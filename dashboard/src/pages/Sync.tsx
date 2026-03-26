@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { fetchSyncInfo, fetchHealth, fetchSettings, fetchCloudStats, type SyncInfo, type HealthResponse, type StatsResponse } from '../api'
+import { fetchSyncInfo, fetchHealth, fetchCloudStats, type SyncInfo, type HealthResponse, type StatsResponse } from '../api'
 
 export function SyncPage() {
   const [syncInfo, setSyncInfo] = useState<SyncInfo | null>(null)
@@ -16,15 +16,8 @@ export function SyncPage() {
       .then(setSyncInfo)
       .catch(() => {}) // sync may not be configured
 
-    // Fetch cloud stats if sync is configured
-    fetchSettings().then((settings) => {
-      if (settings.sync_url) {
-        const key = localStorage.getItem('agent_mem_api_key') || ''
-        fetchCloudStats(settings.sync_url, key)
-          .then(setCloudStats)
-          .catch(() => {}) // cloud may be unreachable
-      }
-    }).catch(() => {})
+    // Fetch cloud stats via local proxy
+    fetchCloudStats().then(setCloudStats).catch(() => {})
   }, [])
 
   return (

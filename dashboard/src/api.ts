@@ -96,11 +96,14 @@ export interface SyncInfo {
   last_pull?: string;
 }
 
-export async function fetchCloudStats(syncUrl: string, apiKey: string): Promise<StatsResponse> {
-  const res = await fetch(`${syncUrl}/api/stats`, {
-    headers: { Authorization: `Bearer ${apiKey}` },
-  });
-  return res.json();
+export async function fetchCloudStats(): Promise<StatsResponse | null> {
+  try {
+    const res = await authFetch(`${BASE}/api/sync/cloud-stats`);
+    if (!res.ok) return null;
+    return res.json();
+  } catch {
+    return null;
+  }
 }
 
 export interface ProjectInfo {

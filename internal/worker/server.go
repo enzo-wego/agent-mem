@@ -145,6 +145,7 @@ func NewServer(cfg *config.Config, logBuf *LogBuffer) (*Server, error) {
 		r.Post("/api/sync/push", s.handleSyncPush)
 		r.Get("/api/sync/pull", s.handleSyncPull)
 		r.Get("/api/sync/info", s.handleSyncInfo)
+		r.Get("/api/sync/cloud-stats", s.handleSyncCloudStats)
 	})
 
 	// Dashboard (served at root, after API routes)

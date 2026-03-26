@@ -2,8 +2,10 @@ package worker
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/rs/zerolog/log"
 
@@ -111,6 +113,37 @@ func (s *Server) handleSyncInfo(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(info)
+}
+
+// handleSyncCloudStats proxies a stats request to the cloud sync URL using
+// the server's configured API key, so the dashboard doesn't need the key.
+func (s *Server) handleSyncCloudStats(w http.ResponseWriter, r *http.Request) {
+	snap := s.config.Snapshot()
+	if snap.SyncURL == "" {
+		http.Error(w, `{"error":"sync not configured"}`, http.StatusServiceUnavailable)
+		return
+	}
+
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, snap.SyncURL+"/api/stats", nil)
+	if err != nil {
+		http.Error(w, `{"error":"failed to create request"}`, http.StatusInternalServerError)
+		return
+	}
+	if snap.APIKey != "" {
+		req.Header.Set("Authorization", "Bearer "+snap.APIKey)
+	}
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		http.Error(w, `{"error":"cloud unreachable"}`, http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(resp.StatusCode)
+	io.Copy(w, resp.Body)
 }
 
 // apiKeyMiddleware is a chi middleware that rejects requests when an API key
