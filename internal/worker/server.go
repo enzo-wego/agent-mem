@@ -110,37 +110,42 @@ func NewServer(cfg *config.Config, logBuf *LogBuffer) (*Server, error) {
 	r.Use(middleware.RealIP)
 	r.Use(corsMiddleware)
 
-	// Hook endpoints (called by CLI hooks)
+	// Public endpoints (no auth required)
+	r.Get("/api/health", s.handleHealth)
+
+	// Hook endpoints (called by local CLI hooks, no auth required)
 	r.Post("/api/hook/session-start", s.handleSessionStart)
 	r.Post("/api/hook/prompt-submit", s.handlePromptSubmit)
 	r.Post("/api/hook/post-tool-use", s.handlePostToolUse)
 	r.Post("/api/hook/stop", s.handleStop)
 
-	// API endpoints
-	r.Get("/api/health", s.handleHealth)
+	// Protected API endpoints (require Bearer api_key when configured)
+	r.Group(func(r chi.Router) {
+		r.Use(s.apiKeyMiddleware)
 
-	// Search endpoints
-	r.Get("/api/search", s.handleSearch)
-	r.Get("/api/search/by-file", s.handleSearchByFile)
-	r.Get("/api/search/timeline", s.handleSearchTimeline)
-	r.Get("/api/stats", s.handleStats)
-	r.Get("/api/projects", s.handleListProjects)
-	r.Get("/api/observations", s.handleListObservations)
-	r.Get("/api/observations/{id}", s.handleGetObservation)
-	r.Get("/api/summaries", s.handleListSummaries)
-	r.Get("/api/prompts", s.handleListPrompts)
+		// Search endpoints
+		r.Get("/api/search", s.handleSearch)
+		r.Get("/api/search/by-file", s.handleSearchByFile)
+		r.Get("/api/search/timeline", s.handleSearchTimeline)
+		r.Get("/api/stats", s.handleStats)
+		r.Get("/api/projects", s.handleListProjects)
+		r.Get("/api/observations", s.handleListObservations)
+		r.Get("/api/observations/{id}", s.handleGetObservation)
+		r.Get("/api/summaries", s.handleListSummaries)
+		r.Get("/api/prompts", s.handleListPrompts)
 
-	// Settings endpoints
-	r.Get("/api/settings", s.handleGetSettings)
-	r.Put("/api/settings", s.handleUpdateSettings)
+		// Settings endpoints
+		r.Get("/api/settings", s.handleGetSettings)
+		r.Put("/api/settings", s.handleUpdateSettings)
 
-	// Logs endpoint
-	r.Get("/api/logs", s.handleGetLogs)
+		// Logs endpoint
+		r.Get("/api/logs", s.handleGetLogs)
 
-	// Sync endpoints
-	r.Post("/api/sync/push", s.handleSyncPush)
-	r.Get("/api/sync/pull", s.handleSyncPull)
-	r.Get("/api/sync/info", s.handleSyncInfo)
+		// Sync endpoints
+		r.Post("/api/sync/push", s.handleSyncPush)
+		r.Get("/api/sync/pull", s.handleSyncPull)
+		r.Get("/api/sync/info", s.handleSyncInfo)
+	})
 
 	// Dashboard (served at root, after API routes)
 	r.Handle("/*", serveDashboard())

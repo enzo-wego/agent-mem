@@ -12,11 +12,6 @@ import (
 
 // handleSyncPush receives data pushed from another machine.
 func (s *Server) handleSyncPush(w http.ResponseWriter, r *http.Request) {
-	if !s.verifyAPIKey(r) {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
-
 	var payload sync.SyncPushPayload
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 		http.Error(w, "invalid payload", http.StatusBadRequest)
@@ -66,11 +61,6 @@ func (s *Server) handleSyncPush(w http.ResponseWriter, r *http.Request) {
 
 // handleSyncPull returns rows for a requesting machine.
 func (s *Server) handleSyncPull(w http.ResponseWriter, r *http.Request) {
-	if !s.verifyAPIKey(r) {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
-
 	machineID := r.URL.Query().Get("machine_id")
 	limit := 100
 	if n, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil && n > 0 {
@@ -121,6 +111,18 @@ func (s *Server) handleSyncInfo(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(info)
+}
+
+// apiKeyMiddleware is a chi middleware that rejects requests when an API key
+// is configured and the request does not carry a matching Bearer token.
+func (s *Server) apiKeyMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !s.verifyAPIKey(r) {
+			http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // verifyAPIKey checks the Authorization header against the configured API key.

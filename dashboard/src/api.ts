@@ -1,5 +1,33 @@
 const BASE = '';
 
+function authHeaders(): HeadersInit {
+  const key = localStorage.getItem('agent_mem_api_key');
+  if (!key) return {};
+  return { Authorization: `Bearer ${key}` };
+}
+
+async function authFetch(url: string, init?: RequestInit): Promise<Response> {
+  const headers = { ...authHeaders(), ...(init?.headers || {}) };
+  const res = await fetch(url, { ...init, headers });
+  if (res.status === 401) {
+    // Dispatch event so the app can show a login prompt
+    window.dispatchEvent(new CustomEvent('agent-mem-unauthorized'));
+  }
+  return res;
+}
+
+export function setApiKey(key: string) {
+  localStorage.setItem('agent_mem_api_key', key);
+}
+
+export function getApiKey(): string {
+  return localStorage.getItem('agent_mem_api_key') || '';
+}
+
+export function clearApiKey() {
+  localStorage.removeItem('agent_mem_api_key');
+}
+
 export interface SearchResult {
   id: number;
   type: string;
@@ -29,7 +57,7 @@ export interface ObservationDetail {
 }
 
 export async function getObservation(id: number): Promise<ObservationDetail> {
-  const res = await fetch(`${BASE}/api/observations/${id}`);
+  const res = await authFetch(`${BASE}/api/observations/${id}`);
   return res.json();
 }
 
@@ -42,7 +70,7 @@ export interface StatsResponse {
 export async function fetchStats(project?: string): Promise<StatsResponse> {
   const params = new URLSearchParams();
   if (project) params.set('project', project);
-  const res = await fetch(`${BASE}/api/stats?${params}`);
+  const res = await authFetch(`${BASE}/api/stats?${params}`);
   return res.json();
 }
 
@@ -74,7 +102,7 @@ export interface ProjectInfo {
 }
 
 export async function fetchProjects(): Promise<ProjectInfo[]> {
-  const res = await fetch(`${BASE}/api/projects`);
+  const res = await authFetch(`${BASE}/api/projects`);
   return res.json();
 }
 
@@ -86,7 +114,7 @@ export async function fetchHealth(): Promise<HealthResponse> {
 export async function search(q: string, project?: string, limit = 10): Promise<SearchResponse> {
   const params = new URLSearchParams({ q, limit: String(limit) });
   if (project) params.set('project', project);
-  const res = await fetch(`${BASE}/api/search?${params}`);
+  const res = await authFetch(`${BASE}/api/search?${params}`);
   return res.json();
 }
 
@@ -94,14 +122,14 @@ export async function searchTimeline(project: string, from?: string, to?: string
   const params = new URLSearchParams({ project, limit: String(limit) });
   if (from) params.set('from', from);
   if (to) params.set('to', to);
-  const res = await fetch(`${BASE}/api/search/timeline?${params}`);
+  const res = await authFetch(`${BASE}/api/search/timeline?${params}`);
   return res.json();
 }
 
 export async function listObservations(project: string, type?: string, limit = 50): Promise<SearchResponse> {
   const params = new URLSearchParams({ project, limit: String(limit) });
   if (type) params.set('type', type);
-  const res = await fetch(`${BASE}/api/observations?${params}`);
+  const res = await authFetch(`${BASE}/api/observations?${params}`);
   return res.json();
 }
 
@@ -125,7 +153,7 @@ export interface SummariesResponse {
 
 export async function listSummaries(project: string, limit = 20): Promise<SummariesResponse> {
   const params = new URLSearchParams({ project, limit: String(limit) });
-  const res = await fetch(`${BASE}/api/summaries?${params}`);
+  const res = await authFetch(`${BASE}/api/summaries?${params}`);
   return res.json();
 }
 
@@ -145,12 +173,12 @@ export interface PromptsResponse {
 
 export async function listPrompts(project: string, limit = 50): Promise<PromptsResponse> {
   const params = new URLSearchParams({ project, limit: String(limit) });
-  const res = await fetch(`${BASE}/api/prompts?${params}`);
+  const res = await authFetch(`${BASE}/api/prompts?${params}`);
   return res.json();
 }
 
 export async function fetchSyncInfo(): Promise<SyncInfo> {
-  const res = await fetch(`${BASE}/api/sync/info`);
+  const res = await authFetch(`${BASE}/api/sync/info`);
   return res.json();
 }
 
@@ -170,7 +198,7 @@ export async function fetchLogs(level?: string, tail?: number): Promise<LogsResp
   const params = new URLSearchParams();
   if (level) params.set('level', level);
   if (tail) params.set('tail', String(tail));
-  const res = await fetch(`${BASE}/api/logs?${params}`);
+  const res = await authFetch(`${BASE}/api/logs?${params}`);
   return res.json();
 }
 
@@ -196,14 +224,14 @@ export interface Settings {
 }
 
 export async function fetchSettings(): Promise<Settings> {
-  const res = await fetch(`${BASE}/api/settings`);
+  const res = await authFetch(`${BASE}/api/settings`);
   return res.json();
 }
 
 export async function updateSettings(partial: Partial<Settings>): Promise<Settings> {
-  const res = await fetch(`${BASE}/api/settings`, {
+  const res = await authFetch(`${BASE}/api/settings`, {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
     body: JSON.stringify(partial),
   });
   if (!res.ok) {

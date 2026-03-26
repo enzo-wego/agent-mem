@@ -79,11 +79,6 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
-	if !s.verifyAPIKey(r) {
-		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
-		return
-	}
-
 	// Limit request body to 64 KB.
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<16)
 
