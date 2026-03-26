@@ -98,10 +98,7 @@ func (s *Server) handleSyncPull(w http.ResponseWriter, r *http.Request) {
 		Prompts:      prompts,
 	}
 
-	total := len(sessions) + len(observations) + len(summaries) + len(prompts)
-	if total > 0 {
-		s.db.SetLastSyncTime(ctx, "last_pull_served")
-	}
+	s.db.SetLastSyncTime(ctx, "last_pull_served")
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)

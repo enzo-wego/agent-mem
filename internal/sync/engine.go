@@ -103,6 +103,7 @@ func (e *Engine) push(ctx context.Context) error {
 
 	total := len(sessions) + len(observations) + len(summaries) + len(prompts)
 	if total == 0 {
+		e.db.SetLastSyncTime(ctx, "last_push")
 		return nil
 	}
 
@@ -194,8 +195,8 @@ func (e *Engine) pull(ctx context.Context) error {
 		}
 	}
 
+	e.db.SetLastSyncTime(ctx, "last_pull")
 	if imported > 0 {
-		e.db.SetLastSyncTime(ctx, "last_pull")
 		log.Info().Int("imported", imported).Msg("Sync pull complete")
 	}
 	return nil
