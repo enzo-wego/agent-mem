@@ -1,14 +1,19 @@
 package hooks
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"regexp"
+	"strings"
 	"time"
 )
+
+var systemReminderRe = regexp.MustCompile(`(?s)<system-reminder>.*?</system-reminder>`)
 
 // RunHook is the thin CLI entry point for all hook subcommands.
 // It reads stdin JSON, adds CWD, POSTs to the worker, and writes the response to stdout.
@@ -18,6 +23,13 @@ func RunHook(event string, port int) error {
 
 	// Build payload with CWD
 	payload := addCWD(input)
+
+	// For stop events: read transcript NOW while the file still exists.
+	// Claude Code may delete the transcript file after the hook returns,
+	// so we must extract the content in the CLI process, not in the worker.
+	if event == "stop" {
+		payload = extractTranscriptContent(payload)
+	}
 
 	// POST to worker with short timeout
 	client := &http.Client{Timeout: 25 * time.Second}
@@ -50,6 +62,116 @@ func RunHook(event string, port int) error {
 	}
 
 	return nil
+}
+
+// extractTranscriptContent reads the transcript file referenced in the payload,
+// extracts the last assistant message, and replaces transcript_path with the
+// actual content. This must happen in the CLI process because Claude Code may
+// clean up the transcript file after the hook returns.
+func extractTranscriptContent(payload []byte) []byte {
+	var data map[string]any
+	if err := json.Unmarshal(payload, &data); err != nil {
+		return payload
+	}
+
+	transcriptPath, _ := data["transcript_path"].(string)
+	if transcriptPath == "" {
+		return payload
+	}
+
+	msg, err := readLastAssistantMessage(transcriptPath)
+	if err != nil {
+		// Can't read file — leave transcript_path for worker to handle/log
+		return payload
+	}
+
+	// Replace transcript_path with the extracted content
+	data["last_assistant_message"] = msg
+	delete(data, "transcript_path")
+
+	result, err := json.Marshal(data)
+	if err != nil {
+		return payload
+	}
+	return result
+}
+
+// readLastAssistantMessage reads a Claude Code JSONL transcript and returns
+// the last assistant message text with system-reminder tags stripped.
+func readLastAssistantMessage(transcriptPath string) (string, error) {
+	f, err := os.Open(transcriptPath)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+
+	var lines []string
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, 1024*1024), 10*1024*1024) // 10MB max line
+	for scanner.Scan() {
+		lines = append(lines, scanner.Text())
+	}
+	if err := scanner.Err(); err != nil {
+		return "", err
+	}
+
+	// Iterate backward to find last assistant message
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(lines[i])
+		if line == "" {
+			continue
+		}
+
+		var entry struct {
+			Type    string `json:"type"`
+			Message struct {
+				Role    string `json:"role"`
+				Content any    `json:"content"`
+			} `json:"message"`
+		}
+
+		if err := json.Unmarshal([]byte(line), &entry); err != nil {
+			continue
+		}
+
+		if entry.Type != "assistant" && entry.Message.Role != "assistant" {
+			continue
+		}
+
+		text := extractContentText(entry.Message.Content)
+		if text == "" {
+			continue
+		}
+
+		// Strip system-reminder tags
+		text = systemReminderRe.ReplaceAllString(text, "")
+		text = strings.TrimSpace(text)
+		return text, nil
+	}
+
+	return "", fmt.Errorf("no assistant message found")
+}
+
+// extractContentText extracts text from content which may be a string or array of content blocks.
+func extractContentText(content any) string {
+	switch v := content.(type) {
+	case string:
+		return v
+	case []any:
+		var parts []string
+		for _, item := range v {
+			if block, ok := item.(map[string]any); ok {
+				if block["type"] == "text" {
+					if text, ok := block["text"].(string); ok {
+						parts = append(parts, text)
+					}
+				}
+			}
+		}
+		return strings.Join(parts, "\n")
+	default:
+		return ""
+	}
 }
 
 // addCWD merges the current working directory into the JSON payload.

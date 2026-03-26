@@ -34,3 +34,29 @@ func (db *DB) StorePrompt(ctx context.Context, contentSessionID, project, prompt
 
 	return id, promptNumber, nil
 }
+
+// GetSessionPrompts returns all user prompts for a session, ordered by prompt number.
+func (db *DB) GetSessionPrompts(ctx context.Context, contentSessionID string) ([]UserPrompt, error) {
+	rows, err := db.Pool.Query(ctx, `
+		SELECT id, content_session_id, project, prompt, prompt_number,
+		       created_at, created_at_epoch
+		FROM user_prompts
+		WHERE content_session_id = $1
+		ORDER BY prompt_number ASC
+	`, contentSessionID)
+	if err != nil {
+		return nil, fmt.Errorf("get session prompts: %w", err)
+	}
+	defer rows.Close()
+
+	var prompts []UserPrompt
+	for rows.Next() {
+		var p UserPrompt
+		if err := rows.Scan(&p.ID, &p.ContentSessionID, &p.Project, &p.Prompt, &p.PromptNumber,
+			&p.CreatedAt, &p.CreatedAtEpoch); err != nil {
+			return nil, fmt.Errorf("scan prompt: %w", err)
+		}
+		prompts = append(prompts, p)
+	}
+	return prompts, rows.Err()
+}

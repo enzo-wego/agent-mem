@@ -3,8 +3,10 @@ package worker
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/rs/zerolog/log"
 
@@ -13,13 +15,14 @@ import (
 
 // hookPayload represents the JSON received from hook CLI subcommands.
 type hookPayload struct {
-	SessionID      string          `json:"session_id"`
-	CWD            string          `json:"cwd"`
-	Prompt         string          `json:"prompt"`
-	ToolName       string          `json:"tool_name"`
-	ToolInput      json.RawMessage `json:"tool_input"`
-	ToolResponse   json.RawMessage `json:"tool_response"`
-	TranscriptPath string          `json:"transcript_path"`
+	SessionID           string          `json:"session_id"`
+	CWD                 string          `json:"cwd"`
+	Prompt              string          `json:"prompt"`
+	ToolName            string          `json:"tool_name"`
+	ToolInput           json.RawMessage `json:"tool_input"`
+	ToolResponse        json.RawMessage `json:"tool_response"`
+	TranscriptPath      string          `json:"transcript_path"`
+	LastAssistantMessage string         `json:"last_assistant_message"`
 }
 
 // handleHealth returns worker health status.
@@ -212,15 +215,21 @@ func (s *Server) handleStop(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Extract last assistant message from transcript
-	var lastMessage string
-	if payload.TranscriptPath != "" {
+	// Get last assistant message content.
+	// Priority: 1) pre-extracted by CLI hook, 2) read transcript file, 3) fallback to DB observations
+	lastMessage := payload.LastAssistantMessage
+
+	if lastMessage == "" && payload.TranscriptPath != "" {
 		msg, err := extractLastAssistantMessage(payload.TranscriptPath)
 		if err != nil {
-			log.Warn().Err(err).Str("path", payload.TranscriptPath).Msg("Failed to read transcript")
+			log.Warn().Err(err).Str("path", payload.TranscriptPath).Msg("Failed to read transcript, will fallback to observations")
 		} else {
 			lastMessage = msg
 		}
+	}
+
+	if lastMessage == "" {
+		lastMessage = s.buildFallbackSummaryContent(r.Context(), payload.SessionID)
 	}
 
 	// Queue summary job if we have content
@@ -233,7 +242,11 @@ func (s *Server) handleStop(w http.ResponseWriter, r *http.Request) {
 		_, err := s.db.QueuePendingMessage(r.Context(), payload.SessionID, "summary", msgPayload)
 		if err != nil {
 			log.Error().Err(err).Msg("Failed to queue summary")
+		} else {
+			log.Info().Str("session", payload.SessionID).Msg("Summary queued")
 		}
+	} else {
+		log.Warn().Str("session", payload.SessionID).Msg("No content available for summary (no transcript, no observations)")
 	}
 
 	// Mark session completed
@@ -243,6 +256,58 @@ func (s *Server) handleStop(w http.ResponseWriter, r *http.Request) {
 
 	log.Info().Str("session", payload.SessionID).Msg("Session stopped")
 	w.WriteHeader(http.StatusOK)
+}
+
+// buildFallbackSummaryContent constructs summary input from session observations and user prompts
+// when the transcript file is unavailable.
+func (s *Server) buildFallbackSummaryContent(ctx context.Context, contentSessionID string) string {
+	session, err := s.db.FindSessionByContentID(ctx, contentSessionID)
+	if err != nil {
+		log.Warn().Err(err).Str("session", contentSessionID).Msg("Fallback: failed to find session")
+		return ""
+	}
+
+	var parts []string
+
+	// Add user prompts
+	prompts, err := s.db.GetSessionPrompts(ctx, contentSessionID)
+	if err != nil {
+		log.Warn().Err(err).Msg("Fallback: failed to get session prompts")
+	}
+	if len(prompts) > 0 {
+		parts = append(parts, "## User Prompts")
+		for _, p := range prompts {
+			parts = append(parts, fmt.Sprintf("- %s", p.Prompt))
+		}
+	}
+
+	// Add observations
+	if session.MemorySessionID != nil {
+		observations, err := s.db.GetSessionObservations(ctx, *session.MemorySessionID)
+		if err != nil {
+			log.Warn().Err(err).Msg("Fallback: failed to get session observations")
+		}
+		if len(observations) > 0 {
+			parts = append(parts, "\n## Session Activity")
+			for _, o := range observations {
+				title := ""
+				if o.Title != nil {
+					title = *o.Title
+				}
+				narrative := ""
+				if o.Narrative != nil {
+					narrative = *o.Narrative
+				}
+				parts = append(parts, fmt.Sprintf("- [%s] %s: %s", o.Type, title, narrative))
+			}
+		}
+	}
+
+	if len(parts) == 0 {
+		return ""
+	}
+
+	return strings.Join(parts, "\n")
 }
 
 // readPayload reads and decodes the JSON request body.

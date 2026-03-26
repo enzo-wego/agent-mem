@@ -72,6 +72,34 @@ func (db *DB) StoreSummary(ctx context.Context, memorySessionID, project, reques
 	return id, nil
 }
 
+// GetSessionObservations returns all observations for a session, ordered by creation time.
+func (db *DB) GetSessionObservations(ctx context.Context, memorySessionID string) ([]Observation, error) {
+	rows, err := db.Pool.Query(ctx, `
+		SELECT id, memory_session_id, project, type, title, subtitle, narrative,
+		       facts, concepts, files_read, files_modified,
+		       created_at, created_at_epoch
+		FROM observations
+		WHERE memory_session_id = $1
+		ORDER BY created_at ASC
+	`, memorySessionID)
+	if err != nil {
+		return nil, fmt.Errorf("get session observations: %w", err)
+	}
+	defer rows.Close()
+
+	var obs []Observation
+	for rows.Next() {
+		var o Observation
+		if err := rows.Scan(&o.ID, &o.MemorySessionID, &o.Project, &o.Type, &o.Title, &o.Subtitle, &o.Narrative,
+			&o.Facts, &o.Concepts, &o.FilesRead, &o.FilesModified,
+			&o.CreatedAt, &o.CreatedAtEpoch); err != nil {
+			return nil, fmt.Errorf("scan observation: %w", err)
+		}
+		obs = append(obs, o)
+	}
+	return obs, rows.Err()
+}
+
 // UpdatePromptEmbedding updates the embedding for a stored user prompt.
 func (db *DB) UpdatePromptEmbedding(ctx context.Context, promptID int64, embedding []float32) error {
 	v := pgvector.NewVector(embedding)
