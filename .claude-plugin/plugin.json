@@ -1,5 +1,5 @@
 {
-  "name": "enzo-claude-mem",
+  "name": "agent-mem",
   "version": "2.0.0",
   "description": "Persistent memory for Claude Code — extracts observations, summaries, and enables semantic search across coding sessions",
   "author": {
