@@ -86,6 +86,12 @@ export interface HealthResponse {
   pending_messages: number;
 }
 
+export interface SyncClientInfo {
+  machine_id: string;
+  last_push?: string;
+  last_pull?: string;
+}
+
 export interface SyncInfo {
   mode: string;
   machine_id: string;
@@ -94,6 +100,7 @@ export interface SyncInfo {
   stats: { table: string; total: number; unsynced: number }[];
   last_push?: string;
   last_pull?: string;
+  clients?: SyncClientInfo[];
 }
 
 export async function fetchCloudStats(): Promise<StatsResponse | null> {

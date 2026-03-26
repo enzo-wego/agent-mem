@@ -318,3 +318,59 @@ func (db *DB) SetLastSyncTime(ctx context.Context, key string) error {
 	`, key, now)
 	return err
 }
+
+// ClientSyncTime holds per-client sync timestamps.
+type ClientSyncTime struct {
+	MachineID string
+	LastPush  *time.Time
+	LastPull  *time.Time
+}
+
+// GetClientSyncTimes returns per-client push/pull timestamps from settings.
+func (db *DB) GetClientSyncTimes(ctx context.Context) ([]ClientSyncTime, error) {
+	rows, err := db.Pool.Query(ctx, `SELECT key, value FROM settings WHERE key LIKE 'client_push:%' OR key LIKE 'client_pull:%'`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	clients := make(map[string]*ClientSyncTime)
+	for rows.Next() {
+		var k, v string
+		if err := rows.Scan(&k, &v); err != nil {
+			continue
+		}
+		t, err := time.Parse(time.RFC3339Nano, v)
+		if err != nil {
+			continue
+		}
+
+		var prefix, machineID string
+		if len(k) > 12 && k[:12] == "client_push:" {
+			prefix = "push"
+			machineID = k[12:]
+		} else if len(k) > 12 && k[:12] == "client_pull:" {
+			prefix = "pull"
+			machineID = k[12:]
+		} else {
+			continue
+		}
+
+		c, ok := clients[machineID]
+		if !ok {
+			c = &ClientSyncTime{MachineID: machineID}
+			clients[machineID] = c
+		}
+		if prefix == "push" {
+			c.LastPush = &t
+		} else {
+			c.LastPull = &t
+		}
+	}
+
+	result := make([]ClientSyncTime, 0, len(clients))
+	for _, c := range clients {
+		result = append(result, *c)
+	}
+	return result, nil
+}

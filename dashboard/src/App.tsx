@@ -5,7 +5,7 @@ import { SessionsPage } from './pages/Sessions'
 import { SyncPage } from './pages/Sync'
 import { SettingsPage } from './pages/Settings'
 import { LogsPage } from './pages/Logs'
-import { fetchProjects, fetchStats, getApiKey, setApiKey, clearApiKey, type ProjectInfo, type StatsResponse } from './api'
+import { fetchProjects, getApiKey, setApiKey, clearApiKey, type ProjectInfo } from './api'
 import './index.css'
 
 type Page = 'timeline' | 'search' | 'sessions' | 'sync' | 'logs' | 'settings'
@@ -66,7 +66,6 @@ function App() {
   const [page, setPage] = useState<Page>('timeline')
   const [project, setProject] = useState('')
   const [projects, setProjects] = useState<ProjectInfo[]>([])
-  const [stats, setStats] = useState<StatsResponse | null>(null)
   const [needsAuth, setNeedsAuth] = useState(false)
   const [authChecked, setAuthChecked] = useState(false)
 
@@ -105,9 +104,6 @@ function App() {
     if (!needsAuth && authChecked) loadData()
   }, [needsAuth, authChecked])
 
-  useEffect(() => {
-    if (!needsAuth && authChecked) fetchStats(project || undefined).then(setStats)
-  }, [project, needsAuth, authChecked])
 
   if (!authChecked) return null
   if (needsAuth) return <LoginForm onLogin={handleLogin} />
@@ -118,11 +114,6 @@ function App() {
         <div className="max-w-6xl mx-auto flex items-center justify-between">
           <div className="flex items-center gap-4">
             <h1 className="text-lg font-semibold">agent-mem</h1>
-            {stats && (
-              <span className="text-xs text-gray-400 font-mono">
-                {stats.observations} obs, {stats.summaries} sum, {stats.prompts} prompts
-              </span>
-            )}
           </div>
           <div className="flex items-center gap-2">
             <select

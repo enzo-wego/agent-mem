@@ -40,15 +40,23 @@ type SyncPullResponse struct {
 	Prompts      []database.SyncablePrompt      `json:"prompts,omitempty"`
 }
 
+// ClientInfo holds per-client sync timestamps (cloud mode).
+type ClientInfo struct {
+	MachineID string     `json:"machine_id"`
+	LastPush  *time.Time `json:"last_push,omitempty"`
+	LastPull  *time.Time `json:"last_pull,omitempty"`
+}
+
 // SyncInfo holds current sync status for the info endpoint.
 type SyncInfo struct {
-	Mode         string             `json:"mode"`
-	MachineID    string             `json:"machine_id"`
-	SyncEnabled  bool               `json:"sync_enabled"`
-	SyncInterval string             `json:"sync_interval"`
+	Mode         string               `json:"mode"`
+	MachineID    string               `json:"machine_id"`
+	SyncEnabled  bool                 `json:"sync_enabled"`
+	SyncInterval string               `json:"sync_interval,omitempty"`
 	Stats        []database.SyncStats `json:"stats"`
-	LastPush     *time.Time         `json:"last_push,omitempty"`
-	LastPull     *time.Time         `json:"last_pull,omitempty"`
+	LastPush     *time.Time           `json:"last_push,omitempty"`
+	LastPull     *time.Time           `json:"last_pull,omitempty"`
+	Clients      []ClientInfo         `json:"clients,omitempty"`
 }
 
 // Engine manages push/pull sync between local and cloud.

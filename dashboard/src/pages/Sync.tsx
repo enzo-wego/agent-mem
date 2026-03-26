@@ -14,9 +14,8 @@ export function SyncPage() {
 
     fetchSyncInfo()
       .then(setSyncInfo)
-      .catch(() => {}) // sync may not be configured
+      .catch(() => {})
 
-    // Fetch cloud stats via local proxy (only works in local mode)
     fetchCloudStats().then(setCloudStats).catch(() => {})
   }, [])
 
@@ -61,38 +60,39 @@ export function SyncPage() {
                 <p className="font-medium font-mono text-xs">{syncInfo.machine_id || 'N/A'}</p>
               </div>
               {!isCloud && (
-                <div>
-                  <span className="text-gray-500">Sync</span>
-                  <p className="font-medium">
-                    {syncInfo.sync_enabled ? `Enabled (every ${syncInfo.sync_interval})` : 'Disabled'}
-                  </p>
-                </div>
+                <>
+                  <div>
+                    <span className="text-gray-500">Sync</span>
+                    <p className="font-medium">
+                      {syncInfo.sync_enabled ? `Enabled (every ${syncInfo.sync_interval})` : 'Disabled'}
+                    </p>
+                  </div>
+                  <div>
+                    <span className="text-gray-500">Last Push</span>
+                    <p className="font-medium">
+                      {syncInfo.last_push ? new Date(syncInfo.last_push).toLocaleString() : 'Never'}
+                    </p>
+                  </div>
+                  <div>
+                    <span className="text-gray-500">Last Pull</span>
+                    <p className="font-medium">
+                      {syncInfo.last_pull ? new Date(syncInfo.last_pull).toLocaleString() : 'Never'}
+                    </p>
+                  </div>
+                </>
               )}
-              <div>
-                <span className="text-gray-500">
-                  {isCloud ? 'Last Push Received' : 'Last Push'}
-                </span>
-                <p className="font-medium">
-                  {syncInfo.last_push ? new Date(syncInfo.last_push).toLocaleString() : 'Never'}
-                </p>
-              </div>
-              <div>
-                <span className="text-gray-500">
-                  {isCloud ? 'Last Pull Served' : 'Last Pull'}
-                </span>
-                <p className="font-medium">
-                  {syncInfo.last_pull ? new Date(syncInfo.last_pull).toLocaleString() : 'Never'}
-                </p>
-              </div>
             </div>
 
+            {/* Data table */}
             {syncInfo.stats && syncInfo.stats.length > 0 && (
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-gray-200 dark:border-gray-700">
                     <th className="text-left py-2 text-gray-500 font-normal">Table</th>
                     <th className="text-right py-2 text-gray-500 font-normal">Total</th>
-                    <th className="text-right py-2 text-gray-500 font-normal">Unsynced</th>
+                    {!isCloud && (
+                      <th className="text-right py-2 text-gray-500 font-normal">Unsynced</th>
+                    )}
                   </tr>
                 </thead>
                 <tbody>
@@ -100,7 +100,9 @@ export function SyncPage() {
                     <tr key={s.table} className="border-b border-gray-100 dark:border-gray-700/50">
                       <td className="py-2">{s.table}</td>
                       <td className="text-right py-2">{s.total.toLocaleString()}</td>
-                      <td className="text-right py-2">{s.unsynced}</td>
+                      {!isCloud && (
+                        <td className="text-right py-2">{s.unsynced}</td>
+                      )}
                     </tr>
                   ))}
                 </tbody>
@@ -111,6 +113,35 @@ export function SyncPage() {
           <p className="text-gray-500 text-sm">Sync not configured or unavailable.</p>
         )}
       </div>
+
+      {/* Connected Clients (cloud mode) */}
+      {isCloud && syncInfo?.clients && syncInfo.clients.length > 0 && (
+        <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
+          <h3 className="font-semibold mb-3">Connected Clients</h3>
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-gray-200 dark:border-gray-700">
+                <th className="text-left py-2 text-gray-500 font-normal">Machine ID</th>
+                <th className="text-right py-2 text-gray-500 font-normal">Last Push</th>
+                <th className="text-right py-2 text-gray-500 font-normal">Last Pull</th>
+              </tr>
+            </thead>
+            <tbody>
+              {syncInfo.clients.map((c) => (
+                <tr key={c.machine_id} className="border-b border-gray-100 dark:border-gray-700/50">
+                  <td className="py-2 font-mono text-xs">{c.machine_id}</td>
+                  <td className="text-right py-2">
+                    {c.last_push ? new Date(c.last_push).toLocaleString() : 'Never'}
+                  </td>
+                  <td className="text-right py-2">
+                    {c.last_pull ? new Date(c.last_pull).toLocaleString() : 'Never'}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
 
       {/* Cloud Stats (only in local mode) */}
       {cloudStats && !isCloud && (

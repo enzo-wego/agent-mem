@@ -52,9 +52,9 @@ func (s *Server) handleSyncPush(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Record when we last received a push (for cloud mode dashboard)
-	if received > 0 {
-		s.db.SetLastSyncTime(ctx, "last_push_received")
+	// Record per-client push time for cloud dashboard
+	if payload.MachineID != "" {
+		s.db.SetLastSyncTime(ctx, "client_push:"+payload.MachineID)
 	}
 
 	log.Info().Int("received", received).Int("rejected", rejected).Str("from", payload.MachineID).Msg("Sync push received")
@@ -98,7 +98,10 @@ func (s *Server) handleSyncPull(w http.ResponseWriter, r *http.Request) {
 		Prompts:      prompts,
 	}
 
-	s.db.SetLastSyncTime(ctx, "last_pull_served")
+	// Record per-client pull time for cloud dashboard
+	if machineID != "" {
+		s.db.SetLastSyncTime(ctx, "client_pull:"+machineID)
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
@@ -122,26 +125,34 @@ func (s *Server) handleSyncInfo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Cloud mode: no sync engine, but still show server stats
+	// Cloud mode: show server totals and per-client sync times
 	snap := s.config.Snapshot()
 	stats, err := s.db.GetSyncStats(ctx)
 	if err != nil {
 		http.Error(w, "error", http.StatusInternalServerError)
 		return
 	}
+	// Cloud only shows totals, unsynced is not meaningful
+	for i := range stats {
+		stats[i].Unsynced = 0
+	}
 
 	info := sync.SyncInfo{
-		Mode:        "cloud",
-		MachineID:   snap.MachineID,
-		SyncEnabled: false,
-		Stats:       stats,
+		Mode:      "cloud",
+		MachineID: snap.MachineID,
+		Stats:     stats,
 	}
 
-	if t, err := s.db.GetLastSyncTime(ctx, "last_push_received"); err == nil {
-		info.LastPush = t
-	}
-	if t, err := s.db.GetLastSyncTime(ctx, "last_pull_served"); err == nil {
-		info.LastPull = t
+	// Per-client timestamps
+	clientTimes, err := s.db.GetClientSyncTimes(ctx)
+	if err == nil {
+		for _, ct := range clientTimes {
+			info.Clients = append(info.Clients, sync.ClientInfo{
+				MachineID: ct.MachineID,
+				LastPush:  ct.LastPush,
+				LastPull:  ct.LastPull,
+			})
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
