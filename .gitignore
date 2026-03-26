@@ -24,9 +24,16 @@ profile.cov
 go.work
 go.work.sum
 
+# Build binary
+/agent-mem
+
 # env file
 .env
 
 # Editor/IDE
 # .idea/
 # .vscode/
+/.claude/settings.local.json
+/.idea
+/.serena
+/docs/plans

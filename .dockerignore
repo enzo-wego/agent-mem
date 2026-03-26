@@ -1,0 +1,9 @@
+.git
+.idea
+.claude
+.serena
+.planning
+vendor
+dashboard/node_modules
+docs
+*.md
