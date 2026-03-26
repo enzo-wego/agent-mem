@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react'
-import { fetchSyncInfo, fetchHealth, type SyncInfo, type HealthResponse } from '../api'
+import { fetchSyncInfo, fetchHealth, fetchSettings, fetchCloudStats, type SyncInfo, type HealthResponse, type StatsResponse } from '../api'
 
 export function SyncPage() {
   const [syncInfo, setSyncInfo] = useState<SyncInfo | null>(null)
   const [health, setHealth] = useState<HealthResponse | null>(null)
+  const [cloudStats, setCloudStats] = useState<StatsResponse | null>(null)
   const [error, setError] = useState('')
 
   useEffect(() => {
@@ -14,6 +15,16 @@ export function SyncPage() {
     fetchSyncInfo()
       .then(setSyncInfo)
       .catch(() => {}) // sync may not be configured
+
+    // Fetch cloud stats if sync is configured
+    fetchSettings().then((settings) => {
+      if (settings.sync_url) {
+        const key = localStorage.getItem('agent_mem_api_key') || ''
+        fetchCloudStats(settings.sync_url, key)
+          .then(setCloudStats)
+          .catch(() => {}) // cloud may be unreachable
+      }
+    }).catch(() => {})
   }, [])
 
   return (
@@ -66,6 +77,12 @@ export function SyncPage() {
                   {syncInfo.last_push ? new Date(syncInfo.last_push).toLocaleString() : 'Never'}
                 </p>
               </div>
+              <div>
+                <span className="text-gray-500">Last Pull</span>
+                <p className="font-medium">
+                  {syncInfo.last_pull ? new Date(syncInfo.last_pull).toLocaleString() : 'Never'}
+                </p>
+              </div>
             </div>
 
             {syncInfo.stats && syncInfo.stats.length > 0 && (
@@ -93,6 +110,27 @@ export function SyncPage() {
           <p className="text-gray-500 text-sm">Sync not configured or unavailable.</p>
         )}
       </div>
+
+      {/* Cloud Stats */}
+      {cloudStats && (
+        <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
+          <h3 className="font-semibold mb-3">Cloud Statistics</h3>
+          <div className="grid grid-cols-3 gap-4 text-sm">
+            <div>
+              <span className="text-gray-500">Observations</span>
+              <p className="font-medium">{cloudStats.observations.toLocaleString()}</p>
+            </div>
+            <div>
+              <span className="text-gray-500">Summaries</span>
+              <p className="font-medium">{cloudStats.summaries.toLocaleString()}</p>
+            </div>
+            <div>
+              <span className="text-gray-500">Prompts</span>
+              <p className="font-medium">{cloudStats.prompts.toLocaleString()}</p>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

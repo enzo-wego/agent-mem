@@ -96,6 +96,13 @@ export interface SyncInfo {
   last_pull?: string;
 }
 
+export async function fetchCloudStats(syncUrl: string, apiKey: string): Promise<StatsResponse> {
+  const res = await fetch(`${syncUrl}/api/stats`, {
+    headers: { Authorization: `Bearer ${apiKey}` },
+  });
+  return res.json();
+}
+
 export interface ProjectInfo {
   name: string;
   observation_count: number;
