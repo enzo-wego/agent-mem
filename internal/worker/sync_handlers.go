@@ -126,10 +126,12 @@ func (s *Server) apiKeyMiddleware(next http.Handler) http.Handler {
 }
 
 // verifyAPIKey checks the Authorization header against the configured API key.
+// Only enforced in cloud mode (api_key set, no sync_url). Local instances that
+// have api_key + sync_url are sync clients and don't require auth on their own API.
 func (s *Server) verifyAPIKey(r *http.Request) bool {
 	snap := s.config.Snapshot()
-	if snap.APIKey == "" {
-		return true // no auth configured
+	if snap.APIKey == "" || snap.SyncURL != "" {
+		return true // no auth needed: either no key or local (sync client) mode
 	}
 	auth := r.Header.Get("Authorization")
 	return auth == "Bearer "+snap.APIKey
