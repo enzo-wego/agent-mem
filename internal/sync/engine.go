@@ -110,11 +110,8 @@ func (e *Engine) push(ctx context.Context) error {
 	prompts, _ := e.db.GetUnsyncedPrompts(ctx, batchSize)
 
 	total := len(sessions) + len(observations) + len(summaries) + len(prompts)
-	if total == 0 {
-		e.db.SetLastSyncTime(ctx, "last_push")
-		return nil
-	}
 
+	// Always push (even empty) so cloud tracks client heartbeat
 	payload := SyncPushPayload{
 		MachineID:    e.config.MachineID,
 		Sessions:     sessions,
