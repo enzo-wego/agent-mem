@@ -1,0 +1,11 @@
+{
+  "name": "enzo-claude-mem",
+  "version": "2.0.0",
+  "description": "Persistent memory for Claude Code — extracts observations, summaries, and enables semantic search across coding sessions",
+  "author": {
+    "name": "enzo"
+  },
+  "repository": "https://github.com/enzo-wego/agent-mem",
+  "skills": "./plugin/skills/",
+  "hooks": "./plugin/hooks/hooks.json"
+}
