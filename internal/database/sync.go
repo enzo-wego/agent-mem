@@ -295,25 +295,26 @@ func (db *DB) GetSyncStats(ctx context.Context) ([]SyncStats, error) {
 
 // --- Sync timestamp tracking ---
 
-// GetLastSyncTime returns the last push or pull timestamp from a metadata table.
+// GetLastSyncTime returns the last push or pull timestamp.
 func (db *DB) GetLastSyncTime(ctx context.Context, key string) (*time.Time, error) {
-	// Use schema_versions table for metadata storage (lightweight)
-	var t time.Time
-	err := db.Pool.QueryRow(ctx, `
-		SELECT applied_at FROM schema_versions WHERE description = $1
-	`, key).Scan(&t)
+	var v string
+	err := db.Pool.QueryRow(ctx, `SELECT value FROM settings WHERE key = $1`, key).Scan(&v)
+	if err != nil {
+		return nil, err
+	}
+	t, err := time.Parse(time.RFC3339Nano, v)
 	if err != nil {
 		return nil, err
 	}
 	return &t, nil
 }
 
-// SetLastSyncTime stores the last push or pull timestamp.
+// SetLastSyncTime stores the current time as the last push or pull timestamp.
 func (db *DB) SetLastSyncTime(ctx context.Context, key string) error {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
 	_, err := db.Pool.Exec(ctx, `
-		INSERT INTO schema_versions (version, description, applied_at)
-		VALUES ((SELECT COALESCE(MAX(version), 0) + 1 FROM schema_versions), $1, now())
-		ON CONFLICT (version) DO UPDATE SET applied_at = now()
-	`, key)
+		INSERT INTO settings (key, value) VALUES ($1, $2)
+		ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+	`, key, now)
 	return err
 }
