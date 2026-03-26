@@ -52,6 +52,11 @@ func (s *Server) handleSyncPush(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Record when we last received a push (for cloud mode dashboard)
+	if received > 0 {
+		s.db.SetLastSyncTime(ctx, "last_push_received")
+	}
+
 	log.Info().Int("received", received).Int("rejected", rejected).Str("from", payload.MachineID).Msg("Sync push received")
 
 	w.Header().Set("Content-Type", "application/json")
@@ -93,22 +98,53 @@ func (s *Server) handleSyncPull(w http.ResponseWriter, r *http.Request) {
 		Prompts:      prompts,
 	}
 
+	total := len(sessions) + len(observations) + len(summaries) + len(prompts)
+	if total > 0 {
+		s.db.SetLastSyncTime(ctx, "last_pull_served")
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
 }
 
 // handleSyncInfo returns current sync status.
+// Works in both local mode (with sync engine) and cloud mode (receive-only).
 func (s *Server) handleSyncInfo(w http.ResponseWriter, r *http.Request) {
-	if s.syncEngine == nil {
-		http.Error(w, "sync not configured", http.StatusServiceUnavailable)
+	ctx := r.Context()
+
+	// If sync engine is running (local mode), use it
+	if s.syncEngine != nil {
+		info, err := s.syncEngine.GetInfo(ctx)
+		if err != nil {
+			log.Error().Err(err).Msg("Failed to get sync info")
+			http.Error(w, "error", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(info)
 		return
 	}
 
-	info, err := s.syncEngine.GetInfo(r.Context())
+	// Cloud mode: no sync engine, but still show server stats
+	snap := s.config.Snapshot()
+	stats, err := s.db.GetSyncStats(ctx)
 	if err != nil {
-		log.Error().Err(err).Msg("Failed to get sync info")
 		http.Error(w, "error", http.StatusInternalServerError)
 		return
+	}
+
+	info := sync.SyncInfo{
+		Mode:        "cloud",
+		MachineID:   snap.MachineID,
+		SyncEnabled: false,
+		Stats:       stats,
+	}
+
+	if t, err := s.db.GetLastSyncTime(ctx, "last_push_received"); err == nil {
+		info.LastPush = t
+	}
+	if t, err := s.db.GetLastSyncTime(ctx, "last_pull_served"); err == nil {
+		info.LastPull = t
 	}
 
 	w.Header().Set("Content-Type", "application/json")

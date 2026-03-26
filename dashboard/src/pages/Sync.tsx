@@ -16,9 +16,11 @@ export function SyncPage() {
       .then(setSyncInfo)
       .catch(() => {}) // sync may not be configured
 
-    // Fetch cloud stats via local proxy
+    // Fetch cloud stats via local proxy (only works in local mode)
     fetchCloudStats().then(setCloudStats).catch(() => {})
   }, [])
+
+  const isCloud = syncInfo?.mode === 'cloud'
 
   return (
     <div className="space-y-6">
@@ -52,26 +54,32 @@ export function SyncPage() {
             <div className="grid grid-cols-2 gap-4 text-sm mb-4">
               <div>
                 <span className="text-gray-500">Mode</span>
-                <p className="font-medium">{syncInfo.mode}</p>
+                <p className="font-medium">{isCloud ? 'Cloud (receive-only)' : 'Local'}</p>
               </div>
               <div>
                 <span className="text-gray-500">Machine ID</span>
                 <p className="font-medium font-mono text-xs">{syncInfo.machine_id || 'N/A'}</p>
               </div>
+              {!isCloud && (
+                <div>
+                  <span className="text-gray-500">Sync</span>
+                  <p className="font-medium">
+                    {syncInfo.sync_enabled ? `Enabled (every ${syncInfo.sync_interval})` : 'Disabled'}
+                  </p>
+                </div>
+              )}
               <div>
-                <span className="text-gray-500">Sync</span>
-                <p className="font-medium">
-                  {syncInfo.sync_enabled ? `Enabled (every ${syncInfo.sync_interval})` : 'Disabled'}
-                </p>
-              </div>
-              <div>
-                <span className="text-gray-500">Last Push</span>
+                <span className="text-gray-500">
+                  {isCloud ? 'Last Push Received' : 'Last Push'}
+                </span>
                 <p className="font-medium">
                   {syncInfo.last_push ? new Date(syncInfo.last_push).toLocaleString() : 'Never'}
                 </p>
               </div>
               <div>
-                <span className="text-gray-500">Last Pull</span>
+                <span className="text-gray-500">
+                  {isCloud ? 'Last Pull Served' : 'Last Pull'}
+                </span>
                 <p className="font-medium">
                   {syncInfo.last_pull ? new Date(syncInfo.last_pull).toLocaleString() : 'Never'}
                 </p>
@@ -104,8 +112,8 @@ export function SyncPage() {
         )}
       </div>
 
-      {/* Cloud Stats */}
-      {cloudStats && (
+      {/* Cloud Stats (only in local mode) */}
+      {cloudStats && !isCloud && (
         <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
           <h3 className="font-semibold mb-3">Cloud Statistics</h3>
           <div className="grid grid-cols-3 gap-4 text-sm">
