@@ -244,6 +244,14 @@ func (c *Config) Update(partial map[string]any) (geminiChanged bool) {
 			if s, ok := v.(string); ok {
 				c.SyncInterval = s
 			}
+		case "api_key":
+			if s, ok := v.(string); ok {
+				c.APIKey = s
+			}
+		case "machine_id":
+			if s, ok := v.(string); ok {
+				c.MachineID = s
+			}
 		}
 	}
 
