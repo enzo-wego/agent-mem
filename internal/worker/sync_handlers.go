@@ -66,7 +66,7 @@ func (s *Server) handleSyncPush(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleSyncPull returns rows for a requesting machine.
+// handleSyncPull returns rows for a requesting machine using cursor-based pagination.
 func (s *Server) handleSyncPull(w http.ResponseWriter, r *http.Request) {
 	machineID := r.URL.Query().Get("machine_id")
 	limit := 100
@@ -79,29 +79,44 @@ func (s *Server) handleSyncPull(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Per-table cursors: cloud-side IDs from previous pull
+	obsAfter, _ := strconv.Atoi(r.URL.Query().Get("obs_after"))
+	sumAfter, _ := strconv.Atoi(r.URL.Query().Get("sum_after"))
+	promptAfter, _ := strconv.Atoi(r.URL.Query().Get("prompt_after"))
+	sessAfter, _ := strconv.Atoi(r.URL.Query().Get("sess_after"))
+
 	ctx := r.Context()
 
-	// Get observations not from this machine
-	observations, _ := s.db.GetUnsyncedObservations(ctx, limit)
-	summaries, _ := s.db.GetUnsyncedSummaries(ctx, limit)
-	prompts, _ := s.db.GetUnsyncedPrompts(ctx, limit)
-	sessions, _ := s.db.GetUnsyncedSessions(ctx, limit)
+	observations, _ := s.db.GetObservationsForPull(ctx, machineID, obsAfter, limit)
+	summaries, _ := s.db.GetSummariesForPull(ctx, machineID, sumAfter, limit)
+	prompts, _ := s.db.GetPromptsForPull(ctx, machineID, promptAfter, limit)
+	sessions, _ := s.db.GetSessionsForPull(ctx, machineID, sessAfter, limit)
 
-	// Filter out rows from requesting machine
-	var filteredObs []interface{ GetSyncSource() string }
-	_ = filteredObs // just use simple approach below
+	// Compute cursors: max ID per table
+	cursors := sync.PullCursors{}
+	if len(observations) > 0 {
+		cursors.Observations = observations[len(observations)-1].ID
+	}
+	if len(summaries) > 0 {
+		cursors.Summaries = summaries[len(summaries)-1].ID
+	}
+	if len(prompts) > 0 {
+		cursors.Prompts = prompts[len(prompts)-1].ID
+	}
+	if len(sessions) > 0 {
+		cursors.Sessions = sessions[len(sessions)-1].ID
+	}
 
 	resp := sync.SyncPullResponse{
 		Sessions:     sessions,
 		Observations: observations,
 		Summaries:    summaries,
 		Prompts:      prompts,
+		Cursors:      cursors,
 	}
 
 	// Record per-client pull time for cloud dashboard
-	if machineID != "" {
-		s.db.SetLastSyncTime(ctx, "client_pull:"+machineID)
-	}
+	s.db.SetLastSyncTime(ctx, "client_pull:"+machineID)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)

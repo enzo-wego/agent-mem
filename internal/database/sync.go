@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/pgvector/pgvector-go"
 )
 
@@ -264,13 +263,138 @@ func (db *DB) ImportPrompt(ctx context.Context, p *SyncablePrompt) error {
 	return err
 }
 
-// GetRowsForPull returns rows not from the requesting machine, ordered by ID.
-func (db *DB) GetRowsForPull(ctx context.Context, table, machineID string, lastID, limit int) (pgx.Rows, error) {
-	return db.Pool.Query(ctx, fmt.Sprintf(`
-		SELECT * FROM %s
-		WHERE sync_source != $1 AND id > $2
+// GetObservationsForPull returns observations not originating from the requesting machine,
+// paginated by cloud-side ID for cursor-based sync.
+func (db *DB) GetObservationsForPull(ctx context.Context, excludeSource string, afterID, limit int) ([]SyncableObservation, error) {
+	rows, err := db.Pool.Query(ctx, `
+		SELECT id, memory_session_id, project, type, title, subtitle, narrative, text,
+		       facts, concepts, files_read, files_modified, discovery_tokens,
+		       created_at, created_at_epoch, embedding,
+		       sync_id, sync_version, sync_source
+		FROM observations
+		WHERE sync_source IS DISTINCT FROM $1 AND id > $2
 		ORDER BY id ASC LIMIT $3
-	`, table), machineID, lastID, limit)
+	`, excludeSource, afterID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("get observations for pull: %w", err)
+	}
+	defer rows.Close()
+
+	var observations []SyncableObservation
+	for rows.Next() {
+		var o SyncableObservation
+		if err := rows.Scan(
+			&o.ID, &o.MemorySessionID, &o.Project, &o.Type, &o.Title, &o.Subtitle,
+			&o.Narrative, &o.Text, &o.Facts, &o.Concepts, &o.FilesRead, &o.FilesModified,
+			&o.DiscoveryTokens, &o.CreatedAt, &o.CreatedAtEpoch, &o.Embedding,
+			&o.SyncID, &o.SyncVersion, &o.SyncSource,
+		); err != nil {
+			return nil, fmt.Errorf("scan observation for pull: %w", err)
+		}
+		if o.Embedding != nil {
+			o.EmbeddingData = o.Embedding.Slice()
+		}
+		observations = append(observations, o)
+	}
+	return observations, rows.Err()
+}
+
+// GetSummariesForPull returns summaries not originating from the requesting machine.
+func (db *DB) GetSummariesForPull(ctx context.Context, excludeSource string, afterID, limit int) ([]SyncableSummary, error) {
+	rows, err := db.Pool.Query(ctx, `
+		SELECT id, memory_session_id, project, request, investigated, learned, completed, next_steps,
+		       notes, files_read, files_edited, discovery_tokens,
+		       created_at, created_at_epoch, embedding,
+		       sync_id, sync_version, sync_source
+		FROM session_summaries
+		WHERE sync_source IS DISTINCT FROM $1 AND id > $2
+		ORDER BY id ASC LIMIT $3
+	`, excludeSource, afterID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("get summaries for pull: %w", err)
+	}
+	defer rows.Close()
+
+	var summaries []SyncableSummary
+	for rows.Next() {
+		var s SyncableSummary
+		if err := rows.Scan(
+			&s.ID, &s.MemorySessionID, &s.Project, &s.Request, &s.Investigated,
+			&s.Learned, &s.Completed, &s.NextSteps, &s.Notes, &s.FilesRead, &s.FilesEdited,
+			&s.DiscoveryTokens, &s.CreatedAt, &s.CreatedAtEpoch, &s.Embedding,
+			&s.SyncID, &s.SyncVersion, &s.SyncSource,
+		); err != nil {
+			return nil, fmt.Errorf("scan summary for pull: %w", err)
+		}
+		if s.Embedding != nil {
+			s.EmbeddingData = s.Embedding.Slice()
+		}
+		summaries = append(summaries, s)
+	}
+	return summaries, rows.Err()
+}
+
+// GetPromptsForPull returns prompts not originating from the requesting machine.
+func (db *DB) GetPromptsForPull(ctx context.Context, excludeSource string, afterID, limit int) ([]SyncablePrompt, error) {
+	rows, err := db.Pool.Query(ctx, `
+		SELECT id, content_session_id, project, prompt, prompt_number,
+		       created_at, created_at_epoch, embedding,
+		       sync_id, sync_version, sync_source
+		FROM user_prompts
+		WHERE sync_source IS DISTINCT FROM $1 AND id > $2
+		ORDER BY id ASC LIMIT $3
+	`, excludeSource, afterID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("get prompts for pull: %w", err)
+	}
+	defer rows.Close()
+
+	var prompts []SyncablePrompt
+	for rows.Next() {
+		var p SyncablePrompt
+		if err := rows.Scan(
+			&p.ID, &p.ContentSessionID, &p.Project, &p.Prompt, &p.PromptNumber,
+			&p.CreatedAt, &p.CreatedAtEpoch, &p.Embedding,
+			&p.SyncID, &p.SyncVersion, &p.SyncSource,
+		); err != nil {
+			return nil, fmt.Errorf("scan prompt for pull: %w", err)
+		}
+		if p.Embedding != nil {
+			p.EmbeddingData = p.Embedding.Slice()
+		}
+		prompts = append(prompts, p)
+	}
+	return prompts, rows.Err()
+}
+
+// GetSessionsForPull returns sessions not originating from the requesting machine.
+func (db *DB) GetSessionsForPull(ctx context.Context, excludeSource string, afterID, limit int) ([]SdkSession, error) {
+	rows, err := db.Pool.Query(ctx, `
+		SELECT id, content_session_id, memory_session_id, project, user_prompt,
+		       started_at, started_at_epoch, completed_at, completed_at_epoch, status,
+		       sync_id, sync_version, sync_source
+		FROM sdk_sessions
+		WHERE sync_source IS DISTINCT FROM $1 AND id > $2
+		ORDER BY id ASC LIMIT $3
+	`, excludeSource, afterID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("get sessions for pull: %w", err)
+	}
+	defer rows.Close()
+
+	var sessions []SdkSession
+	for rows.Next() {
+		var s SdkSession
+		if err := rows.Scan(
+			&s.ID, &s.ContentSessionID, &s.MemorySessionID, &s.Project, &s.UserPrompt,
+			&s.StartedAt, &s.StartedAtEpoch, &s.CompletedAt, &s.CompletedAtEpoch, &s.Status,
+			&s.SyncID, &s.SyncVersion, &s.SyncSource,
+		); err != nil {
+			return nil, fmt.Errorf("scan session for pull: %w", err)
+		}
+		sessions = append(sessions, s)
+	}
+	return sessions, rows.Err()
 }
 
 // SyncStats holds sync status counts.

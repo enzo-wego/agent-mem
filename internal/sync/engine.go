@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -32,12 +33,21 @@ type SyncPushResponse struct {
 	Rejected int `json:"rejected"`
 }
 
+// PullCursors holds per-table cloud-side IDs for cursor-based pull pagination.
+type PullCursors struct {
+	Observations int `json:"observations"`
+	Summaries    int `json:"summaries"`
+	Prompts      int `json:"prompts"`
+	Sessions     int `json:"sessions"`
+}
+
 // SyncPullResponse is the data received from cloud during pull.
 type SyncPullResponse struct {
 	Sessions     []database.SdkSession          `json:"sessions,omitempty"`
 	Observations []database.SyncableObservation `json:"observations,omitempty"`
 	Summaries    []database.SyncableSummary     `json:"summaries,omitempty"`
 	Prompts      []database.SyncablePrompt      `json:"prompts,omitempty"`
+	Cursors      PullCursors                    `json:"cursors"`
 }
 
 // ClientInfo holds per-client sync timestamps (cloud mode).
@@ -155,7 +165,15 @@ func (e *Engine) push(ctx context.Context) error {
 }
 
 func (e *Engine) pull(ctx context.Context) error {
-	url := fmt.Sprintf("%s/api/sync/pull?machine_id=%s&limit=%d", e.config.SyncURL, e.config.MachineID, batchSize)
+	// Load per-table cursors from settings
+	obsCursor := e.getPullCursor(ctx, "observations")
+	sumCursor := e.getPullCursor(ctx, "summaries")
+	promptCursor := e.getPullCursor(ctx, "prompts")
+	sessCursor := e.getPullCursor(ctx, "sessions")
+
+	url := fmt.Sprintf("%s/api/sync/pull?machine_id=%s&limit=%d&obs_after=%d&sum_after=%d&prompt_after=%d&sess_after=%d",
+		e.config.SyncURL, e.config.MachineID, batchSize,
+		obsCursor, sumCursor, promptCursor, sessCursor)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return fmt.Errorf("create pull request: %w", err)
@@ -200,11 +218,42 @@ func (e *Engine) pull(ctx context.Context) error {
 		}
 	}
 
+	// Update cursors from response
+	if pullResp.Cursors.Observations > 0 {
+		e.setPullCursor(ctx, "observations", pullResp.Cursors.Observations)
+	}
+	if pullResp.Cursors.Summaries > 0 {
+		e.setPullCursor(ctx, "summaries", pullResp.Cursors.Summaries)
+	}
+	if pullResp.Cursors.Prompts > 0 {
+		e.setPullCursor(ctx, "prompts", pullResp.Cursors.Prompts)
+	}
+	if pullResp.Cursors.Sessions > 0 {
+		e.setPullCursor(ctx, "sessions", pullResp.Cursors.Sessions)
+	}
+
 	e.db.SetLastSyncTime(ctx, "last_pull")
 	if imported > 0 {
 		log.Info().Int("imported", imported).Msg("Sync pull complete")
 	}
 	return nil
+}
+
+func (e *Engine) getPullCursor(ctx context.Context, table string) int {
+	var v string
+	err := e.db.Pool.QueryRow(ctx, `SELECT value FROM settings WHERE key = $1`, "pull_cursor:"+table).Scan(&v)
+	if err != nil {
+		return 0
+	}
+	n, _ := strconv.Atoi(v)
+	return n
+}
+
+func (e *Engine) setPullCursor(ctx context.Context, table string, id int) {
+	e.db.Pool.Exec(ctx, `
+		INSERT INTO settings (key, value) VALUES ($1, $2)
+		ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+	`, "pull_cursor:"+table, strconv.Itoa(id))
 }
 
 func (e *Engine) postJSON(ctx context.Context, url string, payload any) (*http.Response, error) {
