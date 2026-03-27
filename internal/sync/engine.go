@@ -165,76 +165,87 @@ func (e *Engine) push(ctx context.Context) error {
 }
 
 func (e *Engine) pull(ctx context.Context) error {
-	// Load per-table cursors from settings
-	obsCursor := e.getPullCursor(ctx, "observations")
-	sumCursor := e.getPullCursor(ctx, "summaries")
-	promptCursor := e.getPullCursor(ctx, "prompts")
-	sessCursor := e.getPullCursor(ctx, "sessions")
+	totalImported := 0
 
-	url := fmt.Sprintf("%s/api/sync/pull?machine_id=%s&limit=%d&obs_after=%d&sum_after=%d&prompt_after=%d&sess_after=%d",
-		e.config.SyncURL, e.config.MachineID, batchSize,
-		obsCursor, sumCursor, promptCursor, sessCursor)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return fmt.Errorf("create pull request: %w", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+e.config.APIKey)
+	for {
+		// Load per-table cursors from settings
+		obsCursor := e.getPullCursor(ctx, "observations")
+		sumCursor := e.getPullCursor(ctx, "summaries")
+		promptCursor := e.getPullCursor(ctx, "prompts")
+		sessCursor := e.getPullCursor(ctx, "sessions")
 
-	resp, err := e.client.Do(req)
-	if err != nil {
-		return fmt.Errorf("pull: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("pull returned %d: %s", resp.StatusCode, string(body))
-	}
-
-	var pullResp SyncPullResponse
-	if err := json.NewDecoder(resp.Body).Decode(&pullResp); err != nil {
-		return fmt.Errorf("decode pull response: %w", err)
-	}
-
-	imported := 0
-	for i := range pullResp.Sessions {
-		if err := e.db.ImportSession(ctx, &pullResp.Sessions[i]); err == nil {
-			imported++
+		url := fmt.Sprintf("%s/api/sync/pull?machine_id=%s&limit=%d&obs_after=%d&sum_after=%d&prompt_after=%d&sess_after=%d",
+			e.config.SyncURL, e.config.MachineID, batchSize,
+			obsCursor, sumCursor, promptCursor, sessCursor)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		if err != nil {
+			return fmt.Errorf("create pull request: %w", err)
 		}
-	}
-	for i := range pullResp.Observations {
-		if err := e.db.ImportObservation(ctx, &pullResp.Observations[i]); err == nil {
-			imported++
-		}
-	}
-	for i := range pullResp.Summaries {
-		if err := e.db.ImportSummary(ctx, &pullResp.Summaries[i]); err == nil {
-			imported++
-		}
-	}
-	for i := range pullResp.Prompts {
-		if err := e.db.ImportPrompt(ctx, &pullResp.Prompts[i]); err == nil {
-			imported++
-		}
-	}
+		req.Header.Set("Authorization", "Bearer "+e.config.APIKey)
 
-	// Update cursors from response
-	if pullResp.Cursors.Observations > 0 {
-		e.setPullCursor(ctx, "observations", pullResp.Cursors.Observations)
-	}
-	if pullResp.Cursors.Summaries > 0 {
-		e.setPullCursor(ctx, "summaries", pullResp.Cursors.Summaries)
-	}
-	if pullResp.Cursors.Prompts > 0 {
-		e.setPullCursor(ctx, "prompts", pullResp.Cursors.Prompts)
-	}
-	if pullResp.Cursors.Sessions > 0 {
-		e.setPullCursor(ctx, "sessions", pullResp.Cursors.Sessions)
+		resp, err := e.client.Do(req)
+		if err != nil {
+			return fmt.Errorf("pull: %w", err)
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			return fmt.Errorf("pull returned %d: %s", resp.StatusCode, string(body))
+		}
+
+		var pullResp SyncPullResponse
+		if err := json.NewDecoder(resp.Body).Decode(&pullResp); err != nil {
+			resp.Body.Close()
+			return fmt.Errorf("decode pull response: %w", err)
+		}
+		resp.Body.Close()
+
+		batchSize := len(pullResp.Sessions) + len(pullResp.Observations) +
+			len(pullResp.Summaries) + len(pullResp.Prompts)
+		if batchSize == 0 {
+			break // fully caught up
+		}
+
+		for i := range pullResp.Sessions {
+			if err := e.db.ImportSession(ctx, &pullResp.Sessions[i]); err == nil {
+				totalImported++
+			}
+		}
+		for i := range pullResp.Observations {
+			if err := e.db.ImportObservation(ctx, &pullResp.Observations[i]); err == nil {
+				totalImported++
+			}
+		}
+		for i := range pullResp.Summaries {
+			if err := e.db.ImportSummary(ctx, &pullResp.Summaries[i]); err == nil {
+				totalImported++
+			}
+		}
+		for i := range pullResp.Prompts {
+			if err := e.db.ImportPrompt(ctx, &pullResp.Prompts[i]); err == nil {
+				totalImported++
+			}
+		}
+
+		// Update cursors from response
+		if pullResp.Cursors.Observations > 0 {
+			e.setPullCursor(ctx, "observations", pullResp.Cursors.Observations)
+		}
+		if pullResp.Cursors.Summaries > 0 {
+			e.setPullCursor(ctx, "summaries", pullResp.Cursors.Summaries)
+		}
+		if pullResp.Cursors.Prompts > 0 {
+			e.setPullCursor(ctx, "prompts", pullResp.Cursors.Prompts)
+		}
+		if pullResp.Cursors.Sessions > 0 {
+			e.setPullCursor(ctx, "sessions", pullResp.Cursors.Sessions)
+		}
 	}
 
 	e.db.SetLastSyncTime(ctx, "last_pull")
-	if imported > 0 {
-		log.Info().Int("imported", imported).Msg("Sync pull complete")
+	if totalImported > 0 {
+		log.Info().Int("imported", totalImported).Msg("Sync pull complete")
 	}
 	return nil
 }
