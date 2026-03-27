@@ -1,6 +1,7 @@
 -- +goose Up
 -- Auto-set sync_source from machine_id in settings when NULL on insert.
 
+-- +goose StatementBegin
 CREATE OR REPLACE FUNCTION set_sync_source() RETURNS TRIGGER AS $$
 BEGIN
     IF NEW.sync_source IS NULL THEN
@@ -12,6 +13,7 @@ BEGIN
     RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
+-- +goose StatementEnd
 
 CREATE TRIGGER trg_observations_sync_source
     BEFORE INSERT ON observations
