@@ -8,23 +8,27 @@ Search your past coding sessions, observations, and summaries stored in agent-me
 
 ## How to search
 
-Use curl to query the agent-mem worker API:
+Use curl to query the agent-mem worker API. If `AGENT_MEM_API_KEY` is set, include it as a Bearer token. If a request returns `{"error": "unauthorized"}`, retry with the auth header.
 
 ```bash
+# Auth header (include when AGENT_MEM_API_KEY is set)
+AUTH_HEADER=""
+if [ -n "$AGENT_MEM_API_KEY" ]; then AUTH_HEADER="-H \"Authorization: Bearer $AGENT_MEM_API_KEY\""; fi
+
 # Hybrid search (FTS + semantic)
-curl -s "http://localhost:34567/api/search?q=QUERY&project=PROJECT&limit=10"
+curl -s $AUTH_HEADER "http://localhost:34567/api/search?q=QUERY&project=PROJECT&limit=10"
 
 # Search by file
-curl -s "http://localhost:34567/api/search/by-file?path=FILE_PATH&project=PROJECT"
+curl -s $AUTH_HEADER "http://localhost:34567/api/search/by-file?path=FILE_PATH&project=PROJECT"
 
 # Timeline search
-curl -s "http://localhost:34567/api/search/timeline?project=PROJECT&from=2026-01-01&to=2026-03-21"
+curl -s $AUTH_HEADER "http://localhost:34567/api/search/timeline?project=PROJECT&from=2026-01-01&to=2026-03-21"
 
 # List observations by type
-curl -s "http://localhost:34567/api/observations?project=PROJECT&type=bugfix&limit=20"
+curl -s $AUTH_HEADER "http://localhost:34567/api/observations?project=PROJECT&type=bugfix&limit=20"
 
 # Get observation details
-curl -s "http://localhost:34567/api/observations/ID"
+curl -s $AUTH_HEADER "http://localhost:34567/api/observations/ID"
 ```
 
 ## Parameters
