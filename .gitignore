@@ -37,3 +37,5 @@ go.work.sum
 /.idea
 /.serena
 /docs/plans
+.omx/
+/.codex

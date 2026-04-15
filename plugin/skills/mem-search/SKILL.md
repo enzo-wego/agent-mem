@@ -1,5 +1,5 @@
 ---
-name: "search"
+name: "mem-search"
 description: "Search past coding sessions and observations from agent-mem memory"
 tools: ["Bash"]
 ---
