@@ -17,6 +17,13 @@ help: ## Show this help.
 build: ## Build the Docker images.
 	$(compose) build
 
+build-cli: ## Build the agent-mem CLI into ./bin/agent-mem.
+	mkdir -p bin
+	go build -o ./bin/agent-mem ./cmd/agent-mem
+
+install-cli: ## Install the agent-mem CLI into $$(go env GOPATH)/bin.
+	go install ./cmd/agent-mem
+
 up: ## Start all services.
 	$(compose) up -d
 
@@ -57,4 +64,4 @@ db-reset: ## Clear the database and re-run migrations.
 	@sleep 5
 	$(compose) exec worker agent-mem migrate
 
-.PHONY: all help build up down status logs migrate migrate-create migrate-status migrate-rollback migrate-up-by-one migrate-fix restart db-reset
+.PHONY: all help build build-cli install-cli up down status logs migrate migrate-create migrate-status migrate-rollback migrate-up-by-one migrate-fix restart db-reset
