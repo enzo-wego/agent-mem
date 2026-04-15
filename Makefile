@@ -21,8 +21,12 @@ build-cli: ## Build the agent-mem CLI into ./bin/agent-mem.
 	mkdir -p bin
 	go build -o ./bin/agent-mem ./cmd/agent-mem
 
-install-cli: ## Install the agent-mem CLI into $$(go env GOPATH)/bin.
+install-cli: ## Install the agent-mem CLI. Override with GOBIN=/path, e.g. /usr/local/bin.
+ifdef GOBIN
+	GOBIN="$(GOBIN)" go install ./cmd/agent-mem
+else
 	go install ./cmd/agent-mem
+endif
 
 up: ## Start all services.
 	$(compose) up -d
