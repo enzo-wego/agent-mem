@@ -1,6 +1,7 @@
 GREEN  := $(shell tput -Txterm setaf 2)
 YELLOW := $(shell tput -Txterm setaf 3)
 RESET  := $(shell tput -Txterm sgr0)
+GO     ?= go
 
 compose := docker compose
 
@@ -17,15 +18,15 @@ help: ## Show this help.
 build: ## Build the Docker images.
 	$(compose) build
 
-build-cli: ## Build the agent-mem CLI into ./bin/agent-mem.
+build-cli: ## Build the agent-mem CLI into ./bin/agent-mem. Override GO=/path/to/go if needed.
 	mkdir -p bin
-	go build -o ./bin/agent-mem ./cmd/agent-mem
+	$(GO) build -o ./bin/agent-mem ./cmd/agent-mem
 
-install-cli: ## Install the agent-mem CLI. Override with GOBIN=/path, e.g. /usr/local/bin.
+install-cli: ## Install the agent-mem CLI. Override with GO=/path/to/go and GOBIN=/path, e.g. /usr/local/bin.
 ifdef GOBIN
-	GOBIN="$(GOBIN)" go install ./cmd/agent-mem
+	GOBIN="$(GOBIN)" $(GO) install ./cmd/agent-mem
 else
-	go install ./cmd/agent-mem
+	$(GO) install ./cmd/agent-mem
 endif
 
 up: ## Start all services.
@@ -44,7 +45,7 @@ migrate: up ## Run all pending database migrations.
 	$(compose) exec worker agent-mem migrate
 
 migrate-create: ## Create a new migration file. Usage: make migrate-create name=add_column_to_table
-	go run cmd/agent-mem/main.go migrate-create $(name)
+	$(GO) run cmd/agent-mem/main.go migrate-create $(name)
 
 migrate-status: up ## Show migration status.
 	$(compose) exec worker agent-mem migrate-status
