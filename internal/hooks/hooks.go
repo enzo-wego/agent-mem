@@ -15,20 +15,21 @@ import (
 
 var systemReminderRe = regexp.MustCompile(`(?s)<system-reminder>.*?</system-reminder>`)
 
+const (
+	ProviderClaude = "claude"
+	ProviderCodex  = "codex"
+)
+
 // RunHook is the thin CLI entry point for all hook subcommands.
-// It reads stdin JSON, adds CWD, POSTs to the worker, and writes the response to stdout.
-func RunHook(event string, port int) error {
+// It reads stdin JSON, normalizes provider-specific payloads, POSTs to the
+// worker, and writes the response to stdout.
+func RunHook(event, provider string, port int) error {
 	// Read stdin (may be empty for session-start)
 	input, _ := io.ReadAll(os.Stdin)
 
-	// Build payload with CWD
-	payload := addCWD(input)
-
-	// For stop events: read transcript NOW while the file still exists.
-	// Claude Code may delete the transcript file after the hook returns,
-	// so we must extract the content in the CLI process, not in the worker.
-	if event == "stop" {
-		payload = extractTranscriptContent(payload)
+	payload, err := normalizeHookPayload(input, provider, event)
+	if err != nil {
+		return err
 	}
 
 	// POST to worker with short timeout
@@ -37,7 +38,7 @@ func RunHook(event string, port int) error {
 
 	resp, err := client.Post(url, "application/json", bytes.NewReader(payload))
 	if err != nil {
-		// Worker not running — exit silently (don't break Claude Code)
+		// Worker not running — exit silently (don't break the caller's hook flow)
 		return nil
 	}
 	defer resp.Body.Close()
@@ -50,7 +51,7 @@ func RunHook(event string, port int) error {
 		if len(context) > 0 {
 			output := map[string]any{
 				"hookSpecificOutput": map[string]any{
-					"hookEventName":    "SessionStart",
+					"hookEventName":     "SessionStart",
 					"additionalContext": context,
 				},
 			}
@@ -64,36 +65,134 @@ func RunHook(event string, port int) error {
 	return nil
 }
 
+// NormalizeProvider resolves the optional provider suffix while keeping the
+// existing Claude path as the default contract.
+func NormalizeProvider(provider string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case "", ProviderClaude:
+		return ProviderClaude, nil
+	case ProviderCodex:
+		return ProviderCodex, nil
+	default:
+		return "", fmt.Errorf("unsupported hook provider %q", provider)
+	}
+}
+
+func normalizeHookPayload(input []byte, provider, event string) ([]byte, error) {
+	resolvedProvider, err := NormalizeProvider(provider)
+	if err != nil {
+		return nil, err
+	}
+
+	payload := parsePayload(input)
+	normalizeCommonFields(payload)
+	addCWDToMap(payload)
+
+	// For Claude stop events: read transcript NOW while the file still exists.
+	// Claude Code may delete the transcript file after the hook returns, so we
+	// extract the content in the CLI process, not in the worker.
+	if resolvedProvider == ProviderClaude && event == "stop" {
+		extractTranscriptContentInPlace(payload)
+	}
+
+	result, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func parsePayload(input []byte) map[string]any {
+	if len(input) == 0 {
+		return make(map[string]any)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(input, &payload); err != nil {
+		return make(map[string]any)
+	}
+	if payload == nil {
+		return make(map[string]any)
+	}
+	return payload
+}
+
+func normalizeCommonFields(payload map[string]any) {
+	copyAlias(payload, "session_id", "sessionId")
+	copyAlias(payload, "prompt", "input", "user_prompt", "userPrompt", "text")
+	copyAlias(payload, "tool_name", "toolName")
+	copyAlias(payload, "tool_input", "toolInput")
+	copyAlias(payload, "tool_response", "toolResponse")
+	copyAlias(payload, "transcript_path", "transcriptPath")
+	copyAlias(payload, "last_assistant_message", "lastAssistantMessage")
+}
+
+func copyAlias(payload map[string]any, target string, aliases ...string) {
+	if value, ok := payload[target]; ok && !isEmptyValue(value) {
+		return
+	}
+	for _, alias := range aliases {
+		if value, ok := payload[alias]; ok && !isEmptyValue(value) {
+			payload[target] = value
+			return
+		}
+	}
+}
+
+func addCWDToMap(payload map[string]any) {
+	if value, ok := payload["cwd"]; ok && !isEmptyValue(value) {
+		return
+	}
+
+	cwd, _ := os.Getwd()
+	payload["cwd"] = cwd
+}
+
+func isEmptyValue(value any) bool {
+	switch v := value.(type) {
+	case nil:
+		return true
+	case string:
+		return strings.TrimSpace(v) == ""
+	default:
+		return false
+	}
+}
+
 // extractTranscriptContent reads the transcript file referenced in the payload,
 // extracts the last assistant message, and replaces transcript_path with the
 // actual content. This must happen in the CLI process because Claude Code may
 // clean up the transcript file after the hook returns.
 func extractTranscriptContent(payload []byte) []byte {
-	var data map[string]any
-	if err := json.Unmarshal(payload, &data); err != nil {
+	data := parsePayload(payload)
+	if len(data) == 0 && len(payload) > 0 {
 		return payload
 	}
 
-	transcriptPath, _ := data["transcript_path"].(string)
-	if transcriptPath == "" {
-		return payload
-	}
-
-	msg, err := readLastAssistantMessage(transcriptPath)
-	if err != nil {
-		// Can't read file — leave transcript_path for worker to handle/log
-		return payload
-	}
-
-	// Replace transcript_path with the extracted content
-	data["last_assistant_message"] = msg
-	delete(data, "transcript_path")
+	extractTranscriptContentInPlace(data)
 
 	result, err := json.Marshal(data)
 	if err != nil {
 		return payload
 	}
 	return result
+}
+
+func extractTranscriptContentInPlace(data map[string]any) {
+	transcriptPath, _ := data["transcript_path"].(string)
+	if transcriptPath == "" {
+		return
+	}
+
+	msg, err := readLastAssistantMessage(transcriptPath)
+	if err != nil {
+		// Can't read file — leave transcript_path for worker to handle/log
+		return
+	}
+
+	// Replace transcript_path with the extracted content
+	data["last_assistant_message"] = msg
+	delete(data, "transcript_path")
 }
 
 // readLastAssistantMessage reads a Claude Code JSONL transcript and returns
@@ -176,22 +275,8 @@ func extractContentText(content any) string {
 
 // addCWD merges the current working directory into the JSON payload.
 func addCWD(input []byte) []byte {
-	cwd, _ := os.Getwd()
-
-	var payload map[string]any
-	if len(input) > 0 {
-		if err := json.Unmarshal(input, &payload); err != nil {
-			payload = make(map[string]any)
-		}
-	} else {
-		payload = make(map[string]any)
-	}
-
-	// Only set CWD if not already present
-	if _, ok := payload["cwd"]; !ok {
-		payload["cwd"] = cwd
-	}
-
+	payload := parsePayload(input)
+	addCWDToMap(payload)
 	result, _ := json.Marshal(payload)
 	return result
 }
