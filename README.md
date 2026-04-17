@@ -9,17 +9,85 @@
 - Stores prompts, observations, summaries, and sync metadata in PostgreSQL
 - Builds relevant context for future sessions
 - Exposes a dashboard and JSON API for search, timelines, sync, settings, and logs
-- Installs Codex hooks and bundled plugin skills from the CLI
+- Integrates with Claude Code (manual hook config) and Codex (one-shot CLI installer)
 
 ## Architecture
 
 ```text
-coding-agent hooks
-  -> agent-mem hook <event>
-  -> agent-mem worker (:34567)
-  -> PostgreSQL + pgvector
-  -> dashboard/API
+┌────────────────────────── CLIENTS ───────────────────────────┐
+│                                                              │
+│   Claude Code hooks       Codex hooks       mem-search skill │
+│         │                      │                   │         │
+│         ▼                      ▼                   │         │
+│   ┌──────────────────────────────────┐             │         │
+│   │     agent-mem hook <event>       │             │         │
+│   │  (short-lived CLI, stdin JSON →  │             │         │
+│   │   POST to worker, stdout reply)  │             │         │
+│   └──────────────┬───────────────────┘             │         │
+│                  │ POST /api/hook/*                │ GET     │
+│                  │                                 │ /api/*  │
+│   Browser ───────┼────────── GET /  (SPA) ─────────┤         │
+│                  │                                 │         │
+└──────────────────┼─────────────────────────────────┼─────────┘
+                   │                                 │
+                   └─────────────────┬───────────────┘
+                                     │  HTTP
+                                     ▼
+┌──────────────── SERVER  (localhost:34567) ───────────────────┐
+│                      agent-mem worker                        │
+│                                                              │
+│   hook ingest │ hybrid search │ sync push/pull │ dashboard   │
+│                                                              │
+└────────────┬───────────────────────┬─────────────────────────┘
+             │                       │
+             ▼                       ▼
+   ┌───────────────────┐    ┌───────────────────────┐
+   │  PostgreSQL +     │    │  Gemini API           │
+   │  pgvector         │    │  (extract + embed)    │
+   └───────────────────┘    └───────────────────────┘
 ```
+
+### Cloud Sync
+
+When `AGENT_MEM_SYNC_ENABLED=true`, the worker runs a ticker every `AGENT_MEM_SYNC_INTERVAL` (default `60s`) that pushes unsynced rows to — and pulls other machines' rows from — a remote `agent-mem` instance at `AGENT_MEM_SYNC_URL`. The remote is just another `agent-mem` worker, so "client" and "server" here are roles, not separate binaries.
+
+```text
+┌──────────────────────────┐                        ┌──────────────────────────┐
+│  Local agent-mem         │                        │  Remote agent-mem        │
+│  (sync client)           │                        │  (sync server,           │
+│                          │                        │   same binary)           │
+│  every SYNC_INTERVAL:    │                        │                          │
+│                          │  POST /api/sync/push   │                          │
+│  1. collect unsynced     │  + Bearer API key      │                          │
+│     rows (sync_version   │ ─────────────────────► │  INSERT ... ON CONFLICT  │
+│     = 0) in batches      │    {machine_id,        │    (sync_id) DO NOTHING  │
+│     of 100 per table     │     sessions, obs,     │                          │
+│                          │     summaries,         │                          │
+│                          │     prompts}           │                          │
+│                          │ ◄───────────────────── │                          │
+│  2. MarkSynced locally   │   {received, rejected} │                          │
+│     (sync_version = now) │                        │                          │
+│                          │  GET /api/sync/pull    │                          │
+│  3. request rows from    │  ?machine_id=self      │                          │
+│     other machines       │  &obs_after=cursor…    │                          │
+│     using per-table      │ ─────────────────────► │                          │
+│     cursors stored in    │                        │                          │
+│     app_settings         │ ◄───────────────────── │                          │
+│                          │   rows + new cursors   │                          │
+│  4. import locally with  │                        │                          │
+│     ON CONFLICT (sync_id)│                        │                          │
+│     DO NOTHING           │                        │                          │
+└──────────────────────────┘                        └──────────────────────────┘
+```
+
+Key properties:
+
+- **Auth**: both endpoints require `Authorization: Bearer $AGENT_MEM_API_KEY`.
+- **Identity**: each row carries `sync_id = {machine_id}:{row_id}`; dedup is enforced by a UNIQUE index on `sync_id`, so replaying a push is safe.
+- **Heartbeat**: the local worker pushes every cycle even when it has nothing unsynced, so the remote can track `last_push` per `machine_id`.
+- **Cursors**: the pull uses per-table `_after` cursors (observations / summaries / prompts / sessions) persisted in `app_settings`, so a restart doesn't re-pull the whole dataset.
+- **Embeddings travel with the data** — the remote does not re-embed.
+- **Status**: `GET /api/sync/info` returns current mode, cursors, and per-machine push/pull timestamps.
 
 Main code paths:
 
@@ -67,6 +135,33 @@ Then run the worker against a PostgreSQL instance:
 agent-mem worker
 ```
 
+## Claude Code Integration
+
+Claude Code is the default provider for `agent-mem hook` — no provider argument is required. There is no bundled installer yet, so register the four hooks manually in `~/.claude/settings.json` (or `.claude/settings.json` for a project-local install):
+
+```json
+{
+  "hooks": {
+    "SessionStart": [
+      { "command": "agent-mem hook session-start", "timeout": 30 }
+    ],
+    "UserPromptSubmit": [
+      { "command": "agent-mem hook prompt-submit", "timeout": 10 }
+    ],
+    "PostToolUse": [
+      { "command": "agent-mem hook post-tool-use", "timeout": 10 }
+    ],
+    "Stop": [
+      { "command": "agent-mem hook stop", "timeout": 30 }
+    ]
+  }
+}
+```
+
+The worker normalizes Claude Code hook payloads automatically. On `Stop`, the CLI reads the last assistant message from the JSONL transcript at `~/.claude/projects/.../<session>.jsonl` before Claude Code cleans the file up.
+
+The `mem-search` skill also works with Claude Code — copy `plugin/skills/mem-search/` into `~/.claude/skills/` (user-global) or `.claude/skills/` (project-local).
+
 ## Codex Integration
 
 Install the bundled Codex hooks and plugin skills:
@@ -101,6 +196,12 @@ agent-mem migrate-sqlite --sqlite-path ~/.claude-mem/claude-mem.db
 agent-mem backfill-embeddings
 agent-mem install codex --scope project
 agent-mem install-skill mem-search --scope project
+
+# hook adapters (stdin JSON -> worker; defaults to claude, pass "codex" as 2nd arg for Codex)
+agent-mem hook session-start
+agent-mem hook prompt-submit
+agent-mem hook post-tool-use
+agent-mem hook stop
 ```
 
 ## Configuration
