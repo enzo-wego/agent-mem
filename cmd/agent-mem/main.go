@@ -10,7 +10,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 
-	"github.com/agent-mem/agent-mem/internal/codexinstall"
+	"github.com/agent-mem/agent-mem/internal/agentinstall"
 	"github.com/agent-mem/agent-mem/internal/config"
 	"github.com/agent-mem/agent-mem/internal/database"
 	"github.com/agent-mem/agent-mem/internal/hooks"
@@ -111,8 +111,8 @@ func main() {
 	var installSkillSourceDir string
 	installSkillCmd := &cobra.Command{
 		Use:   "install-skill [name]",
-		Short: "Install a plugin skill into a Codex-recognized skills directory",
-		Long:  "Copies a plugin skill directory into either the user-global or project-local .codex skills directory so Codex can discover it.",
+		Short: "Install a plugin skill into the unified .agents/skills directory",
+		Long:  "Copies a plugin skill directory into either the user-global or project-local .agents/skills directory.",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			result, err := skills.Install(args[0], skills.InstallOptions{
@@ -147,7 +147,8 @@ func main() {
 		Short: "Install agent-mem Codex hooks and plugin skills together",
 		Long:  "Installs the agent-mem Codex hook config plus all plugin skills into the selected Codex scope.",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			result, err := codexinstall.Install(codexinstall.InstallOptions{
+			result, err := agentinstall.Install(agentinstall.InstallOptions{
+				Provider:        hooks.ProviderCodex,
 				Scope:           installCodexScope,
 				ProjectDir:      installCodexProjectDir,
 				HooksPath:       installCodexHooksFile,
@@ -169,11 +170,43 @@ func main() {
 	installCodexCmd.Flags().StringVar(&installCodexHooksFile, "hooks-file", "", "Override the hooks config path")
 	installCodexCmd.Flags().StringVar(&installCodexPluginSkillsDir, "plugin-skills-dir", "", "Override the plugin skills directory (defaults to the skills embedded in the agent-mem binary)")
 
+	var installGeminiScope string
+	var installGeminiProjectDir string
+	var installGeminiHooksFile string
+	var installGeminiPluginSkillsDir string
+	installGeminiCmd := &cobra.Command{
+		Use:   "gemini",
+		Short: "Install agent-mem Gemini CLI hooks and plugin skills together",
+		Long:  "Installs the agent-mem Gemini CLI hook config plus all plugin skills into the selected Gemini scope.",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			result, err := agentinstall.Install(agentinstall.InstallOptions{
+				Provider:        hooks.ProviderGemini,
+				Scope:           installGeminiScope,
+				ProjectDir:      installGeminiProjectDir,
+				HooksPath:       installGeminiHooksFile,
+				PluginSkillsDir: installGeminiPluginSkillsDir,
+			})
+			if err != nil {
+				return err
+			}
+
+			fmt.Fprintf(cmd.OutOrStdout(), "installed Gemini hooks in %s\n", result.Hooks.Path)
+			for _, skill := range result.Skills {
+				fmt.Fprintf(cmd.OutOrStdout(), "installed Gemini skill %s in %s\n", skill.Name, skill.Target)
+			}
+			return nil
+		},
+	}
+	installGeminiCmd.Flags().StringVar(&installGeminiScope, "scope", "project", "Install scope: user or project")
+	installGeminiCmd.Flags().StringVar(&installGeminiProjectDir, "project-dir", "", "Project root to use with --scope project (defaults to the current working directory)")
+	installGeminiCmd.Flags().StringVar(&installGeminiHooksFile, "hooks-file", "", "Override the hooks config path")
+	installGeminiCmd.Flags().StringVar(&installGeminiPluginSkillsDir, "plugin-skills-dir", "", "Override the plugin skills directory (defaults to the skills embedded in the agent-mem binary)")
+
 	installCmd := &cobra.Command{
 		Use:   "install",
 		Short: "Install agent-mem integration surfaces into supported coding agents",
 	}
-	installCmd.AddCommand(installCodexCmd)
+	installCmd.AddCommand(installCodexCmd, installGeminiCmd)
 
 	// hook <event> [provider]
 	hookCmd := &cobra.Command{

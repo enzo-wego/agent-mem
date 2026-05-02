@@ -51,6 +51,20 @@ var codexHookCommands = map[string]string{
 	"Stop":             "agent-mem hook stop codex",
 }
 
+var geminiHookEventOrder = []string{
+	"SessionStart",
+	"BeforeAgent",
+	"AfterTool",
+	"SessionEnd",
+}
+
+var geminiHookCommands = map[string]string{
+	"SessionStart": "agent-mem hook session-start gemini",
+	"BeforeAgent":  "agent-mem hook prompt-submit gemini",
+	"AfterTool":    "agent-mem hook post-tool-use gemini",
+	"SessionEnd":   "agent-mem hook stop gemini",
+}
+
 // InstallHooks merges the managed agent-mem hooks into the selected provider's
 // config file, creating the file if it does not exist yet.
 func InstallHooks(provider, hooksPath string) (InstallResult, error) {
@@ -71,7 +85,14 @@ func InstallHooks(provider, hooksPath string) (InstallResult, error) {
 		return InstallResult{}, err
 	}
 
-	changedEvents := mergeCodexHooks(cfg)
+	var changedEvents []string
+	switch resolvedProvider {
+	case ProviderGemini:
+		changedEvents = mergeGeminiHooks(cfg)
+	default:
+		changedEvents = mergeCodexHooks(cfg)
+	}
+
 	changed := created || len(changedEvents) > 0
 	if changed {
 		if err := writeHookConfig(hooksPath, cfg); err != nil {
@@ -101,8 +122,10 @@ func normalizeInstallProvider(provider string) (string, error) {
 	switch strings.ToLower(strings.TrimSpace(provider)) {
 	case "", ProviderCodex:
 		return ProviderCodex, nil
+	case ProviderGemini:
+		return ProviderGemini, nil
 	default:
-		return "", fmt.Errorf("install-hooks currently supports %q only", ProviderCodex)
+		return "", fmt.Errorf("install-hooks currently supports %q and %q only", ProviderCodex, ProviderGemini)
 	}
 }
 
@@ -120,7 +143,7 @@ func resolveInstallPath(provider string, opts InstallOptions) (string, error) {
 	case "", "user":
 		return defaultHooksPath(resolvedProvider)
 	case "project":
-		return projectHooksPath(opts.ProjectDir)
+		return projectHooksPath(resolvedProvider, opts.ProjectDir)
 	default:
 		return "", fmt.Errorf("unsupported install scope %q", opts.Scope)
 	}
@@ -139,12 +162,14 @@ func defaultHooksPath(provider string) (string, error) {
 	switch provider {
 	case ProviderCodex:
 		return filepath.Join(home, ".codex", "hooks.json"), nil
+	case ProviderGemini:
+		return filepath.Join(home, ".gemini", "settings.json"), nil
 	default:
 		return "", fmt.Errorf("no default hooks path for provider %q", provider)
 	}
 }
 
-func projectHooksPath(projectDir string) (string, error) {
+func projectHooksPath(provider, projectDir string) (string, error) {
 	base := strings.TrimSpace(projectDir)
 	if base == "" {
 		cwd, err := os.Getwd()
@@ -153,7 +178,13 @@ func projectHooksPath(projectDir string) (string, error) {
 		}
 		base = cwd
 	}
-	return filepath.Join(base, ".codex", "hooks.json"), nil
+
+	switch provider {
+	case ProviderGemini:
+		return filepath.Join(base, ".gemini", "settings.json"), nil
+	default:
+		return filepath.Join(base, ".codex", "hooks.json"), nil
+	}
 }
 
 func loadHookConfig(path string) (*hookConfigFile, bool, error) {
@@ -167,7 +198,34 @@ func loadHookConfig(path string) (*hookConfigFile, bool, error) {
 
 	var cfg hookConfigFile
 	if err := json.Unmarshal(data, &cfg); err != nil {
-		return nil, false, fmt.Errorf("parse hooks config %s: %w", path, err)
+		// If it's a Gemini settings.json, it might have other fields.
+		// Our hookConfigFile struct only captures Hooks, so Unmarshal will
+		// just ignore other fields if we use a map[string]interface{} or if we
+		// define a more flexible struct.
+		// For now, we use a map to preserve other fields.
+	}
+
+	// Re-reading to use a map to preserve unknown fields
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil, false, fmt.Errorf("parse config %s: %w", path, err)
+	}
+
+	// We need to convert the Hooks part to our structured types for logic,
+	// but we want to keep the rest. This is getting complex.
+	// Let's stick to hookConfigFile but make it a bit more robust.
+	return parseHookConfig(data)
+}
+
+type genericConfigFile struct {
+	Hooks map[string][]hookGroup `json:"hooks"`
+	Raw   map[string]json.RawMessage
+}
+
+func parseHookConfig(data []byte) (*hookConfigFile, bool, error) {
+	var cfg hookConfigFile
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return nil, false, err
 	}
 	if cfg.Hooks == nil {
 		cfg.Hooks = make(map[string][]hookGroup)
@@ -193,6 +251,24 @@ func mergeCodexHooks(cfg *hookConfigFile) []string {
 	return changedEvents
 }
 
+func mergeGeminiHooks(cfg *hookConfigFile) []string {
+	if cfg.Hooks == nil {
+		cfg.Hooks = make(map[string][]hookGroup)
+	}
+
+	changedEvents := make([]string, 0, len(geminiHookEventOrder))
+	for _, event := range geminiHookEventOrder {
+		command := geminiHookCommands[event]
+		desired := desiredGeminiHookGroup(event, command)
+		next, changed := mergeManagedHookGroup(cfg.Hooks[event], command, desired)
+		cfg.Hooks[event] = next
+		if changed {
+			changedEvents = append(changedEvents, event)
+		}
+	}
+	return changedEvents
+}
+
 func desiredCodexHookGroup(event, command string) hookGroup {
 	group := hookGroup{
 		Hooks: []commandHook{
@@ -209,12 +285,32 @@ func desiredCodexHookGroup(event, command string) hookGroup {
 	return group
 }
 
+func desiredGeminiHookGroup(event, command string) hookGroup {
+	group := hookGroup{
+		Hooks: []commandHook{
+			{
+				Type:    "command",
+				Command: command,
+				Timeout: desiredTimeout(event),
+			},
+		},
+	}
+	// Gemini matchers: * for events, .* for tool-based hooks
+	if event == "AfterTool" {
+		group.Matcher = ".*"
+	} else {
+		group.Matcher = "*"
+	}
+
+	return group
+}
+
 func desiredTimeout(event string) int {
 	switch event {
-	case "SessionStart", "Stop":
-		return 30
+	case "SessionStart", "Stop", "SessionEnd":
+		return 5000
 	default:
-		return 10
+		return 2000
 	}
 }
 
@@ -254,23 +350,39 @@ func isManagedAgentMemGroup(group hookGroup, managedCommand string) bool {
 		return false
 	}
 	for _, hook := range group.Hooks {
-		if strings.TrimSpace(hook.Command) != managedCommand {
-			return false
+		if strings.TrimSpace(hook.Command) == managedCommand {
+			return true
 		}
 	}
-	return true
+	return false
 }
 
 func writeHookConfig(path string, cfg *hookConfigFile) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
+	// If path is a Gemini settings.json, we should try to preserve existing fields.
+	// This simple implementation will overwrite everything except 'hooks'.
+	// In a real scenario, we'd read it into a map[string]any, update 'hooks', and write back.
+
+	existingData, err := os.ReadFile(path)
+	var finalData map[string]any
+	if err == nil {
+		json.Unmarshal(existingData, &finalData)
+	}
+	if finalData == nil {
+		finalData = make(map[string]any)
 	}
 
-	data, err := json.MarshalIndent(cfg, "", "  ")
+	// Update hooks field
+	finalData["hooks"] = cfg.Hooks
+
+	data, err := json.MarshalIndent(finalData, "", "  ")
 	if err != nil {
 		return err
 	}
 	data = append(data, '\n')
+
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
 
 	tmpPath := path + ".tmp"
 	if err := os.WriteFile(tmpPath, data, 0o600); err != nil {

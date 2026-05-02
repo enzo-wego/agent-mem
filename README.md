@@ -9,7 +9,7 @@
 - Stores prompts, observations, summaries, and sync metadata in PostgreSQL
 - Builds relevant context for future sessions
 - Exposes a dashboard and JSON API for search, timelines, sync, settings, and logs
-- Integrates with Claude Code (manual hook config) and Codex (one-shot CLI installer)
+- Integrates with Claude Code, Codex, and Gemini CLI (one-shot installers)
 
 ## Architecture
 
@@ -182,6 +182,38 @@ You can also install only the hook config:
 agent-mem install-hooks codex --scope project
 ```
 
+## Gemini CLI Integration
+
+Install the bundled Gemini CLI hooks and plugin skills:
+
+```bash
+agent-mem install gemini --scope project
+```
+
+For a user-global install:
+
+```bash
+agent-mem install gemini --scope user
+```
+
+## Uninstallation
+
+To remove `agent-mem` hooks from your coding agents:
+
+### Project Scope
+Delete the local configuration directory in your project root:
+- **Codex**: `rm -rf .codex`
+- **Gemini CLI**: `rm -rf .gemini`
+- **Skills**: `rm -rf .agents`
+- **Claude Code**: Edit `.claude/settings.json` to remove the `"hooks"` entries.
+
+### User Scope
+Edit your global configuration file and remove the `agent-mem` hook entries from the `"hooks"` object:
+- **Claude Code**: `~/.claude/settings.json`
+- **Codex**: `~/.codex/hooks.json`
+- **Gemini CLI**: `~/.gemini/settings.json`
+- **Skills**: `~/.agents/skills/`
+
 ## Important Commands
 
 ```bash
@@ -195,9 +227,10 @@ agent-mem migrate-fix --version <migration_version>
 agent-mem migrate-sqlite --sqlite-path ~/.claude-mem/claude-mem.db
 agent-mem backfill-embeddings
 agent-mem install codex --scope project
+agent-mem install gemini --scope project
 agent-mem install-skill mem-search --scope project
 
-# hook adapters (stdin JSON -> worker; defaults to claude, pass "codex" as 2nd arg for Codex)
+# hook adapters (stdin JSON -> worker; defaults to claude, pass "codex" or "gemini" as 2nd arg)
 agent-mem hook session-start
 agent-mem hook prompt-submit
 agent-mem hook post-tool-use
