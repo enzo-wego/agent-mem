@@ -99,7 +99,7 @@ Main code paths:
 
 ## Quick Start
 
-### Docker
+### Local server via Docker
 
 1. Start PostgreSQL and the worker:
 
@@ -127,12 +127,6 @@ Or install it:
 
 ```bash
 make install-cli
-```
-
-Then run the worker against a PostgreSQL instance:
-
-```bash
-agent-mem worker
 ```
 
 ## Claude Code Integration

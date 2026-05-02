@@ -1,7 +1,8 @@
-GREEN  := $(shell tput -Txterm setaf 2)
-YELLOW := $(shell tput -Txterm setaf 3)
-RESET  := $(shell tput -Txterm sgr0)
-GO     ?= go
+GREEN     := $(shell tput -Txterm setaf 2)
+YELLOW    := $(shell tput -Txterm setaf 3)
+RESET     := $(shell tput -Txterm sgr0)
+GO        ?= go
+GOBIN_VPS ?= /usr/local/bin
 
 compose := docker compose
 
@@ -28,6 +29,9 @@ ifdef GOBIN
 else
 	$(GO) install ./cmd/agent-mem
 endif
+
+install-cli-vps: ## Install agent-mem system-wide via sudo (preserves PATH so go is found). Override GOBIN_VPS=/path (default /usr/local/bin).
+	sudo env "PATH=$$PATH" GOBIN="$(GOBIN_VPS)" $(GO) install ./cmd/agent-mem
 
 up: ## Start all services.
 	$(compose) up -d
@@ -69,4 +73,4 @@ db-reset: ## Clear the database and re-run migrations.
 	@sleep 5
 	$(compose) exec worker agent-mem migrate
 
-.PHONY: all help build build-cli install-cli up down status logs migrate migrate-create migrate-status migrate-rollback migrate-up-by-one migrate-fix restart db-reset
+.PHONY: all help build build-cli install-cli install-cli-vps up down status logs migrate migrate-create migrate-status migrate-rollback migrate-up-by-one migrate-fix restart db-reset
