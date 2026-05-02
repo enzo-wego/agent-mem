@@ -1,4 +1,4 @@
-package codexinstall
+package agentinstall
 
 import (
 	"fmt"
@@ -13,9 +13,8 @@ import (
 	pluginassets "github.com/agent-mem/agent-mem/plugin"
 )
 
-const ProviderCodex = "codex"
-
 type InstallOptions struct {
+	Provider        string
 	Scope           string
 	ProjectDir      string
 	HooksPath       string
@@ -33,7 +32,7 @@ func Install(opts InstallOptions) (InstallResult, error) {
 		return InstallResult{}, err
 	}
 
-	hookResult, err := hooks.InstallHooksWithOptions(ProviderCodex, hooks.InstallOptions{
+	hookResult, err := hooks.InstallHooksWithOptions(opts.Provider, hooks.InstallOptions{
 		Scope:      defaultScope(opts.Scope),
 		ProjectDir: opts.ProjectDir,
 		HooksPath:  opts.HooksPath,

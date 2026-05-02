@@ -114,13 +114,15 @@ func resolveSourceDir(name, sourceDir string) (string, error) {
 }
 
 func resolveTargetDir(name, scope, projectDir string) (string, error) {
+	providerBase := ".agents"
+
 	switch normalizeScope(scope) {
 	case "", ScopeUser:
 		home, err := os.UserHomeDir()
 		if err != nil {
 			return "", err
 		}
-		return filepath.Join(home, ".codex", "skills", name), nil
+		return filepath.Join(home, providerBase, "skills", name), nil
 	case ScopeProject:
 		base := strings.TrimSpace(projectDir)
 		if base == "" {
@@ -130,7 +132,7 @@ func resolveTargetDir(name, scope, projectDir string) (string, error) {
 			}
 			base = cwd
 		}
-		return filepath.Join(base, ".codex", "skills", name), nil
+		return filepath.Join(base, providerBase, "skills", name), nil
 	default:
 		return "", fmt.Errorf("unsupported install scope %q", scope)
 	}

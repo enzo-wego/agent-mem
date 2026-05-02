@@ -1,0 +1,57 @@
+{
+  "description": "agent-mem persistent memory hooks for Gemini CLI",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "name": "agent-mem-session-start",
+            "type": "command",
+            "command": "agent-mem hook session-start gemini",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "BeforeAgent": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "name": "agent-mem-before-agent",
+            "type": "command",
+            "command": "agent-mem hook prompt-submit gemini",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "AfterTool": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "name": "agent-mem-after-tool",
+            "type": "command",
+            "command": "agent-mem hook post-tool-use gemini",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "name": "agent-mem-session-end",
+            "type": "command",
+            "command": "agent-mem hook stop gemini",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}

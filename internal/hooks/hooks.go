@@ -18,6 +18,7 @@ var systemReminderRe = regexp.MustCompile(`(?s)<system-reminder>.*?</system-remi
 const (
 	ProviderClaude = "claude"
 	ProviderCodex  = "codex"
+	ProviderGemini = "gemini"
 )
 
 // RunHook is the thin CLI entry point for all hook subcommands.
@@ -38,7 +39,17 @@ func RunHook(event, provider string, port int) error {
 
 	resp, err := client.Post(url, "application/json", bytes.NewReader(payload))
 	if err != nil {
-		// Worker not running — exit silently (don't break the caller's hook flow)
+		// Worker not running — exit silently but return continue signal to not block the agent
+		if event == "session-start" {
+			fmt.Println("{}")
+			return nil
+		}
+		resolvedProvider, _ := NormalizeProvider(provider)
+		if resolvedProvider == ProviderGemini {
+			fmt.Println(`{"continue":true,"decision":"allow"}`)
+		} else {
+			fmt.Println(`{"continue":true}`)
+		}
 		return nil
 	}
 	defer resp.Body.Close()
@@ -49,6 +60,10 @@ func RunHook(event, provider string, port int) error {
 	if event == "session-start" {
 		context := string(body)
 		if len(context) > 0 {
+			// Providers may have different response requirements.
+			// Claude/Codex use hookSpecificOutput.
+			// Gemini may use a different structure if it starts supporting it,
+			// but for now we follow the general pattern.
 			output := map[string]any{
 				"hookSpecificOutput": map[string]any{
 					"hookEventName":     "SessionStart",
@@ -56,10 +71,18 @@ func RunHook(event, provider string, port int) error {
 				},
 			}
 			json.NewEncoder(os.Stdout).Encode(output)
+		} else {
+			// Always return valid JSON to avoid hook failure in Gemini CLI
+			fmt.Println("{}")
 		}
 	} else {
 		// All other hooks: return continue signal
-		fmt.Fprint(os.Stdout, `{"continue":true,"suppressOutput":true}`)
+		resolvedProvider, _ := NormalizeProvider(provider)
+		if resolvedProvider == ProviderGemini {
+			fmt.Println(`{"continue":true,"decision":"allow"}`)
+		} else {
+			fmt.Println(`{"continue":true,"suppressOutput":true}`)
+		}
 	}
 
 	return nil
@@ -73,6 +96,8 @@ func NormalizeProvider(provider string) (string, error) {
 		return ProviderClaude, nil
 	case ProviderCodex:
 		return ProviderCodex, nil
+	case ProviderGemini:
+		return ProviderGemini, nil
 	default:
 		return "", fmt.Errorf("unsupported hook provider %q", provider)
 	}
