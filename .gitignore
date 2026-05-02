@@ -40,3 +40,4 @@ go.work.sum
 .omx/
 /.codex
 /.omc
+/vendor
