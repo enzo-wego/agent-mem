@@ -56,6 +56,16 @@ func (d *TypeDispatcher) runOne(ctx context.Context, job *Job) {
 		runCtx, cancel = context.WithTimeout(ctx, d.entry.Lease)
 		defer cancel()
 	}
+	if d.entry.Handler == nil {
+		log.Warn().Msg("no handler registered for job type; marking failed")
+		if e := Fail(ctx, d.cfg.DB, job.ID, ErrFatal); e != nil {
+			log.Error().Err(e).Msg("fail failed")
+		}
+		if hb != nil {
+			hb.Stop()
+		}
+		return
+	}
 	err := d.entry.Handler(runCtx, job.Payload)
 	if hb != nil {
 		hb.Stop()

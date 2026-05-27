@@ -4,6 +4,7 @@ package handlers
 
 import (
 	"context"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/zerolog"
@@ -45,4 +46,11 @@ func RegisterAll(reg *jobs.Registry, deps Deps) {
 	reg.Register("index_artifact", NewIndexArtifactHandler(deps))
 	reg.Register("refresh_slack_groups", NewRefreshSlackGroupsHandler(deps))
 	reg.Register("import_bamboohr", NewImportBambooHRHandler(deps))
+	reg.Register("recompute_person_distance", jobs.Entry{
+		Handler:   RecomputePersonDistance(deps.DB, deps.Logger),
+		Systems:   []string{},
+		PoolSize:  1,
+		Lease:     600 * time.Second,
+		Heartbeat: true,
+	})
 }
