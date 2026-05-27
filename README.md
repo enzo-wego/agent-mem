@@ -97,6 +97,98 @@ Main code paths:
 - [dashboard](/Users/neocapitelo/go/src/github.com/agent-mem/dashboard)
 - [plugin/skills](/Users/neocapitelo/go/src/github.com/agent-mem/plugin/skills)
 
+## Graph Memory
+
+Graph Memory builds a cross-source knowledge graph that links Slack messages, Jira tickets, GitHub PRs, Confluence pages, PagerDuty incidents, Datadog monitors, Sentry issues, and Google Workspace docs into a single queryable artifact store. Each source is a node; relationships extracted from bodies (references, mentions, ownership) become typed edges.
+
+```text
+  Slack msg  ──REFERENCES──▶  Jira PAY-2128  ──REFERENCES──▶  GH PR #1960
+      │                            │
+   MENTIONS                    PART_OF
+      ▼                            ▼
+  graph.people               Confluence page
+```
+
+### Ingest endpoints
+
+Two endpoints accept content from external integrations or the hook pipeline:
+
+**POST /api/graph/ingest/content** — push a message or document body directly:
+
+```bash
+curl -s -X POST http://localhost:34567/api/graph/ingest/content \
+  -H "Authorization: Bearer $AGENT_MEM_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "source": "slack",
+    "canonical_url": "https://wego.slack.com/archives/C08S954G2LX/p1779710863216389",
+    "body": "TRY payments failing — see PAY-2128",
+    "metadata": {
+      "channel_id": "C08S954G2LX",
+      "ts": "1779710863.216389",
+      "body_ts": "2026-05-27T09:01:03Z",
+      "author": { "ref": "slack_uid:UUK3WPNNQ", "display_name": "Lei Zheng" }
+    }
+  }'
+# {"node_id":"slack:C08S954G2LX:1779710863.216389","outcome":"created","extracted":{...},...}
+```
+
+**POST /api/graph/ingest/url** — enqueue a fetch for a URL you don't have the body for:
+
+```bash
+curl -s -X POST http://localhost:34567/api/graph/ingest/url \
+  -H "Authorization: Bearer $AGENT_MEM_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"url": "https://wegomushi.atlassian.net/browse/PAY-2128"}'
+```
+
+Both endpoints return `outcome`: `created`, `updated`, or `unchanged`.
+
+### Required env vars (fetchers)
+
+| Variable | Source |
+|---|---|
+| `AGENT_MEM_SLACK_BOT_TOKEN` | Slack Bot OAuth token |
+| `AGENT_MEM_JIRA_EMAIL` + `AGENT_MEM_JIRA_TOKEN` | Jira API basic auth |
+| `AGENT_MEM_GH_TOKEN` | GitHub personal access token |
+| `AGENT_MEM_CF_TOKEN` | Confluence API token (reuses Jira email) |
+| `AGENT_MEM_PAGERDUTY_TOKEN` | PagerDuty REST API v2 token |
+| `AGENT_MEM_DATADOG_API_KEY` + `AGENT_MEM_DATADOG_APP_KEY` | Datadog API/App keys |
+| `AGENT_MEM_SENTRY_AUTH_TOKEN` + `AGENT_MEM_SENTRY_ORG` | Sentry auth token + org slug |
+| `AGENT_MEM_GWS_SERVICE_KEY_PATH` | Path to Google service-account JSON |
+
+Optional: `AGENT_MEM_GRAPH_RUNNER` (default `any`), `AGENT_MEM_JIRA_BASE_URL`, `AGENT_MEM_GH_BASE_URL`.
+
+### Job admin endpoints
+
+```bash
+# List recent jobs
+GET  /api/graph/jobs
+
+# Delete a job
+DELETE /api/graph/jobs/{id}
+
+# Retry a failed job
+POST /api/graph/jobs/{id}/retry
+```
+
+### Import org chart from BambooHR
+
+```bash
+agent-mem entities import-bamboohr --csv ~/Downloads/bamboohr_org_chart_for_visio.csv
+# enqueued import_bamboohr job id=42 (csv: .../bamboohr_org_chart_for_visio.csv, 18432 bytes)
+```
+
+The command enqueues an `import_bamboohr` job. The worker processes the CSV to upsert `graph.people` rows with `eeid`, `display_name`, `reports_to`, and `depth_from_root`.
+
+### Graph sync
+
+Graph tables (`graph.people`, `graph.nodes`, `graph.edges`, `graph.artifact_bodies`, etc.) are included in the standard push/pull sync rotation. Batch sizes: `artifact_bodies` and `artifact_index` use 50 rows per batch; all others use 100. Embeddings are excluded from sync transport — the receiving machine re-generates them via the `index_artifact` job.
+
+### Phase 3 — read endpoints
+
+Search (`/api/graph/search`), entity resolve (`/api/graph/resolve`), and node detail (`/api/graph/node/{id}`) ship in Phase 3. See [docs/plans/12-graph-memory-read.md](docs/plans/12-graph-memory-read.md).
+
 ## Quick Start
 
 ### Local server via Docker
