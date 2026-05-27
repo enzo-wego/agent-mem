@@ -342,6 +342,7 @@ func main() {
 		migrateFixCmd,
 		migrateSqliteCmd,
 		backfillCmd,
+		newEntitiesCmd(func() *config.Config { return cfg }),
 	)
 
 	if err := rootCmd.Execute(); err != nil {
