@@ -18,6 +18,12 @@ import (
 	memctx "github.com/agent-mem/agent-mem/internal/context"
 	"github.com/agent-mem/agent-mem/internal/database"
 	"github.com/agent-mem/agent-mem/internal/gemini"
+	"github.com/agent-mem/agent-mem/internal/graph/extractor"
+	"github.com/agent-mem/agent-mem/internal/graph/fetchers"
+	graphhandlers "github.com/agent-mem/agent-mem/internal/graph/handlers"
+	"github.com/agent-mem/agent-mem/internal/graph/identity"
+	"github.com/agent-mem/agent-mem/internal/graph/jobs"
+	"github.com/agent-mem/agent-mem/internal/graph/normalizer"
 	"github.com/agent-mem/agent-mem/internal/search"
 	memsync "github.com/agent-mem/agent-mem/internal/sync"
 )
@@ -28,6 +34,7 @@ type Server struct {
 	db         *database.DB
 	contextBld *memctx.Builder
 	syncEngine *memsync.Engine
+	dispatcher *jobs.Dispatcher
 	router     chi.Router
 	http       *http.Server
 	cancel     context.CancelFunc
@@ -95,6 +102,23 @@ func NewServer(cfg *config.Config, logBuf *LogBuffer) (*Server, error) {
 		log.Info().Str("url", cfg.SyncURL).Msg("Sync engine configured")
 	}
 
+	// Build graph deps and dispatcher
+	graphLog := log.Logger
+	graphDeps := graphhandlers.Deps{
+		DB:          pool,
+		Logger:      graphLog,
+		MachineID:   cfg.MachineID,
+		Fetchers:    fetchers.NewRegistry(fetchersConfigFromAppConfig(cfg), graphLog),
+		Normalizers: normalizer.NewRegistry(),
+		Extractor:   extractor.New(pool, graphLog),
+		Identity:    identity.NewService(pool, graphLog),
+		Gemini:      graphhandlers.NewGeminiAdapter(geminiClient),
+	}
+
+	sems := jobs.NewSemaphores(rateFromAppConfig(cfg))
+	dispatcher := jobs.NewDispatcher(pool, sems, cfg.MachineID, cfg.Graph.Runner, graphLog)
+	graphhandlers.RegisterAll(dispatcher, graphDeps)
+
 	s := &Server{
 		config:     cfg,
 		db:         db,
@@ -102,6 +126,7 @@ func NewServer(cfg *config.Config, logBuf *LogBuffer) (*Server, error) {
 		contextBld: memctx.NewBuilder(db, cfg),
 		searcher:   searcher,
 		syncEngine: syncEng,
+		dispatcher: dispatcher,
 		logBuffer:  logBuf,
 	}
 
@@ -146,6 +171,9 @@ func NewServer(cfg *config.Config, logBuf *LogBuffer) (*Server, error) {
 		r.Get("/api/sync/pull", s.handleSyncPull)
 		r.Get("/api/sync/info", s.handleSyncInfo)
 		r.Get("/api/sync/cloud-stats", s.handleSyncCloudStats)
+
+		// Graph memory endpoints
+		graphhandlers.Mount(r, graphDeps)
 	})
 
 	// Dashboard (served at root, after API routes)
@@ -168,6 +196,11 @@ func (s *Server) Run() error {
 		go s.syncEngine.Start(ctx)
 	}
 
+	// Start graph job dispatcher
+	if s.dispatcher != nil {
+		go s.dispatcher.Run(ctx)
+	}
+
 	s.http = &http.Server{
 		Addr:              fmt.Sprintf(":%d", s.config.WorkerPort),
 		Handler:           s.router,
@@ -186,6 +219,10 @@ func (s *Server) Run() error {
 		if err := s.http.Shutdown(shutdownCtx); err != nil {
 			log.Error().Err(err).Msg("HTTP shutdown error")
 		}
+		// Wait for in-flight graph jobs to finish.
+		if s.dispatcher != nil {
+			s.dispatcher.Wait()
+		}
 	}()
 
 	log.Info().Int("port", s.config.WorkerPort).Msg("Worker started")
@@ -193,6 +230,63 @@ func (s *Server) Run() error {
 		return fmt.Errorf("http server: %w", err)
 	}
 	return nil
+}
+
+// fetchersConfigFromAppConfig converts app Config to fetchers.Config.
+func fetchersConfigFromAppConfig(cfg *config.Config) fetchers.Config {
+	return fetchers.Config{
+		SlackBotToken:    cfg.Graph.SlackBotToken,
+		JiraEmail:        cfg.Graph.JiraEmail,
+		JiraToken:        cfg.Graph.JiraToken,
+		JiraBaseURL:      cfg.Graph.JiraBaseURL,
+		GHToken:          cfg.Graph.GHToken,
+		GHBaseURL:        cfg.Graph.GHBaseURL,
+		CFToken:          cfg.Graph.CFToken,
+		CFBaseURL:        cfg.Graph.CFBaseURL,
+		PagerDutyToken:   cfg.Graph.PagerDutyToken,
+		PagerDutyBaseURL: cfg.Graph.PagerDutyBaseURL,
+		DatadogAPIKey:    cfg.Graph.DatadogAPIKey,
+		DatadogAppKey:    cfg.Graph.DatadogAppKey,
+		DatadogBaseURL:   cfg.Graph.DatadogBaseURL,
+		SentryAuthToken:  cfg.Graph.SentryAuthToken,
+		SentryBaseURL:    cfg.Graph.SentryBaseURL,
+		SentryOrg:        cfg.Graph.SentryOrg,
+		GWSServiceKeyPath: cfg.Graph.GWSServiceKeyPath,
+	}
+}
+
+// rateFromAppConfig converts app GraphRateConfig to jobs.Rate.
+func rateFromAppConfig(cfg *config.Config) jobs.Rate {
+	r := cfg.Graph.Rate
+	rate := jobs.DefaultRate()
+	if r.Slack > 0 {
+		rate.Slack = r.Slack
+	}
+	if r.Jira > 0 {
+		rate.Jira = r.Jira
+	}
+	if r.Github > 0 {
+		rate.Github = r.Github
+	}
+	if r.Confluence > 0 {
+		rate.Confluence = r.Confluence
+	}
+	if r.Pagerduty > 0 {
+		rate.Pagerduty = r.Pagerduty
+	}
+	if r.Datadog > 0 {
+		rate.Datadog = r.Datadog
+	}
+	if r.Sentry > 0 {
+		rate.Sentry = r.Sentry
+	}
+	if r.GWS > 0 {
+		rate.GWS = r.GWS
+	}
+	if r.Gemini > 0 {
+		rate.Gemini = r.Gemini
+	}
+	return rate
 }
 
 // corsMiddleware handles CORS preflight OPTIONS requests and adds CORS headers.

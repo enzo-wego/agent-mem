@@ -9,6 +9,52 @@ import (
 	"sync"
 )
 
+// GraphRateConfig holds per-source concurrency caps for the graph job dispatcher.
+type GraphRateConfig struct {
+	Slack      int64 `json:"slack"`
+	Jira       int64 `json:"jira"`
+	Github     int64 `json:"github"`
+	Confluence int64 `json:"confluence"`
+	Pagerduty  int64 `json:"pagerduty"`
+	Datadog    int64 `json:"datadog"`
+	Sentry     int64 `json:"sentry"`
+	GWS        int64 `json:"gws"`
+	Gemini     int64 `json:"gemini"`
+}
+
+// GraphConfig holds all graph-memory specific configuration.
+type GraphConfig struct {
+	Runner string `json:"runner"` // "any" | "vps" | "local"
+
+	// Fetcher tokens / base URLs
+	SlackBotToken string `json:"slack_bot_token"`
+
+	JiraEmail   string `json:"jira_email"`
+	JiraToken   string `json:"jira_token"`
+	JiraBaseURL string `json:"jira_base_url"`
+
+	GHToken   string `json:"gh_token"`
+	GHBaseURL string `json:"gh_base_url"`
+
+	CFToken   string `json:"cf_token"`
+	CFBaseURL string `json:"cf_base_url"`
+
+	PagerDutyToken   string `json:"pagerduty_token"`
+	PagerDutyBaseURL string `json:"pagerduty_base_url"`
+
+	DatadogAPIKey  string `json:"datadog_api_key"`
+	DatadogAppKey  string `json:"datadog_app_key"`
+	DatadogBaseURL string `json:"datadog_base_url"`
+
+	SentryAuthToken string `json:"sentry_auth_token"`
+	SentryBaseURL   string `json:"sentry_base_url"`
+	SentryOrg       string `json:"sentry_org"`
+
+	GWSServiceKeyPath string `json:"gws_service_key_path"`
+
+	Rate GraphRateConfig `json:"rate"`
+}
+
 type Config struct {
 	mu sync.RWMutex `json:"-"`
 
@@ -35,6 +81,8 @@ type Config struct {
 	SyncInterval string `json:"sync_interval"`
 	APIKey       string `json:"api_key"`
 	MachineID    string `json:"machine_id"`
+
+	Graph GraphConfig `json:"graph"`
 }
 
 // Snapshot returns a thread-safe, mutex-free copy of the config for reading.
@@ -148,6 +196,7 @@ func (c *Config) snapshot() ConfigSnapshot {
 		SyncInterval:         c.SyncInterval,
 		APIKey:               c.APIKey,
 		MachineID:            c.MachineID,
+		Graph:                c.Graph,
 	}
 }
 
@@ -172,6 +221,7 @@ type ConfigSnapshot struct {
 	SyncInterval         string `json:"sync_interval"`
 	APIKey               string `json:"api_key"`
 	MachineID            string `json:"machine_id"`
+	Graph                GraphConfig `json:"graph"`
 }
 
 // Update applies partial updates from a JSON object to the config.
@@ -289,6 +339,24 @@ func defaults() *Config {
 		ContextSessionCount:  10,
 		SkipTools:            "ListMcpResourcesTool,SlashCommand",
 		SyncInterval:         "60s",
+		Graph: GraphConfig{
+			Runner:           "any",
+			GHBaseURL:        "https://api.github.com",
+			PagerDutyBaseURL: "https://api.pagerduty.com",
+			DatadogBaseURL:   "https://api.datadoghq.com",
+			SentryBaseURL:    "https://sentry.io",
+			Rate: GraphRateConfig{
+				Slack:      5,
+				Jira:       5,
+				Github:     10,
+				Confluence: 5,
+				Pagerduty:  3,
+				Datadog:    3,
+				Sentry:     5,
+				GWS:        5,
+				Gemini:     4,
+			},
+		},
 	}
 }
 
@@ -371,5 +439,107 @@ func ApplyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("AGENT_MEM_MACHINE_ID"); v != "" {
 		cfg.MachineID = v
+	}
+
+	// Graph config
+	if v := os.Getenv("AGENT_MEM_GRAPH_RUNNER"); v != "" {
+		cfg.Graph.Runner = v
+	}
+	if v := os.Getenv("AGENT_MEM_SLACK_BOT_TOKEN"); v != "" {
+		cfg.Graph.SlackBotToken = v
+	}
+	if v := os.Getenv("AGENT_MEM_JIRA_EMAIL"); v != "" {
+		cfg.Graph.JiraEmail = v
+	}
+	if v := os.Getenv("AGENT_MEM_JIRA_TOKEN"); v != "" {
+		cfg.Graph.JiraToken = v
+	}
+	if v := os.Getenv("AGENT_MEM_JIRA_BASE_URL"); v != "" {
+		cfg.Graph.JiraBaseURL = v
+	}
+	if v := os.Getenv("AGENT_MEM_GH_TOKEN"); v != "" {
+		cfg.Graph.GHToken = v
+	}
+	if v := os.Getenv("AGENT_MEM_GH_BASE_URL"); v != "" {
+		cfg.Graph.GHBaseURL = v
+	}
+	if v := os.Getenv("AGENT_MEM_CF_TOKEN"); v != "" {
+		cfg.Graph.CFToken = v
+	}
+	if v := os.Getenv("AGENT_MEM_CF_BASE_URL"); v != "" {
+		cfg.Graph.CFBaseURL = v
+	}
+	if v := os.Getenv("AGENT_MEM_PAGERDUTY_TOKEN"); v != "" {
+		cfg.Graph.PagerDutyToken = v
+	}
+	if v := os.Getenv("AGENT_MEM_PAGERDUTY_BASE_URL"); v != "" {
+		cfg.Graph.PagerDutyBaseURL = v
+	}
+	if v := os.Getenv("AGENT_MEM_DATADOG_API_KEY"); v != "" {
+		cfg.Graph.DatadogAPIKey = v
+	}
+	if v := os.Getenv("AGENT_MEM_DATADOG_APP_KEY"); v != "" {
+		cfg.Graph.DatadogAppKey = v
+	}
+	if v := os.Getenv("AGENT_MEM_DATADOG_BASE_URL"); v != "" {
+		cfg.Graph.DatadogBaseURL = v
+	}
+	if v := os.Getenv("AGENT_MEM_SENTRY_AUTH_TOKEN"); v != "" {
+		cfg.Graph.SentryAuthToken = v
+	}
+	if v := os.Getenv("AGENT_MEM_SENTRY_BASE_URL"); v != "" {
+		cfg.Graph.SentryBaseURL = v
+	}
+	if v := os.Getenv("AGENT_MEM_SENTRY_ORG"); v != "" {
+		cfg.Graph.SentryOrg = v
+	}
+	if v := os.Getenv("AGENT_MEM_GWS_SERVICE_KEY_PATH"); v != "" {
+		cfg.Graph.GWSServiceKeyPath = v
+	}
+	// Rate limits
+	if v := os.Getenv("AGENT_MEM_GRAPH_RATE_SLACK"); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+			cfg.Graph.Rate.Slack = n
+		}
+	}
+	if v := os.Getenv("AGENT_MEM_GRAPH_RATE_JIRA"); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+			cfg.Graph.Rate.Jira = n
+		}
+	}
+	if v := os.Getenv("AGENT_MEM_GRAPH_RATE_GITHUB"); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+			cfg.Graph.Rate.Github = n
+		}
+	}
+	if v := os.Getenv("AGENT_MEM_GRAPH_RATE_CONFLUENCE"); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+			cfg.Graph.Rate.Confluence = n
+		}
+	}
+	if v := os.Getenv("AGENT_MEM_GRAPH_RATE_PAGERDUTY"); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+			cfg.Graph.Rate.Pagerduty = n
+		}
+	}
+	if v := os.Getenv("AGENT_MEM_GRAPH_RATE_DATADOG"); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+			cfg.Graph.Rate.Datadog = n
+		}
+	}
+	if v := os.Getenv("AGENT_MEM_GRAPH_RATE_SENTRY"); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+			cfg.Graph.Rate.Sentry = n
+		}
+	}
+	if v := os.Getenv("AGENT_MEM_GRAPH_RATE_GWS"); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+			cfg.Graph.Rate.GWS = n
+		}
+	}
+	if v := os.Getenv("AGENT_MEM_GRAPH_RATE_GEMINI"); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+			cfg.Graph.Rate.Gemini = n
+		}
 	}
 }
