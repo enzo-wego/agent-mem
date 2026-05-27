@@ -32,6 +32,7 @@ type Job struct {
 	AvailableAt  time.Time
 	LockedBy     string
 	LockedAt     time.Time
+	LeaseUntil   time.Time
 	TargetRunner string
 }
 
@@ -91,7 +92,11 @@ func EnqueueRaw(ctx context.Context, db DB, jobType string, payload []byte, opts
 	return id, nil
 }
 
-const claimSQL = `
+// Claim atomically picks one queued job of the given type whose available_at
+// has passed, sets status='running', and stamps a fresh lease window.
+// Returns nil + nil error when the queue is empty for this type.
+func Claim(ctx context.Context, db DB, jobType string, lease time.Duration, workerID string, runner string) (*Job, error) {
+	const q = `
 WITH next AS (
   SELECT id FROM graph.jobs
   WHERE status = 'queued'
@@ -106,18 +111,16 @@ UPDATE graph.jobs
 SET status      = 'running',
     locked_by   = $3,
     locked_at   = NOW(),
+    lease_until = NOW() + ($4 || ' seconds')::interval,
     attempts    = attempts + 1
 WHERE id IN (SELECT id FROM next)
 RETURNING id, type, payload, priority, attempts, max_attempts,
-          available_at, locked_by, locked_at, target_runner`
+          available_at, locked_by, locked_at, lease_until, target_runner`
 
-// Claim atomically picks one queued job of the given type, sets status='running',
-// and returns it. Returns (nil, nil) when the queue is empty.
-func Claim(ctx context.Context, db DB, jobType string, workerID string, runner string) (*Job, error) {
 	j := &Job{}
-	err := db.QueryRow(ctx, claimSQL, jobType, runner, workerID).Scan(
+	err := db.QueryRow(ctx, q, jobType, runner, workerID, fmt.Sprintf("%d", int(lease/time.Second))).Scan(
 		&j.ID, &j.Type, &j.Payload, &j.Priority, &j.Attempts, &j.MaxAttempts,
-		&j.AvailableAt, &j.LockedBy, &j.LockedAt, &j.TargetRunner,
+		&j.AvailableAt, &j.LockedBy, &j.LockedAt, &j.LeaseUntil, &j.TargetRunner,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
@@ -126,59 +129,6 @@ func Claim(ctx context.Context, db DB, jobType string, workerID string, runner s
 		return nil, fmt.Errorf("claim: %w", err)
 	}
 	return j, nil
-}
-
-// Complete marks a job as done.
-func Complete(ctx context.Context, db DB, id int64) error {
-	_, err := db.Exec(ctx, `
-		UPDATE graph.jobs
-		SET status = 'done', completed_at = NOW()
-		WHERE id = $1`, id)
-	if err != nil {
-		return fmt.Errorf("complete job %d: %w", id, err)
-	}
-	return nil
-}
-
-// Retry resets the job to 'queued' with available_at = NOW() + delay.
-func Retry(ctx context.Context, db DB, id int64, runErr error, delay time.Duration) error {
-	var errMsg string
-	if runErr != nil {
-		errMsg = runErr.Error()
-	}
-	_, err := db.Exec(ctx, `
-		UPDATE graph.jobs
-		SET status       = 'queued',
-		    locked_by    = NULL,
-		    locked_at    = NULL,
-		    available_at = NOW() + $2::interval,
-		    last_error   = $3
-		WHERE id = $1`,
-		id, fmt.Sprintf("%d microseconds", delay.Microseconds()), errMsg,
-	)
-	if err != nil {
-		return fmt.Errorf("retry job %d: %w", id, err)
-	}
-	return nil
-}
-
-// Fail marks a job 'failed'. Used when max_attempts is reached or err is non-retryable.
-func Fail(ctx context.Context, db DB, id int64, runErr error) error {
-	var errMsg string
-	if runErr != nil {
-		errMsg = runErr.Error()
-	}
-	_, err := db.Exec(ctx, `
-		UPDATE graph.jobs
-		SET status     = 'failed',
-		    last_error = $2
-		WHERE id = $1`,
-		id, errMsg,
-	)
-	if err != nil {
-		return fmt.Errorf("fail job %d: %w", id, err)
-	}
-	return nil
 }
 
 // QueueDepth returns counts grouped by status for the given type (or all types

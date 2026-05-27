@@ -81,7 +81,7 @@ func TestClaim_RespectsAvailableAt(t *testing.T) {
 		t.Fatalf("EnqueueRaw: %v", err)
 	}
 
-	job, err := jobs.Claim(ctx, pool, "future_type", "worker1", "any")
+	job, err := jobs.Claim(ctx, pool, "future_type", 60*time.Second, "worker1", "any")
 	if err != nil {
 		t.Fatalf("Claim: %v", err)
 	}
@@ -107,7 +107,7 @@ func TestClaim_SkipLocked(t *testing.T) {
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck
 
-	job1, err := jobs.Claim(ctx, tx, "skip_type", "worker1", "any")
+	job1, err := jobs.Claim(ctx, tx, "skip_type", 60*time.Second, "worker1", "any")
 	if err != nil {
 		t.Fatalf("Claim tx: %v", err)
 	}
@@ -116,7 +116,7 @@ func TestClaim_SkipLocked(t *testing.T) {
 	}
 
 	// Second claim (outside the tx) should find nothing locked.
-	job2, err := jobs.Claim(ctx, pool, "skip_type", "worker2", "any")
+	job2, err := jobs.Claim(ctx, pool, "skip_type", 60*time.Second, "worker2", "any")
 	if err != nil {
 		t.Fatalf("Claim pool: %v", err)
 	}
@@ -139,7 +139,7 @@ func TestClaim_TargetRunner(t *testing.T) {
 	}
 
 	// local runner must not claim it.
-	job, err := jobs.Claim(ctx, pool, "runner_type", "worker1", "local")
+	job, err := jobs.Claim(ctx, pool, "runner_type", 60*time.Second, "worker1", "local")
 	if err != nil {
 		t.Fatalf("Claim local: %v", err)
 	}
@@ -148,7 +148,7 @@ func TestClaim_TargetRunner(t *testing.T) {
 	}
 
 	// vps runner claims it.
-	job, err = jobs.Claim(ctx, pool, "runner_type", "worker1", "vps")
+	job, err = jobs.Claim(ctx, pool, "runner_type", 60*time.Second, "worker1", "vps")
 	if err != nil {
 		t.Fatalf("Claim vps: %v", err)
 	}
@@ -166,7 +166,7 @@ func TestClaim_TargetRunner(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EnqueueRaw any: %v", err)
 	}
-	job2, err := jobs.Claim(ctx, pool, "runner_type", "worker1", "any")
+	job2, err := jobs.Claim(ctx, pool, "runner_type", 60*time.Second, "worker1", "any")
 	if err != nil {
 		t.Fatalf("Claim any: %v", err)
 	}
@@ -187,7 +187,7 @@ func TestComplete_SetsCompletedAt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EnqueueRaw: %v", err)
 	}
-	job, err := jobs.Claim(ctx, pool, "complete_type", "worker1", "any")
+	job, err := jobs.Claim(ctx, pool, "complete_type", 60*time.Second, "worker1", "any")
 	if err != nil || job == nil {
 		t.Fatalf("Claim: %v / nil=%v", err, job == nil)
 	}
@@ -220,7 +220,7 @@ func TestRetry_PushesAvailableAt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EnqueueRaw: %v", err)
 	}
-	job, err := jobs.Claim(ctx, pool, "retry_type", "worker1", "any")
+	job, err := jobs.Claim(ctx, pool, "retry_type", 60*time.Second, "worker1", "any")
 	if err != nil || job == nil {
 		t.Fatalf("Claim: err=%v nil=%v", err, job == nil)
 	}
@@ -260,7 +260,7 @@ func TestFail_FinalState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EnqueueRaw: %v", err)
 	}
-	job, err := jobs.Claim(ctx, pool, "fail_type", "worker1", "any")
+	job, err := jobs.Claim(ctx, pool, "fail_type", 60*time.Second, "worker1", "any")
 	if err != nil || job == nil {
 		t.Fatalf("Claim: err=%v nil=%v", err, job == nil)
 	}
@@ -294,7 +294,7 @@ func TestQueueDepth(t *testing.T) {
 			t.Fatalf("EnqueueRaw: %v", err)
 		}
 	}
-	job, err := jobs.Claim(ctx, pool, "depth_type", "worker1", "any")
+	job, err := jobs.Claim(ctx, pool, "depth_type", 60*time.Second, "worker1", "any")
 	if err != nil || job == nil {
 		t.Fatalf("Claim: err=%v nil=%v", err, job == nil)
 	}
