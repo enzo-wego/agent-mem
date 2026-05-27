@@ -1,9 +1,13 @@
 package jobs
 
 import (
+	"context"
 	"sync"
 	"time"
 )
+
+// Handler is the signature every job-type handler implements.
+type Handler func(ctx context.Context, payload []byte) error
 
 // Entry is one row in the worker registry.
 type Entry struct {

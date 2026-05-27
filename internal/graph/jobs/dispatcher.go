@@ -2,8 +2,7 @@ package jobs
 
 import (
 	"context"
-	"math/rand/v2"
-	"sync"
+	"errors"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -11,193 +10,92 @@ import (
 	"golang.org/x/sync/semaphore"
 )
 
-// Handler is the signature every job-type handler implements.
-type Handler func(ctx context.Context, payload []byte) error
-
-// HandlerInfo bundles a handler with its required semaphore systems.
-type HandlerInfo struct {
-	Handler  Handler
-	Systems  []string      // semaphore names to acquire before running
-	PoolSize int           // max concurrent goroutines (default 4)
-	Timeout  time.Duration // per-call timeout (default 60s); 0 = no timeout
-}
-
-// Dispatcher owns one goroutine per registered type.
-type Dispatcher struct {
+// DispatcherConfig is the constructor input for TypeDispatcher.
+type DispatcherConfig struct {
+	Type         string
+	Registry     *Registry
 	DB           *pgxpool.Pool
-	Sems         *Semaphores
-	WorkerID     string
-	Runner       string        // "vps" or "local"
-	IdleInterval time.Duration // poll cadence when queue empty; default 5s
-	BackoffBase  time.Duration // default 30s
-	BackoffCap   time.Duration // default 1h
+	WorkerID     string                       // unique string per process: host+pid+uuid
+	Runner       string                       // "vps" or "local"
+	IdleInterval time.Duration                // poll cadence when queue empty (default 5s)
+	Semaphores   map[string]*semaphore.Weighted // per-system rate limiters
+	BackoffBase  time.Duration                // default 30s
+	BackoffCap   time.Duration                // default 1h
 	Logger       zerolog.Logger
-
-	handlers map[string]HandlerInfo
-	wg       sync.WaitGroup
 }
 
-// NewDispatcher creates a Dispatcher with defaults.
-func NewDispatcher(db *pgxpool.Pool, sems *Semaphores, workerID, runner string, log zerolog.Logger) *Dispatcher {
-	return &Dispatcher{
-		DB:           db,
-		Sems:         sems,
-		WorkerID:     workerID,
-		Runner:       runner,
-		IdleInterval: 5 * time.Second,
-		BackoffBase:  30 * time.Second,
-		BackoffCap:   time.Hour,
-		Logger:       log,
-		handlers:     make(map[string]HandlerInfo),
+// TypeDispatcher claims and runs jobs of one specific type.
+type TypeDispatcher struct {
+	cfg   DispatcherConfig
+	pool  *semaphore.Weighted // pool slots = registry.PoolSize for this type
+	entry Entry
+}
+
+// NewTypeDispatcher returns a dispatcher ready to Run.
+func NewTypeDispatcher(cfg DispatcherConfig) *TypeDispatcher {
+	if cfg.IdleInterval == 0 {
+		cfg.IdleInterval = 5 * time.Second
+	}
+	if cfg.BackoffBase == 0 {
+		cfg.BackoffBase = 30 * time.Second
+	}
+	if cfg.BackoffCap == 0 {
+		cfg.BackoffCap = 1 * time.Hour
+	}
+	entry, _ := cfg.Registry.Get(cfg.Type)
+	poolSize := entry.PoolSize
+	if poolSize <= 0 {
+		poolSize = 4
+	}
+	return &TypeDispatcher{
+		cfg:   cfg,
+		pool:  semaphore.NewWeighted(int64(poolSize)),
+		entry: entry,
 	}
 }
 
-// Register binds a handler to a type. Must be called before Run.
-func (d *Dispatcher) Register(jobType string, info HandlerInfo) {
-	if info.PoolSize <= 0 {
-		info.PoolSize = 4
-	}
-	if info.Timeout == 0 {
-		info.Timeout = 60 * time.Second
-	}
-	d.handlers[jobType] = info
-}
-
-// Run starts one goroutine per registered type. Returns when ctx is cancelled.
-func (d *Dispatcher) Run(ctx context.Context) {
-	for jobType, info := range d.handlers {
-		d.wg.Add(1)
-		go d.runLoop(ctx, jobType, info)
-	}
-}
-
-// Wait blocks until all per-type loops have exited.
-func (d *Dispatcher) Wait() {
-	d.wg.Wait()
-}
-
-// runLoop is the per-type polling loop.
-func (d *Dispatcher) runLoop(ctx context.Context, jobType string, info HandlerInfo) {
-	defer d.wg.Done()
-
-	pool := semaphore.NewWeighted(int64(info.PoolSize))
-	log := d.Logger.With().Str("job_type", jobType).Logger()
-
-	for {
-		select {
-		case <-ctx.Done():
-			// Drain: wait for all in-flight workers to finish.
-			_ = pool.Acquire(ctx, int64(info.PoolSize))
-			return
-		default:
-		}
-
-		// Acquire a pool slot.
-		if err := pool.Acquire(ctx, 1); err != nil {
-			// ctx cancelled.
+// Run loops until ctx is cancelled. Chain-after-success: try claiming again
+// immediately after launching a worker. Slow-poll when the queue is empty.
+func (d *TypeDispatcher) Run(ctx context.Context) {
+	log := d.cfg.Logger.With().Str("dispatcher", d.cfg.Type).Logger()
+	log.Info().Int("pool", d.entry.PoolSize).Msg("dispatcher starting")
+	for ctx.Err() == nil {
+		// Acquire a pool slot, blocking until one is free or ctx is done.
+		if err := d.pool.Acquire(ctx, 1); err != nil {
 			return
 		}
-
-		job, err := Claim(ctx, d.DB, jobType, d.WorkerID, d.Runner)
+		lease := d.entry.Lease
+		if lease == 0 {
+			lease = 60 * time.Second
+		}
+		job, err := Claim(ctx, d.cfg.DB, d.cfg.Type, lease, d.cfg.WorkerID, d.cfg.Runner)
 		if err != nil {
-			pool.Release(1)
-			log.Error().Err(err).Msg("claim error")
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(d.IdleInterval):
+			d.pool.Release(1)
+			if !errors.Is(err, context.Canceled) {
+				log.Error().Err(err).Msg("claim failed")
 			}
+			d.sleep(ctx, 1*time.Second)
 			continue
 		}
-
 		if job == nil {
-			pool.Release(1)
-			// Queue empty — wait before polling again.
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(d.IdleInterval):
-			}
+			d.pool.Release(1)
+			d.sleep(ctx, d.cfg.IdleInterval)
 			continue
 		}
-
-		// Spawn worker goroutine.
-		go d.runJob(ctx, job, info, pool, log)
+		go func(j *Job) {
+			defer d.pool.Release(1)
+			d.runOne(ctx, j)
+		}(job)
 	}
+	log.Info().Msg("dispatcher stopping")
 }
 
-// runJob executes a single job and applies the appropriate state transition.
-func (d *Dispatcher) runJob(ctx context.Context, job *Job, info HandlerInfo, pool *semaphore.Weighted, log zerolog.Logger) {
-	defer pool.Release(1)
-
-	log = log.With().Int64("job_id", job.ID).Logger()
-
-	// Acquire system semaphores.
-	release, err := d.Sems.AcquireMany(ctx, info.Systems)
-	if err != nil {
-		log.Error().Err(err).Msg("semaphore acquire failed")
-		if retryErr := Retry(context.Background(), d.DB, job.ID, err,
-			Backoff(job.Attempts, d.BackoffBase, d.BackoffCap)); retryErr != nil {
-			log.Error().Err(retryErr).Msg("retry failed")
-		}
-		return
+// sleep returns early if ctx is cancelled.
+func (d *TypeDispatcher) sleep(ctx context.Context, dur time.Duration) {
+	t := time.NewTimer(dur)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+	case <-t.C:
 	}
-	defer release()
-
-	// Apply per-call timeout.
-	runCtx := ctx
-	if info.Timeout > 0 {
-		var cancel context.CancelFunc
-		runCtx, cancel = context.WithTimeout(ctx, info.Timeout)
-		defer cancel()
-	}
-
-	handlerErr := info.Handler(runCtx, job.Payload)
-
-	if handlerErr == nil {
-		if err := Complete(context.Background(), d.DB, job.ID); err != nil {
-			log.Error().Err(err).Msg("complete failed")
-		}
-		return
-	}
-
-	// Decide retry vs fail.
-	retryable := IsRetryable(handlerErr)
-	attemptsExhausted := job.Attempts >= job.MaxAttempts
-
-	if retryable && !attemptsExhausted {
-		delay := Backoff(job.Attempts, d.BackoffBase, d.BackoffCap)
-		log.Warn().Err(handlerErr).Dur("delay", delay).Int16("attempts", job.Attempts).Msg("retrying job")
-		if err := Retry(context.Background(), d.DB, job.ID, handlerErr, delay); err != nil {
-			log.Error().Err(err).Msg("retry update failed")
-		}
-		return
-	}
-
-	log.Error().Err(handlerErr).Int16("attempts", job.Attempts).Msg("failing job")
-	if err := Fail(context.Background(), d.DB, job.ID, handlerErr); err != nil {
-		log.Error().Err(err).Msg("fail update failed")
-	}
-}
-
-// Backoff returns delay = base * 2^(attempts-1), capped at cap, with ±20% jitter.
-func Backoff(attempts int16, base, cap time.Duration) time.Duration {
-	if attempts <= 0 {
-		attempts = 1
-	}
-	shift := int(attempts) - 1
-	if shift > 62 {
-		shift = 62
-	}
-	delay := base * (1 << uint(shift))
-	if delay <= 0 || delay > cap {
-		delay = cap
-	}
-	// ±20% jitter: multiply by a factor in [0.8, 1.2].
-	jitter := 0.8 + rand.Float64()*0.4
-	delay = time.Duration(float64(delay) * jitter)
-	if delay > cap {
-		delay = cap
-	}
-	return delay
 }

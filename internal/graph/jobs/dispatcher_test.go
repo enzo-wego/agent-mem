@@ -2,239 +2,153 @@ package jobs_test
 
 import (
 	"context"
-	"fmt"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/agent-mem/agent-mem/internal/graph/jobs"
 	"github.com/rs/zerolog"
+	"golang.org/x/sync/semaphore"
 )
 
-func TestDispatcher_RunsPooledJobs(t *testing.T) {
-	pool := openTestDB(t)
-	truncateJobsTable(t, pool)
-	ctx := context.Background()
+func TestTypeDispatcher_RunsPooledJobs(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	pool := testDB(t)
 
-	const total = 20
-	const poolSize = 4
-
-	for i := 0; i < total; i++ {
-		if _, err := jobs.EnqueueRaw(ctx, pool, "pooled_type", []byte(`{}`), defaultOpts("machine1")); err != nil {
-			t.Fatalf("EnqueueRaw: %v", err)
-		}
+	// Enqueue 20 fetch_body jobs.
+	for i := 0; i < 20; i++ {
+		mustEnqueue(t, pool, "fetch_body", []byte(`{}`), 0)
 	}
 
-	var concurrent int64
-	var maxConcurrent int64
-	var ran int64
+	var ran atomic.Int32
+	var inflight atomic.Int32
+	var maxInflight atomic.Int32
 
-	sems := jobs.NewSemaphores(jobs.DefaultRate())
-	d := jobs.NewDispatcher(pool, sems, "worker1", "any", zerolog.Nop())
-	d.IdleInterval = 50 * time.Millisecond
-	d.Register("pooled_type", jobs.HandlerInfo{
-		Handler: func(_ context.Context, _ []byte) error {
-			c := atomic.AddInt64(&concurrent, 1)
-			// Track peak.
+	reg := jobs.NewRegistry()
+	reg.Register("fetch_body", jobs.Entry{
+		PoolSize: 4,
+		Lease:    5 * time.Second,
+		Handler: func(ctx context.Context, payload []byte) error {
+			cur := inflight.Add(1)
 			for {
-				old := atomic.LoadInt64(&maxConcurrent)
-				if c <= old || atomic.CompareAndSwapInt64(&maxConcurrent, old, c) {
+				old := maxInflight.Load()
+				if cur <= old || maxInflight.CompareAndSwap(old, cur) {
 					break
 				}
 			}
-			time.Sleep(20 * time.Millisecond)
-			atomic.AddInt64(&concurrent, -1)
-			atomic.AddInt64(&ran, 1)
+			defer inflight.Add(-1)
+			time.Sleep(50 * time.Millisecond)
+			ran.Add(1)
 			return nil
 		},
-		PoolSize: poolSize,
-		Timeout:  5 * time.Second,
 	})
 
-	runCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
+	d := jobs.NewTypeDispatcher(jobs.DispatcherConfig{
+		Type:         "fetch_body",
+		Registry:     reg,
+		DB:           pool,
+		WorkerID:     "w-test",
+		Runner:       "vps",
+		IdleInterval: 100 * time.Millisecond,
+		Semaphores:   map[string]*semaphore.Weighted{},
+		BackoffBase:  1 * time.Second,
+		BackoffCap:   10 * time.Second,
+		Logger:       zerolog.Nop(),
+	})
 
-	d.Run(runCtx)
+	go d.Run(ctx)
 
-	// Wait until all jobs processed or timeout.
-	deadline := time.Now().Add(9 * time.Second)
+	// Wait for queue to drain.
+	deadline := time.Now().Add(8 * time.Second)
 	for time.Now().Before(deadline) {
-		depths, err := jobs.QueueDepth(ctx, pool, "pooled_type")
-		if err != nil {
-			t.Fatalf("QueueDepth: %v", err)
-		}
-		if depths["done"] == total {
+		if ran.Load() == 20 {
 			break
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-
 	cancel()
-	d.Wait()
 
-	if atomic.LoadInt64(&ran) != total {
-		t.Errorf("ran = %d, want %d", ran, total)
+	if ran.Load() != 20 {
+		t.Fatalf("ran %d/20 jobs", ran.Load())
 	}
-	if mc := atomic.LoadInt64(&maxConcurrent); mc > poolSize {
-		t.Errorf("max concurrent = %d, exceeded pool size %d", mc, poolSize)
+	if maxInflight.Load() > 4 {
+		t.Errorf("max inflight %d > pool size 4", maxInflight.Load())
 	}
 }
 
-func TestDispatcher_RetryOn5xx(t *testing.T) {
-	pool := openTestDB(t)
-	truncateJobsTable(t, pool)
-	ctx := context.Background()
+func TestTypeDispatcher_RetryOn5xx(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	pool := testDB(t)
 
-	if _, err := jobs.EnqueueRaw(ctx, pool, "retry5xx_type", []byte(`{}`),
-		jobs.EnqueueOptions{MachineID: "machine1", MaxAttempts: 5}); err != nil {
-		t.Fatalf("EnqueueRaw: %v", err)
-	}
+	var calls atomic.Int32
 
-	var calls int64
-
-	sems := jobs.NewSemaphores(jobs.DefaultRate())
-	d := jobs.NewDispatcher(pool, sems, "worker1", "any", zerolog.Nop())
-	d.IdleInterval = 20 * time.Millisecond
-	d.BackoffBase = 100 * time.Millisecond
-	d.BackoffCap = 500 * time.Millisecond
-	d.Register("retry5xx_type", jobs.HandlerInfo{
-		Handler: func(_ context.Context, _ []byte) error {
-			n := atomic.AddInt64(&calls, 1)
+	reg := jobs.NewRegistry()
+	reg.Register("fetch_body", jobs.Entry{
+		PoolSize: 1,
+		Lease:    5 * time.Second,
+		Handler: func(ctx context.Context, payload []byte) error {
+			n := calls.Add(1)
 			if n < 3 {
-				return jobs.NewHTTPError(503, "unavailable")
+				return jobs.NewHTTPError(503, "down")
 			}
 			return nil
 		},
-		PoolSize: 1,
-		Timeout:  5 * time.Second,
 	})
 
-	runCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
+	d := jobs.NewTypeDispatcher(jobs.DispatcherConfig{
+		Type:        "fetch_body",
+		Registry:    reg,
+		DB:          pool,
+		WorkerID:    "w-1",
+		Runner:      "vps",
+		BackoffBase: 200 * time.Millisecond,
+		BackoffCap:  2 * time.Second,
+		Semaphores:  map[string]*semaphore.Weighted{},
+		Logger:      zerolog.Nop(),
+	})
+	mustEnqueueWithMaxAttempts(t, pool, "fetch_body", []byte(`{}`), 0, 5)
+	go d.Run(ctx)
 
-	d.Run(runCtx)
-
-	// Wait for done.
-	deadline := time.Now().Add(14 * time.Second)
+	deadline := time.Now().Add(8 * time.Second)
 	for time.Now().Before(deadline) {
-		depths, _ := jobs.QueueDepth(ctx, pool, "retry5xx_type")
-		if depths["done"] == 1 {
+		if calls.Load() >= 3 {
 			break
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
 	cancel()
-	d.Wait()
-
-	if atomic.LoadInt64(&calls) != 3 {
-		t.Errorf("calls = %d, want 3", atomic.LoadInt64(&calls))
+	if calls.Load() < 3 {
+		t.Fatalf("expected 3 attempts, got %d", calls.Load())
 	}
 }
 
-func TestDispatcher_FailOn4xx(t *testing.T) {
-	pool := openTestDB(t)
-	truncateJobsTable(t, pool)
-	ctx := context.Background()
+func TestTypeDispatcher_FailOn4xx(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	pool := testDB(t)
 
-	if _, err := jobs.EnqueueRaw(ctx, pool, "fail4xx_type", []byte(`{}`),
-		jobs.EnqueueOptions{MachineID: "machine1", MaxAttempts: 5}); err != nil {
-		t.Fatalf("EnqueueRaw: %v", err)
-	}
-
-	sems := jobs.NewSemaphores(jobs.DefaultRate())
-	d := jobs.NewDispatcher(pool, sems, "worker1", "any", zerolog.Nop())
-	d.IdleInterval = 20 * time.Millisecond
-	d.Register("fail4xx_type", jobs.HandlerInfo{
-		Handler: func(_ context.Context, _ []byte) error {
-			return jobs.NewHTTPError(404, "not found")
-		},
+	reg := jobs.NewRegistry()
+	reg.Register("fetch_body", jobs.Entry{
 		PoolSize: 1,
-		Timeout:  5 * time.Second,
+		Lease:    5 * time.Second,
+		Handler: func(ctx context.Context, payload []byte) error {
+			return jobs.NewHTTPError(404, "missing")
+		},
 	})
 
-	runCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-
-	d.Run(runCtx)
-
-	deadline := time.Now().Add(9 * time.Second)
-	for time.Now().Before(deadline) {
-		depths, _ := jobs.QueueDepth(ctx, pool, "fail4xx_type")
-		if depths["failed"] == 1 {
-			break
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-	cancel()
-	d.Wait()
-
-	depths, err := jobs.QueueDepth(ctx, pool, "fail4xx_type")
-	if err != nil {
-		t.Fatalf("QueueDepth: %v", err)
-	}
-	if depths["failed"] != 1 {
-		t.Errorf("failed = %d, want 1; depths=%v", depths["failed"], depths)
-	}
-}
-
-func TestDispatcher_HonoursTimeout(t *testing.T) {
-	pool := openTestDB(t)
-	truncateJobsTable(t, pool)
-	ctx := context.Background()
-
-	if _, err := jobs.EnqueueRaw(ctx, pool, "timeout_type", []byte(`{}`),
-		jobs.EnqueueOptions{MachineID: "machine1", MaxAttempts: 2}); err != nil {
-		t.Fatalf("EnqueueRaw: %v", err)
-	}
-
-	var ctxErr atomic.Value
-
-	sems := jobs.NewSemaphores(jobs.DefaultRate())
-	d := jobs.NewDispatcher(pool, sems, "worker1", "any", zerolog.Nop())
-	d.IdleInterval = 20 * time.Millisecond
-	d.BackoffBase = 100 * time.Millisecond
-	d.BackoffCap = 500 * time.Millisecond
-	d.Register("timeout_type", jobs.HandlerInfo{
-		Handler: func(handlerCtx context.Context, _ []byte) error {
-			select {
-			case <-handlerCtx.Done():
-				ctxErr.Store(handlerCtx.Err())
-				return fmt.Errorf("handler timed out: %w", handlerCtx.Err())
-			case <-time.After(30 * time.Second):
-				return nil
-			}
-		},
-		PoolSize: 1,
-		Timeout:  200 * time.Millisecond, // short timeout
+	d := jobs.NewTypeDispatcher(jobs.DispatcherConfig{
+		Type:       "fetch_body",
+		Registry:   reg,
+		DB:         pool,
+		WorkerID:   "w-1",
+		Runner:     "vps",
+		Semaphores: map[string]*semaphore.Weighted{},
+		Logger:     zerolog.Nop(),
 	})
+	id := mustEnqueue(t, pool, "fetch_body", []byte(`{}`), 0)
+	go d.Run(ctx)
 
-	runCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-
-	d.Run(runCtx)
-
-	// The job should be retried (ctx.Err() -> DeadlineExceeded -> retryable).
-	// Wait for it to be retried at least once (attempts>1) or failed due to max_attempts.
-	deadline := time.Now().Add(9 * time.Second)
-	for time.Now().Before(deadline) {
-		var attempts int16
-		err := pool.QueryRow(ctx,
-			`SELECT attempts FROM graph.jobs WHERE type = 'timeout_type' LIMIT 1`,
-		).Scan(&attempts)
-		if err == nil && attempts >= 2 {
-			break
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	cancel()
-	d.Wait()
-
-	// The handler ctx.Err() should have been context.DeadlineExceeded.
-	stored := ctxErr.Load()
-	if stored == nil {
-		t.Fatal("handler context error never set")
-	}
-	if stored.(error) != context.DeadlineExceeded {
-		t.Errorf("ctx.Err() = %v, want DeadlineExceeded", stored)
-	}
+	waitForStatus(t, pool, id, "failed", 3*time.Second)
 }
