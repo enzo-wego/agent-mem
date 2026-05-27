@@ -1,0 +1,5 @@
+Following up on PAY-2128 — I checked the tabby integration logs and it looks like the issue is on our side with the TRY currency mapping.
+
+The PR https://github.com/wego/payments/pull/1960 should fix this once merged. cc the checkout team as well.
+
+Let me know if anyone needs more context on the tabby payment flow.

@@ -1,0 +1,20 @@
+EnzoBot SEV-1 RED — Payment Processing Outage
+
+Summary: Critical payment failure affecting TRY currency transactions via ext-wego-checkout partner. Incident started at 2026-05-25T10:15:00Z.
+
+Jira ticket: https://wegomushi.atlassian.net/browse/PAY-2128
+GitHub PR: https://github.com/wego/payments/pull/1960
+PagerDuty incident: https://wegotravel.pagerduty.com/incidents/P8K3M2N
+Sentry issue: https://sentry.io/wego/payments/issues/4872610293/
+Datadog monitor: https://app.datadoghq.com/monitors/133274814
+Confluence runbook: https://wegomushi.atlassian.net/wiki/spaces/PAY/pages/987654321
+
+Affected partners: tabby, checkout
+Related: PAY-2080
+File: https://drive.google.com/file/d/1BxTY9mKPqrs3NuvMnLopXY7QZabcdefgh/view
+Order ref: WF-A1B2C3D4-E5F6-7890
+Processing channel: pc_live_abc123xyz
+Payment ref: F.k3m9p2q8r
+
+Team thread: https://wego.slack.com/archives/C05RNSE8TBR/p1779710997630059
+Slack file: https://wego.slack.com/files/U01ABCDEF/F0B5TLXQLTV/screenshot.png

@@ -1,0 +1,5 @@
+Hey team, quick heads up — the TRY (Turkish Lira) payments through checkout are failing intermittently since this morning. I saw about 12 errors in the last hour. Looks like the issue might be related to PAY-2128.
+
+Check the thread here: https://wego.slack.com/archives/C08S954G2LX/p1779710863216389
+
+I'll dig into it more. Anyone from the tabby team have context?

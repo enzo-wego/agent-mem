@@ -1,0 +1,5 @@
+Hi team, just a note about TripleA (3A) payments — we're seeing some delays in processing for the Singapore market.
+
+I've filed PAY-2155 to track this. The issue seems to be a rate limit on the TripleA API side. Will update once I have more info from their support team.
+
+Monitoring here: https://app.datadoghq.com/monitors/133274999
