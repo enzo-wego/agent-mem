@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"os"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/agent-mem/agent-mem/internal/config"
 	"github.com/agent-mem/agent-mem/internal/database"
 	"github.com/agent-mem/agent-mem/internal/graph/entities"
+	"github.com/agent-mem/agent-mem/internal/graph/jobs"
 )
 
 // newEntitiesCmd returns the "entities" cobra parent command with its
@@ -145,6 +147,57 @@ Example CSV:
 	}
 	listCmd.Flags().StringVar(&listKind, "kind", "", "Filter by kind (partner, feature, status, currency, …)")
 
-	entitiesCmd.AddCommand(seedPartnersCmd, loadCSVCmd, listCmd)
+	// entities import-bamboohr
+	var bambooHRCSVPath string
+	importBambooHRCmd := &cobra.Command{
+		Use:   "import-bamboohr",
+		Short: "Enqueue an import_bamboohr job from a BambooHR org-chart CSV",
+		Long: `Reads a BambooHR org-chart CSV (with columns EEID, Full Name, Reports To)
+and enqueues an import_bamboohr job in graph.jobs.
+
+The job worker processes the CSV to upsert graph.people rows.
+
+Example:
+  agent-mem entities import-bamboohr --csv ~/Downloads/bamboohr_org_chart_for_visio.csv`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if bambooHRCSVPath == "" {
+				return fmt.Errorf("--csv is required")
+			}
+
+			data, err := os.ReadFile(bambooHRCSVPath)
+			if err != nil {
+				return fmt.Errorf("read CSV %s: %w", bambooHRCSVPath, err)
+			}
+
+			// Encode as base64 so the job payload is JSON-safe.
+			encoded := base64.StdEncoding.EncodeToString(data)
+
+			ctx := context.Background()
+			pool, err := database.Connect(ctx, getCfg().DatabaseURL)
+			if err != nil {
+				return fmt.Errorf("open db: %w", err)
+			}
+			defer pool.Close()
+
+			cfg := getCfg()
+			payload := map[string]string{
+				"csv_bytes": encoded,
+			}
+			jobID, err := jobs.Enqueue(ctx, pool, "import_bamboohr", payload, jobs.EnqueueOptions{
+				Priority:  5,
+				MachineID: cfg.MachineID,
+			})
+			if err != nil {
+				return fmt.Errorf("enqueue import_bamboohr job: %w", err)
+			}
+
+			fmt.Fprintf(cmd.OutOrStdout(), "enqueued import_bamboohr job id=%d (csv: %s, %d bytes)\n",
+				jobID, bambooHRCSVPath, len(data))
+			return nil
+		},
+	}
+	importBambooHRCmd.Flags().StringVar(&bambooHRCSVPath, "csv", "", "Path to BambooHR org-chart CSV file")
+
+	entitiesCmd.AddCommand(seedPartnersCmd, loadCSVCmd, listCmd, importBambooHRCmd)
 	return entitiesCmd
 }
