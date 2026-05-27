@@ -14,12 +14,12 @@ import (
 )
 
 // NewRefreshSlackGroupsHandler returns a HandlerInfo for the "refresh_slack_groups" job type.
-func NewRefreshSlackGroupsHandler(deps Deps) jobs.HandlerInfo {
-	return jobs.HandlerInfo{
+func NewRefreshSlackGroupsHandler(deps Deps) jobs.Entry {
+	return jobs.Entry{
 		Handler:  refreshSlackGroupsHandler(deps),
 		Systems:  []string{"slack"},
 		PoolSize: 1,
-		Timeout:  300 * time.Second,
+		Lease:  300 * time.Second,
 	}
 }
 

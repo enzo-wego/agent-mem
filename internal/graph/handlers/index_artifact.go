@@ -17,12 +17,12 @@ type indexArtifactPayload struct {
 }
 
 // NewIndexArtifactHandler returns a HandlerInfo for the "index_artifact" job type.
-func NewIndexArtifactHandler(deps Deps) jobs.HandlerInfo {
-	return jobs.HandlerInfo{
+func NewIndexArtifactHandler(deps Deps) jobs.Entry {
+	return jobs.Entry{
 		Handler:  indexArtifactHandler(deps),
 		Systems:  []string{"gemini"},
 		PoolSize: 4,
-		Timeout:  60 * time.Second,
+		Lease:  60 * time.Second,
 	}
 }
 

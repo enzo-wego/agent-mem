@@ -37,12 +37,12 @@ type Deps struct {
 	Gemini      GeminiClient
 }
 
-// RegisterAll registers all six handlers with the given Dispatcher.
-func RegisterAll(d *jobs.Dispatcher, deps Deps) {
-	d.Register("fetch_body", NewFetchBodyHandler(deps))
-	d.Register("describe_attachment", NewDescribeAttachmentHandler(deps))
-	d.Register("resolve_identity", NewResolveIdentityHandler(deps))
-	d.Register("index_artifact", NewIndexArtifactHandler(deps))
-	d.Register("refresh_slack_groups", NewRefreshSlackGroupsHandler(deps))
-	d.Register("import_bamboohr", NewImportBambooHRHandler(deps))
+// RegisterAll registers all handlers with the given Registry.
+func RegisterAll(reg *jobs.Registry, deps Deps) {
+	reg.Register("fetch_body", NewFetchBodyHandler(deps))
+	reg.Register("describe_attachment", NewDescribeAttachmentHandler(deps))
+	reg.Register("resolve_identity", NewResolveIdentityHandler(deps))
+	reg.Register("index_artifact", NewIndexArtifactHandler(deps))
+	reg.Register("refresh_slack_groups", NewRefreshSlackGroupsHandler(deps))
+	reg.Register("import_bamboohr", NewImportBambooHRHandler(deps))
 }

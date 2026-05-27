@@ -13,6 +13,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/rs/zerolog/log"
+	"golang.org/x/sync/semaphore"
 
 	"github.com/agent-mem/agent-mem/internal/config"
 	memctx "github.com/agent-mem/agent-mem/internal/context"
@@ -34,7 +35,7 @@ type Server struct {
 	db         *database.DB
 	contextBld *memctx.Builder
 	syncEngine *memsync.Engine
-	dispatcher *jobs.Dispatcher
+	manager    *jobs.Manager
 	router     chi.Router
 	http       *http.Server
 	cancel     context.CancelFunc
@@ -115,9 +116,33 @@ func NewServer(cfg *config.Config, logBuf *LogBuffer) (*Server, error) {
 		Gemini:      graphhandlers.NewGeminiAdapter(geminiClient),
 	}
 
-	sems := jobs.NewSemaphores(rateFromAppConfig(cfg))
-	dispatcher := jobs.NewDispatcher(pool, sems, cfg.MachineID, cfg.Graph.Runner, graphLog)
-	graphhandlers.RegisterAll(dispatcher, graphDeps)
+	rate := rateFromAppConfig(cfg)
+	sems := map[string]*semaphore.Weighted{
+		"slack":      semaphore.NewWeighted(rate.Slack),
+		"jira":       semaphore.NewWeighted(rate.Jira),
+		"github":     semaphore.NewWeighted(rate.Github),
+		"confluence": semaphore.NewWeighted(rate.Confluence),
+		"pagerduty":  semaphore.NewWeighted(rate.Pagerduty),
+		"datadog":    semaphore.NewWeighted(rate.Datadog),
+		"sentry":     semaphore.NewWeighted(rate.Sentry),
+		"gws":        semaphore.NewWeighted(rate.GWS),
+		"gemini":     semaphore.NewWeighted(rate.Gemini),
+	}
+	reg := jobs.NewRegistry()
+	graphhandlers.RegisterAll(reg, graphDeps)
+	mgr := jobs.NewManager(jobs.ManagerConfig{
+		Registry:            reg,
+		DB:                  pool,
+		WorkerID:            cfg.MachineID,
+		Runner:              cfg.Graph.Runner,
+		Semaphores:          sems,
+		IdleInterval:        5 * time.Second,
+		BackoffBase:         30 * time.Second,
+		BackoffCap:          time.Hour,
+		JanitorScanInterval: 30 * time.Second,
+		JanitorBatchSize:    100,
+		Logger:              graphLog,
+	})
 
 	s := &Server{
 		config:     cfg,
@@ -126,7 +151,7 @@ func NewServer(cfg *config.Config, logBuf *LogBuffer) (*Server, error) {
 		contextBld: memctx.NewBuilder(db, cfg),
 		searcher:   searcher,
 		syncEngine: syncEng,
-		dispatcher: dispatcher,
+		manager:    mgr,
 		logBuffer:  logBuf,
 	}
 
@@ -196,9 +221,9 @@ func (s *Server) Run() error {
 		go s.syncEngine.Start(ctx)
 	}
 
-	// Start graph job dispatcher
-	if s.dispatcher != nil {
-		go s.dispatcher.Run(ctx)
+	// Start graph job manager (dispatchers + janitor)
+	if s.manager != nil {
+		go s.manager.Run(ctx)
 	}
 
 	s.http = &http.Server{
@@ -220,8 +245,8 @@ func (s *Server) Run() error {
 			log.Error().Err(err).Msg("HTTP shutdown error")
 		}
 		// Wait for in-flight graph jobs to finish.
-		if s.dispatcher != nil {
-			s.dispatcher.Wait()
+		if s.manager != nil {
+			s.manager.Wait()
 		}
 	}()
 

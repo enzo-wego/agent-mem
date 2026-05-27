@@ -20,12 +20,12 @@ type resolveIdentityPayload struct {
 }
 
 // NewResolveIdentityHandler returns a HandlerInfo for the "resolve_identity" job type.
-func NewResolveIdentityHandler(deps Deps) jobs.HandlerInfo {
-	return jobs.HandlerInfo{
+func NewResolveIdentityHandler(deps Deps) jobs.Entry {
+	return jobs.Entry{
 		Handler:  resolveIdentityHandler(deps),
 		Systems:  []string{}, // source resolved at runtime
 		PoolSize: 4,
-		Timeout:  30 * time.Second,
+		Lease:  30 * time.Second,
 	}
 }
 

@@ -29,12 +29,12 @@ type bambooRow struct {
 }
 
 // NewImportBambooHRHandler returns a HandlerInfo for the "import_bamboohr" job type.
-func NewImportBambooHRHandler(deps Deps) jobs.HandlerInfo {
-	return jobs.HandlerInfo{
+func NewImportBambooHRHandler(deps Deps) jobs.Entry {
+	return jobs.Entry{
 		Handler:  importBambooHRHandler(deps),
 		Systems:  []string{},
 		PoolSize: 1,
-		Timeout:  600 * time.Second,
+		Lease:  600 * time.Second,
 	}
 }
 

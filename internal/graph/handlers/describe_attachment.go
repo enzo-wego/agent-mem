@@ -22,12 +22,12 @@ type describeAttachmentPayload struct {
 }
 
 // NewDescribeAttachmentHandler returns a HandlerInfo for the "describe_attachment" job type.
-func NewDescribeAttachmentHandler(deps Deps) jobs.HandlerInfo {
-	return jobs.HandlerInfo{
+func NewDescribeAttachmentHandler(deps Deps) jobs.Entry {
+	return jobs.Entry{
 		Handler:  describeAttachmentHandler(deps),
 		Systems:  []string{"gemini"},
 		PoolSize: 4,
-		Timeout:  120 * time.Second,
+		Lease:  120 * time.Second,
 	}
 }
 

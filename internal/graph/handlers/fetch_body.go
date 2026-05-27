@@ -21,12 +21,12 @@ type fetchBodyPayload struct {
 
 // NewFetchBodyHandler returns a HandlerInfo for the "fetch_body" job type.
 // It fetches, normalises, and upserts a single artifact node plus its edges.
-func NewFetchBodyHandler(deps Deps) jobs.HandlerInfo {
-	return jobs.HandlerInfo{
+func NewFetchBodyHandler(deps Deps) jobs.Entry {
+	return jobs.Entry{
 		Handler:  fetchBodyHandler(deps),
 		Systems:  []string{}, // source resolved at runtime per-payload
 		PoolSize: 8,
-		Timeout:  90 * time.Second,
+		Lease:  90 * time.Second,
 	}
 }
 
