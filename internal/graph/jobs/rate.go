@@ -2,7 +2,6 @@ package jobs
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"sort"
 
@@ -100,50 +99,3 @@ func (s *Semaphores) AcquireMany(ctx context.Context, systems []string) (release
 	}, nil
 }
 
-// HTTPError carries an HTTP status code for retryability classification.
-type HTTPError struct {
-	Status int
-	Msg    string
-}
-
-// NewHTTPError creates an HTTPError.
-func NewHTTPError(status int, msg string) *HTTPError {
-	return &HTTPError{Status: status, Msg: msg}
-}
-
-// Error implements the error interface.
-func (e *HTTPError) Error() string {
-	return fmt.Sprintf("HTTP %d: %s", e.Status, e.Msg)
-}
-
-// Sentinel errors handlers may return.
-var (
-	ErrTransient = errors.New("transient")
-	ErrFatal     = errors.New("fatal")
-)
-
-// IsRetryable: 5xx, 429, transient sentinel → true. 4xx (except 429), fatal → false.
-func IsRetryable(err error) bool {
-	if err == nil {
-		return false
-	}
-	if errors.Is(err, ErrTransient) {
-		return true
-	}
-	if errors.Is(err, ErrFatal) {
-		return false
-	}
-	var httpErr *HTTPError
-	if errors.As(err, &httpErr) {
-		if httpErr.Status == 429 {
-			return true
-		}
-		if httpErr.Status >= 500 {
-			return true
-		}
-		// 4xx other than 429
-		return false
-	}
-	// Unknown errors are treated as transient by default.
-	return true
-}
