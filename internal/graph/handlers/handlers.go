@@ -53,4 +53,6 @@ func RegisterAll(reg *jobs.Registry, deps Deps) {
 		Lease:     600 * time.Second,
 		Heartbeat: true,
 	})
+	reg.Register("backfill_slack_channel", NewBackfillSlackChannelHandler(deps))
+	reg.Register("backfill_slack_thread", NewBackfillSlackThreadHandler(deps))
 }

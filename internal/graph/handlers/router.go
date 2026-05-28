@@ -10,6 +10,7 @@ func Mount(r chi.Router, deps Deps) {
 	r.Get("/api/graph/jobs", NewJobsListHandler(deps).ServeHTTP)
 	r.Delete("/api/graph/jobs/{id}", NewJobsDeleteHandler(deps).ServeHTTP)
 	r.Post("/api/graph/jobs/{id}/retry", NewJobsRetryHandler(deps).ServeHTTP)
+	r.Post("/api/graph/backfill/slack", NewBackfillSlackHandler(deps).ServeHTTP)
 
 	// Read endpoints (Phase 3).
 	node := NewNode(deps.DB)

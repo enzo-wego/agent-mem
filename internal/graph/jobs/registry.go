@@ -46,6 +46,8 @@ func NewRegistry() *Registry {
 	r.entries["refresh_slack_groups"] = Entry{PoolSize: 1, Lease: 600 * time.Second, Heartbeat: true}
 	r.entries["import_bamboohr"] = Entry{PoolSize: 1, Lease: 600 * time.Second, Heartbeat: true}
 	r.entries["recompute_person_distance"] = Entry{PoolSize: 1, Lease: 600 * time.Second, Heartbeat: true}
+	r.entries["backfill_slack_channel"] = Entry{PoolSize: 2, Lease: 120 * time.Second, Systems: []string{"slack"}}
+	r.entries["backfill_slack_thread"] = Entry{PoolSize: 2, Lease: 120 * time.Second, Systems: []string{"slack"}}
 	return r
 }
 
