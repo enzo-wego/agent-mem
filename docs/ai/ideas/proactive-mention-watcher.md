@@ -114,6 +114,42 @@ This is **mostly a process-layer addition**, with a small CCR change:
   - **Watches**: list active watches, create/edit/delete, mute durations
   - **Notifications**: history of matches per user with the feedback they gave
 
+## Credential choice — bot token, not user token
+
+agent-mem uses **EnzoBot's bot token** (`xoxb-...`, env
+`AGENT_MEM_SLACK_BOT_TOKEN`) for all Slack calls, including the DMs this
+feature sends. Never the user's personal `xoxp-` token.
+
+This is consistent with the Phase 1 "agent-mem owns crawler creds"
+decision, and it's the right call for this feature too. Rationale:
+
+- **Privacy boundary.** A user token would let agent-mem read the user's
+  personal DMs into `graph.artifact_bodies`. The retrieval ACL can hide
+  those rows from other askers, but the raw text still lives in our DB
+  — a much bigger leak surface. The bot only sees channels it's invited
+  to, which is a feature, not a bug.
+- **Credential lifecycle.** A bot token survives any individual leaving
+  the company; a user token dies with them.
+- **Auditing.** Slack action logs are clean: "EnzoBot did X" rather than
+  "Enzo did X (but actually it was a stored token in a server)" — better
+  for compliance.
+
+Practical implication for this feature:
+
+- The proactive watcher only fires on artefacts that EnzoBot can see —
+  i.e., channels EnzoBot is invited to.
+- DMing the user works because `chat.postMessage` to `im:<user>` is
+  allowed once the user has interacted with the bot (or the bot calls
+  `conversations.open` first).
+
+Required Slack app scopes for the watcher specifically (added to whatever
+the bot already has):
+
+- `chat:write` — send DMs
+- `im:write` — open a 1:1 conversation with the user if not yet open
+- `im:history` — only if we want to coalesce a "do not re-notify if user
+  already saw a related DM" rule (optional)
+
 ## Configurable knobs (per user)
 
 - `notify_minimum_score` — threshold for sending a DM (default 0.5)
