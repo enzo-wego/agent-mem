@@ -159,6 +159,38 @@ Both endpoints return `outcome`: `created`, `updated`, or `unchanged`.
 
 Optional: `AGENT_MEM_GRAPH_RUNNER` (default `any`), `AGENT_MEM_JIRA_BASE_URL`, `AGENT_MEM_GH_BASE_URL`.
 
+### Optional: LiteParse for fast PDF/office parsing
+
+agent-mem can use [LiteParse](https://github.com/run-llama/liteparse) to
+extract text from PDF/DOCX/XLSX/PPTX locally before falling back to Gemini
+multimodal. This is faster (~50–200ms vs 2–5s) and avoids API cost for
+text-heavy documents.
+
+Install on the VPS:
+
+```bash
+cargo install liteparse   # installs the `lit` CLI binary
+# or
+npm install -g @llamaindex/liteparse   # ships a prebuilt binary
+```
+
+Then set the env (defaults invoke `lit` from `$PATH`):
+
+| Variable | Default | Description |
+|---|---|---|
+| `LITEPARSE_BIN_PATH` | `lit` | Path to the `lit` binary |
+| `LITEPARSE_SCREENSHOT_ENABLED` | `true` | Enable per-page screenshots for image-heavy docs |
+| `LITEPARSE_TEMP_DIR` | `os.TempDir()` | Working directory for temp files |
+
+If the binary is not present, agent-mem silently falls back to sending the full document bytes to
+Gemini multimodal — no error, just slower.
+
+**Extraction tiers** (automatic, no config needed):
+
+1. **Rich text** (≥ 200 chars extracted): LiteParse text used directly; only a cheap Gemini Embed call is made.
+2. **Thin text** (image-heavy doc): LiteParse generates page screenshots; each screenshot is sent to Gemini Vision.
+3. **LiteParse unavailable**: full document bytes sent to Gemini multimodal (original behaviour).
+
 ### Job admin endpoints
 
 ```bash
