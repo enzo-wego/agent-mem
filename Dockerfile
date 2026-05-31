@@ -23,15 +23,17 @@ RUN CGO_ENABLED=0 go build -o agent-mem ./cmd/agent-mem/
 #
 # The Go binary copied from the alpine builder is statically linked
 # (CGO_ENABLED=0) so it runs on Debian without modification.
-FROM node:22-slim
-# Install the LiteParse CLI in a local project dir so the native binary's
-# package can sit nested under @llamaindex/liteparse/node_modules/, which is
-# the only layout where its bundled loader's `require('@llamaindex/
-# liteparse-linux-x64-gnu')` resolves correctly. Installing both packages
-# globally as siblings under /usr/local/lib/node_modules/ fails because the
-# resolver inside @llamaindex/liteparse/dist/native.js walks up only its own
-# package's node_modules chain, not the global one.
-# After install, symlink the bin into /usr/local/bin so `lit` is on PATH.
+#
+# IMPORTANT: must be node:22-trixie-slim (Debian Trixie, glibc 2.40), NOT
+# node:22-slim (Bookworm, glibc 2.36). The prebuilt @llamaindex/liteparse-
+# linux-x64-gnu binary requires GLIBC_2.38/2.39 and GLIBCXX_3.4.31 — these
+# are not in Bookworm. Trying alpine fails because liteparse doesn't ship a
+# musl variant. Trixie is the right glibc target.
+#
+# Install pattern: a local project dir so the native binary lands nested
+# under @llamaindex/liteparse/node_modules/@llamaindex/liteparse-linux-x64-
+# gnu/, which is where the loader resolves it from. Then symlink the bin.
+FROM node:22-trixie-slim
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates \
  && rm -rf /var/lib/apt/lists/* \
