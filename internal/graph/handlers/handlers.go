@@ -36,6 +36,7 @@ type Deps struct {
 	Extractor   *extractor.Extractor
 	Identity    *identity.Service
 	Gemini      GeminiClient
+	LiteParse   LiteParseConfig
 }
 
 // RegisterAll registers all handlers with the given Registry.

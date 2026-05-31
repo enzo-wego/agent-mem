@@ -13,6 +13,10 @@ import (
 	"github.com/agent-mem/agent-mem/internal/graph/jobs"
 )
 
+// liteParseRichTextThreshold is the minimum total character count across all pages
+// for a LiteParse extraction to be considered "rich" (i.e. worth skipping Gemini multimodal).
+const liteParseRichTextThreshold = 200
+
 // describeAttachmentPayload is the JSON payload for the describe_attachment job type.
 type describeAttachmentPayload struct {
 	NodeID      string `json:"node_id"`
@@ -27,11 +31,25 @@ func NewDescribeAttachmentHandler(deps Deps) jobs.Entry {
 		Handler:  describeAttachmentHandler(deps),
 		Systems:  []string{"gemini"},
 		PoolSize: 4,
-		Lease:  120 * time.Second,
+		Lease:    120 * time.Second,
 	}
 }
 
+// isDocumentMime returns true for PDF and office document MIME types handled by LiteParse.
+func isDocumentMime(mime string) bool {
+	switch mime {
+	case "application/pdf",
+		"application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+		"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+		"application/vnd.openxmlformats-officedocument.presentationml.presentation":
+		return true
+	}
+	return false
+}
+
 func describeAttachmentHandler(deps Deps) jobs.Handler {
+	const geminiDescribePrompt = "Describe this attachment in detail. Extract any visible text (OCR). List key entities mentioned."
+
 	return func(ctx context.Context, payload []byte) error {
 		var p describeAttachmentPayload
 		if err := json.Unmarshal(payload, &p); err != nil {
@@ -51,23 +69,57 @@ func describeAttachmentHandler(deps Deps) jobs.Handler {
 		// Step 3: branch on mime.
 		mime := strings.ToLower(p.Mime)
 		var description, ocrText string
+		var entities []string
 
 		switch {
-		case strings.HasPrefix(mime, "image/") || mime == "application/pdf":
-			prompt := "Describe this attachment in detail. Extract any visible text (OCR). List key entities mentioned."
-			var entities []string
-			description, ocrText, entities, err = deps.Gemini.Describe(ctx, p.Mime, data, prompt)
+		case strings.HasPrefix(mime, "text/"):
+			description = string(data)
+
+		case isDocumentMime(mime):
+			lp, _ := ParseDocument(ctx, deps.LiteParse, data, mime, deps.Logger)
+
+			if lp.Available && lp.TotalTextLen >= liteParseRichTextThreshold {
+				// Tier 2a: rich text extraction — skip Gemini multimodal entirely.
+				description = combinePageTexts(lp.Pages)
+
+			} else if lp.Available {
+				// Tier 2b: thin extraction — run Gemini Vision on per-page screenshots.
+				for _, page := range lp.Pages {
+					if len(page.ScreenshotBytes) == 0 {
+						continue
+					}
+					pageDesc, pageOCR, pageEnts, descErr := deps.Gemini.Describe(ctx, "image/png", page.ScreenshotBytes, geminiDescribePrompt)
+					if descErr != nil {
+						deps.Logger.Warn().Err(descErr).Int("page", page.PageNumber).Msg("liteparse: Gemini screenshot describe")
+						continue
+					}
+					description += pageDesc + "\n\n"
+					ocrText += pageOCR + "\n\n"
+					entities = append(entities, pageEnts...)
+				}
+				description = strings.TrimSpace(description)
+				ocrText = strings.TrimSpace(ocrText)
+
+			} else {
+				// LiteParse unavailable — fall back to current behaviour.
+				deps.Logger.Warn().Str("reason", lp.FailureReason).Msg("liteparse: unavailable, falling back to Gemini multimodal")
+				description, ocrText, entities, err = deps.Gemini.Describe(ctx, p.Mime, data, geminiDescribePrompt)
+				if err != nil {
+					return fmt.Errorf("%w: describe_attachment Gemini.Describe: %v", jobs.ErrTransient, err)
+				}
+			}
+
+		case strings.HasPrefix(mime, "image/"):
+			description, ocrText, entities, err = deps.Gemini.Describe(ctx, p.Mime, data, geminiDescribePrompt)
 			if err != nil {
 				return fmt.Errorf("%w: describe_attachment Gemini.Describe: %v", jobs.ErrTransient, err)
 			}
-			_ = entities
-
-		case strings.HasPrefix(mime, "text/"):
-			description = string(data)
 
 		default:
 			return fmt.Errorf("%w: describe_attachment: unsupported mime type %q", jobs.ErrFatal, p.Mime)
 		}
+
+		_ = entities
 
 		// Step 4: UPDATE graph.nodes body for this media node.
 		_, err = deps.DB.Exec(ctx, `

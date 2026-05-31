@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -114,6 +115,7 @@ func NewServer(cfg *config.Config, logBuf *LogBuffer) (*Server, error) {
 		Extractor:   extractor.New(pool, graphLog),
 		Identity:    identity.NewService(pool, graphLog),
 		Gemini:      graphhandlers.NewGeminiAdapter(geminiClient),
+		LiteParse:   liteparseConfigFromEnv(),
 	}
 
 	rate := rateFromAppConfig(cfg)
@@ -255,6 +257,31 @@ func (s *Server) Run() error {
 		return fmt.Errorf("http server: %w", err)
 	}
 	return nil
+}
+
+// liteparseConfigFromEnv builds LiteParseConfig from environment variables.
+//
+// Env vars:
+//
+//	LITEPARSE_BIN_PATH          — path to the lit binary (default "lit")
+//	LITEPARSE_SCREENSHOT_ENABLED — enable per-page screenshots for thin-text fallback (default "true")
+//	LITEPARSE_TEMP_DIR           — working directory for temp files (default os.TempDir())
+func liteparseConfigFromEnv() graphhandlers.LiteParseConfig {
+	cfg := graphhandlers.LiteParseConfig{
+		BinPath:           "lit",
+		ScreenshotEnabled: true,
+		TempDir:           os.TempDir(),
+	}
+	if v := os.Getenv("LITEPARSE_BIN_PATH"); v != "" {
+		cfg.BinPath = v
+	}
+	if v := os.Getenv("LITEPARSE_SCREENSHOT_ENABLED"); v != "" {
+		cfg.ScreenshotEnabled = strings.EqualFold(v, "true") || v == "1"
+	}
+	if v := os.Getenv("LITEPARSE_TEMP_DIR"); v != "" {
+		cfg.TempDir = v
+	}
+	return cfg
 }
 
 // fetchersConfigFromAppConfig converts app Config to fetchers.Config.
