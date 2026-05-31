@@ -24,10 +24,15 @@ RUN CGO_ENABLED=0 go build -o agent-mem ./cmd/agent-mem/
 # The Go binary copied from the alpine builder is statically linked
 # (CGO_ENABLED=0) so it runs on Debian without modification.
 FROM node:22-slim
+# Install both the wrapper and the linux-x64-gnu native binary explicitly.
+# `npm install -g @llamaindex/liteparse` alone does not reliably pull the
+# optional native dep `@llamaindex/liteparse-linux-x64-gnu` in some npm
+# configurations, leading to "Failed to load native module for linux-x64"
+# at runtime. Pinning the native package as a direct install avoids that.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates \
  && rm -rf /var/lib/apt/lists/* \
- && npm install -g @llamaindex/liteparse \
+ && npm install -g @llamaindex/liteparse @llamaindex/liteparse-linux-x64-gnu \
  && lit --version
 COPY --from=builder /build/agent-mem /usr/local/bin/agent-mem
 COPY --from=builder /build/migrations /usr/local/share/agent-mem/migrations
