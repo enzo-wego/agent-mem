@@ -54,8 +54,17 @@ export BASE=http://localhost:34567        # on the VPS
 ```
 
 **Invite EnzoBot into the test channel.** The bot token can only read history
-of channels the bot is a member of. In Slack: `/invite @EnzoBot` into e.g.
-`#payments-incidents` (`C08S954G2LX`).
+of channels the bot is a member of. In Slack: `/invite @EnzoBot` into the
+target channel.
+
+Recommended first target — **`#payments-alerts`** (`C08S954G2LX`): the
+Sentry/PagerDuty/Datadog SLO alert channel where EnzoBot ran the TRY-currency
+and Tabby incident investigations. Dense with incident threads, partner names,
+Jira keys, PR links, and PagerDuty/Datadog URLs — ideal for exercising
+cross-source linking.
+
+Other payments channels (for reference):
+`#payments-team` = `C05RNSE8TBR`, `#payments-pull-requests` = `C0597404MS6`.
 
 EnzoBot bot scopes required (set in the Slack app → OAuth & Permissions;
 reinstall if you add any): `channels:history`, `groups:history`,
