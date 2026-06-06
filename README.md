@@ -1,6 +1,6 @@
 # agent-mem
 
-`agent-mem` is a Go service and CLI for persistent coding-agent memory. It captures local hook events, stores prompts/observations/session summaries in PostgreSQL with `pgvector`, uses Gemini for extraction and embeddings, and serves a small dashboard for search and inspection.
+`agent-mem` is a Go service and CLI for persistent coding-agent memory. It captures local hook events, stores prompts/observations/session summaries in PostgreSQL with `pgvector`, uses Gemini for extraction and embeddings, and serves a small dashboard for search and inspection. It also hosts **Graph Memory** — a cross-source knowledge graph that links Slack, Jira, GitHub, Confluence, PagerDuty, Datadog, Sentry, and Google Workspace artifacts into one queryable store ([jump to section](#graph-memory)).
 
 ## What It Does
 
@@ -8,7 +8,8 @@
 - Accepts hook events such as session start, prompt submit, post-tool-use, and stop
 - Stores prompts, observations, summaries, and sync metadata in PostgreSQL
 - Builds relevant context for future sessions
-- Exposes a dashboard and JSON API for search, timelines, sync, settings, and logs
+- **Graph Memory**: ingests cross-source artifacts (push, URL, or Slack backfill), processes them through a Postgres-backed job queue (fetch → normalize → extract edges → describe media → embed), and serves search / BFS-resolve / node read endpoints
+- Exposes a dashboard and JSON API for search, timelines, sync, settings, logs, graph, jobs, and backfill
 - Integrates with Claude Code, Codex, and Gemini CLI (one-shot installers)
 
 ## Architecture
@@ -37,14 +38,16 @@
 │                      agent-mem worker                        │
 │                                                              │
 │   hook ingest │ hybrid search │ sync push/pull │ dashboard   │
+│   graph: ingest/backfill → job queue → search/resolve/node   │
 │                                                              │
-└────────────┬───────────────────────┬─────────────────────────┘
-             │                       │
-             ▼                       ▼
-   ┌───────────────────┐    ┌───────────────────────┐
-   │  PostgreSQL +     │    │  Gemini API           │
-   │  pgvector         │    │  (extract + embed)    │
-   └───────────────────┘    └───────────────────────┘
+└────────────┬───────────────────────┬────────────────┬────────┘
+             │                       │                │
+             ▼                       ▼                ▼
+   ┌───────────────────┐    ┌───────────────────┐  ┌──────────────────────┐
+   │  PostgreSQL +     │    │  Gemini API       │  │  External sources     │
+   │  pgvector         │    │  (extract+embed,  │  │  Slack/Jira/GH/CF/PD/  │
+   │  (memory + graph) │    │   media describe) │  │  DD/Sentry/GWS + lit   │
+   └───────────────────┘    └───────────────────┘  └──────────────────────┘
 ```
 
 ### Cloud Sync
@@ -94,6 +97,7 @@ Main code paths:
 - [cmd/agent-mem/main.go](/Users/neocapitelo/go/src/github.com/agent-mem/cmd/agent-mem/main.go)
 - [internal/worker](/Users/neocapitelo/go/src/github.com/agent-mem/internal/worker)
 - [internal/database](/Users/neocapitelo/go/src/github.com/agent-mem/internal/database)
+- [internal/graph](/Users/neocapitelo/go/src/github.com/agent-mem/internal/graph) — graph memory: `ids`, `identity`, `normalizer`, `extractor`, `entities`, `fetchers`, `jobs`, `handlers`, `acl`, `scoring`, `bfs`, `hydrate`
 - [dashboard](/Users/neocapitelo/go/src/github.com/agent-mem/dashboard)
 - [plugin/skills](/Users/neocapitelo/go/src/github.com/agent-mem/plugin/skills)
 
@@ -144,6 +148,29 @@ curl -s -X POST http://localhost:34567/api/graph/ingest/url \
 
 Both endpoints return `outcome`: `created`, `updated`, or `unchanged`.
 
+### Backfill a Slack channel
+
+**POST /api/graph/backfill/slack** — pull a channel's last *N* months of history
+into the graph. This is a *pull* (the worker calls Slack's `conversations.history`
+/ `conversations.replies` Web API with the bot token) — it does **not** need any
+webhook or socket-mode wiring. The bot must be a member of the channel
+(`/invite @bot`), and private channels need the `groups:history` scope.
+
+```bash
+curl -s -X POST http://localhost:34567/api/graph/backfill/slack \
+  -H "Authorization: Bearer $AGENT_MEM_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"channel_id": "C08S954G2LX", "months": 1}'
+# {"job_id":1,"status":"queued","channel_id":"C08S954G2LX","oldest_ts":"...","estimated_months":1}
+```
+
+`channel_id` must match `^C[A-Z0-9]+$`; `months` is 1–24. The endpoint enqueues a
+`backfill_slack_channel` job (paginated, re-enqueues itself per cursor) which fans
+out into `backfill_slack_thread`, `fetch_body`, `describe_attachment`, and
+`index_artifact` jobs. Watch them via the job admin endpoints or the **Jobs**
+dashboard tab. See [docs/ai/TESTING.md](docs/ai/TESTING.md) for the full
+insert → process → read walkthrough.
+
 ### Required env vars (fetchers)
 
 | Variable | Source |
@@ -169,10 +196,17 @@ text-heavy documents.
 Install on the VPS:
 
 ```bash
-cargo install liteparse   # installs the `lit` CLI binary
+npm install -g @llamaindex/liteparse   # ships a prebuilt `lit` binary (recommended)
 # or
-npm install -g @llamaindex/liteparse   # ships a prebuilt binary
+cargo install liteparse                # builds the `lit` CLI from source
 ```
+
+> **glibc requirement.** The prebuilt native binary
+> (`@llamaindex/liteparse-linux-x64-gnu`) links against **glibc ≥ 2.38** and
+> `GLIBCXX_3.4.31`, and ships **no musl variant**. It will *not* load on Alpine
+> or on Debian Bookworm (glibc 2.36) — use a `node:22-trixie-slim` (glibc 2.40)
+> or newer base. The Docker image installs it into a local project dir and
+> symlinks `lit` onto `$PATH`; see [Dockerfile](Dockerfile).
 
 Then set the env (defaults invoke `lit` from `$PATH`):
 
@@ -217,9 +251,46 @@ The command enqueues an `import_bamboohr` job. The worker processes the CSV to u
 
 Graph tables (`graph.people`, `graph.nodes`, `graph.edges`, `graph.artifact_bodies`, etc.) are included in the standard push/pull sync rotation. Batch sizes: `artifact_bodies` and `artifact_index` use 50 rows per batch; all others use 100. Embeddings are excluded from sync transport — the receiving machine re-generates them via the `index_artifact` job.
 
-### Phase 3 — read endpoints
+### Read endpoints
 
-Search (`/api/graph/search`), entity resolve (`/api/graph/resolve`), and node detail (`/api/graph/node/{id}`) ship in Phase 3. See [docs/plans/12-graph-memory-read.md](docs/plans/12-graph-memory-read.md).
+Query the graph that ingest + processing built. All require the Bearer API key;
+reads carry the asker identity (`asker_eeid` in the body, or `X-Asker-User`
+header) so results are ACL-filtered and person-weighted. Design:
+[docs/plans/12-graph-memory-read.md](docs/plans/12-graph-memory-read.md).
+
+**GET /api/graph/search** — keyword + semantic candidate search:
+
+```bash
+curl -s -H "Authorization: Bearer $AGENT_MEM_API_KEY" \
+  "http://localhost:34567/api/graph/search?q=TRY%20currency&types=slack_thread,jira&limit=5"
+# { "results": [ { "node_id": "...", "score": 0.87, "score_breakdown": {...}, ... } ], "total": 14 }
+```
+
+Query params: `q` (required), `types` (CSV filter), `limit` (default 10).
+
+**POST /api/graph/resolve** — seed-driven BFS, scored + hydrated as LLM context:
+
+```bash
+curl -s -X POST http://localhost:34567/api/graph/resolve \
+  -H "Authorization: Bearer $AGENT_MEM_API_KEY" -H "Content-Type: application/json" \
+  -d '{
+    "seeds": ["jira:PAY-2128"],
+    "query": "what is the TRY currency issue?",
+    "asker_eeid": 982,
+    "depth": 2,
+    "budget_tokens": 4000,
+    "include_bodies": true
+  }'
+# { "artifacts": [ {hop:0 seed}, {hop:1 ...}, ... ], "graph_trace": {...}, "cache_misses": [...] }
+```
+
+Seeds may be canonical node ids (`jira:PAY-2128`, `slack:C…:ts`) or raw URLs.
+
+**GET /api/graph/node** — direct lookup by `?url=` or `?id=`, returns the node +
+`edges_in` / `edges_out`.
+
+**GET /api/graph/node/{id}/neighbors** — adjacency walk; `?depth=1|2|3`,
+`?kind=REFERENCES`, `?direction=in|out|both`.
 
 ## Quick Start
 
@@ -388,6 +459,14 @@ Gemini is optional for startup, but required for extraction and hybrid semantic 
 ## Dashboard
 
 The React dashboard source lives in [dashboard](/Users/neocapitelo/go/src/github.com/agent-mem/dashboard). The worker serves embedded production assets from [internal/worker/dashboard](/Users/neocapitelo/go/src/github.com/agent-mem/internal/worker/dashboard).
+
+Tabs: Timeline, Search, Sessions, Sync, Logs, Settings, plus the Graph Memory tabs:
+
+- **Graph** — Search (keyword/semantic) and Resolve (paste a seed URL → BFS context) over the artifact graph.
+- **Jobs** — queue inspector: filter by status/type, 5s auto-refresh while active, retry/delete actions.
+- **Backfill** — form to pull a Slack channel's last *N* months into the graph; links straight to the Jobs tab to watch it drain.
+
+> The worker embeds prebuilt dashboard assets at compile time (`//go:embed`). After changing the frontend, run `npm run build` in `dashboard/` and copy `dashboard/dist/*` into `internal/worker/dashboard/` before rebuilding the worker.
 
 Frontend scripts:
 
