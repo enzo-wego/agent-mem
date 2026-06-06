@@ -449,6 +449,28 @@ Core environment variables:
 - `AGENT_MEM_API_KEY`
 - `AGENT_MEM_MACHINE_ID`
 
+### Graph Memory env vars
+
+Fetcher credentials (see the [Required env vars](#required-env-vars-fetchers) table for what each enables — all optional; a source is simply skipped if its token is unset):
+
+- `AGENT_MEM_SLACK_BOT_TOKEN`
+- `AGENT_MEM_JIRA_EMAIL`, `AGENT_MEM_JIRA_TOKEN`, `AGENT_MEM_JIRA_BASE_URL`
+- `AGENT_MEM_GH_TOKEN`, `AGENT_MEM_GH_BASE_URL`
+- `AGENT_MEM_CF_TOKEN`
+- `AGENT_MEM_PAGERDUTY_TOKEN`
+- `AGENT_MEM_DATADOG_API_KEY`, `AGENT_MEM_DATADOG_APP_KEY`
+- `AGENT_MEM_SENTRY_AUTH_TOKEN`, `AGENT_MEM_SENTRY_ORG`
+- `AGENT_MEM_GWS_SERVICE_KEY_PATH`
+
+Behaviour and rate limits:
+
+- `AGENT_MEM_GRAPH_RUNNER` — `any` (default), `vps`, or `local`. Controls which jobs this worker claims (`vps` owns the Slack bot token, so backfill jobs target `vps`).
+- `AGENT_MEM_GRAPH_RATE_*` — per-source concurrency caps for the job dispatcher's semaphores: `SLACK`, `JIRA`, `GITHUB`, `CONFLUENCE`, `PAGERDUTY`, `DATADOG`, `SENTRY`, `GWS`, `GEMINI`. Sensible defaults are seeded in `app_settings`; override only to throttle a rate-limited source.
+
+LiteParse (optional, for PDF/office parsing) — see [the LiteParse section](#optional-liteparse-for-fast-pdfoffice-parsing):
+
+- `LITEPARSE_BIN_PATH`, `LITEPARSE_SCREENSHOT_ENABLED`, `LITEPARSE_TEMP_DIR`
+
 Default local ports:
 
 - PostgreSQL: `5433`
