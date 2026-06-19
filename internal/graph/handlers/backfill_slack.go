@@ -259,14 +259,29 @@ func ingestSlackMessage(ctx context.Context, deps Deps, channelID string, msg sl
 	}
 
 	// Upsert artifact_bodies.
-	_, _ = deps.DB.Exec(ctx, `
-		INSERT INTO graph.artifact_bodies (node_id, body_full, fetched_at)
-		VALUES ($1, $2, NOW())
+	if _, abErr := deps.DB.Exec(ctx, `
+		INSERT INTO graph.artifact_bodies (node_id, body_full, fetched_at, machine_id)
+		VALUES ($1, $2, NOW(), $3)
 		ON CONFLICT (node_id) DO UPDATE SET
 			body_full  = EXCLUDED.body_full,
 			fetched_at = NOW()`,
-		nodeID, msg.Text,
-	)
+		nodeID, msg.Text, deps.MachineID,
+	); abErr != nil {
+		deps.Logger.Warn().Err(abErr).Str("node_id", nodeID).Msg("ingestSlackMessage: upsert artifact_bodies failed")
+	}
+
+	// Enqueue index_artifact so semantic search has embeddings.
+	if msg.Text != "" {
+		if _, jErr := jobs.Enqueue(ctx, deps.DB, "index_artifact", map[string]any{
+			"node_id": nodeID,
+			"force":   false,
+		}, jobs.EnqueueOptions{
+			Priority:  5,
+			MachineID: deps.MachineID,
+		}); jErr != nil {
+			deps.Logger.Warn().Err(jErr).Str("node_id", nodeID).Msg("ingestSlackMessage: enqueue index_artifact failed")
+		}
+	}
 
 	// Reconcile edges if extractor available.
 	if deps.Extractor != nil && msg.Text != "" {
@@ -295,20 +310,23 @@ func ingestSlackMessage(ctx context.Context, deps Deps, channelID string, msg sl
 		attNK, _ := ids.ParseNaturalKey(attNodeID)
 		attType, _ := ids.ParseType(attNodeID)
 
-		_, _ = deps.DB.Exec(ctx, `
+		if _, attErr := deps.DB.Exec(ctx, `
 			INSERT INTO graph.nodes (id, type, natural_key, url, updated_at, machine_id)
 			VALUES ($1, $2, $3, $4, NOW(), $5)
 			ON CONFLICT (id) DO NOTHING`,
 			attNodeID, string(attType), attNK, f.URLPrivate, deps.MachineID,
-		)
-		_, _ = deps.DB.Exec(ctx, `
-			INSERT INTO graph.edges (from_node_id, to_node_id, kind, source_msg_id, updated_at)
-			VALUES ($1, $2, 'REFERENCES', $3, NOW())
+		); attErr != nil {
+			deps.Logger.Warn().Err(attErr).Str("att_node_id", attNodeID).Msg("ingestSlackMessage: upsert attachment node failed")
+		}
+		if _, edgeErr := deps.DB.Exec(ctx, `
+			INSERT INTO graph.edges (from_node_id, to_node_id, kind, source_msg_id, machine_id)
+			VALUES ($1, $2, 'REFERENCES', $3, $4)
 			ON CONFLICT (from_node_id, to_node_id, kind) DO UPDATE SET
-				source_msg_id = EXCLUDED.source_msg_id,
-				updated_at    = NOW()`,
-			nodeID, attNodeID, nodeID,
-		)
+				source_msg_id = EXCLUDED.source_msg_id`,
+			nodeID, attNodeID, nodeID, deps.MachineID,
+		); edgeErr != nil {
+			deps.Logger.Warn().Err(edgeErr).Str("att_node_id", attNodeID).Msg("ingestSlackMessage: upsert attachment edge failed")
+		}
 		_, _ = jobs.Enqueue(ctx, deps.DB, "describe_attachment", map[string]string{
 			"node_id":      attNodeID,
 			"external_url": f.URLPrivate,

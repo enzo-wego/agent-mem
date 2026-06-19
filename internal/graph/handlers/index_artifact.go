@@ -82,14 +82,14 @@ func indexArtifactHandler(deps Deps) jobs.Handler {
 
 		// Step 5: UPSERT graph.artifact_index.
 		_, err = deps.DB.Exec(ctx, `
-			INSERT INTO graph.artifact_index (node_id, summary, summary_kind, embedding, refreshed_at)
-			VALUES ($1, $2, 'heuristic', $3, NOW())
+			INSERT INTO graph.artifact_index (node_id, summary, summary_kind, embedding, refreshed_at, machine_id)
+			VALUES ($1, $2, 'heuristic', $3, NOW(), $4)
 			ON CONFLICT (node_id) DO UPDATE SET
 				summary      = EXCLUDED.summary,
 				summary_kind = EXCLUDED.summary_kind,
 				embedding    = EXCLUDED.embedding,
 				refreshed_at = NOW()`,
-			p.NodeID, summary, embedding,
+			p.NodeID, summary, embedding, deps.MachineID,
 		)
 		if err != nil {
 			return fmt.Errorf("index_artifact: upsert artifact_index: %w", err)

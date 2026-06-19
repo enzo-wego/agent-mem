@@ -137,12 +137,12 @@ func describeAttachmentHandler(deps Deps) jobs.Handler {
 			fullBody = description + "\n\nOCR:\n" + ocrText
 		}
 		_, err = deps.DB.Exec(ctx, `
-			INSERT INTO graph.artifact_bodies (node_id, body_full, fetched_at)
-			VALUES ($1, $2, NOW())
+			INSERT INTO graph.artifact_bodies (node_id, body_full, fetched_at, machine_id)
+			VALUES ($1, $2, NOW(), $3)
 			ON CONFLICT (node_id) DO UPDATE SET
 				body_full  = EXCLUDED.body_full,
 				fetched_at = NOW()`,
-			p.NodeID, fullBody,
+			p.NodeID, fullBody, deps.MachineID,
 		)
 		if err != nil {
 			return fmt.Errorf("describe_attachment: upsert artifact_bodies: %w", err)
@@ -155,14 +155,14 @@ func describeAttachmentHandler(deps Deps) jobs.Handler {
 		}
 
 		_, err = deps.DB.Exec(ctx, `
-			INSERT INTO graph.artifact_index (node_id, summary, summary_kind, embedding, refreshed_at)
-			VALUES ($1, $2, 'gemini', $3, NOW())
+			INSERT INTO graph.artifact_index (node_id, summary, summary_kind, embedding, refreshed_at, machine_id)
+			VALUES ($1, $2, 'gemini', $3, NOW(), $4)
 			ON CONFLICT (node_id) DO UPDATE SET
 				summary      = EXCLUDED.summary,
 				summary_kind = EXCLUDED.summary_kind,
 				embedding    = EXCLUDED.embedding,
 				refreshed_at = NOW()`,
-			p.NodeID, description, embedding,
+			p.NodeID, description, embedding, deps.MachineID,
 		)
 		if err != nil {
 			return fmt.Errorf("describe_attachment: upsert artifact_index: %w", err)

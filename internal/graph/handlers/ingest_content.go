@@ -205,12 +205,12 @@ func NewIngestContentHandler(deps Deps) http.Handler {
 
 		// Upsert graph.artifact_bodies.
 		_, abErr := deps.DB.Exec(ctx, `
-			INSERT INTO graph.artifact_bodies (node_id, body_full, fetched_at)
-			VALUES ($1, $2, NOW())
+			INSERT INTO graph.artifact_bodies (node_id, body_full, fetched_at, machine_id)
+			VALUES ($1, $2, NOW(), $3)
 			ON CONFLICT (node_id) DO UPDATE SET
 				body_full  = EXCLUDED.body_full,
 				fetched_at = NOW()`,
-			nodeID, req.Body,
+			nodeID, req.Body, deps.MachineID,
 		)
 		if abErr != nil {
 			deps.Logger.Warn().Err(abErr).Msg("ingest_content: upsert artifact_bodies failed")
@@ -270,12 +270,11 @@ func NewIngestContentHandler(deps Deps) http.Handler {
 			}
 
 			_, edgeErr := deps.DB.Exec(ctx, `
-				INSERT INTO graph.edges (from_node_id, to_node_id, kind, source_msg_id, updated_at)
-				VALUES ($1, $2, 'REFERENCES', $3, NOW())
+				INSERT INTO graph.edges (from_node_id, to_node_id, kind, source_msg_id, machine_id)
+				VALUES ($1, $2, 'REFERENCES', $3, $4)
 				ON CONFLICT (from_node_id, to_node_id, kind) DO UPDATE SET
-					source_msg_id = EXCLUDED.source_msg_id,
-					updated_at    = NOW()`,
-				nodeID, attNodeID, nodeID,
+					source_msg_id = EXCLUDED.source_msg_id`,
+				nodeID, attNodeID, nodeID, deps.MachineID,
 			)
 			if edgeErr != nil {
 				deps.Logger.Warn().Err(edgeErr).Str("att_node_id", attNodeID).Msg("ingest_content: upsert attachment edge failed")

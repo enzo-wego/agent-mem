@@ -151,12 +151,12 @@ func fetchBodyHandler(deps Deps) jobs.Handler {
 
 		// Step 6: upsert graph.artifact_bodies.
 		_, err = deps.DB.Exec(ctx, `
-			INSERT INTO graph.artifact_bodies (node_id, body_full, fetched_at)
-			VALUES ($1, $2, NOW())
+			INSERT INTO graph.artifact_bodies (node_id, body_full, fetched_at, machine_id)
+			VALUES ($1, $2, NOW(), $3)
 			ON CONFLICT (node_id) DO UPDATE SET
 				body_full  = EXCLUDED.body_full,
 				fetched_at = NOW()`,
-			body.NodeID, plainText,
+			body.NodeID, plainText, deps.MachineID,
 		)
 		if err != nil {
 			return fmt.Errorf("fetch_body: upsert artifact_bodies: %w", err)
@@ -198,12 +198,11 @@ func fetchBodyHandler(deps Deps) jobs.Handler {
 				continue
 			}
 			_, uErr = deps.DB.Exec(ctx, `
-				INSERT INTO graph.edges (from_node_id, to_node_id, kind, source_msg_id, updated_at)
-				VALUES ($1, $2, 'REFERENCES', $3, NOW())
+				INSERT INTO graph.edges (from_node_id, to_node_id, kind, source_msg_id, machine_id)
+				VALUES ($1, $2, 'REFERENCES', $3, $4)
 				ON CONFLICT (from_node_id, to_node_id, kind) DO UPDATE SET
-					source_msg_id = EXCLUDED.source_msg_id,
-					updated_at    = NOW()`,
-				body.NodeID, att.NodeID, body.NodeID,
+					source_msg_id = EXCLUDED.source_msg_id`,
+				body.NodeID, att.NodeID, body.NodeID, deps.MachineID,
 			)
 			if uErr != nil {
 				deps.Logger.Warn().Err(uErr).Str("att_node_id", att.NodeID).Msg("fetch_body: upsert attachment edge failed")
@@ -286,13 +285,12 @@ func reconcileEdges(ctx context.Context, deps Deps, fromNodeID string, findings 
 		// Upsert edge.
 		var edgeID int64
 		err = deps.DB.QueryRow(ctx, `
-			INSERT INTO graph.edges (from_node_id, to_node_id, kind, source_msg_id, updated_at)
-			VALUES ($1, $2, $3, $4, NOW())
+			INSERT INTO graph.edges (from_node_id, to_node_id, kind, source_msg_id, machine_id)
+			VALUES ($1, $2, $3, $4, $5)
 			ON CONFLICT (from_node_id, to_node_id, kind) DO UPDATE SET
-				source_msg_id = EXCLUDED.source_msg_id,
-				updated_at    = NOW()
+				source_msg_id = EXCLUDED.source_msg_id
 			RETURNING id`,
-			fromNodeID, f.NodeID, f.EdgeKind, fromNodeID,
+			fromNodeID, f.NodeID, f.EdgeKind, fromNodeID, deps.MachineID,
 		).Scan(&edgeID)
 		if err != nil {
 			deps.Logger.Warn().Err(err).Str("to_node_id", f.NodeID).Msg("reconcileEdges: upsert edge failed")
