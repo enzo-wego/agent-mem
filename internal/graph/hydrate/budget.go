@@ -37,7 +37,7 @@ func Greedy(ctx context.Context, db *pgxpool.Pool, cands []Candidate, budgetToke
 	used := 0
 	for _, c := range cands {
 		row := db.QueryRow(ctx, `
-SELECT n.title, n.type, COALESCE(n.url,''), b.body_full
+SELECT COALESCE(n.title,''), n.type, COALESCE(n.url,''), b.body_full
 FROM graph.nodes n
 LEFT JOIN graph.artifact_bodies b ON b.node_id = n.id
 WHERE n.id = $1 AND n.deleted_at IS NULL
