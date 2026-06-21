@@ -104,12 +104,13 @@ func fetchBodyHandler(deps Deps) jobs.Handler {
 		naturalKey, _ := ids.ParseNaturalKey(body.NodeID)
 		scope := deriveScope(fetcher.Source(), body.Metadata)
 
-		// Build metadata JSON.
-		var metaJSON []byte
+		// Build metadata JSON. graph.nodes.metadata is NOT NULL, so default to
+		// an empty object — sources that don't populate Metadata (jira, confluence,
+		// github, …) would otherwise pass an explicit NULL and fail the upsert.
+		metaJSON := []byte("{}")
 		if body.Metadata != nil {
-			metaJSON, err = json.Marshal(body.Metadata)
-			if err != nil {
-				metaJSON = nil
+			if b, mErr := json.Marshal(body.Metadata); mErr == nil {
+				metaJSON = b
 			}
 		}
 
