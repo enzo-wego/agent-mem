@@ -1,6 +1,6 @@
 # agent-mem
 
-`agent-mem` is a Go service and CLI for persistent coding-agent memory. It captures local hook events, stores prompts/observations/session summaries in PostgreSQL with `pgvector`, uses Gemini for extraction and embeddings, and serves a small dashboard for search and inspection. It also hosts **Graph Memory** — a cross-source knowledge graph that links Slack, Jira, GitHub, Confluence, PagerDuty, Datadog, Sentry, Google Workspace, and Wego Hub artifacts into one queryable store ([jump to section](#graph-memory)).
+`agent-mem` is a Go service and CLI for persistent coding-agent memory. It captures local hook events, stores prompts/observations/session summaries in PostgreSQL with `pgvector`, uses Gemini for extraction and embeddings, and serves a small dashboard for search and inspection. It also hosts **Graph Memory** — a cross-source knowledge graph that links Slack, Jira, GitHub, Confluence, PagerDuty, Datadog, Sentry, Google Workspace, Wego Hub, and shared Claude artifacts into one queryable store ([jump to section](#graph-memory)).
 
 ## What It Does
 
@@ -103,7 +103,7 @@ Main code paths:
 
 ## Graph Memory
 
-Graph Memory builds a cross-source knowledge graph that links Slack messages, Jira tickets, GitHub PRs, Confluence pages, PagerDuty incidents, Datadog monitors, Sentry issues, Google Workspace docs, and Wego Hub published files into a single queryable artifact store. Each source is a node; relationships extracted from bodies (references, mentions, ownership) become typed edges.
+Graph Memory builds a cross-source knowledge graph that links Slack messages, Jira tickets, GitHub PRs, Confluence pages, PagerDuty incidents, Datadog monitors, Sentry issues, Google Workspace docs, Wego Hub published files, and shared Claude artifacts into a single queryable artifact store. Each source is a node; relationships extracted from bodies (references, mentions, ownership) become typed edges.
 
 ```text
   Slack msg  ──REFERENCES──▶  Jira PAY-2128  ──REFERENCES──▶  GH PR #1960

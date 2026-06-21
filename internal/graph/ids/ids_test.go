@@ -271,6 +271,41 @@ func TestWegoHub(t *testing.T) {
 	}
 }
 
+func TestClaudeArtifact(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		id      string
+		wantErr bool
+	}{
+		{"2599ee45-a789-4d1e-9a91-c1e10a651966", false},
+		{"abcd1234", false},
+		{"short", true}, // < 8 chars
+		{"has space", true},
+		{"", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.id, func(t *testing.T) {
+			t.Parallel()
+			got, err := ClaudeArtifact(tt.id)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("ClaudeArtifact(%q) = %q, want error", tt.id, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ClaudeArtifact(%q) unexpected error: %v", tt.id, err)
+			}
+			if want := "claude_artifact:" + tt.id; got != want {
+				t.Fatalf("ClaudeArtifact(%q) = %q, want %q", tt.id, got, want)
+			}
+			if typ, ok := ParseType(got); !ok || typ != TypeClaudeArtifact {
+				t.Fatalf("ParseType(%q) = %q,%v want claude_artifact", got, typ, ok)
+			}
+		})
+	}
+}
+
 func TestPartner(t *testing.T) {
 	t.Parallel()
 	tests := []struct{ input, want string }{

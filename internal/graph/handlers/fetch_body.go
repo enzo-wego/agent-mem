@@ -132,7 +132,7 @@ func fetchBodyHandler(deps Deps) jobs.Handler {
 				metadata         = EXCLUDED.metadata,
 				updated_at       = NOW(),
 				machine_id       = EXCLUDED.machine_id
-			WHERE EXCLUDED.body_ts >= graph.nodes.body_ts`,
+			WHERE graph.nodes.body_ts IS NULL OR EXCLUDED.body_ts >= graph.nodes.body_ts`,
 			body.NodeID,
 			string(body.Type),
 			naturalKey,
@@ -264,6 +264,10 @@ func deriveScope(source string, meta map[string]any) string {
 	case "wegohub":
 		// Wego Hub is internal-public: any signed-in @wego.com user can read
 		// every published file. The acl builder grants "public" to all askers.
+		return "public"
+	case "claude_artifact":
+		// Shared Claude artifacts are link-accessible; treat as public so any
+		// asker who has it ingested can retrieve it.
 		return "public"
 	}
 	return source

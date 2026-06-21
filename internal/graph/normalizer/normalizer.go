@@ -67,5 +67,6 @@ func NewDefault(cache Cache) *Registry {
 	r.Register(NewSentryNormalizer())
 	r.Register(NewGWSNormalizer())
 	r.Register(NewWegoHubNormalizer())
+	r.Register(NewClaudeArtifactNormalizer())
 	return r
 }

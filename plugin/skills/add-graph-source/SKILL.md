@@ -65,6 +65,18 @@ func (f *<src>Fetcher) Fetch(ctx context.Context, node string) (FetchedBody, err
 
 Internal file-publishing platform. One node = one slug (`wegohub:<slug>`), served at `internal.wego.com/hub/apps/<slug>`. Files are **internal-public** → scope `"public"`. Metadata (description, owner, file list) comes from `GET /hub/api/files/:slug` behind a Bearer token; the served `index.html` is fetched without auth and stripped to text. See `internal/graph/fetchers/wegohub.go` and `internal/graph/normalizer/wegohub.go` for the full reference implementation, and commit history for the 11-file wiring.
 
+## Worked example: Claude artifacts (`claude_artifact`) — no-auth variant
+
+A shared Claude artifact is self-contained HTML at a public URL
+(`claude.ai/public/artifacts/<id>` or `claude.ai/code/artifact/<id>`). One node
+= one artifact (`claude_artifact:<id>`), scope `"public"`, no token/config — the
+fetcher GETs the URL unauthenticated, extracts `<title>`, and HTML-strips the
+body. The only caveat: **private/unshared artifacts 404 server-side** (they need
+the owner's claude.ai session). This source touches even fewer files than Wego
+Hub: no `Config`/env-var/`server.go`/`downloadWithAuth` changes — just ids,
+fetcher, normalizer, url pattern, ingest dispatch, and `deriveScope`. See
+`internal/graph/fetchers/claude_artifact.go`.
+
 ## Verify
 
 ```bash

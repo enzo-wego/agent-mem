@@ -19,8 +19,9 @@ const (
 	TypePagerDuty   NodeType = "pagerduty"
 	TypeDatadog     NodeType = "datadog"
 	TypeSentry      NodeType = "sentry"
-	TypeGWSDoc      NodeType = "gws_doc"
-	TypeWegoHub     NodeType = "wegohub"
+	TypeGWSDoc         NodeType = "gws_doc"
+	TypeWegoHub        NodeType = "wegohub"
+	TypeClaudeArtifact NodeType = "claude_artifact"
 	TypeSlackFile   NodeType = "slack_file"
 	TypePartner     NodeType = "partner"
 	TypeFeature     NodeType = "feature"
@@ -37,6 +38,7 @@ var (
 	reSentryID      = regexp.MustCompile(`^[A-Z0-9_\-]+$`)
 	reGHRepo        = regexp.MustCompile(`^[a-zA-Z0-9_.\-]+/[a-zA-Z0-9_.\-]+$`)
 	reWegoHubSlug   = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$`)
+	reClaudeArtID   = regexp.MustCompile(`^[A-Za-z0-9_-]{8,}$`)
 	datadogTypes    = map[string]bool{"monitor": true, "dashboard": true, "log": true}
 )
 
@@ -122,6 +124,15 @@ func WegoHub(slug string) (string, error) {
 	return fmt.Sprintf("wegohub:%s", slug), nil
 }
 
+// ClaudeArtifact builds "claude_artifact:<id>". id is the artifact UUID/slug
+// from a claude.ai artifact URL.
+func ClaudeArtifact(id string) (string, error) {
+	if !reClaudeArtID.MatchString(id) {
+		return "", fmt.Errorf("ids: invalid Claude artifact id %q", id)
+	}
+	return fmt.Sprintf("claude_artifact:%s", id), nil
+}
+
 // Partner builds "partner:<slug>". Name is lowercased; spaces become hyphens.
 func Partner(name string) string {
 	slug := strings.ToLower(name)
@@ -171,7 +182,7 @@ func ParseType(nodeID string) (NodeType, bool) {
 	prefix := nodeID[:idx]
 	switch NodeType(prefix) {
 	case TypeSlackThread, TypeJira, TypeGHPR, TypeCFPage, TypePagerDuty,
-		TypeDatadog, TypeSentry, TypeGWSDoc, TypeWegoHub, TypeSlackFile, TypePartner,
+		TypeDatadog, TypeSentry, TypeGWSDoc, TypeWegoHub, TypeClaudeArtifact, TypeSlackFile, TypePartner,
 		TypeFeature, TypeStatus, TypeCurrency, TypeCodeFile, TypePerson,
 		TypeUserGroup:
 		return NodeType(prefix), true

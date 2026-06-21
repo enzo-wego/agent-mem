@@ -213,6 +213,14 @@ func nodeIDFromURL(rawURL, source string) string {
 				return nodeID
 			}
 		}
+	case "claude_artifact":
+		m := claudeArtifactURLPattern.FindStringSubmatch(rawURL)
+		if m != nil {
+			nodeID, err := ids.ClaudeArtifact(m[1])
+			if err == nil {
+				return nodeID
+			}
+		}
 	}
 	return ""
 }

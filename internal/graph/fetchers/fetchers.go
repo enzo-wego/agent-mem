@@ -133,6 +133,7 @@ func NewRegistry(cfg Config, log zerolog.Logger) *Registry {
 		newSentryFetcher(cfg, log),
 		newGWSFetcher(cfg, log),
 		newWegoHubFetcher(cfg, log),
+		newClaudeArtifactFetcher(cfg, log),
 	}
 	return r
 }
