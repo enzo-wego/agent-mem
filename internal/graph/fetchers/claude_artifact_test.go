@@ -17,6 +17,13 @@ func TestClaudeArtifactFetcher_Matches(t *testing.T) {
 		{"wegohub:q4-report", false},
 		{"https://example.com/artifacts/abcdefgh", false},
 		{"claude_artifact:short", false}, // < 8 chars
+		// SSRF attempts: claude.ai appears only as a path/substring, not the host.
+		{"https://evil.com/claude.ai/public/artifacts/abcdefgh", false},
+		{"https://evil.com/code/artifact/abcdefgh", false},
+		{"https://claude.ai.evil.com/public/artifacts/abcdefgh", false},
+		{"http://claude.ai/public/artifacts/abcdefgh", false}, // non-https
+		{"https://169.254.169.254/code/artifact/abcdefgh", false},
+		{"https://claude.ai@evil.com/public/artifacts/abcdefgh", false}, // userinfo trick
 	}
 	for _, tc := range cases {
 		if got := f.Matches(tc.input); got != tc.want {

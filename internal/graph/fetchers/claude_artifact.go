@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 
@@ -13,12 +14,17 @@ import (
 	"github.com/agent-mem/agent-mem/internal/graph/ids"
 )
 
+// claudeArtifactHost is the only host this fetcher will ever request. Anchoring
+// validation on an exact host (not a substring match) prevents SSRF via inputs
+// like https://evil.com/claude.ai/public/artifacts/<id>.
+const claudeArtifactHost = "claude.ai"
+
 var (
 	// claudeArtifactNodeRe matches "claude_artifact:<id>".
 	claudeArtifactNodeRe = regexp.MustCompile(`^claude_artifact:([A-Za-z0-9_-]{8,})$`)
-	// claudeArtifactURLRe matches a shared/published Claude artifact URL, e.g.
-	// https://claude.ai/public/artifacts/<id> or https://claude.ai/code/artifact/<id>.
-	claudeArtifactURLRe = regexp.MustCompile(`\bclaude\.ai/(?:public/artifacts|code/artifact)/([A-Za-z0-9_-]{8,})\b`)
+	// claudeArtifactPathRe matches the path of a shared/published artifact URL,
+	// anchored end-to-end: /public/artifacts/<id> or /code/artifact/<id>.
+	claudeArtifactPathRe = regexp.MustCompile(`^/(?:public/artifacts|code/artifact)/([A-Za-z0-9_-]{8,})/?$`)
 	// htmlTitleRe extracts the <title> for a human-readable node title.
 	htmlTitleRe = regexp.MustCompile(`(?is)<title[^>]*>(.*?)</title>`)
 )
@@ -38,7 +44,8 @@ func newClaudeArtifactFetcher(cfg Config, log zerolog.Logger) *claudeArtifactFet
 func (f *claudeArtifactFetcher) Source() string { return "claude_artifact" }
 
 func (f *claudeArtifactFetcher) Matches(nodeIDorURL string) bool {
-	return claudeArtifactNodeRe.MatchString(nodeIDorURL) || claudeArtifactURLRe.MatchString(nodeIDorURL)
+	_, _, err := f.parseNode(nodeIDorURL)
+	return err == nil
 }
 
 func (f *claudeArtifactFetcher) Fetch(ctx context.Context, node string) (FetchedBody, error) {
@@ -91,18 +98,31 @@ func (f *claudeArtifactFetcher) Fetch(ctx context.Context, node string) (Fetched
 	}, nil
 }
 
-// parseNode returns the artifact id and the URL to GET. A node ID is mapped to
-// the public-share URL; a URL is used as-is.
-func (f *claudeArtifactFetcher) parseNode(node string) (id, url string, err error) {
-	if m := claudeArtifactURLRe.FindStringSubmatch(node); m != nil {
-		url = node
-		if !strings.HasPrefix(url, "http") {
-			url = "https://" + strings.TrimPrefix(url, "//")
-		}
-		return m[1], url, nil
-	}
+// parseNode returns the artifact id and the URL to GET. The returned URL is
+// always reconstructed from a verified scheme+host+path (never echoed from the
+// input) so an attacker cannot point the fetch at an arbitrary host (SSRF).
+func (f *claudeArtifactFetcher) parseNode(node string) (id, fetchURL string, err error) {
+	// Canonical node ID form → reconstruct the public-share URL.
 	if m := claudeArtifactNodeRe.FindStringSubmatch(node); m != nil {
-		return m[1], "https://claude.ai/public/artifacts/" + m[1], nil
+		return m[1], "https://" + claudeArtifactHost + "/public/artifacts/" + m[1], nil
 	}
-	return "", "", fmt.Errorf("cannot parse claude_artifact node %q", node)
+
+	// URL form → validate scheme + exact host + anchored path.
+	u, perr := url.Parse(node)
+	if perr != nil {
+		return "", "", fmt.Errorf("claude_artifact: invalid url %q: %w", node, perr)
+	}
+	if u.Scheme != "https" {
+		return "", "", fmt.Errorf("claude_artifact: scheme must be https, got %q", u.Scheme)
+	}
+	host := strings.TrimSuffix(strings.ToLower(u.Hostname()), ".")
+	if host != claudeArtifactHost {
+		return "", "", fmt.Errorf("claude_artifact: host must be %s, got %q", claudeArtifactHost, host)
+	}
+	m := claudeArtifactPathRe.FindStringSubmatch(u.Path)
+	if m == nil {
+		return "", "", fmt.Errorf("claude_artifact: unexpected path %q", u.Path)
+	}
+	// Rebuild from verified parts; drop any query/fragment/userinfo/port.
+	return m[1], (&url.URL{Scheme: "https", Host: claudeArtifactHost, Path: u.Path}).String(), nil
 }
