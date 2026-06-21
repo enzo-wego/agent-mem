@@ -119,33 +119,28 @@ func heuristicSummary(nodeID, body string) string {
 	case "gh_pr":
 		// title + first 3 lines.
 		lines := strings.SplitN(body, "\n", 4)
-		count := 3
-		if len(lines) < count {
-			count = len(lines)
-		}
-		result := strings.Join(lines[:count], "\n")
-		if len(result) > maxChars {
-			return result[:maxChars]
-		}
-		return result
+		count := min(len(lines), 3)
+		return truncateRunes(strings.Join(lines[:count], "\n"), maxChars)
 
 	default:
 		return firstParagraph(body, maxChars)
 	}
 }
 
+// truncateRunes caps s to at most n runes, never splitting a multi-byte
+// UTF-8 character (a byte slice would, producing invalid UTF-8 that Postgres
+// rejects with SQLSTATE 22021).
+func truncateRunes(s string, n int) string {
+	r := []rune(s)
+	if len(r) > n {
+		return string(r[:n])
+	}
+	return s
+}
+
 // firstParagraph returns the first paragraph of text, capped at maxChars.
 func firstParagraph(body string, maxChars int) string {
 	// Split on blank line (paragraph break).
-	idx := strings.Index(body, "\n\n")
-	var para string
-	if idx >= 0 {
-		para = strings.TrimSpace(body[:idx])
-	} else {
-		para = strings.TrimSpace(body)
-	}
-	if len(para) > maxChars {
-		return para[:maxChars]
-	}
-	return para
+	first, _, _ := strings.Cut(body, "\n\n")
+	return truncateRunes(strings.TrimSpace(first), maxChars)
 }

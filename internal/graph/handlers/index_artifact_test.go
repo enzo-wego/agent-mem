@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/rs/zerolog"
 )
@@ -67,6 +69,21 @@ func TestHeuristicSummary(t *testing.T) {
 		}
 		if len(got) > 200 {
 			t.Errorf("heuristicSummary result exceeds 200 chars: %d", len(got))
+		}
+	}
+}
+
+// Regression: truncation must not split a multi-byte rune — a byte slice
+// produced invalid UTF-8 that Postgres rejected (SQLSTATE 22021).
+func TestHeuristicSummary_TruncatesOnRuneBoundary(t *testing.T) {
+	body := strings.Repeat("é", 300) // 2 bytes each, > 200 runes
+	for _, nodeID := range []string{"jira:PAY-1", "gh_pr:wego/x#1", "slack:C1:1.2"} {
+		got := heuristicSummary(nodeID, body)
+		if !utf8.ValidString(got) {
+			t.Errorf("%s: result is not valid UTF-8: %q", nodeID, got)
+		}
+		if n := utf8.RuneCountInString(got); n > 200 {
+			t.Errorf("%s: result exceeds 200 runes: %d", nodeID, n)
 		}
 	}
 }
