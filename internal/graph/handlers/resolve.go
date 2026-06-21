@@ -128,9 +128,17 @@ func (h *Resolve) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// ACL filter: nodes with no scope are open; scoped nodes require membership.
+	// ACL filter: an empty scope set means "no filter" (admin/anonymous/dashboard),
+	// matching /search semantics — otherwise we'd hide every scoped node, including
+	// "public" ones, from an asker who simply has no derivable memberships.
+	// A non-empty scope set requires membership; unscoped nodes are always open.
 	var filtered []bfs.Candidate
+	noFilter := len(scopeSet) == 0
 	for _, c := range visited {
+		if noFilter {
+			filtered = append(filtered, c)
+			continue
+		}
 		ok, _ := h.checkScope(ctx, c.NodeID, scopeSet)
 		if ok {
 			filtered = append(filtered, c)

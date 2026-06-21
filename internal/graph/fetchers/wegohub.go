@@ -19,9 +19,11 @@ import (
 var (
 	// wegoHubNodeRe matches "wegohub:<slug>".
 	wegoHubNodeRe = regexp.MustCompile(`^wegohub:([a-z0-9][a-z0-9-]*)$`)
-	// wegoHubURLRe matches a served slug URL, e.g.
+	// wegoHubURLRe matches a served slug URL, anchored to the exact scheme+host
+	// so a spoofed URL (e.g. https://evil.com/?x=internal.wego.com/hub/apps/foo)
+	// is not claimed and mapped to an unrelated slug:
 	// https://internal.wego.com/hub/apps/<slug>[/<file>].
-	wegoHubURLRe = regexp.MustCompile(`\binternal\.wego\.com/hub/apps/([a-z0-9][a-z0-9-]*)\b`)
+	wegoHubURLRe = regexp.MustCompile(`^https://internal\.wego\.com/hub/apps/([a-z0-9][a-z0-9-]*)\b`)
 )
 
 // wegoHubFetcher retrieves a published Wego Hub slug: it reads slug metadata
