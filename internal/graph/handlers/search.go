@@ -78,8 +78,17 @@ func (s *Search) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		limit = 10
 	}
 
+	// noFilter when no asker principal is asserted (eeid 0 = the trusted
+	// dashboard/integration calling behind the API key). A real asker
+	// (eeid != 0) is always filtered: even with zero memberships they see only
+	// "public" (plus their scopes), never the whole graph. (The API key is the
+	// privilege boundary; asker identity is advisory until authenticated.)
 	askerEEID := lookupAskerEEID(ctx, s.db, r.Header.Get("X-Asker-User"))
-	scopes, _ := s.aclBld.For(ctx, askerEEID)
+	var scopeArg any
+	if askerEEID != 0 {
+		scopes, _ := s.aclBld.For(ctx, askerEEID)
+		scopeArg = append(scopes, "public")
+	}
 
 	// Embed the query if an embedder is available.
 	var queryVec []float32
@@ -115,10 +124,6 @@ WHERE n.deleted_at IS NULL
 ORDER BY ai.embedding <=> $1
 LIMIT $4
 `
-		var scopeArg any
-		if len(scopes) > 0 {
-			scopeArg = scopes
-		}
 		var typesArg any
 		if len(typesFilter) > 0 {
 			typesArg = typesFilter
@@ -147,10 +152,6 @@ WHERE n.deleted_at IS NULL
 ORDER BY n.updated_at DESC
 LIMIT $4
 `
-		var scopeArg any
-		if len(scopes) > 0 {
-			scopeArg = scopes
-		}
 		var typesArg any
 		if len(typesFilter) > 0 {
 			typesArg = typesFilter

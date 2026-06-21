@@ -105,14 +105,9 @@ SELECT DISTINCT scope FROM graph.member_scopes WHERE eeid = $1
 	}
 	// Ignore error on member_scopes (table may be empty but should exist after migrations).
 
-	// Internal-public sources (e.g. Wego Hub) are scoped "public" and visible
-	// to everyone. Only grant it when the asker already has a scope set — an
-	// empty set means "no filter" (admin/anonymous), which sees public anyway;
-	// adding "public" there would wrongly narrow it to public-only.
-	if len(scopes) > 0 {
-		scopes = append(scopes, "public")
-	}
-
+	// Returns the asker's real memberships only. Visibility of internal-public
+	// ("public") content is handled at the read endpoints (search/resolve), not
+	// here, so it applies uniformly even to an asker with zero memberships.
 	return scopes, nil
 }
 

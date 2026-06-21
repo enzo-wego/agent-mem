@@ -104,7 +104,6 @@ func TestBuilder_ReturnsAccessibleScopes(t *testing.T) {
 	}
 	want := map[string]bool{
 		"slack:C05RNSE8TBR": true,
-		"public":            true, // internal-public sources visible to any scoped asker
 	}
 	for w := range want {
 		found := false

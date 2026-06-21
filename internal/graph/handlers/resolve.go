@@ -128,12 +128,16 @@ func (h *Resolve) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// ACL filter: an empty scope set means "no filter" (admin/anonymous/dashboard),
-	// matching /search semantics — otherwise we'd hide every scoped node, including
-	// "public" ones, from an asker who simply has no derivable memberships.
-	// A non-empty scope set requires membership; unscoped nodes are always open.
+	// ACL filter. noFilter is keyed on whether a *principal was asserted at all*,
+	// NOT on whether the membership set is empty: a real asker (eeid != 0) with
+	// zero memberships must still be filtered (sees only unscoped + "public"),
+	// never the whole graph. eeid == 0 means no asker was asserted — the trusted
+	// dashboard/integration calling behind the API key — which gets the unfiltered
+	// admin view (same contract as /search). See checkScope for "public".
+	// (The API key is the privilege boundary here; asker_eeid is advisory until
+	// the asker identity is authenticated — see Mount's auth note.)
 	var filtered []bfs.Candidate
-	noFilter := len(scopeSet) == 0
+	noFilter := req.AskerEEID == 0
 	for _, c := range visited {
 		if noFilter {
 			filtered = append(filtered, c)
@@ -257,6 +261,9 @@ func (h *Resolve) checkScope(ctx context.Context, nodeID string, scopeSet map[st
 	}
 	if scope == nil || *scope == "" {
 		return true, nil // unscoped = open
+	}
+	if *scope == "public" {
+		return true, nil // internal-public, visible to everyone
 	}
 	return scopeSet[*scope], nil
 }

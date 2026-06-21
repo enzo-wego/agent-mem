@@ -3,7 +3,18 @@ package handlers
 import "github.com/go-chi/chi/v5"
 
 // Mount wires the graph ingest, admin, and read endpoints onto r.
-// The caller is responsible for adding any auth middleware before calling Mount.
+//
+// Auth/trust model: the caller MUST gate these routes with auth middleware
+// (the worker mounts them behind the API-key middleware). The API key is the
+// privilege boundary — any key-bearing caller is trusted internal infra
+// (EnzoBot, the admin dashboard). The per-request asker identity used for ACL
+// (`X-Asker-User` header on search, `asker_eeid` in the resolve body) is an
+// ADVISORY hint asserted by that trusted caller on a user's behalf; it is NOT
+// independently authenticated. Read endpoints treat "no asker asserted"
+// (eeid 0) as the trusted/unfiltered view and always filter a real asker
+// (eeid != 0) — so a real user, even with zero memberships, can never read the
+// whole graph. Hardening this into a real per-user boundary requires
+// authenticating the asker (e.g. binding eeid to a verified principal).
 func Mount(r chi.Router, deps Deps) {
 	r.Post("/api/graph/ingest/content", NewIngestContentHandler(deps).ServeHTTP)
 	r.Post("/api/graph/ingest/url", NewIngestURLHandler(deps).ServeHTTP)
