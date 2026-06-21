@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/agent-mem/agent-mem/internal/graph/jobs"
+	"github.com/pgvector/pgvector-go"
 )
 
 // indexArtifactPayload is the JSON payload for the index_artifact job type.
@@ -89,7 +90,7 @@ func indexArtifactHandler(deps Deps) jobs.Handler {
 				summary_kind = EXCLUDED.summary_kind,
 				embedding    = EXCLUDED.embedding,
 				refreshed_at = NOW()`,
-			p.NodeID, summary, embedding, deps.MachineID,
+			p.NodeID, summary, pgvector.NewVector(embedding), deps.MachineID,
 		)
 		if err != nil {
 			return fmt.Errorf("index_artifact: upsert artifact_index: %w", err)

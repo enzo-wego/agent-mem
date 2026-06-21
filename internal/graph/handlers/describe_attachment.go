@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/agent-mem/agent-mem/internal/graph/jobs"
+	"github.com/pgvector/pgvector-go"
 )
 
 // liteParseRichTextThreshold is the minimum total character count across all pages
@@ -105,14 +106,14 @@ func describeAttachmentHandler(deps Deps) jobs.Handler {
 				deps.Logger.Warn().Str("reason", lp.FailureReason).Msg("liteparse: unavailable, falling back to Gemini multimodal")
 				description, ocrText, entities, err = deps.Gemini.Describe(ctx, p.Mime, data, geminiDescribePrompt)
 				if err != nil {
-					return fmt.Errorf("%w: describe_attachment Gemini.Describe: %v", jobs.ErrTransient, err)
+					return fmt.Errorf("describe_attachment Gemini.Describe: %w", err)
 				}
 			}
 
 		case strings.HasPrefix(mime, "image/"):
 			description, ocrText, entities, err = deps.Gemini.Describe(ctx, p.Mime, data, geminiDescribePrompt)
 			if err != nil {
-				return fmt.Errorf("%w: describe_attachment Gemini.Describe: %v", jobs.ErrTransient, err)
+				return fmt.Errorf("describe_attachment Gemini.Describe: %w", err)
 			}
 
 		default:
@@ -162,7 +163,7 @@ func describeAttachmentHandler(deps Deps) jobs.Handler {
 				summary_kind = EXCLUDED.summary_kind,
 				embedding    = EXCLUDED.embedding,
 				refreshed_at = NOW()`,
-			p.NodeID, description, embedding, deps.MachineID,
+			p.NodeID, description, pgvector.NewVector(embedding), deps.MachineID,
 		)
 		if err != nil {
 			return fmt.Errorf("describe_attachment: upsert artifact_index: %w", err)
