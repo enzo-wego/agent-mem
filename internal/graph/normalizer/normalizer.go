@@ -66,5 +66,6 @@ func NewDefault(cache Cache) *Registry {
 	r.Register(NewDatadogNormalizer())
 	r.Register(NewSentryNormalizer())
 	r.Register(NewGWSNormalizer())
+	r.Register(NewWegoHubNormalizer())
 	return r
 }

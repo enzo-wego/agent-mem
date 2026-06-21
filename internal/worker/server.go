@@ -304,6 +304,8 @@ func fetchersConfigFromAppConfig(cfg *config.Config) fetchers.Config {
 		SentryBaseURL:    cfg.Graph.SentryBaseURL,
 		SentryOrg:        cfg.Graph.SentryOrg,
 		GWSServiceKeyPath: cfg.Graph.GWSServiceKeyPath,
+		WegoHubToken:      cfg.Graph.WegoHubToken,
+		WegoHubBaseURL:    cfg.Graph.WegoHubBaseURL,
 	}
 }
 

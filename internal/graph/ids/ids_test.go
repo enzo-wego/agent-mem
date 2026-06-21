@@ -232,6 +232,45 @@ func TestGWSDoc(t *testing.T) {
 	}
 }
 
+func TestWegoHub(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		slug    string
+		want    string
+		wantErr bool
+	}{
+		{"q4-report", "wegohub:q4-report", false},
+		{"my-app", "wegohub:my-app", false},
+		{"feature-branch-123", "wegohub:feature-branch-123", false},
+		{"-my-app", "", true},  // leading hyphen
+		{"My_App", "", true},   // uppercase + underscore
+		{"my-app-", "", true},  // trailing hyphen
+		{"", "", true},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.slug, func(t *testing.T) {
+			t.Parallel()
+			got, err := WegoHub(tt.slug)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("WegoHub(%q) = %q, want error", tt.slug, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("WegoHub(%q) unexpected error: %v", tt.slug, err)
+			}
+			if got != tt.want {
+				t.Fatalf("WegoHub(%q) = %q, want %q", tt.slug, got, tt.want)
+			}
+			if typ, ok := ParseType(got); !ok || typ != TypeWegoHub {
+				t.Fatalf("ParseType(%q) = %q,%v want wegohub", got, typ, ok)
+			}
+		})
+	}
+}
+
 func TestPartner(t *testing.T) {
 	t.Parallel()
 	tests := []struct{ input, want string }{

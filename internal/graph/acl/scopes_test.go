@@ -104,6 +104,7 @@ func TestBuilder_ReturnsAccessibleScopes(t *testing.T) {
 	}
 	want := map[string]bool{
 		"slack:C05RNSE8TBR": true,
+		"public":            true, // internal-public sources visible to any scoped asker
 	}
 	for w := range want {
 		found := false
@@ -116,6 +117,24 @@ func TestBuilder_ReturnsAccessibleScopes(t *testing.T) {
 		if !found {
 			t.Errorf("missing scope %q in %v", w, scopes)
 		}
+	}
+}
+
+// An asker with no derivable scopes must return an EMPTY set, not ["public"].
+// An empty set means "no filter" (admin/anonymous sees everything); adding
+// "public" there would wrongly narrow visibility to public-only.
+func TestBuilder_NoScopesStaysEmpty(t *testing.T) {
+	ctx := context.Background()
+	pool := testDB(t)
+	seedAsker(t, pool, 777, "U_NOGROUPS", nil)
+
+	b := acl.NewBuilder(pool, 5*time.Minute)
+	scopes, err := b.For(ctx, 777)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(scopes) != 0 {
+		t.Errorf("expected empty scopes for asker with no memberships, got %v", scopes)
 	}
 }
 

@@ -20,6 +20,7 @@ const (
 	TypeDatadog     NodeType = "datadog"
 	TypeSentry      NodeType = "sentry"
 	TypeGWSDoc      NodeType = "gws_doc"
+	TypeWegoHub     NodeType = "wegohub"
 	TypeSlackFile   NodeType = "slack_file"
 	TypePartner     NodeType = "partner"
 	TypeFeature     NodeType = "feature"
@@ -35,6 +36,7 @@ var (
 	rePagerDutyID   = regexp.MustCompile(`^[A-Z0-9]+$`)
 	reSentryID      = regexp.MustCompile(`^[A-Z0-9_\-]+$`)
 	reGHRepo        = regexp.MustCompile(`^[a-zA-Z0-9_.\-]+/[a-zA-Z0-9_.\-]+$`)
+	reWegoHubSlug   = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$`)
 	datadogTypes    = map[string]bool{"monitor": true, "dashboard": true, "log": true}
 )
 
@@ -110,6 +112,16 @@ func GWSDoc(driveID string) string {
 	return fmt.Sprintf("gws_doc:%s", driveID)
 }
 
+// WegoHub builds "wegohub:<slug>". Validates the Wego Hub slug rules:
+// lowercase letters, digits and hyphens, starting and ending alphanumeric,
+// max 64 chars.
+func WegoHub(slug string) (string, error) {
+	if !reWegoHubSlug.MatchString(slug) {
+		return "", fmt.Errorf("ids: invalid Wego Hub slug %q (lowercase alnum + hyphens, max 64)", slug)
+	}
+	return fmt.Sprintf("wegohub:%s", slug), nil
+}
+
 // Partner builds "partner:<slug>". Name is lowercased; spaces become hyphens.
 func Partner(name string) string {
 	slug := strings.ToLower(name)
@@ -159,7 +171,7 @@ func ParseType(nodeID string) (NodeType, bool) {
 	prefix := nodeID[:idx]
 	switch NodeType(prefix) {
 	case TypeSlackThread, TypeJira, TypeGHPR, TypeCFPage, TypePagerDuty,
-		TypeDatadog, TypeSentry, TypeGWSDoc, TypeSlackFile, TypePartner,
+		TypeDatadog, TypeSentry, TypeGWSDoc, TypeWegoHub, TypeSlackFile, TypePartner,
 		TypeFeature, TypeStatus, TypeCurrency, TypeCodeFile, TypePerson,
 		TypeUserGroup:
 		return NodeType(prefix), true

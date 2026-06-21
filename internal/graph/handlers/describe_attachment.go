@@ -219,6 +219,11 @@ func downloadWithAuth(ctx context.Context, url, source string) ([]byte, error) {
 		if token != "" {
 			req.Header.Set("Authorization", "Token token="+token)
 		}
+	case "wegohub":
+		token := os.Getenv("AGENT_MEM_WEGOHUB_TOKEN")
+		if token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
 	}
 
 	client := &http.Client{Timeout: 60 * time.Second}

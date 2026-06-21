@@ -85,6 +85,9 @@ type Config struct {
 
 	GWSServiceKeyPath string // path to a Google service-account JSON
 
+	WegoHubToken   string // deploy/Bearer token for the Wego Hub read API
+	WegoHubBaseURL string // default https://internal.wego.com/hub
+
 	HTTPClient *http.Client // optional override for tests; defaults to a client with 15s timeout
 }
 
@@ -115,6 +118,9 @@ func NewRegistry(cfg Config, log zerolog.Logger) *Registry {
 	if cfg.SentryBaseURL == "" {
 		cfg.SentryBaseURL = "https://sentry.io"
 	}
+	if cfg.WegoHubBaseURL == "" {
+		cfg.WegoHubBaseURL = "https://internal.wego.com/hub"
+	}
 
 	r := &Registry{}
 	r.fetchers = []Fetcher{
@@ -126,6 +132,7 @@ func NewRegistry(cfg Config, log zerolog.Logger) *Registry {
 		newDatadogFetcher(cfg, log),
 		newSentryFetcher(cfg, log),
 		newGWSFetcher(cfg, log),
+		newWegoHubFetcher(cfg, log),
 	}
 	return r
 }

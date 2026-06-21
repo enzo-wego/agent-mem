@@ -1,6 +1,6 @@
 # agent-mem
 
-`agent-mem` is a Go service and CLI for persistent coding-agent memory. It captures local hook events, stores prompts/observations/session summaries in PostgreSQL with `pgvector`, uses Gemini for extraction and embeddings, and serves a small dashboard for search and inspection. It also hosts **Graph Memory** — a cross-source knowledge graph that links Slack, Jira, GitHub, Confluence, PagerDuty, Datadog, Sentry, and Google Workspace artifacts into one queryable store ([jump to section](#graph-memory)).
+`agent-mem` is a Go service and CLI for persistent coding-agent memory. It captures local hook events, stores prompts/observations/session summaries in PostgreSQL with `pgvector`, uses Gemini for extraction and embeddings, and serves a small dashboard for search and inspection. It also hosts **Graph Memory** — a cross-source knowledge graph that links Slack, Jira, GitHub, Confluence, PagerDuty, Datadog, Sentry, Google Workspace, and Wego Hub artifacts into one queryable store ([jump to section](#graph-memory)).
 
 ## What It Does
 
@@ -103,7 +103,7 @@ Main code paths:
 
 ## Graph Memory
 
-Graph Memory builds a cross-source knowledge graph that links Slack messages, Jira tickets, GitHub PRs, Confluence pages, PagerDuty incidents, Datadog monitors, Sentry issues, and Google Workspace docs into a single queryable artifact store. Each source is a node; relationships extracted from bodies (references, mentions, ownership) become typed edges.
+Graph Memory builds a cross-source knowledge graph that links Slack messages, Jira tickets, GitHub PRs, Confluence pages, PagerDuty incidents, Datadog monitors, Sentry issues, Google Workspace docs, and Wego Hub published files into a single queryable artifact store. Each source is a node; relationships extracted from bodies (references, mentions, ownership) become typed edges.
 
 ```text
   Slack msg  ──REFERENCES──▶  Jira PAY-2128  ──REFERENCES──▶  GH PR #1960
@@ -183,8 +183,9 @@ insert → process → read walkthrough.
 | `AGENT_MEM_DATADOG_API_KEY` + `AGENT_MEM_DATADOG_APP_KEY` | Datadog API/App keys |
 | `AGENT_MEM_SENTRY_AUTH_TOKEN` + `AGENT_MEM_SENTRY_ORG` | Sentry auth token + org slug |
 | `AGENT_MEM_GWS_SERVICE_KEY_PATH` | Path to Google service-account JSON |
+| `AGENT_MEM_WEGOHUB_TOKEN` | Wego Hub deploy/Bearer token (read API) |
 
-Optional: `AGENT_MEM_GRAPH_RUNNER` (default `any`), `AGENT_MEM_JIRA_BASE_URL`, `AGENT_MEM_GH_BASE_URL`.
+Optional: `AGENT_MEM_GRAPH_RUNNER` (default `any`), `AGENT_MEM_JIRA_BASE_URL`, `AGENT_MEM_GH_BASE_URL`, `AGENT_MEM_WEGOHUB_BASE_URL` (default `https://internal.wego.com/hub`).
 
 ### Optional: LiteParse for fast PDF/office parsing
 

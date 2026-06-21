@@ -261,6 +261,10 @@ func deriveScope(source string, meta map[string]any) string {
 		if space, ok := meta["space_key"].(string); ok && space != "" {
 			return "confluence:" + space
 		}
+	case "wegohub":
+		// Wego Hub is internal-public: any signed-in @wego.com user can read
+		// every published file. The acl builder grants "public" to all askers.
+		return "public"
 	}
 	return source
 }

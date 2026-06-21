@@ -205,6 +205,14 @@ func nodeIDFromURL(rawURL, source string) string {
 		if m != nil {
 			return ids.GWSDoc(m[1])
 		}
+	case "wegohub":
+		m := wegoHubURLPattern.FindStringSubmatch(rawURL)
+		if m != nil {
+			nodeID, err := ids.WegoHub(m[1])
+			if err == nil {
+				return nodeID
+			}
+		}
 	}
 	return ""
 }

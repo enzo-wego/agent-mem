@@ -52,6 +52,9 @@ type GraphConfig struct {
 
 	GWSServiceKeyPath string `json:"gws_service_key_path"`
 
+	WegoHubToken   string `json:"wegohub_token"`
+	WegoHubBaseURL string `json:"wegohub_base_url"`
+
 	Rate GraphRateConfig `json:"rate"`
 }
 
@@ -495,6 +498,12 @@ func ApplyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("AGENT_MEM_GWS_SERVICE_KEY_PATH"); v != "" {
 		cfg.Graph.GWSServiceKeyPath = v
+	}
+	if v := os.Getenv("AGENT_MEM_WEGOHUB_TOKEN"); v != "" {
+		cfg.Graph.WegoHubToken = v
+	}
+	if v := os.Getenv("AGENT_MEM_WEGOHUB_BASE_URL"); v != "" {
+		cfg.Graph.WegoHubBaseURL = v
 	}
 	// Rate limits
 	if v := os.Getenv("AGENT_MEM_GRAPH_RATE_SLACK"); v != "" {
