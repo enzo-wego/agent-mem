@@ -289,6 +289,12 @@ func ingestSlackMessage(ctx context.Context, deps Deps, channelID string, msg sl
 		if extErr == nil {
 			upsertedIDs, _ := reconcileEdges(ctx, deps, nodeID, extractResult.Findings)
 			_ = pruneStaleEdges(ctx, deps, nodeID, upsertedIDs)
+			// Enqueue fetch_body for referenced nodes with no body yet, so the
+			// cross-source artifacts a message links to (Jira/PR/Confluence) get
+			// enriched — not just left as title-less edge stubs.
+			for _, fnd := range extractResult.Findings {
+				enqueueFetchIfEmpty(ctx, deps, fnd.NodeID, fnd.Type)
+			}
 		}
 	}
 

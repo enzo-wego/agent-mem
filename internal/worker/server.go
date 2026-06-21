@@ -111,7 +111,7 @@ func NewServer(cfg *config.Config, logBuf *LogBuffer) (*Server, error) {
 		Logger:      graphLog,
 		MachineID:   cfg.MachineID,
 		Fetchers:    fetchers.NewRegistry(fetchersConfigFromAppConfig(cfg), graphLog),
-		Normalizers: normalizer.NewRegistry(),
+		Normalizers: normalizer.NewDefault(nil),
 		Extractor:   extractor.New(pool, graphLog),
 		Identity:    identity.NewService(pool, graphLog),
 		Gemini:      graphhandlers.NewGeminiAdapter(geminiClient),
