@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react'
-import { graphSearch, graphResolve, graphNode, type GraphNode, type ResolveArtifact } from '../api'
+import { useEffect, useRef, useState } from 'react'
+import ForceGraph2D from 'react-force-graph-2d'
+import { graphSearch, graphResolve, graphNode, graphNeighbors, type GraphNode, type ResolveArtifact } from '../api'
 
 const NODE_TYPES = [
   'slack_thread',
@@ -77,7 +78,7 @@ function NodeDetailPanel({ nodeId, onClose }: { nodeId: string; onClose: () => v
   )
 }
 
-function SearchResultCard({ node }: { node: GraphNode }) {
+function SearchResultCard({ node, onVisualize }: { node: GraphNode; onVisualize?: (id: string) => void }) {
   const [expanded, setExpanded] = useState(false)
 
   return (
@@ -106,20 +107,28 @@ function SearchResultCard({ node }: { node: GraphNode }) {
           {node.body.slice(0, 200)}{node.body.length > 200 ? '…' : ''}
         </p>
       )}
-      <div className="mt-2">
+      <div className="mt-2 flex gap-3">
         <button
           onClick={() => setExpanded(!expanded)}
           className="text-xs text-blue-500 hover:underline"
         >
           {expanded ? 'Hide detail' : 'View node'}
         </button>
+        {onVisualize && (
+          <button
+            onClick={() => onVisualize(node.id)}
+            className="text-xs text-blue-500 hover:underline"
+          >
+            Visualize
+          </button>
+        )}
       </div>
       {expanded && <NodeDetailPanel nodeId={node.id} onClose={() => setExpanded(false)} />}
     </div>
   )
 }
 
-function SearchTab() {
+function SearchTab({ onVisualize }: { onVisualize?: (id: string) => void }) {
   const [query, setQuery] = useState('')
   const [selectedTypes, setSelectedTypes] = useState<string[]>([])
   const [results, setResults] = useState<GraphNode[]>([])
@@ -200,7 +209,7 @@ function SearchTab() {
 
       <div className="space-y-3">
         {results.map((node) => (
-          <SearchResultCard key={node.id} node={node} />
+          <SearchResultCard key={node.id} node={node} onVisualize={onVisualize} />
         ))}
       </div>
     </div>
@@ -393,17 +402,131 @@ function ResolveTab() {
   )
 }
 
+// ── Graph visualization tab (Obsidian-style local graph) ─────────────────────
+
+type VizNode = { id: string; label: string; type: string }
+type VizLink = { source: string; target: string; kind: string }
+
+const TYPE_COLORS: Record<string, string> = {
+  slack: '#a855f7', slack_thread: '#a855f7', slack_file: '#eab308',
+  jira: '#3b82f6', gh_pr: '#9ca3af', cf: '#06b6d4', cf_page: '#06b6d4',
+  pagerduty: '#22c55e', datadog: '#f97316', sentry: '#ef4444',
+  gws_doc: '#14b8a6', wegohub: '#84cc16', claude_artifact: '#f59e0b',
+}
+const colorFor = (t: string) => TYPE_COLORS[t] ?? '#6b7280'
+
+function GraphVizTab({ initialSeed }: { initialSeed?: string }) {
+  const [seed, setSeed] = useState(initialSeed ?? '')
+  const [data, setData] = useState<{ nodes: VizNode[]; links: VizLink[] }>({ nodes: [], links: [] })
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+  const expanded = useRef<Set<string>>(new Set())
+  const wrapRef = useRef<HTMLDivElement>(null)
+  const [width, setWidth] = useState(800)
+
+  useEffect(() => {
+    const measure = () => { if (wrapRef.current) setWidth(wrapRef.current.clientWidth) }
+    measure()
+    window.addEventListener('resize', measure)
+    return () => window.removeEventListener('resize', measure)
+  }, [])
+
+  const expand = async (id: string, seeding = false) => {
+    if (expanded.current.has(id)) return
+    setLoading(true); setError('')
+    try {
+      const nbrs = await graphNeighbors(id, 1)
+      expanded.current.add(id)
+      setData((prev) => {
+        const nodes = [...prev.nodes]
+        const links = [...prev.links]
+        const have = new Set(nodes.map((n) => n.id))
+        if (seeding && !have.has(id)) { nodes.push({ id, label: id, type: id.split(':')[0] }); have.add(id) }
+        const linkSet = new Set(links.map((l) => `${l.source}->${l.target}`))
+        for (const nb of nbrs) {
+          const nid = nb.node.node_id
+          if (!have.has(nid)) { nodes.push({ id: nid, label: nb.node.title || nid, type: nb.node.type }); have.add(nid) }
+          const key = `${id}->${nid}`
+          if (!linkSet.has(key)) { links.push({ source: id, target: nid, kind: nb.edge.kind }); linkSet.add(key) }
+        }
+        return { nodes, links }
+      })
+    } catch (e) { setError(e instanceof Error ? e.message : 'Failed to load neighbors') }
+    finally { setLoading(false) }
+  }
+
+  const start = (id: string) => {
+    if (!id.trim()) return
+    expanded.current = new Set()
+    setData({ nodes: [], links: [] })
+    expand(id.trim(), true)
+  }
+
+  useEffect(() => { if (initialSeed) { setSeed(initialSeed); start(initialSeed) } }, [initialSeed]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  return (
+    <div className="space-y-3">
+      <div className="flex gap-2">
+        <input
+          type="text"
+          placeholder="Seed node id (e.g. jira:PAY-2190 or slack:C05RNSE8TBR:1779…)"
+          value={seed}
+          onChange={(e) => setSeed(e.target.value)}
+          onKeyDown={(e) => e.key === 'Enter' && start(seed)}
+          className="flex-1 px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+        />
+        <button onClick={() => start(seed)} disabled={loading} className="px-6 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:opacity-50 text-sm">
+          {loading ? '...' : 'Load'}
+        </button>
+      </div>
+      {error && <p className="text-red-500 text-sm">{error}</p>}
+      <p className="text-xs text-gray-500">
+        {data.nodes.length} nodes · {data.links.length} edges — click a node to expand its neighbors, drag to rearrange, scroll to zoom.
+      </p>
+      <div ref={wrapRef} className="border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden bg-gray-50 dark:bg-gray-900" style={{ height: 560 }}>
+        {data.nodes.length > 0 && (
+          <ForceGraph2D
+            graphData={data}
+            width={width}
+            height={560}
+            nodeId="id"
+            nodeLabel={(n: VizNode) => `${n.type}: ${n.label}`}
+            nodeColor={(n: VizNode) => colorFor(n.type)}
+            nodeRelSize={5}
+            linkColor={() => 'rgba(148,163,184,0.4)'}
+            linkDirectionalArrowLength={3}
+            linkDirectionalArrowRelPos={1}
+            onNodeClick={(n: VizNode) => expand(n.id)}
+            nodeCanvasObjectMode={() => 'after'}
+            nodeCanvasObject={(n: VizNode & { x?: number; y?: number }, ctx, scale) => {
+              if (scale < 1.5) return
+              const label = n.label.length > 28 ? n.label.slice(0, 28) + '…' : n.label
+              ctx.font = `${10 / scale}px sans-serif`
+              ctx.fillStyle = 'rgba(120,130,145,0.9)'
+              ctx.textAlign = 'center'
+              ctx.fillText(label, n.x ?? 0, (n.y ?? 0) + 8)
+            }}
+          />
+        )}
+      </div>
+    </div>
+  )
+}
+
 // ── Main page ────────────────────────────────────────────────────────────────
 
-type GraphTab = 'search' | 'resolve'
+type GraphTab = 'search' | 'resolve' | 'graph'
 
 export function GraphPage() {
   const [tab, setTab] = useState<GraphTab>('search')
+  const [vizSeed, setVizSeed] = useState<string | undefined>(undefined)
+
+  const visualize = (id: string) => { setVizSeed(id); setTab('graph') }
 
   return (
     <div className="space-y-4">
       <div className="flex gap-0 border-b border-gray-200 dark:border-gray-700">
-        {(['search', 'resolve'] as GraphTab[]).map((t) => (
+        {(['search', 'resolve', 'graph'] as GraphTab[]).map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -418,8 +541,9 @@ export function GraphPage() {
         ))}
       </div>
 
-      {tab === 'search' && <SearchTab />}
+      {tab === 'search' && <SearchTab onVisualize={visualize} />}
       {tab === 'resolve' && <ResolveTab />}
+      {tab === 'graph' && <GraphVizTab initialSeed={vizSeed} />}
     </div>
   )
 }

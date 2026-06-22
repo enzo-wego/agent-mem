@@ -400,3 +400,15 @@ export async function graphNode(url?: string, id?: string): Promise<GraphNodeDet
   const res = await authFetch(`${BASE}/api/graph/node?${params}`);
   return res.json();
 }
+
+export interface GraphNeighbor {
+  node: { node_id: string; type: string; url: string; title: string };
+  edge: { kind: string };
+  hop: number;
+}
+
+export async function graphNeighbors(id: string, depth = 1): Promise<GraphNeighbor[]> {
+  const res = await authFetch(`${BASE}/api/graph/node/${encodeURIComponent(id)}/neighbors?depth=${depth}`);
+  const data = await res.json();
+  return data.neighbors ?? [];
+}
