@@ -408,7 +408,10 @@ export interface GraphNeighbor {
 }
 
 export async function graphNeighbors(id: string, depth = 1): Promise<GraphNeighbor[]> {
-  const res = await authFetch(`${BASE}/api/graph/node/${encodeURIComponent(id)}/neighbors?depth=${depth}`);
+  // Keep ':' literal — the chi path param doesn't decode %3A, so node ids like
+  // "jira:PAY-2190" / "slack:C..:ts" must keep their colons unencoded.
+  const seg = encodeURIComponent(id).replace(/%3A/gi, ':');
+  const res = await authFetch(`${BASE}/api/graph/node/${seg}/neighbors?depth=${depth}`);
   const data = await res.json();
   return data.neighbors ?? [];
 }
