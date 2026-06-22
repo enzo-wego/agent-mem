@@ -56,6 +56,7 @@ func NewSearchWithEmbedder(db *pgxpool.Pool, embed Embedder) (*Search, error) {
 
 type searchResult struct {
 	NodeID         string             `json:"node_id"`
+	ID             string             `json:"id"` // alias of node_id; the dashboard reads `id`
 	Type           string             `json:"type"`
 	Title          string             `json:"title"`
 	URL            string             `json:"url"`
@@ -188,7 +189,7 @@ LIMIT $4
 		}
 		score := scoring.Combine(s.weights, c)
 		results = append(results, searchResult{
-			NodeID: id, Type: typ, Title: title, URL: url,
+			NodeID: id, ID: id, Type: typ, Title: title, URL: url,
 			Summary: summary, Score: score, ScoreBreakdown: c,
 			Author: authorName,
 		})
