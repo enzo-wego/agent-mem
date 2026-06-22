@@ -407,6 +407,11 @@ export interface GraphNeighbor {
   hop: number;
 }
 
+export async function graphSlackUsers(): Promise<Record<string, string>> {
+  const res = await authFetch(`${BASE}/api/graph/slack-users`);
+  return res.json();
+}
+
 export async function graphNeighbors(id: string, depth = 1): Promise<GraphNeighbor[]> {
   // Keep ':' literal — the chi path param doesn't decode %3A, so node ids like
   // "jira:PAY-2190" / "slack:C..:ts" must keep their colons unencoded.

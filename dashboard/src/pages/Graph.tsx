@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import ForceGraph2D from 'react-force-graph-2d'
-import { graphSearch, graphResolve, graphNode, graphNeighbors, type GraphNode, type ResolveArtifact } from '../api'
+import { graphSearch, graphResolve, graphNode, graphNeighbors, graphSlackUsers, type GraphNode, type ResolveArtifact } from '../api'
+
+// Slack user-id → display name, loaded once from /api/graph/slack-users.
+let slackUserMap: Record<string, string> = {}
 
 // ── Slack-markup helpers ──────────────────────────────────────────────────────
 // Slack stores mentions/links as <@U…>, <#C…|name>, <url|label>. Render them as
@@ -16,7 +19,8 @@ function renderSlackText(text: string): ReactNode[] {
     if (m.index > last) out.push(text.slice(last, m.index))
     const link = 'text-blue-500 hover:underline'
     if (m[1]) {
-      out.push(<a key={key++} href={`https://wego.slack.com/team/${m[1]}`} target="_blank" rel="noopener noreferrer" className={link}>@{m[1]}</a>)
+      const name = slackUserMap[m[1]] || m[1]
+      out.push(<a key={key++} href={`https://wego.slack.com/team/${m[1]}`} target="_blank" rel="noopener noreferrer" className={link}>@{name}</a>)
     } else if (m[2]) {
       out.push('#' + m[2])
     } else if (m[3]) {
@@ -31,7 +35,7 @@ function renderSlackText(text: string): ReactNode[] {
 // Plain-text cleanup of the same markup, for compact labels.
 function cleanSlack(s: string): string {
   return s
-    .replace(/<@(U[A-Z0-9]+)>/g, '@$1')
+    .replace(/<@(U[A-Z0-9]+)>/g, (_, uid) => '@' + (slackUserMap[uid] || uid))
     .replace(/<#C[A-Z0-9]+\|([^>]+)>/g, '#$1')
     .replace(/<(https?:\/\/[^>|]+)(?:\|([^>]+))?>/g, (_, u, l) => l || u)
 }
@@ -570,6 +574,11 @@ type GraphTab = 'search' | 'resolve' | 'graph'
 export function GraphPage() {
   const [tab, setTab] = useState<GraphTab>('search')
   const [vizSeed, setVizSeed] = useState<string | undefined>(undefined)
+  const [, bumpUsers] = useState(0)
+
+  useEffect(() => {
+    graphSlackUsers().then((m) => { slackUserMap = m; bumpUsers((n) => n + 1) }).catch(() => {})
+  }, [])
 
   const visualize = (id: string) => { setVizSeed(id); setTab('graph') }
 

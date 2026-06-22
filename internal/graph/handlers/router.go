@@ -33,5 +33,7 @@ func Mount(r chi.Router, deps Deps) {
 	resolve, _ := NewResolve(deps.DB)
 	r.Method("POST", "/api/graph/resolve", resolve)
 
+	r.Method("GET", "/api/graph/slack-users", NewSlackUsersHandler(deps))
+
 	r.Mount("/api/graph", NewNeighbors(deps.DB))
 }
