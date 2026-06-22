@@ -35,7 +35,7 @@ type resolveArtifact struct {
 	URL            string             `json:"url"`
 	Type           string             `json:"type"`
 	Title          string             `json:"title"`
-	Author         map[string]string  `json:"author,omitempty"`
+	Author         string             `json:"author,omitempty"`
 	Score          float64            `json:"score"`
 	ScoreBreakdown scoring.Components `json:"score_breakdown"`
 	Summary        string             `json:"summary,omitempty"`

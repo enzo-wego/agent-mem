@@ -62,7 +62,7 @@ type searchResult struct {
 	Summary        string             `json:"summary"`
 	Score          float64            `json:"score"`
 	ScoreBreakdown scoring.Components `json:"score_breakdown"`
-	Author         map[string]string  `json:"author,omitempty"`
+	Author         string             `json:"author,omitempty"`
 }
 
 func (s *Search) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -190,7 +190,7 @@ LIMIT $4
 		results = append(results, searchResult{
 			NodeID: id, Type: typ, Title: title, URL: url,
 			Summary: summary, Score: score, ScoreBreakdown: c,
-			Author: map[string]string{"name": authorName},
+			Author: authorName,
 		})
 	}
 	if rows.Err() != nil {
