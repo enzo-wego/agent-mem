@@ -1,6 +1,48 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import ForceGraph2D from 'react-force-graph-2d'
 import { graphSearch, graphResolve, graphNode, graphNeighbors, type GraphNode, type ResolveArtifact } from '../api'
+
+// ── Slack-markup helpers ──────────────────────────────────────────────────────
+// Slack stores mentions/links as <@U…>, <#C…|name>, <url|label>. Render them as
+// links / clean text instead of raw angle-bracket markup.
+const SLACK_MARKUP = /<@(U[A-Z0-9]+)>|<#C[A-Z0-9]+\|([^>]+)>|<(https?:\/\/[^>|]+)(?:\|([^>]+))?>/g
+
+function renderSlackText(text: string): ReactNode[] {
+  const out: ReactNode[] = []
+  let last = 0, key = 0
+  let m: RegExpExecArray | null
+  SLACK_MARKUP.lastIndex = 0
+  while ((m = SLACK_MARKUP.exec(text)) !== null) {
+    if (m.index > last) out.push(text.slice(last, m.index))
+    const link = 'text-blue-500 hover:underline'
+    if (m[1]) {
+      out.push(<a key={key++} href={`https://wego.slack.com/team/${m[1]}`} target="_blank" rel="noopener noreferrer" className={link}>@{m[1]}</a>)
+    } else if (m[2]) {
+      out.push('#' + m[2])
+    } else if (m[3]) {
+      out.push(<a key={key++} href={m[3]} target="_blank" rel="noopener noreferrer" className={link}>{m[4] || m[3]}</a>)
+    }
+    last = SLACK_MARKUP.lastIndex
+  }
+  if (last < text.length) out.push(text.slice(last))
+  return out
+}
+
+// Plain-text cleanup of the same markup, for compact labels.
+function cleanSlack(s: string): string {
+  return s
+    .replace(/<@(U[A-Z0-9]+)>/g, '@$1')
+    .replace(/<#C[A-Z0-9]+\|([^>]+)>/g, '#$1')
+    .replace(/<(https?:\/\/[^>|]+)(?:\|([^>]+))?>/g, (_, u, l) => l || u)
+}
+
+// Short, human-readable label for a graph node: prefer title, else type + key.
+function shortLabel(title: string | undefined, id: string, type: string): string {
+  const t = cleanSlack((title || '').trim())
+  if (t) return t.length > 38 ? t.slice(0, 38) + '…' : t
+  const seg = id.split(':').pop() || id
+  return `${type} ${seg.slice(0, 12)}`
+}
 
 const NODE_TYPES = [
   'slack_thread',
@@ -64,7 +106,7 @@ function NodeDetailPanel({ nodeId, onClose }: { nodeId: string; onClose: () => v
           )}
           {detail.body && (
             <pre className="whitespace-pre-wrap break-all text-gray-700 dark:text-gray-300 bg-gray-50 dark:bg-gray-900 rounded p-2 max-h-40 overflow-auto">
-              {detail.body.slice(0, 1000)}{detail.body.length > 1000 ? '…' : ''}
+              {renderSlackText(detail.body.slice(0, 1000))}{detail.body.length > 1000 ? '…' : ''}
             </pre>
           )}
           {detail.metadata && (
@@ -101,10 +143,10 @@ function SearchResultCard({ node, onVisualize }: { node: GraphNode; onVisualize?
           </span>
         )}
       </div>
-      <h4 className="font-medium text-sm mb-1">{node.title || node.id}</h4>
+      <h4 className="font-medium text-sm mb-1">{cleanSlack(node.title || node.id)}</h4>
       {node.body && (
         <p className="text-xs text-gray-500 dark:text-gray-400 line-clamp-2">
-          {node.body.slice(0, 200)}{node.body.length > 200 ? '…' : ''}
+          {renderSlackText(node.body.slice(0, 200))}{node.body.length > 200 ? '…' : ''}
         </p>
       )}
       <div className="mt-2 flex gap-3">
@@ -344,10 +386,10 @@ function ResolveTab() {
                       <span className="text-xs text-gray-400 ml-auto">score {a.score.toFixed(3)}</span>
                     )}
                   </div>
-                  <p className="text-sm font-medium">{a.title || a.node_id}</p>
+                  <p className="text-sm font-medium">{cleanSlack(a.title || a.node_id)}</p>
                   {a.body && (
                     <p className="text-xs text-gray-500 mt-1 line-clamp-2">
-                      {a.body.slice(0, 200)}{a.body.length > 200 ? '…' : ''}
+                      {renderSlackText(a.body.slice(0, 200))}{a.body.length > 200 ? '…' : ''}
                     </p>
                   )}
                   {a.url && (
@@ -420,6 +462,7 @@ function GraphVizTab({ initialSeed }: { initialSeed?: string }) {
   const [data, setData] = useState<{ nodes: VizNode[]; links: VizLink[] }>({ nodes: [], links: [] })
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const [seedTitle, setSeedTitle] = useState('')
   const expanded = useRef<Set<string>>(new Set())
   const wrapRef = useRef<HTMLDivElement>(null)
   const [width, setWidth] = useState(800)
@@ -431,7 +474,7 @@ function GraphVizTab({ initialSeed }: { initialSeed?: string }) {
     return () => window.removeEventListener('resize', measure)
   }, [])
 
-  const expand = async (id: string, seeding = false) => {
+  const expand = async (id: string, seeding = false, title = '') => {
     if (expanded.current.has(id)) return
     setLoading(true); setError('')
     try {
@@ -441,11 +484,12 @@ function GraphVizTab({ initialSeed }: { initialSeed?: string }) {
         const nodes = [...prev.nodes]
         const links = [...prev.links]
         const have = new Set(nodes.map((n) => n.id))
-        if (seeding && !have.has(id)) { nodes.push({ id, label: id, type: id.split(':')[0] }); have.add(id) }
+        const seedType = id.split(':')[0]
+        if (seeding && !have.has(id)) { nodes.push({ id, label: shortLabel(title, id, seedType), type: seedType }); have.add(id) }
         const linkSet = new Set(links.map((l) => `${l.source}->${l.target}`))
         for (const nb of nbrs) {
           const nid = nb.node.node_id
-          if (!have.has(nid)) { nodes.push({ id: nid, label: nb.node.title || nid, type: nb.node.type }); have.add(nid) }
+          if (!have.has(nid)) { nodes.push({ id: nid, label: shortLabel(nb.node.title, nid, nb.node.type), type: nb.node.type }); have.add(nid) }
           const key = `${id}->${nid}`
           if (!linkSet.has(key)) { links.push({ source: id, target: nid, kind: nb.edge.kind }); linkSet.add(key) }
         }
@@ -455,11 +499,16 @@ function GraphVizTab({ initialSeed }: { initialSeed?: string }) {
     finally { setLoading(false) }
   }
 
-  const start = (id: string) => {
+  const start = async (id: string) => {
     if (!id.trim()) return
+    const sid = id.trim()
     expanded.current = new Set()
     setData({ nodes: [], links: [] })
-    expand(id.trim(), true)
+    setSeedTitle('')
+    let title = ''
+    try { const d = await graphNode(undefined, sid); title = d.title || '' } catch { /* ignore */ }
+    setSeedTitle(shortLabel(title, sid, sid.split(':')[0]))
+    await expand(sid, true, title)
   }
 
   useEffect(() => { if (initialSeed) { setSeed(initialSeed); start(initialSeed) } }, [initialSeed]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -480,6 +529,7 @@ function GraphVizTab({ initialSeed }: { initialSeed?: string }) {
         </button>
       </div>
       {error && <p className="text-red-500 text-sm">{error}</p>}
+      {seedTitle && <p className="text-sm font-medium text-gray-700 dark:text-gray-300">Seed: {seedTitle}</p>}
       <p className="text-xs text-gray-500">
         {data.nodes.length} nodes · {data.links.length} edges — click a node to expand its neighbors, drag to rearrange, scroll to zoom.
       </p>
