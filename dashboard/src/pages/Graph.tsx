@@ -523,18 +523,16 @@ function GraphVizTab({ initialSeeds }: { initialSeeds?: string[] }) {
     if (!list.length) return
     expanded.current = new Set()
     setData({ nodes: [], links: [] })
-    setSeedTitle('')
     setSeed(list.length === 1 ? list[0] : '')
-    let firstTitle = ''
-    for (const sid of list) {
-      let title = ''
-      try { const d = await graphNode(undefined, sid); title = d.title || '' } catch { /* ignore */ }
-      if (!firstTitle) firstTitle = title
-      await expand(sid, true, title)
-    }
-    setSeedTitle(list.length === 1
-      ? shortLabel(firstTitle, list[0], list[0].split(':')[0])
-      : `${list.length} search results (seeds) + their neighbors`)
+    setSeedTitle(list.length === 1 ? '' : `${list.length} search results (seeds) + their neighbors`)
+    // Fetch seed titles + expand each seed in parallel (fast for many seeds).
+    const titles = await Promise.all(
+      list.map(async (sid) => {
+        try { const d = await graphNode(undefined, sid); return d.title || '' } catch { return '' }
+      }),
+    )
+    await Promise.all(list.map((sid, i) => expand(sid, true, titles[i])))
+    if (list.length === 1) setSeedTitle(shortLabel(titles[0], list[0], list[0].split(':')[0]))
   }
 
   useEffect(() => { if (initialSeeds && initialSeeds.length) start(initialSeeds) }, [initialSeeds]) // eslint-disable-line react-hooks/exhaustive-deps
