@@ -1,6 +1,6 @@
 # agent-mem
 
-`agent-mem` is a Go service and CLI for persistent coding-agent memory. It captures local hook events, stores prompts/observations/session summaries in PostgreSQL with `pgvector`, uses Gemini for extraction and embeddings, and serves a small dashboard for search and inspection.
+`agent-mem` is a Go service and CLI for persistent coding-agent memory. It captures local hook events, stores prompts/observations/session summaries in PostgreSQL with `pgvector`, uses Gemini for extraction and embeddings, and serves a small dashboard for search and inspection. It also hosts **Graph Memory** — a cross-source knowledge graph that links Slack, Jira, GitHub, Confluence, PagerDuty, Datadog, Sentry, Google Workspace, Wego Hub, and shared Claude artifacts into one queryable store ([jump to section](#graph-memory)).
 
 ## What It Does
 
@@ -8,7 +8,8 @@
 - Accepts hook events such as session start, prompt submit, post-tool-use, and stop
 - Stores prompts, observations, summaries, and sync metadata in PostgreSQL
 - Builds relevant context for future sessions
-- Exposes a dashboard and JSON API for search, timelines, sync, settings, and logs
+- **Graph Memory**: ingests cross-source artifacts (push, URL, or Slack backfill), processes them through a Postgres-backed job queue (fetch → normalize → extract edges → describe media → embed), and serves search / BFS-resolve / node read endpoints
+- Exposes a dashboard and JSON API for search, timelines, sync, settings, logs, graph, jobs, and backfill
 - Integrates with Claude Code, Codex, and Gemini CLI (one-shot installers)
 
 ## Architecture
@@ -37,14 +38,16 @@
 │                      agent-mem worker                        │
 │                                                              │
 │   hook ingest │ hybrid search │ sync push/pull │ dashboard   │
+│   graph: ingest/backfill → job queue → search/resolve/node   │
 │                                                              │
-└────────────┬───────────────────────┬─────────────────────────┘
-             │                       │
-             ▼                       ▼
-   ┌───────────────────┐    ┌───────────────────────┐
-   │  PostgreSQL +     │    │  Gemini API           │
-   │  pgvector         │    │  (extract + embed)    │
-   └───────────────────┘    └───────────────────────┘
+└────────────┬───────────────────────┬────────────────┬────────┘
+             │                       │                │
+             ▼                       ▼                ▼
+   ┌───────────────────┐    ┌───────────────────┐  ┌──────────────────────┐
+   │  PostgreSQL +     │    │  Gemini API       │  │  External sources     │
+   │  pgvector         │    │  (extract+embed,  │  │  Slack/Jira/GH/CF/PD/  │
+   │  (memory + graph) │    │   media describe) │  │  DD/Sentry/GWS + lit   │
+   └───────────────────┘    └───────────────────┘  └──────────────────────┘
 ```
 
 ### Cloud Sync
@@ -94,8 +97,201 @@ Main code paths:
 - [cmd/agent-mem/main.go](/Users/neocapitelo/go/src/github.com/agent-mem/cmd/agent-mem/main.go)
 - [internal/worker](/Users/neocapitelo/go/src/github.com/agent-mem/internal/worker)
 - [internal/database](/Users/neocapitelo/go/src/github.com/agent-mem/internal/database)
+- [internal/graph](/Users/neocapitelo/go/src/github.com/agent-mem/internal/graph) — graph memory: `ids`, `identity`, `normalizer`, `extractor`, `entities`, `fetchers`, `jobs`, `handlers`, `acl`, `scoring`, `bfs`, `hydrate`
 - [dashboard](/Users/neocapitelo/go/src/github.com/agent-mem/dashboard)
 - [plugin/skills](/Users/neocapitelo/go/src/github.com/agent-mem/plugin/skills)
+
+## Graph Memory
+
+Graph Memory builds a cross-source knowledge graph that links Slack messages, Jira tickets, GitHub PRs, Confluence pages, PagerDuty incidents, Datadog monitors, Sentry issues, Google Workspace docs, Wego Hub published files, and shared Claude artifacts into a single queryable artifact store. Each source is a node; relationships extracted from bodies (references, mentions, ownership) become typed edges.
+
+```text
+  Slack msg  ──REFERENCES──▶  Jira PAY-2128  ──REFERENCES──▶  GH PR #1960
+      │                            │
+   MENTIONS                    PART_OF
+      ▼                            ▼
+  graph.people               Confluence page
+```
+
+### Ingest endpoints
+
+Two endpoints accept content from external integrations or the hook pipeline:
+
+**POST /api/graph/ingest/content** — push a message or document body directly:
+
+```bash
+curl -s -X POST http://localhost:34567/api/graph/ingest/content \
+  -H "Authorization: Bearer $AGENT_MEM_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "source": "slack",
+    "canonical_url": "https://wego.slack.com/archives/C08S954G2LX/p1779710863216389",
+    "body": "TRY payments failing — see PAY-2128",
+    "metadata": {
+      "channel_id": "C08S954G2LX",
+      "ts": "1779710863.216389",
+      "body_ts": "2026-05-27T09:01:03Z",
+      "author": { "ref": "slack_uid:UUK3WPNNQ", "display_name": "Lei Zheng" }
+    }
+  }'
+# {"node_id":"slack:C08S954G2LX:1779710863.216389","outcome":"created","extracted":{...},...}
+```
+
+**POST /api/graph/ingest/url** — enqueue a fetch for a URL you don't have the body for:
+
+```bash
+curl -s -X POST http://localhost:34567/api/graph/ingest/url \
+  -H "Authorization: Bearer $AGENT_MEM_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"url": "https://wegomushi.atlassian.net/browse/PAY-2128"}'
+```
+
+Both endpoints return `outcome`: `created`, `updated`, or `unchanged`.
+
+### Backfill a Slack channel
+
+**POST /api/graph/backfill/slack** — pull a channel's last *N* months of history
+into the graph. This is a *pull* (the worker calls Slack's `conversations.history`
+/ `conversations.replies` Web API with the bot token) — it does **not** need any
+webhook or socket-mode wiring. The bot must be a member of the channel
+(`/invite @bot`), and private channels need the `groups:history` scope.
+
+```bash
+curl -s -X POST http://localhost:34567/api/graph/backfill/slack \
+  -H "Authorization: Bearer $AGENT_MEM_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"channel_id": "C08S954G2LX", "months": 1}'
+# {"job_id":1,"status":"queued","channel_id":"C08S954G2LX","oldest_ts":"...","estimated_months":1}
+```
+
+`channel_id` must match `^C[A-Z0-9]+$`; `months` is 1–24. The endpoint enqueues a
+`backfill_slack_channel` job (paginated, re-enqueues itself per cursor) which fans
+out into `backfill_slack_thread`, `fetch_body`, `describe_attachment`, and
+`index_artifact` jobs. Watch them via the job admin endpoints or the **Jobs**
+dashboard tab. See [docs/ai/TESTING.md](docs/ai/TESTING.md) for the full
+insert → process → read walkthrough.
+
+### Required env vars (fetchers)
+
+| Variable | Source |
+|---|---|
+| `AGENT_MEM_SLACK_BOT_TOKEN` | Slack Bot OAuth token |
+| `AGENT_MEM_JIRA_EMAIL` + `AGENT_MEM_JIRA_TOKEN` | Jira API basic auth |
+| `AGENT_MEM_GH_TOKEN` | GitHub personal access token |
+| `AGENT_MEM_CF_TOKEN` | Confluence API token (reuses Jira email) |
+| `AGENT_MEM_PAGERDUTY_TOKEN` | PagerDuty REST API v2 token |
+| `AGENT_MEM_DATADOG_API_KEY` + `AGENT_MEM_DATADOG_APP_KEY` | Datadog API/App keys |
+| `AGENT_MEM_SENTRY_AUTH_TOKEN` + `AGENT_MEM_SENTRY_ORG` | Sentry auth token + org slug |
+| `AGENT_MEM_GWS_SERVICE_KEY_PATH` | Path to Google service-account JSON |
+| `AGENT_MEM_WEGOHUB_TOKEN` | Wego Hub deploy/Bearer token (read API) |
+
+Optional: `AGENT_MEM_GRAPH_RUNNER` (default `any`), `AGENT_MEM_JIRA_BASE_URL`, `AGENT_MEM_GH_BASE_URL`, `AGENT_MEM_WEGOHUB_BASE_URL` (default `https://internal.wego.com/hub`).
+
+### Optional: LiteParse for fast PDF/office parsing
+
+agent-mem can use [LiteParse](https://github.com/run-llama/liteparse) to
+extract text from PDF/DOCX/XLSX/PPTX locally before falling back to Gemini
+multimodal. This is faster (~50–200ms vs 2–5s) and avoids API cost for
+text-heavy documents.
+
+Install on the VPS:
+
+```bash
+npm install -g @llamaindex/liteparse   # ships a prebuilt `lit` binary (recommended)
+# or
+cargo install liteparse                # builds the `lit` CLI from source
+```
+
+> **glibc requirement.** The prebuilt native binary
+> (`@llamaindex/liteparse-linux-x64-gnu`) links against **glibc ≥ 2.38** and
+> `GLIBCXX_3.4.31`, and ships **no musl variant**. It will *not* load on Alpine
+> or on Debian Bookworm (glibc 2.36) — use a `node:22-trixie-slim` (glibc 2.40)
+> or newer base. The Docker image installs it into a local project dir and
+> symlinks `lit` onto `$PATH`; see [Dockerfile](Dockerfile).
+
+Then set the env (defaults invoke `lit` from `$PATH`):
+
+| Variable | Default | Description |
+|---|---|---|
+| `LITEPARSE_BIN_PATH` | `lit` | Path to the `lit` binary |
+| `LITEPARSE_SCREENSHOT_ENABLED` | `true` | Enable per-page screenshots for image-heavy docs |
+| `LITEPARSE_TEMP_DIR` | `os.TempDir()` | Working directory for temp files |
+
+If the binary is not present, agent-mem silently falls back to sending the full document bytes to
+Gemini multimodal — no error, just slower.
+
+**Extraction tiers** (automatic, no config needed):
+
+1. **Rich text** (≥ 200 chars extracted): LiteParse text used directly; only a cheap Gemini Embed call is made.
+2. **Thin text** (image-heavy doc): LiteParse generates page screenshots; each screenshot is sent to Gemini Vision.
+3. **LiteParse unavailable**: full document bytes sent to Gemini multimodal (original behaviour).
+
+### Job admin endpoints
+
+```bash
+# List recent jobs
+GET  /api/graph/jobs
+
+# Delete a job
+DELETE /api/graph/jobs/{id}
+
+# Retry a failed job
+POST /api/graph/jobs/{id}/retry
+```
+
+### Import org chart from BambooHR
+
+```bash
+agent-mem entities import-bamboohr --csv ~/Downloads/bamboohr_org_chart_for_visio.csv
+# enqueued import_bamboohr job id=42 (csv: .../bamboohr_org_chart_for_visio.csv, 18432 bytes)
+```
+
+The command enqueues an `import_bamboohr` job. The worker processes the CSV to upsert `graph.people` rows with `eeid`, `display_name`, `reports_to`, and `depth_from_root`.
+
+### Graph sync
+
+Graph tables (`graph.people`, `graph.nodes`, `graph.edges`, `graph.artifact_bodies`, etc.) are included in the standard push/pull sync rotation. Batch sizes: `artifact_bodies` and `artifact_index` use 50 rows per batch; all others use 100. Embeddings are excluded from sync transport — the receiving machine re-generates them via the `index_artifact` job.
+
+### Read endpoints
+
+Query the graph that ingest + processing built. All require the Bearer API key;
+reads carry the asker identity (`asker_eeid` in the body, or `X-Asker-User`
+header) so results are ACL-filtered and person-weighted. Design:
+[docs/plans/12-graph-memory-read.md](docs/plans/12-graph-memory-read.md).
+
+**GET /api/graph/search** — keyword + semantic candidate search:
+
+```bash
+curl -s -H "Authorization: Bearer $AGENT_MEM_API_KEY" \
+  "http://localhost:34567/api/graph/search?q=TRY%20currency&types=slack_thread,jira&limit=5"
+# { "results": [ { "node_id": "...", "score": 0.87, "score_breakdown": {...}, ... } ], "total": 14 }
+```
+
+Query params: `q` (required), `types` (CSV filter), `limit` (default 10).
+
+**POST /api/graph/resolve** — seed-driven BFS, scored + hydrated as LLM context:
+
+```bash
+curl -s -X POST http://localhost:34567/api/graph/resolve \
+  -H "Authorization: Bearer $AGENT_MEM_API_KEY" -H "Content-Type: application/json" \
+  -d '{
+    "seeds": ["jira:PAY-2128"],
+    "query": "what is the TRY currency issue?",
+    "asker_eeid": 982,
+    "depth": 2,
+    "budget_tokens": 4000,
+    "include_bodies": true
+  }'
+# { "artifacts": [ {hop:0 seed}, {hop:1 ...}, ... ], "graph_trace": {...}, "cache_misses": [...] }
+```
+
+Seeds may be canonical node ids (`jira:PAY-2128`, `slack:C…:ts`) or raw URLs.
+
+**GET /api/graph/node** — direct lookup by `?url=` or `?id=`, returns the node +
+`edges_in` / `edges_out`.
+
+**GET /api/graph/node/{id}/neighbors** — adjacency walk; `?depth=1|2|3`,
+`?kind=REFERENCES`, `?direction=in|out|both`.
 
 ## Quick Start
 
@@ -254,6 +450,28 @@ Core environment variables:
 - `AGENT_MEM_API_KEY`
 - `AGENT_MEM_MACHINE_ID`
 
+### Graph Memory env vars
+
+Fetcher credentials (see the [Required env vars](#required-env-vars-fetchers) table for what each enables — all optional; a source is simply skipped if its token is unset):
+
+- `AGENT_MEM_SLACK_BOT_TOKEN`
+- `AGENT_MEM_JIRA_EMAIL`, `AGENT_MEM_JIRA_TOKEN`, `AGENT_MEM_JIRA_BASE_URL`
+- `AGENT_MEM_GH_TOKEN`, `AGENT_MEM_GH_BASE_URL`
+- `AGENT_MEM_CF_TOKEN`
+- `AGENT_MEM_PAGERDUTY_TOKEN`
+- `AGENT_MEM_DATADOG_API_KEY`, `AGENT_MEM_DATADOG_APP_KEY`
+- `AGENT_MEM_SENTRY_AUTH_TOKEN`, `AGENT_MEM_SENTRY_ORG`
+- `AGENT_MEM_GWS_SERVICE_KEY_PATH`
+
+Behaviour and rate limits:
+
+- `AGENT_MEM_GRAPH_RUNNER` — `any` (default), `vps`, or `local`. Controls which jobs this worker claims (`vps` owns the Slack bot token, so backfill jobs target `vps`).
+- `AGENT_MEM_GRAPH_RATE_*` — per-source concurrency caps for the job dispatcher's semaphores: `SLACK`, `JIRA`, `GITHUB`, `CONFLUENCE`, `PAGERDUTY`, `DATADOG`, `SENTRY`, `GWS`, `GEMINI`. Sensible defaults are seeded in `app_settings`; override only to throttle a rate-limited source.
+
+LiteParse (optional, for PDF/office parsing) — see [the LiteParse section](#optional-liteparse-for-fast-pdfoffice-parsing):
+
+- `LITEPARSE_BIN_PATH`, `LITEPARSE_SCREENSHOT_ENABLED`, `LITEPARSE_TEMP_DIR`
+
 Default local ports:
 
 - PostgreSQL: `5433`
@@ -264,6 +482,14 @@ Gemini is optional for startup, but required for extraction and hybrid semantic 
 ## Dashboard
 
 The React dashboard source lives in [dashboard](/Users/neocapitelo/go/src/github.com/agent-mem/dashboard). The worker serves embedded production assets from [internal/worker/dashboard](/Users/neocapitelo/go/src/github.com/agent-mem/internal/worker/dashboard).
+
+Tabs: Timeline, Search, Sessions, Sync, Logs, Settings, plus the Graph Memory tabs:
+
+- **Graph** — Search (keyword/semantic) and Resolve (paste a seed URL → BFS context) over the artifact graph.
+- **Jobs** — queue inspector: filter by status/type, 5s auto-refresh while active, retry/delete actions.
+- **Backfill** — form to pull a Slack channel's last *N* months into the graph; links straight to the Jobs tab to watch it drain.
+
+> The worker embeds prebuilt dashboard assets at compile time (`//go:embed`). After changing the frontend, run `npm run build` in `dashboard/` and copy `dashboard/dist/*` into `internal/worker/dashboard/` before rebuilding the worker.
 
 Frontend scripts:
 

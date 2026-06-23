@@ -52,6 +52,71 @@ func (s *Server) handleSyncPush(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Graph tables (FK-ordered: people → nodes → edges, then the rest)
+	for i := range payload.GraphPeople {
+		if err := s.db.ImportGraphPerson(ctx, &payload.GraphPeople[i]); err != nil {
+			rejected++
+		} else {
+			received++
+		}
+	}
+	for i := range payload.GraphNodes {
+		if err := s.db.ImportGraphNode(ctx, &payload.GraphNodes[i]); err != nil {
+			rejected++
+		} else {
+			received++
+		}
+	}
+	for i := range payload.GraphEdges {
+		if err := s.db.ImportGraphEdge(ctx, &payload.GraphEdges[i]); err != nil {
+			rejected++
+		} else {
+			received++
+		}
+	}
+	for i := range payload.GraphArtifactIndex {
+		if err := s.db.ImportGraphArtifactIndex(ctx, &payload.GraphArtifactIndex[i]); err != nil {
+			rejected++
+		} else {
+			received++
+		}
+	}
+	for i := range payload.GraphArtifactBodies {
+		if err := s.db.ImportGraphArtifactBody(ctx, &payload.GraphArtifactBodies[i]); err != nil {
+			rejected++
+		} else {
+			received++
+		}
+	}
+	for i := range payload.GraphSlackGroups {
+		if err := s.db.ImportGraphSlackGroup(ctx, &payload.GraphSlackGroups[i]); err != nil {
+			rejected++
+		} else {
+			received++
+		}
+	}
+	for i := range payload.GraphEntities {
+		if err := s.db.ImportGraphEntity(ctx, &payload.GraphEntities[i]); err != nil {
+			rejected++
+		} else {
+			received++
+		}
+	}
+	for i := range payload.GraphJobs {
+		if err := s.db.ImportGraphJob(ctx, &payload.GraphJobs[i]); err != nil {
+			rejected++
+		} else {
+			received++
+		}
+	}
+	for i := range payload.GraphUserAffinityConfig {
+		if err := s.db.ImportGraphUserAffinityConfig(ctx, &payload.GraphUserAffinityConfig[i]); err != nil {
+			rejected++
+		} else {
+			received++
+		}
+	}
+
 	// Record per-client push time for cloud dashboard
 	if payload.MachineID != "" {
 		s.db.SetLastSyncTime(ctx, "client_push:"+payload.MachineID)
@@ -85,12 +150,34 @@ func (s *Server) handleSyncPull(w http.ResponseWriter, r *http.Request) {
 	promptAfter, _ := strconv.Atoi(r.URL.Query().Get("prompt_after"))
 	sessAfter, _ := strconv.Atoi(r.URL.Query().Get("sess_after"))
 
+	// Graph cursors
+	gPeopleAfter, _ := strconv.Atoi(r.URL.Query().Get("g_people_after"))
+	gNodesAfter, _ := strconv.Atoi(r.URL.Query().Get("g_nodes_after"))
+	gEdgesAfter, _ := strconv.Atoi(r.URL.Query().Get("g_edges_after"))
+	gArtIdxAfter, _ := strconv.Atoi(r.URL.Query().Get("g_artidx_after"))
+	gArtBodyAfter, _ := strconv.Atoi(r.URL.Query().Get("g_artbody_after"))
+	gSlackGrpAfter, _ := strconv.Atoi(r.URL.Query().Get("g_slackgrp_after"))
+	gEntitiesAfter, _ := strconv.Atoi(r.URL.Query().Get("g_entities_after"))
+	gJobsAfter, _ := strconv.Atoi(r.URL.Query().Get("g_jobs_after"))
+	gAffinityAfter, _ := strconv.Atoi(r.URL.Query().Get("g_affinity_after"))
+
 	ctx := r.Context()
 
 	observations, _ := s.db.GetObservationsForPull(ctx, machineID, obsAfter, limit)
 	summaries, _ := s.db.GetSummariesForPull(ctx, machineID, sumAfter, limit)
 	prompts, _ := s.db.GetPromptsForPull(ctx, machineID, promptAfter, limit)
 	sessions, _ := s.db.GetSessionsForPull(ctx, machineID, sessAfter, limit)
+
+	// Graph tables
+	graphPeople, _ := s.db.GetGraphPeopleForPull(ctx, machineID, gPeopleAfter, limit)
+	graphNodes, _ := s.db.GetGraphNodesForPull(ctx, machineID, gNodesAfter, limit)
+	graphEdges, _ := s.db.GetGraphEdgesForPull(ctx, machineID, gEdgesAfter, limit)
+	graphArtIdx, _ := s.db.GetGraphArtifactIndexForPull(ctx, machineID, gArtIdxAfter, limit/2)
+	graphArtBody, _ := s.db.GetGraphArtifactBodiesForPull(ctx, machineID, gArtBodyAfter, limit/2)
+	graphSlackGrp, _ := s.db.GetGraphSlackGroupsForPull(ctx, machineID, gSlackGrpAfter, limit)
+	graphEntities, _ := s.db.GetGraphEntitiesForPull(ctx, machineID, gEntitiesAfter, limit)
+	graphJobs, _ := s.db.GetGraphJobsForPull(ctx, machineID, gJobsAfter, limit)
+	graphAffinity, _ := s.db.GetGraphUserAffinityConfigForPull(ctx, machineID, gAffinityAfter, limit)
 
 	// Compute cursors: max ID per table
 	cursors := sync.PullCursors{}
@@ -107,12 +194,51 @@ func (s *Server) handleSyncPull(w http.ResponseWriter, r *http.Request) {
 		cursors.Sessions = sessions[len(sessions)-1].ID
 	}
 
+	// Graph cursors (ID-based for int-PK tables; offset-based for text-PK tables)
+	if len(graphPeople) > 0 {
+		cursors.GraphPeople = int(graphPeople[len(graphPeople)-1].ID)
+	}
+	if len(graphEdges) > 0 {
+		cursors.GraphEdges = int(graphEdges[len(graphEdges)-1].ID)
+	}
+	if len(graphJobs) > 0 {
+		cursors.GraphJobs = int(graphJobs[len(graphJobs)-1].ID)
+	}
+	// Offset-based cursors: advance by batch size
+	if len(graphNodes) > 0 {
+		cursors.GraphNodes = gNodesAfter + len(graphNodes)
+	}
+	if len(graphArtIdx) > 0 {
+		cursors.GraphArtifactIndex = gArtIdxAfter + len(graphArtIdx)
+	}
+	if len(graphArtBody) > 0 {
+		cursors.GraphArtifactBodies = gArtBodyAfter + len(graphArtBody)
+	}
+	if len(graphSlackGrp) > 0 {
+		cursors.GraphSlackGroups = gSlackGrpAfter + len(graphSlackGrp)
+	}
+	if len(graphEntities) > 0 {
+		cursors.GraphEntities = gEntitiesAfter + len(graphEntities)
+	}
+	if len(graphAffinity) > 0 {
+		cursors.GraphUserAffinityConfig = gAffinityAfter + len(graphAffinity)
+	}
+
 	resp := sync.SyncPullResponse{
-		Sessions:     sessions,
-		Observations: observations,
-		Summaries:    summaries,
-		Prompts:      prompts,
-		Cursors:      cursors,
+		Sessions:                sessions,
+		Observations:            observations,
+		Summaries:               summaries,
+		Prompts:                 prompts,
+		GraphPeople:             graphPeople,
+		GraphNodes:              graphNodes,
+		GraphEdges:              graphEdges,
+		GraphArtifactIndex:      graphArtIdx,
+		GraphArtifactBodies:     graphArtBody,
+		GraphSlackGroups:        graphSlackGrp,
+		GraphEntities:           graphEntities,
+		GraphJobs:               graphJobs,
+		GraphUserAffinityConfig: graphAffinity,
+		Cursors:                 cursors,
 	}
 
 	// Record per-client pull time for cloud dashboard

@@ -1,0 +1,39 @@
+package handlers
+
+import "github.com/go-chi/chi/v5"
+
+// Mount wires the graph ingest, admin, and read endpoints onto r.
+//
+// Auth/trust model: the caller MUST gate these routes with auth middleware
+// (the worker mounts them behind the API-key middleware). The API key is the
+// privilege boundary — any key-bearing caller is trusted internal infra
+// (EnzoBot, the admin dashboard). The per-request asker identity used for ACL
+// (`X-Asker-User` header on search, `asker_eeid` in the resolve body) is an
+// ADVISORY hint asserted by that trusted caller on a user's behalf; it is NOT
+// independently authenticated. Read endpoints treat "no asker asserted"
+// (eeid 0) as the trusted/unfiltered view and always filter a real asker
+// (eeid != 0) — so a real user, even with zero memberships, can never read the
+// whole graph. Hardening this into a real per-user boundary requires
+// authenticating the asker (e.g. binding eeid to a verified principal).
+func Mount(r chi.Router, deps Deps) {
+	r.Post("/api/graph/ingest/content", NewIngestContentHandler(deps).ServeHTTP)
+	r.Post("/api/graph/ingest/url", NewIngestURLHandler(deps).ServeHTTP)
+	r.Get("/api/graph/jobs", NewJobsListHandler(deps).ServeHTTP)
+	r.Delete("/api/graph/jobs/{id}", NewJobsDeleteHandler(deps).ServeHTTP)
+	r.Post("/api/graph/jobs/{id}/retry", NewJobsRetryHandler(deps).ServeHTTP)
+	r.Post("/api/graph/backfill/slack", NewBackfillSlackHandler(deps).ServeHTTP)
+
+	// Read endpoints (Phase 3).
+	node := NewNode(deps.DB)
+	r.Method("GET", "/api/graph/node", node)
+
+	search, _ := NewSearchWithEmbedder(deps.DB, deps.Gemini)
+	r.Method("GET", "/api/graph/search", search)
+
+	resolve, _ := NewResolve(deps.DB)
+	r.Method("POST", "/api/graph/resolve", resolve)
+
+	r.Method("GET", "/api/graph/slack-users", NewSlackUsersHandler(deps))
+
+	r.Mount("/api/graph", NewNeighbors(deps.DB))
+}

@@ -25,6 +25,17 @@ type SyncPushPayload struct {
 	Observations []database.SyncableObservation `json:"observations,omitempty"`
 	Summaries    []database.SyncableSummary     `json:"summaries,omitempty"`
 	Prompts      []database.SyncablePrompt      `json:"prompts,omitempty"`
+
+	// Graph tables (FK-ordered: people → nodes → edges, then the rest)
+	GraphPeople            []database.SyncableGraphPerson           `json:"graph_people,omitempty"`
+	GraphNodes             []database.SyncableGraphNode             `json:"graph_nodes,omitempty"`
+	GraphEdges             []database.SyncableGraphEdge             `json:"graph_edges,omitempty"`
+	GraphArtifactIndex     []database.SyncableGraphArtifactIndex    `json:"graph_artifact_index,omitempty"`
+	GraphArtifactBodies    []database.SyncableGraphArtifactBody     `json:"graph_artifact_bodies,omitempty"`
+	GraphSlackGroups       []database.SyncableGraphSlackGroup       `json:"graph_slack_groups,omitempty"`
+	GraphEntities          []database.SyncableGraphEntity           `json:"graph_entities,omitempty"`
+	GraphJobs              []database.SyncableGraphJob              `json:"graph_jobs,omitempty"`
+	GraphUserAffinityConfig []database.SyncableGraphUserAffinityConfig `json:"graph_user_affinity_config,omitempty"`
 }
 
 // SyncPushResponse is the response from the cloud after a push.
@@ -39,6 +50,17 @@ type PullCursors struct {
 	Summaries    int `json:"summaries"`
 	Prompts      int `json:"prompts"`
 	Sessions     int `json:"sessions"`
+
+	// Graph table cursors (ID-based for tables with int PKs; offset-based for text-PK tables)
+	GraphPeople             int `json:"graph_people"`
+	GraphNodes              int `json:"graph_nodes"`
+	GraphEdges              int `json:"graph_edges"`
+	GraphArtifactIndex      int `json:"graph_artifact_index"`
+	GraphArtifactBodies     int `json:"graph_artifact_bodies"`
+	GraphSlackGroups        int `json:"graph_slack_groups"`
+	GraphEntities           int `json:"graph_entities"`
+	GraphJobs               int `json:"graph_jobs"`
+	GraphUserAffinityConfig int `json:"graph_user_affinity_config"`
 }
 
 // SyncPullResponse is the data received from cloud during pull.
@@ -48,6 +70,17 @@ type SyncPullResponse struct {
 	Summaries    []database.SyncableSummary     `json:"summaries,omitempty"`
 	Prompts      []database.SyncablePrompt      `json:"prompts,omitempty"`
 	Cursors      PullCursors                    `json:"cursors"`
+
+	// Graph tables
+	GraphPeople             []database.SyncableGraphPerson           `json:"graph_people,omitempty"`
+	GraphNodes              []database.SyncableGraphNode             `json:"graph_nodes,omitempty"`
+	GraphEdges              []database.SyncableGraphEdge             `json:"graph_edges,omitempty"`
+	GraphArtifactIndex      []database.SyncableGraphArtifactIndex    `json:"graph_artifact_index,omitempty"`
+	GraphArtifactBodies     []database.SyncableGraphArtifactBody     `json:"graph_artifact_bodies,omitempty"`
+	GraphSlackGroups        []database.SyncableGraphSlackGroup       `json:"graph_slack_groups,omitempty"`
+	GraphEntities           []database.SyncableGraphEntity           `json:"graph_entities,omitempty"`
+	GraphJobs               []database.SyncableGraphJob              `json:"graph_jobs,omitempty"`
+	GraphUserAffinityConfig []database.SyncableGraphUserAffinityConfig `json:"graph_user_affinity_config,omitempty"`
 }
 
 // ClientInfo holds per-client sync timestamps (cloud mode).
@@ -113,21 +146,49 @@ func (e *Engine) Start(ctx context.Context) {
 	}
 }
 
+const (
+	batchSizeDefault       = 100
+	batchSizeArtifactLarge = 50 // artifact_bodies and artifact_index have large payloads
+)
+
 func (e *Engine) push(ctx context.Context) error {
 	sessions, _ := e.db.GetUnsyncedSessions(ctx, batchSize)
 	observations, _ := e.db.GetUnsyncedObservations(ctx, batchSize)
 	summaries, _ := e.db.GetUnsyncedSummaries(ctx, batchSize)
 	prompts, _ := e.db.GetUnsyncedPrompts(ctx, batchSize)
 
-	total := len(sessions) + len(observations) + len(summaries) + len(prompts)
+	// Graph tables (FK-ordered)
+	graphPeople, _ := e.db.GetUnsyncedGraphPeople(ctx, batchSizeDefault)
+	graphNodes, _ := e.db.GetUnsyncedGraphNodes(ctx, batchSizeDefault)
+	graphEdges, _ := e.db.GetUnsyncedGraphEdges(ctx, batchSizeDefault)
+	graphArtifactIndex, _ := e.db.GetUnsyncedGraphArtifactIndex(ctx, batchSizeArtifactLarge)
+	graphArtifactBodies, _ := e.db.GetUnsyncedGraphArtifactBodies(ctx, batchSizeArtifactLarge)
+	graphSlackGroups, _ := e.db.GetUnsyncedGraphSlackGroups(ctx, batchSizeDefault)
+	graphEntities, _ := e.db.GetUnsyncedGraphEntities(ctx, batchSizeDefault)
+	graphJobs, _ := e.db.GetUnsyncedGraphJobs(ctx, batchSizeDefault)
+	graphUserAffinity, _ := e.db.GetUnsyncedGraphUserAffinityConfig(ctx, batchSizeDefault)
+
+	total := len(sessions) + len(observations) + len(summaries) + len(prompts) +
+		len(graphPeople) + len(graphNodes) + len(graphEdges) +
+		len(graphArtifactIndex) + len(graphArtifactBodies) +
+		len(graphSlackGroups) + len(graphEntities) + len(graphJobs) + len(graphUserAffinity)
 
 	// Always push (even empty) so cloud tracks client heartbeat
 	payload := SyncPushPayload{
-		MachineID:    e.config.MachineID,
-		Sessions:     sessions,
-		Observations: observations,
-		Summaries:    summaries,
-		Prompts:      prompts,
+		MachineID:               e.config.MachineID,
+		Sessions:                sessions,
+		Observations:            observations,
+		Summaries:               summaries,
+		Prompts:                 prompts,
+		GraphPeople:             graphPeople,
+		GraphNodes:              graphNodes,
+		GraphEdges:              graphEdges,
+		GraphArtifactIndex:      graphArtifactIndex,
+		GraphArtifactBodies:     graphArtifactBodies,
+		GraphSlackGroups:        graphSlackGroups,
+		GraphEntities:           graphEntities,
+		GraphJobs:               graphJobs,
+		GraphUserAffinityConfig: graphUserAffinity,
 	}
 
 	resp, err := e.postJSON(ctx, e.config.SyncURL+"/api/sync/push", payload)
@@ -144,7 +205,7 @@ func (e *Engine) push(ctx context.Context) error {
 	var pushResp SyncPushResponse
 	json.NewDecoder(resp.Body).Decode(&pushResp)
 
-	// Mark synced
+	// Mark synced — original tables
 	syncVer := int(time.Now().Unix())
 	if len(sessions) > 0 {
 		e.db.MarkSynced(ctx, "sdk_sessions", syncIDs(sessions), syncVer)
@@ -157,6 +218,36 @@ func (e *Engine) push(ctx context.Context) error {
 	}
 	if len(prompts) > 0 {
 		e.db.MarkSynced(ctx, "user_prompts", syncPromptIDs(prompts), syncVer)
+	}
+
+	// Mark synced — graph tables
+	syncVer64 := int64(syncVer)
+	if len(graphPeople) > 0 {
+		e.db.MarkSyncedGraphBySyncID(ctx, "graph", "people", graphSyncIDs(graphPeople, func(p database.SyncableGraphPerson) string { return p.SyncID }), syncVer64)
+	}
+	if len(graphNodes) > 0 {
+		e.db.MarkSyncedGraphBySyncID(ctx, "graph", "nodes", graphSyncIDs(graphNodes, func(n database.SyncableGraphNode) string { return n.SyncID }), syncVer64)
+	}
+	if len(graphEdges) > 0 {
+		e.db.MarkSyncedGraphBySyncID(ctx, "graph", "edges", graphSyncIDs(graphEdges, func(e database.SyncableGraphEdge) string { return e.SyncID }), syncVer64)
+	}
+	if len(graphArtifactIndex) > 0 {
+		e.db.MarkSyncedGraphBySyncID(ctx, "graph", "artifact_index", graphSyncIDs(graphArtifactIndex, func(ai database.SyncableGraphArtifactIndex) string { return ai.SyncID }), syncVer64)
+	}
+	if len(graphArtifactBodies) > 0 {
+		e.db.MarkSyncedGraphBySyncID(ctx, "graph", "artifact_bodies", graphSyncIDs(graphArtifactBodies, func(ab database.SyncableGraphArtifactBody) string { return ab.SyncID }), syncVer64)
+	}
+	if len(graphSlackGroups) > 0 {
+		e.db.MarkSyncedGraphBySyncID(ctx, "graph", "slack_groups", graphSyncIDs(graphSlackGroups, func(sg database.SyncableGraphSlackGroup) string { return sg.SyncID }), syncVer64)
+	}
+	if len(graphEntities) > 0 {
+		e.db.MarkSyncedGraphBySyncID(ctx, "graph", "entities", graphSyncIDs(graphEntities, func(e database.SyncableGraphEntity) string { return e.SyncID }), syncVer64)
+	}
+	if len(graphJobs) > 0 {
+		e.db.MarkSyncedGraphBySyncID(ctx, "graph", "jobs", graphSyncIDs(graphJobs, func(j database.SyncableGraphJob) string { return j.SyncID }), syncVer64)
+	}
+	if len(graphUserAffinity) > 0 {
+		e.db.MarkSyncedGraphBySyncID(ctx, "graph", "user_affinity_config", graphSyncIDs(graphUserAffinity, func(c database.SyncableGraphUserAffinityConfig) string { return c.SyncID }), syncVer64)
 	}
 
 	e.db.SetLastSyncTime(ctx, "last_push")
@@ -174,10 +265,30 @@ func (e *Engine) pull(ctx context.Context) error {
 		promptCursor := e.getPullCursor(ctx, "prompts")
 		sessCursor := e.getPullCursor(ctx, "sessions")
 
-		url := fmt.Sprintf("%s/api/sync/pull?machine_id=%s&limit=%d&obs_after=%d&sum_after=%d&prompt_after=%d&sess_after=%d",
+		// Graph cursors
+		gPeopleCursor := e.getPullCursor(ctx, "graph.people")
+		gNodesCursor := e.getPullCursor(ctx, "graph.nodes")
+		gEdgesCursor := e.getPullCursor(ctx, "graph.edges")
+		gArtIdxCursor := e.getPullCursor(ctx, "graph.artifact_index")
+		gArtBodyCursor := e.getPullCursor(ctx, "graph.artifact_bodies")
+		gSlackGrpCursor := e.getPullCursor(ctx, "graph.slack_groups")
+		gEntitiesCursor := e.getPullCursor(ctx, "graph.entities")
+		gJobsCursor := e.getPullCursor(ctx, "graph.jobs")
+		gAffinityCursor := e.getPullCursor(ctx, "graph.user_affinity_config")
+
+		pullURL := fmt.Sprintf(
+			"%s/api/sync/pull?machine_id=%s&limit=%d"+
+				"&obs_after=%d&sum_after=%d&prompt_after=%d&sess_after=%d"+
+				"&g_people_after=%d&g_nodes_after=%d&g_edges_after=%d"+
+				"&g_artidx_after=%d&g_artbody_after=%d&g_slackgrp_after=%d"+
+				"&g_entities_after=%d&g_jobs_after=%d&g_affinity_after=%d",
 			e.config.SyncURL, e.config.MachineID, batchSize,
-			obsCursor, sumCursor, promptCursor, sessCursor)
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+			obsCursor, sumCursor, promptCursor, sessCursor,
+			gPeopleCursor, gNodesCursor, gEdgesCursor,
+			gArtIdxCursor, gArtBodyCursor, gSlackGrpCursor,
+			gEntitiesCursor, gJobsCursor, gAffinityCursor,
+		)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, pullURL, nil)
 		if err != nil {
 			return fmt.Errorf("create pull request: %w", err)
 		}
@@ -201,12 +312,17 @@ func (e *Engine) pull(ctx context.Context) error {
 		}
 		resp.Body.Close()
 
-		batchSize := len(pullResp.Sessions) + len(pullResp.Observations) +
-			len(pullResp.Summaries) + len(pullResp.Prompts)
-		if batchSize == 0 {
+		batchTotal := len(pullResp.Sessions) + len(pullResp.Observations) +
+			len(pullResp.Summaries) + len(pullResp.Prompts) +
+			len(pullResp.GraphPeople) + len(pullResp.GraphNodes) + len(pullResp.GraphEdges) +
+			len(pullResp.GraphArtifactIndex) + len(pullResp.GraphArtifactBodies) +
+			len(pullResp.GraphSlackGroups) + len(pullResp.GraphEntities) +
+			len(pullResp.GraphJobs) + len(pullResp.GraphUserAffinityConfig)
+		if batchTotal == 0 {
 			break // fully caught up
 		}
 
+		// Import original tables
 		for i := range pullResp.Sessions {
 			if err := e.db.ImportSession(ctx, &pullResp.Sessions[i]); err == nil {
 				totalImported++
@@ -228,7 +344,54 @@ func (e *Engine) pull(ctx context.Context) error {
 			}
 		}
 
-		// Update cursors from response
+		// Import graph tables (FK-ordered)
+		for i := range pullResp.GraphPeople {
+			if err := e.db.ImportGraphPerson(ctx, &pullResp.GraphPeople[i]); err == nil {
+				totalImported++
+			}
+		}
+		for i := range pullResp.GraphNodes {
+			if err := e.db.ImportGraphNode(ctx, &pullResp.GraphNodes[i]); err == nil {
+				totalImported++
+			}
+		}
+		for i := range pullResp.GraphEdges {
+			if err := e.db.ImportGraphEdge(ctx, &pullResp.GraphEdges[i]); err == nil {
+				totalImported++
+			}
+		}
+		for i := range pullResp.GraphArtifactIndex {
+			if err := e.db.ImportGraphArtifactIndex(ctx, &pullResp.GraphArtifactIndex[i]); err == nil {
+				totalImported++
+			}
+		}
+		for i := range pullResp.GraphArtifactBodies {
+			if err := e.db.ImportGraphArtifactBody(ctx, &pullResp.GraphArtifactBodies[i]); err == nil {
+				totalImported++
+			}
+		}
+		for i := range pullResp.GraphSlackGroups {
+			if err := e.db.ImportGraphSlackGroup(ctx, &pullResp.GraphSlackGroups[i]); err == nil {
+				totalImported++
+			}
+		}
+		for i := range pullResp.GraphEntities {
+			if err := e.db.ImportGraphEntity(ctx, &pullResp.GraphEntities[i]); err == nil {
+				totalImported++
+			}
+		}
+		for i := range pullResp.GraphJobs {
+			if err := e.db.ImportGraphJob(ctx, &pullResp.GraphJobs[i]); err == nil {
+				totalImported++
+			}
+		}
+		for i := range pullResp.GraphUserAffinityConfig {
+			if err := e.db.ImportGraphUserAffinityConfig(ctx, &pullResp.GraphUserAffinityConfig[i]); err == nil {
+				totalImported++
+			}
+		}
+
+		// Update cursors from response — original tables
 		if pullResp.Cursors.Observations > 0 {
 			e.setPullCursor(ctx, "observations", pullResp.Cursors.Observations)
 		}
@@ -240,6 +403,35 @@ func (e *Engine) pull(ctx context.Context) error {
 		}
 		if pullResp.Cursors.Sessions > 0 {
 			e.setPullCursor(ctx, "sessions", pullResp.Cursors.Sessions)
+		}
+
+		// Update cursors — graph tables
+		if pullResp.Cursors.GraphPeople > 0 {
+			e.setPullCursor(ctx, "graph.people", pullResp.Cursors.GraphPeople)
+		}
+		if pullResp.Cursors.GraphNodes > 0 {
+			e.setPullCursor(ctx, "graph.nodes", pullResp.Cursors.GraphNodes)
+		}
+		if pullResp.Cursors.GraphEdges > 0 {
+			e.setPullCursor(ctx, "graph.edges", pullResp.Cursors.GraphEdges)
+		}
+		if pullResp.Cursors.GraphArtifactIndex > 0 {
+			e.setPullCursor(ctx, "graph.artifact_index", pullResp.Cursors.GraphArtifactIndex)
+		}
+		if pullResp.Cursors.GraphArtifactBodies > 0 {
+			e.setPullCursor(ctx, "graph.artifact_bodies", pullResp.Cursors.GraphArtifactBodies)
+		}
+		if pullResp.Cursors.GraphSlackGroups > 0 {
+			e.setPullCursor(ctx, "graph.slack_groups", pullResp.Cursors.GraphSlackGroups)
+		}
+		if pullResp.Cursors.GraphEntities > 0 {
+			e.setPullCursor(ctx, "graph.entities", pullResp.Cursors.GraphEntities)
+		}
+		if pullResp.Cursors.GraphJobs > 0 {
+			e.setPullCursor(ctx, "graph.jobs", pullResp.Cursors.GraphJobs)
+		}
+		if pullResp.Cursors.GraphUserAffinityConfig > 0 {
+			e.setPullCursor(ctx, "graph.user_affinity_config", pullResp.Cursors.GraphUserAffinityConfig)
 		}
 	}
 
@@ -309,6 +501,15 @@ func (e *Engine) GetInfo(ctx context.Context) (*SyncInfo, error) {
 }
 
 // --- helpers ---
+
+// graphSyncIDs extracts sync_id strings from any graph slice using a selector func.
+func graphSyncIDs[T any](items []T, sel func(T) string) []string {
+	ids := make([]string, 0, len(items))
+	for _, item := range items {
+		ids = append(ids, sel(item))
+	}
+	return ids
+}
 
 func syncIDs(sessions []database.SdkSession) []string {
 	ids := make([]string, 0, len(sessions))

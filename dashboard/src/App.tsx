@@ -5,10 +5,13 @@ import { SessionsPage } from './pages/Sessions'
 import { SyncPage } from './pages/Sync'
 import { SettingsPage } from './pages/Settings'
 import { LogsPage } from './pages/Logs'
+import { GraphPage } from './pages/Graph'
+import { JobsPage } from './pages/Jobs'
+import { BackfillPage } from './pages/Backfill'
 import { fetchProjects, getApiKey, setApiKey, clearApiKey, type ProjectInfo } from './api'
 import './index.css'
 
-type Page = 'timeline' | 'search' | 'sessions' | 'sync' | 'logs' | 'settings'
+type Page = 'timeline' | 'search' | 'sessions' | 'sync' | 'logs' | 'settings' | 'graph' | 'jobs' | 'backfill'
 
 const tabs: { key: Page; label: string }[] = [
   { key: 'timeline', label: 'Timeline' },
@@ -17,6 +20,9 @@ const tabs: { key: Page; label: string }[] = [
   { key: 'sync', label: 'Sync' },
   { key: 'logs', label: 'Logs' },
   { key: 'settings', label: 'Settings' },
+  { key: 'graph', label: 'Graph' },
+  { key: 'jobs', label: 'Jobs' },
+  { key: 'backfill', label: 'Backfill' },
 ]
 
 function LoginForm({ onLogin }: { onLogin: () => void }) {
@@ -68,6 +74,7 @@ function App() {
   const [projects, setProjects] = useState<ProjectInfo[]>([])
   const [needsAuth, setNeedsAuth] = useState(false)
   const [authChecked, setAuthChecked] = useState(false)
+  const [jobsInitialId, setJobsInitialId] = useState<number | undefined>(undefined)
 
   // Listen for 401 events from authFetch
   useEffect(() => {
@@ -157,6 +164,16 @@ function App() {
         {page === 'sync' && <SyncPage />}
         {page === 'logs' && <LogsPage />}
         {page === 'settings' && <SettingsPage />}
+        {page === 'graph' && <GraphPage />}
+        {page === 'jobs' && <JobsPage initialJobId={jobsInitialId} />}
+        {page === 'backfill' && (
+          <BackfillPage
+            onNavigateJobs={(jobId) => {
+              setJobsInitialId(jobId)
+              setPage('jobs')
+            }}
+          />
+        )}
       </main>
     </div>
   )

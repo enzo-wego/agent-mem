@@ -257,3 +257,166 @@ export async function updateSettings(partial: Partial<Settings>): Promise<Settin
   }
   return res.json();
 }
+
+// ── Graph backfill ──────────────────────────────────────────────────────────
+
+export interface BackfillSlackResponse {
+  job_id: number;
+  status: string;
+  channel_id: string;
+  oldest_ts: string;
+  estimated_months: number;
+}
+
+export async function backfillSlack(channelId: string, months: number): Promise<BackfillSlackResponse> {
+  const res = await authFetch(`${BASE}/api/graph/backfill/slack`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ channel_id: channelId, months }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Unknown error' }));
+    throw new Error(err.error || `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+// ── Graph jobs ───────────────────────────────────────────────────────────────
+
+export interface JobRow {
+  id: number;
+  type: string;
+  priority: number;
+  payload: unknown;
+  available_at: string;
+  attempts: number;
+  status: string;
+  last_error: string;
+}
+
+export interface JobsListResponse {
+  queue_depth: Record<string, number>;
+  oldest_queued_age_s: number;
+  jobs: JobRow[];
+}
+
+export async function listJobs(status?: string, type?: string, limit = 50): Promise<JobsListResponse> {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (status) params.set('status', status);
+  if (type) params.set('type', type);
+  const res = await authFetch(`${BASE}/api/graph/jobs?${params}`);
+  return res.json();
+}
+
+export async function retryJob(id: number): Promise<void> {
+  await authFetch(`${BASE}/api/graph/jobs/${id}/retry`, { method: 'POST', headers: authHeaders() });
+}
+
+export async function deleteJob(id: number): Promise<void> {
+  await authFetch(`${BASE}/api/graph/jobs/${id}`, { method: 'DELETE', headers: authHeaders() });
+}
+
+// ── Graph search / resolve / node ────────────────────────────────────────────
+
+export interface GraphNode {
+  id: string;
+  type: string;
+  title?: string;
+  url?: string;
+  body?: string;
+  scope?: string;
+  score?: number;
+  score_breakdown?: Record<string, number>;
+  author?: string;
+  updated_at?: string;
+}
+
+export interface GraphSearchResponse {
+  results: GraphNode[];
+  query: string;
+  total: number;
+}
+
+export async function graphSearch(query: string, types?: string[], limit = 20): Promise<GraphSearchResponse> {
+  const params = new URLSearchParams({ q: query, limit: String(limit) });
+  if (types && types.length > 0) params.set('types', types.join(','));
+  const res = await authFetch(`${BASE}/api/graph/search?${params}`);
+  return res.json();
+}
+
+export interface ResolveArtifact {
+  node_id: string;
+  type: string;
+  title?: string;
+  url?: string;
+  body?: string;
+  author?: string;
+  score?: number;
+  hop: number;
+}
+
+export interface ResolveTrace {
+  expanded_nodes: number;
+  after_acl: number;
+  took_ms: number;
+  cache_misses?: string[];
+}
+
+export interface GraphResolveResponse {
+  artifacts: ResolveArtifact[];
+  trace: ResolveTrace;
+}
+
+export async function graphResolve(
+  seeds: string[],
+  query?: string,
+  depth = 2,
+  budgetTokens = 4000,
+): Promise<GraphResolveResponse> {
+  const res = await authFetch(`${BASE}/api/graph/resolve`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ seeds, query, depth, budget_tokens: budgetTokens }),
+  });
+  return res.json();
+}
+
+export interface GraphNodeDetail {
+  id: string;
+  type: string;
+  title?: string;
+  url?: string;
+  body?: string;
+  scope?: string;
+  author?: string;
+  updated_at?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export async function graphNode(url?: string, id?: string): Promise<GraphNodeDetail> {
+  const params = new URLSearchParams();
+  if (url) params.set('url', url);
+  if (id) params.set('id', id);
+  const res = await authFetch(`${BASE}/api/graph/node?${params}`);
+  return res.json();
+}
+
+export interface GraphNeighbor {
+  node: { node_id: string; type: string; url: string; title: string };
+  edge: { kind: string };
+  hop: number;
+}
+
+export async function graphSlackUsers(): Promise<Record<string, string>> {
+  const res = await authFetch(`${BASE}/api/graph/slack-users`);
+  return res.json();
+}
+
+export async function graphNeighbors(id: string, depth = 1): Promise<GraphNeighbor[]> {
+  // Keep ':' literal — the chi path param doesn't decode %3A, so node ids like
+  // "jira:PAY-2190" / "slack:C..:ts" must keep their colons unencoded.
+  const seg = encodeURIComponent(id).replace(/%3A/gi, ':');
+  const res = await authFetch(`${BASE}/api/graph/node/${seg}/neighbors?depth=${depth}`);
+  const data = await res.json();
+  return data.neighbors ?? [];
+}
