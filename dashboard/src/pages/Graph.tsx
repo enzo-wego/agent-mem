@@ -174,7 +174,7 @@ function SearchResultCard({ node, onVisualize }: { node: GraphNode; onVisualize?
   )
 }
 
-function SearchTab({ onVisualize }: { onVisualize?: (id: string) => void }) {
+function SearchTab({ onVisualize, onVisualizeAll }: { onVisualize?: (id: string) => void; onVisualizeAll?: (ids: string[]) => void }) {
   const [query, setQuery] = useState('')
   const [selectedTypes, setSelectedTypes] = useState<string[]>([])
   const [results, setResults] = useState<GraphNode[]>([])
@@ -250,7 +250,17 @@ function SearchTab({ onVisualize }: { onVisualize?: (id: string) => void }) {
 
       {error && <p className="text-red-500 text-sm">{error}</p>}
       {searched && !loading && (
-        <p className="text-sm text-gray-500">{results.length} result{results.length !== 1 ? 's' : ''}</p>
+        <div className="flex items-center gap-3">
+          <p className="text-sm text-gray-500">{results.length} result{results.length !== 1 ? 's' : ''}</p>
+          {results.length > 0 && onVisualizeAll && (
+            <button
+              onClick={() => onVisualizeAll(results.map((r) => r.id))}
+              className="text-xs px-2 py-0.5 rounded-full border border-blue-400 text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-900/20"
+            >
+              Visualize all {results.length} in graph
+            </button>
+          )}
+        </div>
       )}
 
       <div className="space-y-3">
@@ -461,8 +471,8 @@ const TYPE_COLORS: Record<string, string> = {
 }
 const colorFor = (t: string) => TYPE_COLORS[t] ?? '#6b7280'
 
-function GraphVizTab({ initialSeed }: { initialSeed?: string }) {
-  const [seed, setSeed] = useState(initialSeed ?? '')
+function GraphVizTab({ initialSeeds }: { initialSeeds?: string[] }) {
+  const [seed, setSeed] = useState('')
   const [data, setData] = useState<{ nodes: VizNode[]; links: VizLink[] }>({ nodes: [], links: [] })
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -471,11 +481,15 @@ function GraphVizTab({ initialSeed }: { initialSeed?: string }) {
   const wrapRef = useRef<HTMLDivElement>(null)
   const [width, setWidth] = useState(800)
 
+  // ResizeObserver keeps the canvas width correct, including when the tab goes
+  // from hidden (display:none, width 0) to visible.
   useEffect(() => {
-    const measure = () => { if (wrapRef.current) setWidth(wrapRef.current.clientWidth) }
-    measure()
-    window.addEventListener('resize', measure)
-    return () => window.removeEventListener('resize', measure)
+    const el = wrapRef.current
+    if (!el) return
+    const ro = new ResizeObserver(() => setWidth(el.clientWidth || 800))
+    ro.observe(el)
+    setWidth(el.clientWidth || 800)
+    return () => ro.disconnect()
   }, [])
 
   const expand = async (id: string, seeding = false, title = '') => {
@@ -503,19 +517,27 @@ function GraphVizTab({ initialSeed }: { initialSeed?: string }) {
     finally { setLoading(false) }
   }
 
-  const start = async (id: string) => {
-    if (!id.trim()) return
-    const sid = id.trim()
+  // start seeds the graph with one or more nodes and expands each one hop.
+  const start = async (ids: string[]) => {
+    const list = Array.from(new Set(ids.map((s) => s.trim()).filter(Boolean)))
+    if (!list.length) return
     expanded.current = new Set()
     setData({ nodes: [], links: [] })
     setSeedTitle('')
-    let title = ''
-    try { const d = await graphNode(undefined, sid); title = d.title || '' } catch { /* ignore */ }
-    setSeedTitle(shortLabel(title, sid, sid.split(':')[0]))
-    await expand(sid, true, title)
+    setSeed(list.length === 1 ? list[0] : '')
+    let firstTitle = ''
+    for (const sid of list) {
+      let title = ''
+      try { const d = await graphNode(undefined, sid); title = d.title || '' } catch { /* ignore */ }
+      if (!firstTitle) firstTitle = title
+      await expand(sid, true, title)
+    }
+    setSeedTitle(list.length === 1
+      ? shortLabel(firstTitle, list[0], list[0].split(':')[0])
+      : `${list.length} search results (seeds) + their neighbors`)
   }
 
-  useEffect(() => { if (initialSeed) { setSeed(initialSeed); start(initialSeed) } }, [initialSeed]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (initialSeeds && initialSeeds.length) start(initialSeeds) }, [initialSeeds]) // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className="space-y-3">
@@ -525,10 +547,10 @@ function GraphVizTab({ initialSeed }: { initialSeed?: string }) {
           placeholder="Seed node id (e.g. jira:PAY-2190 or slack:C05RNSE8TBR:1779…)"
           value={seed}
           onChange={(e) => setSeed(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && start(seed)}
+          onKeyDown={(e) => e.key === 'Enter' && start([seed])}
           className="flex-1 px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
         />
-        <button onClick={() => start(seed)} disabled={loading} className="px-6 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:opacity-50 text-sm">
+        <button onClick={() => start([seed])} disabled={loading} className="px-6 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:opacity-50 text-sm">
           {loading ? '...' : 'Load'}
         </button>
       </div>
@@ -573,14 +595,15 @@ type GraphTab = 'search' | 'resolve' | 'graph'
 
 export function GraphPage() {
   const [tab, setTab] = useState<GraphTab>('search')
-  const [vizSeed, setVizSeed] = useState<string | undefined>(undefined)
+  const [vizSeeds, setVizSeeds] = useState<string[]>([])
   const [, bumpUsers] = useState(0)
 
   useEffect(() => {
     graphSlackUsers().then((m) => { slackUserMap = m; bumpUsers((n) => n + 1) }).catch(() => {})
   }, [])
 
-  const visualize = (id: string) => { setVizSeed(id); setTab('graph') }
+  const visualize = (id: string) => { setVizSeeds([id]); setTab('graph') }
+  const visualizeAll = (ids: string[]) => { setVizSeeds(ids); setTab('graph') }
 
   return (
     <div className="space-y-4">
@@ -600,9 +623,11 @@ export function GraphPage() {
         ))}
       </div>
 
-      {tab === 'search' && <SearchTab onVisualize={visualize} />}
-      {tab === 'resolve' && <ResolveTab />}
-      {tab === 'graph' && <GraphVizTab initialSeed={vizSeed} />}
+      {/* All tabs stay mounted (hidden when inactive) so switching tabs — e.g.
+          clicking Visualize — never resets your search. */}
+      <div className={tab === 'search' ? '' : 'hidden'}><SearchTab onVisualize={visualize} onVisualizeAll={visualizeAll} /></div>
+      <div className={tab === 'resolve' ? '' : 'hidden'}><ResolveTab /></div>
+      <div className={tab === 'graph' ? '' : 'hidden'}><GraphVizTab initialSeeds={vizSeeds} /></div>
     </div>
   )
 }
