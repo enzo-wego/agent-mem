@@ -166,6 +166,29 @@ func (h *Resolve) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	hydrated, missed, _ := hydrate.Greedy(ctx, h.db, cands, req.BudgetTokens)
 
+	// Batch-resolve author display names for the hydrated nodes (for the
+	// "Related context" block / dashboard). Best-effort.
+	authorByID := make(map[string]string)
+	if len(hydrated) > 0 {
+		ids := make([]string, len(hydrated))
+		for i, hyd := range hydrated {
+			ids[i] = hyd.NodeID
+		}
+		if rows, aErr := h.db.Query(ctx, `
+SELECT n.id, COALESCE(p.display_name, '')
+FROM graph.nodes n
+LEFT JOIN graph.people p ON p.id = n.author_person_id
+WHERE n.id = ANY($1)`, ids); aErr == nil {
+			for rows.Next() {
+				var id, name string
+				if rows.Scan(&id, &name) == nil && name != "" {
+					authorByID[id] = name
+				}
+			}
+			rows.Close()
+		}
+	}
+
 	// Build response.
 	resp := resolveResponse{
 		Artifacts: make([]resolveArtifact, 0, len(hydrated)),
@@ -197,7 +220,8 @@ func (h *Resolve) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		resp.Artifacts = append(resp.Artifacts, resolveArtifact{
 			NodeID: hyd.NodeID, URL: hyd.URL, Type: hyd.Type, Title: hyd.Title,
-			Score: score, ScoreBreakdown: bd,
+			Author: authorByID[hyd.NodeID],
+			Score:  score, ScoreBreakdown: bd,
 			Body: body, Hop: hop,
 		})
 		resp.ContextTokens += hyd.Tokens
