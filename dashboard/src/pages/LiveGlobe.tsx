@@ -172,6 +172,9 @@ export function LiveGlobePage() {
     startTy: number
     moved: boolean
   } | null>(null)
+  // Set true on pointerup when the gesture was a pan, so the click that fires
+  // immediately afterwards is swallowed (clicks fire after pointerup).
+  const suppressClickRef = useRef(false)
 
   // Refs mirror state for use inside the polling closure without re-subscribing.
   const prevCountsRef = useRef<Map<string, number>>(new Map())
@@ -411,7 +414,9 @@ export function LiveGlobePage() {
       startTy: view.ty,
       moved: false,
     }
-    e.currentTarget.setPointerCapture(e.pointerId)
+    // NOTE: do NOT setPointerCapture here — capturing on the <svg> would make the
+    // browser fire `click` on the svg instead of the child <circle>, so markers
+    // would never receive clicks. We capture only once a real drag starts.
   }
 
   function onPointerMove(e: React.PointerEvent<SVGSVGElement>) {
@@ -421,29 +426,32 @@ export function LiveGlobePage() {
     if (!svg) return
     const rect = svg.getBoundingClientRect()
     const scale = Math.min(rect.width / 360, rect.height / 180)
+    if (!d.moved && Math.hypot(e.clientX - d.startX, e.clientY - d.startY) > 4) {
+      d.moved = true
+      // Now it's a real pan — capture so panning continues smoothly off-target.
+      try {
+        e.currentTarget.setPointerCapture(e.pointerId)
+      } catch {
+        /* ignore */
+      }
+    }
+    if (!d.moved) return // a plain click: don't pan, leave the marker click intact
     // Convert client-pixel delta to viewBox-unit delta (independent of k:
     // tx/ty are pre-scale translation in the group transform).
     const dx = (e.clientX - d.startX) / scale
     const dy = (e.clientY - d.startY) / scale
-    if (!d.moved && Math.hypot(e.clientX - d.startX, e.clientY - d.startY) > 4) {
-      d.moved = true
-    }
     setView((v) => ({ ...v, tx: d.startTx + dx, ty: d.startTy + dy }))
   }
 
   function onPointerUp(e: React.PointerEvent<SVGSVGElement>) {
     const d = dragRef.current
     if (!d || d.pointerId !== e.pointerId) return
+    // Remember whether this gesture panned, so the upcoming click is swallowed.
+    suppressClickRef.current = d.moved
     dragRef.current = null
     if (e.currentTarget.hasPointerCapture(e.pointerId)) {
       e.currentTarget.releasePointerCapture(e.pointerId)
     }
-  }
-
-  // True while a pan drag has crossed the movement threshold — used to swallow
-  // the click that would otherwise open the data panel.
-  function isDragging(): boolean {
-    return !!dragRef.current?.moved
   }
 
   function zoomBy(factor: number) {
@@ -563,7 +571,10 @@ export function LiveGlobePage() {
                 onMouseLeave={() => setHovered((h) => (h === p.channelId ? null : h))}
                 onClick={() => {
                   // A drag that crossed the pan threshold shouldn't open the panel.
-                  if (isDragging()) return
+                  if (suppressClickRef.current) {
+                    suppressClickRef.current = false
+                    return
+                  }
                   setSelected(p)
                 }}
               >
