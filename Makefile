@@ -4,6 +4,12 @@ RESET     := $(shell tput -Txterm sgr0)
 GO        ?= go
 GOBIN_VPS ?= /usr/local/bin
 
+# Deploy: build the amd64 image on this (dev) machine, push to GHCR, pull on the VPS.
+# The VPS is too weak to build images, so it only ever pulls. See `make deploy`.
+IMAGE     ?= ghcr.io/enzo-wego/agent-mem-worker
+VPS       ?= enzo@enzogo.io.vn
+VPS_DIR   ?= /var/go/src/github.com/agent-mem
+
 compose := docker compose
 
 all: help
@@ -66,6 +72,14 @@ migrate-fix: up ## Force-delete a failed migration record. Usage: make migrate-f
 restart: ## Rebuild and restart worker.
 	$(compose) up -d --build worker
 
+deploy: ## Build amd64 image here, push to GHCR, and pull-only deploy on the VPS (no build on the box).
+	@echo "${YELLOW}>> building + pushing $(IMAGE) (linux/amd64)${RESET}"
+	docker buildx build --platform linux/amd64 \
+		-t $(IMAGE):latest -t $(IMAGE):$$(git rev-parse --short HEAD) --push .
+	@echo "${YELLOW}>> deploying on $(VPS) (pull-only)${RESET}"
+	ssh $(VPS) 'cd $(VPS_DIR) && sudo docker compose pull worker && sudo docker compose up -d --no-build worker'
+	@echo "${GREEN}>> deployed $(IMAGE):$$(git rev-parse --short HEAD)${RESET}"
+
 db-reset: ## Clear the database and re-run migrations.
 	$(compose) down -v
 	$(compose) up -d
@@ -73,4 +87,4 @@ db-reset: ## Clear the database and re-run migrations.
 	@sleep 5
 	$(compose) exec worker agent-mem migrate
 
-.PHONY: all help build build-cli install-cli install-cli-vps up down status logs migrate migrate-create migrate-status migrate-rollback migrate-up-by-one migrate-fix restart db-reset
+.PHONY: all help build build-cli install-cli install-cli-vps up down status logs migrate migrate-create migrate-status migrate-rollback migrate-up-by-one migrate-fix restart deploy db-reset
