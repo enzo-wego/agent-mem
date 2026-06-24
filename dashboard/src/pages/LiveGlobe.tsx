@@ -159,6 +159,20 @@ export function LiveGlobePage() {
   const [messages, setMessages] = useState<ChannelMessage[]>([])
   const [msgsLoading, setMsgsLoading] = useState(false)
 
+  // ── Zoom + pan transform (viewBox space: 360×180) ────────────────────────────
+  const [view, setView] = useState({ k: 1, tx: 0, ty: 0 })
+  const svgRef = useRef<SVGSVGElement | null>(null)
+  // Drag tracking: start pointer + start translate, plus whether we moved enough
+  // to count as a pan (so a plain click still opens the data panel).
+  const dragRef = useRef<{
+    pointerId: number
+    startX: number
+    startY: number
+    startTx: number
+    startTy: number
+    moved: boolean
+  } | null>(null)
+
   // Refs mirror state for use inside the polling closure without re-subscribing.
   const prevCountsRef = useRef<Map<string, number>>(new Map())
   const cfgRef = useRef<ContinentCfg | null>(null)
@@ -350,6 +364,107 @@ export function LiveGlobePage() {
     return MIN_R + (MAX_R - MIN_R) * norm
   }
 
+  // ── Zoom + pan ──────────────────────────────────────────────────────────────
+  const K_MIN = 1
+  const K_MAX = 8
+
+  // Map a client-space point (px) to viewBox space (0..360 × 0..180).
+  function clientToViewBox(clientX: number, clientY: number): { x: number; y: number } {
+    const svg = svgRef.current
+    if (!svg) return { x: 0, y: 0 }
+    const rect = svg.getBoundingClientRect()
+    // preserveAspectRatio="xMidYMid meet": the 360×180 (2:1) viewBox is letterboxed
+    // inside the element. Compute the rendered map rect and map into it.
+    const scale = Math.min(rect.width / 360, rect.height / 180)
+    const drawW = 360 * scale
+    const drawH = 180 * scale
+    const offX = (rect.width - drawW) / 2
+    const offY = (rect.height - drawH) / 2
+    const x = (clientX - rect.left - offX) / scale
+    const y = (clientY - rect.top - offY) / scale
+    return { x, y }
+  }
+
+  function onWheel(e: React.WheelEvent<SVGSVGElement>) {
+    e.preventDefault()
+    setView((v) => {
+      const factor = Math.exp(-e.deltaY * 0.0015)
+      const nextK = Math.min(K_MAX, Math.max(K_MIN, v.k * factor))
+      if (nextK === v.k) return v
+      // Keep the point under the cursor fixed: solve for tx/ty so that the
+      // svg-space point p stays at the same screen location across the k change.
+      const p = clientToViewBox(e.clientX, e.clientY)
+      const tx = p.x - (p.x - v.tx) * (nextK / v.k)
+      const ty = p.y - (p.y - v.ty) * (nextK / v.k)
+      return { k: nextK, tx, ty }
+    })
+  }
+
+  function onPointerDown(e: React.PointerEvent<SVGSVGElement>) {
+    // Only primary button initiates a pan.
+    if (e.button !== 0) return
+    dragRef.current = {
+      pointerId: e.pointerId,
+      startX: e.clientX,
+      startY: e.clientY,
+      startTx: view.tx,
+      startTy: view.ty,
+      moved: false,
+    }
+    e.currentTarget.setPointerCapture(e.pointerId)
+  }
+
+  function onPointerMove(e: React.PointerEvent<SVGSVGElement>) {
+    const d = dragRef.current
+    if (!d || d.pointerId !== e.pointerId) return
+    const svg = svgRef.current
+    if (!svg) return
+    const rect = svg.getBoundingClientRect()
+    const scale = Math.min(rect.width / 360, rect.height / 180)
+    // Convert client-pixel delta to viewBox-unit delta (independent of k:
+    // tx/ty are pre-scale translation in the group transform).
+    const dx = (e.clientX - d.startX) / scale
+    const dy = (e.clientY - d.startY) / scale
+    if (!d.moved && Math.hypot(e.clientX - d.startX, e.clientY - d.startY) > 4) {
+      d.moved = true
+    }
+    setView((v) => ({ ...v, tx: d.startTx + dx, ty: d.startTy + dy }))
+  }
+
+  function onPointerUp(e: React.PointerEvent<SVGSVGElement>) {
+    const d = dragRef.current
+    if (!d || d.pointerId !== e.pointerId) return
+    dragRef.current = null
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+      e.currentTarget.releasePointerCapture(e.pointerId)
+    }
+  }
+
+  // True while a pan drag has crossed the movement threshold — used to swallow
+  // the click that would otherwise open the data panel.
+  function isDragging(): boolean {
+    return !!dragRef.current?.moved
+  }
+
+  function zoomBy(factor: number) {
+    setView((v) => {
+      const nextK = Math.min(K_MAX, Math.max(K_MIN, v.k * factor))
+      if (nextK === v.k) return v
+      // Zoom toward the map center (viewBox 180,90).
+      const cx = 180
+      const cy = 90
+      const tx = cx - (cx - v.tx) * (nextK / v.k)
+      const ty = cy - (cy - v.ty) * (nextK / v.k)
+      return { k: nextK, tx, ty }
+    })
+  }
+
+  function resetView() {
+    setView({ k: 1, tx: 0, ty: 0 })
+  }
+
+  const k = view.k
+
   // ── Shared chrome styles ─────────────────────────────────────────────────────
   const panel: React.CSSProperties = {
     background: C.panel,
@@ -385,9 +500,23 @@ export function LiveGlobePage() {
 
       {/* ── 2D equirectangular world map ──────────────────────────────────────── */}
       <svg
+        ref={svgRef}
         viewBox="0 0 360 180"
         preserveAspectRatio="xMidYMid meet"
-        style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', background: C.bg }}
+        onWheel={onWheel}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        onPointerCancel={onPointerUp}
+        style={{
+          position: 'absolute',
+          inset: 0,
+          width: '100%',
+          height: '100%',
+          background: C.bg,
+          cursor: dragRef.current?.moved ? 'grabbing' : 'grab',
+          touchAction: 'none',
+        }}
       >
         <defs>
           <filter id="marker-glow" x="-200%" y="-200%" width="500%" height="500%">
@@ -399,10 +528,12 @@ export function LiveGlobePage() {
           </filter>
         </defs>
 
+        {/* Zoom + pan transform wraps all map content (countries + markers + labels) */}
+        <g transform={`translate(${view.tx} ${view.ty}) scale(${k})`}>
         {/* Countries */}
         <g>
           {countryPaths.map((d, i) => (
-            <path key={i} d={d} fill={C.land} stroke={C.landStroke} strokeWidth={0.15} />
+            <path key={i} d={d} fill={C.land} stroke={C.landStroke} strokeWidth={0.15 / k} />
           ))}
         </g>
 
@@ -411,24 +542,37 @@ export function LiveGlobePage() {
           {visiblePts.map((p) => {
             const cx = projX(p.lng)
             const cy = projY(p.lat)
-            const r = radiusFor(p.count)
+            // Marker radius / strokes / label sizes are counter-scaled by k so
+            // they stay roughly constant on-screen as the map zooms.
+            const r = radiusFor(p.count) / k
             const isHover = hovered === p.channelId
             const isSel = selected?.channelId === p.channelId
             const pulsing = p.pulseUntil > now
+            // Label: primary = channel name, secondary = raw id. If nameOf
+            // returned the id itself (no name configured), show only the id.
+            const labelX = cx + r + 1 / k
+            const fontPrimary = 2 / k
+            const fontSecondary = fontPrimary * 0.7
+            const labelStroke = 0.4 / k
+            const hasName = p.name !== p.channelId
             return (
               <g
                 key={p.channelId}
                 style={{ cursor: 'pointer' }}
                 onMouseEnter={() => setHovered(p.channelId)}
                 onMouseLeave={() => setHovered((h) => (h === p.channelId ? null : h))}
-                onClick={() => setSelected(p)}
+                onClick={() => {
+                  // A drag that crossed the pan threshold shouldn't open the panel.
+                  if (isDragging()) return
+                  setSelected(p)
+                }}
               >
                 {/* soft halo */}
                 <circle cx={cx} cy={cy} r={r * 2.2} fill={p.color} opacity={isHover || isSel ? 0.22 : 0.12} />
                 {/* expanding ring when count just grew */}
                 {pulsing && (
-                  <circle cx={cx} cy={cy} fill="none" stroke={p.color} strokeWidth={0.4} opacity={0.8}>
-                    <animate attributeName="r" from={r} to={r + 9} dur="2s" repeatCount="indefinite" />
+                  <circle cx={cx} cy={cy} fill="none" stroke={p.color} strokeWidth={0.4 / k} opacity={0.8}>
+                    <animate attributeName="r" from={r} to={r + 9 / k} dur="2s" repeatCount="indefinite" />
                     <animate attributeName="opacity" from="0.8" to="0" dur="2s" repeatCount="indefinite" />
                   </circle>
                 )}
@@ -440,25 +584,40 @@ export function LiveGlobePage() {
                   fill={p.color}
                   opacity={0.85}
                   stroke={isSel ? C.text : 'none'}
-                  strokeWidth={isSel ? 0.4 : 0}
+                  strokeWidth={isSel ? 0.4 / k : 0}
                   filter="url(#marker-glow)"
                 />
-                {/* channel name label (no country name) */}
+                {/* label: name on line 1, raw id on line 2 (id-only if unnamed) */}
                 <text
-                  x={cx + r + 1}
-                  y={cy + 0.7}
-                  fontSize={2}
+                  x={labelX}
+                  y={cy + 0.7 / k}
+                  fontSize={fontPrimary}
                   fontFamily={MONO}
                   fill="#cbd5e1"
                   style={{ paintOrder: 'stroke', pointerEvents: 'none' }}
                   stroke="#0a0a0a"
-                  strokeWidth={0.4}
+                  strokeWidth={labelStroke}
                 >
                   {p.name}
                 </text>
+                {hasName && (
+                  <text
+                    x={labelX}
+                    y={cy + 0.7 / k + fontPrimary}
+                    fontSize={fontSecondary}
+                    fontFamily={MONO}
+                    fill="#6b7280"
+                    style={{ paintOrder: 'stroke', pointerEvents: 'none' }}
+                    stroke="#0a0a0a"
+                    strokeWidth={labelStroke}
+                  >
+                    {p.channelId}
+                  </text>
+                )}
               </g>
             )
           })}
+        </g>
         </g>
       </svg>
 
@@ -491,7 +650,7 @@ export function LiveGlobePage() {
             }}
           />
           <span style={{ color: C.text, fontSize: 12, letterSpacing: '0.1em' }}>
-            LIVE — GLOBAL CHANNEL ACTIVITY
+            LIVE — WEGO AROUND ME
           </span>
           <a
             href="/"
@@ -546,6 +705,49 @@ export function LiveGlobePage() {
           {error}
         </div>
       )}
+
+      {/* ── Zoom controls (bottom-right, clear of legend + data panel) ───────── */}
+      <div
+        style={{
+          position: 'absolute',
+          bottom: 14,
+          right: selected ? 366 : 244,
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 4,
+          fontFamily: MONO,
+        }}
+      >
+        {[
+          { label: '+', title: 'Zoom in', onClick: () => zoomBy(1.4) },
+          { label: '−', title: 'Zoom out', onClick: () => zoomBy(1 / 1.4) },
+          { label: '⤢', title: 'Reset view', onClick: resetView },
+        ].map((b) => (
+          <button
+            key={b.label}
+            onClick={b.onClick}
+            title={b.title}
+            aria-label={b.title}
+            style={{
+              width: 30,
+              height: 30,
+              background: C.panel,
+              border: `1px solid ${C.border}`,
+              color: C.text,
+              cursor: 'pointer',
+              fontFamily: MONO,
+              fontSize: 15,
+              lineHeight: '15px',
+              borderRadius: 3,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+          >
+            {b.label}
+          </button>
+        ))}
+      </div>
 
       {/* ── Layer panel (bottom-left) ────────────────────────────────────────── */}
       <div
