@@ -1,0 +1,130 @@
+package handlers
+
+import (
+	"encoding/json"
+	"errors"
+	"io"
+	"net/http"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+)
+
+// defaultContinents is returned by GET /api/graph/continents when no config row
+// exists yet. It is also lazily inserted so subsequent edits have a baseline.
+const defaultContinents = `{
+  "continents": [
+    {"id":"partners","label":"Payment Partners","color":"#d29922","center":[0,-75],"match":["ext-wego-"]},
+    {"id":"core","label":"Payments Core","color":"#3fb950","center":[30,20],"match":["payments"]},
+    {"id":"other","label":"Other","color":"#8b949e","center":[25,110],"match":["*"]}
+  ],
+  "overrides": {},
+  "names": {
+    "C08S954G2LX":"payments-alerts","C05RNSE8TBR":"payments-team","CUV9EAYGY":"payments-dev",
+    "C0597404MS6":"payments-pull-requests","C06Q3JHUAUV":"payments-releases","C01T60D80JV":"payments-alerts-staging",
+    "C0B1BR522F5":"payments-staging","C02NA2MA5K5":"payments-x-hotels-devs","C048WV1BZTK":"payments-x-flights-devs",
+    "C04L5JN6GKB":"payments-x-mobile-devs","C051NJMRLF8":"payments-x-shopcash-devs","C06SCE1LXAA":"payments-x-backoffice-devs",
+    "C011RFSBLP3":"ext-wego-checkout","C03K79A2S20":"ext-wego-tabby","C0736FUE03W":"ext-wego-juspay","C091REMLCAX":"ext-wego-triplea-juspay",
+    "CCY420A3D":"flights-analysis","C04M1R6NQNB":"flights-supply-help","C029TRHS5HU":"disputes-hotels-production",
+    "C02AD7A21UH":"disputes-flights-production","C031TA3JUMT":"offline-bookings","C04U4KATYUV":"value-added-tax",
+    "C08SVNFA30R":"taxes-core","C099FA175CY":"alerts-taxes-status","C09A46W6ZN1":"vat_data_ota_eg",
+    "C09AHGY5WJV":"vat_data_ota_ksa","C09H1QMK882":"vat_data_ota_pk","CPP5EH3A8":"task-alerts-production",
+    "C0A7D29E5ED":"alerts-itops-tech-and-ai-news","C012A121AQJ":"pm-design","C09USC3U9A9":"sandbox-enzo",
+    "C0AJ3JPRA9L":"enzo-private","C0AV14LGPMG":"partner-saudi-rail"
+  }
+}`
+
+// Channels serves the Globe feature endpoints: per-channel message volume and
+// the channel→continent config stored in the public settings table.
+type Channels struct {
+	db *pgxpool.Pool
+}
+
+// NewChannels creates a new Channels handler.
+func NewChannels(db *pgxpool.Pool) *Channels {
+	return &Channels{db: db}
+}
+
+type channelCount struct {
+	ChannelID string `json:"channel_id"`
+	Count     int    `json:"count"`
+}
+
+// list handles GET /api/graph/channels.
+func (h *Channels) list(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	rows, err := h.db.Query(ctx, `
+SELECT REPLACE(scope,'slack:','') AS channel_id, COUNT(*) AS count
+FROM graph.nodes
+WHERE scope LIKE 'slack:%' AND deleted_at IS NULL
+GROUP BY scope
+ORDER BY count DESC`)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+	out := []channelCount{}
+	for rows.Next() {
+		var c channelCount
+		if err := rows.Scan(&c.ChannelID, &c.Count); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		out = append(out, c)
+	}
+	if err := rows.Err(); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(out)
+}
+
+// getContinents handles GET /api/graph/continents. Returns the raw JSON stored
+// under settings key graph_continents, lazily inserting the default if missing.
+func (h *Channels) getContinents(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	var value string
+	err := h.db.QueryRow(ctx, `SELECT value FROM settings WHERE key='graph_continents'`).Scan(&value)
+	if errors.Is(err, pgx.ErrNoRows) {
+		// Lazily insert the default so future edits have a baseline.
+		if _, ierr := h.db.Exec(ctx,
+			`INSERT INTO settings(key,value) VALUES('graph_continents',$1) ON CONFLICT(key) DO NOTHING`,
+			defaultContinents); ierr != nil {
+			http.Error(w, ierr.Error(), http.StatusInternalServerError)
+			return
+		}
+		value = defaultContinents
+	} else if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	io.WriteString(w, value)
+}
+
+// putContinents handles PUT /api/graph/continents. Validates the body parses as
+// JSON, then upserts it under settings key graph_continents.
+func (h *Channels) putContinents(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	// Limit request body to 64 KB.
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<16)
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, `{"error":"failed to read body"}`, http.StatusBadRequest)
+		return
+	}
+	if !json.Valid(body) {
+		http.Error(w, `{"error":"invalid JSON"}`, http.StatusBadRequest)
+		return
+	}
+	if _, err := h.db.Exec(ctx,
+		`INSERT INTO settings(key,value) VALUES('graph_continents',$1) ON CONFLICT(key) DO UPDATE SET value=excluded.value`,
+		string(body)); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(body)
+}

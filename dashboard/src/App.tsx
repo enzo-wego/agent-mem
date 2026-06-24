@@ -8,10 +8,12 @@ import { LogsPage } from './pages/Logs'
 import { GraphPage } from './pages/Graph'
 import { JobsPage } from './pages/Jobs'
 import { BackfillPage } from './pages/Backfill'
+import { GlobePage } from './pages/Globe'
+import { ContinentsPage } from './pages/Continents'
 import { fetchProjects, getApiKey, setApiKey, clearApiKey, type ProjectInfo } from './api'
 import './index.css'
 
-type Page = 'timeline' | 'search' | 'sessions' | 'sync' | 'logs' | 'settings' | 'graph' | 'jobs' | 'backfill'
+type Page = 'timeline' | 'search' | 'sessions' | 'sync' | 'logs' | 'settings' | 'graph' | 'jobs' | 'backfill' | 'globe' | 'continents'
 
 const tabs: { key: Page; label: string }[] = [
   { key: 'timeline', label: 'Timeline' },
@@ -23,6 +25,8 @@ const tabs: { key: Page; label: string }[] = [
   { key: 'graph', label: 'Graph' },
   { key: 'jobs', label: 'Jobs' },
   { key: 'backfill', label: 'Backfill' },
+  { key: 'globe', label: 'Globe' },
+  { key: 'continents', label: 'Continents' },
 ]
 
 function LoginForm({ onLogin }: { onLogin: () => void }) {
@@ -174,6 +178,8 @@ function App() {
             }}
           />
         )}
+        {page === 'globe' && <GlobePage />}
+        {page === 'continents' && <ContinentsPage />}
       </main>
     </div>
   )

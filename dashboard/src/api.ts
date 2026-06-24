@@ -412,6 +412,50 @@ export async function graphSlackUsers(): Promise<Record<string, string>> {
   return res.json();
 }
 
+// ── Globe (channels + continents) ─────────────────────────────────────────────
+
+export interface ChannelCount {
+  channel_id: string;
+  count: number;
+}
+
+export interface Continent {
+  id: string;
+  label: string;
+  color: string;
+  center: [number, number]; // [lat, lon]
+  match: string[];
+}
+
+export interface ContinentCfg {
+  continents: Continent[];
+  overrides: Record<string, string>; // channelId -> continent id
+  names: Record<string, string>; // channelId -> display name
+}
+
+export async function fetchChannels(): Promise<ChannelCount[]> {
+  const res = await authFetch(`${BASE}/api/graph/channels`);
+  return res.json();
+}
+
+export async function fetchContinents(): Promise<ContinentCfg> {
+  const res = await authFetch(`${BASE}/api/graph/continents`);
+  return res.json();
+}
+
+export async function saveContinents(cfg: ContinentCfg): Promise<ContinentCfg> {
+  const res = await authFetch(`${BASE}/api/graph/continents`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify(cfg),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Unknown error' }));
+    throw new Error(err.error || `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
 export async function graphNeighbors(id: string, depth = 1): Promise<GraphNeighbor[]> {
   // Keep ':' literal — the chi path param doesn't decode %3A, so node ids like
   // "jira:PAY-2190" / "slack:C..:ts" must keep their colons unencoded.
