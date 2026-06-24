@@ -23,6 +23,7 @@ import (
 type GeminiClient interface {
 	Embed(ctx context.Context, text string) ([]float32, error)
 	Describe(ctx context.Context, mime string, data []byte, prompt string) (description string, ocr string, entities []string, err error)
+	Generate(ctx context.Context, systemPrompt, userMessage string) (string, error)
 }
 
 // Deps groups the shared dependencies needed by all handlers. Wired once at

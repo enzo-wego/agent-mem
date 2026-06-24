@@ -341,6 +341,25 @@ func NewIngestContentHandler(deps Deps) http.Handler {
 			}
 		}
 
+		// If this is a thread reply and we don't have the thread's root yet, fetch
+		// the whole thread once (root + all replies) so the thread is complete.
+		if req.Source == "slack" && req.Metadata.ThreadTs != "" && req.Metadata.ThreadTs != req.Metadata.Ts {
+			rootID := ids.SlackMessage(req.Metadata.ChannelID, req.Metadata.ThreadTs)
+			var rootExists bool
+			_ = deps.DB.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM graph.nodes WHERE id=$1)`, rootID).Scan(&rootExists)
+			if !rootExists {
+				btID, btErr := jobs.Enqueue(ctx, deps.DB, "backfill_slack_thread", map[string]string{
+					"channel_id": req.Metadata.ChannelID,
+					"thread_ts":  req.Metadata.ThreadTs,
+				}, jobs.EnqueueOptions{Priority: 5, TargetRunner: "vps"})
+				if btErr != nil {
+					deps.Logger.Warn().Err(btErr).Msg("ingest_content: enqueue backfill_slack_thread failed")
+				} else {
+					enqueuedJobs = append(enqueuedJobs, jobEnqueuedView{ID: btID, Type: "backfill_slack_thread", Priority: 5})
+				}
+			}
+		}
+
 		// Enqueue resolve_identity if author has no email yet.
 		if authorPersonID != nil && deps.Identity != nil {
 			var emailVal *string

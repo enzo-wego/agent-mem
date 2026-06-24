@@ -460,15 +460,42 @@ export interface ChannelMessage {
 }
 
 // fetchChannelMessages returns recent messages for a single channel (for the
-// map's click-to-see-data panel). days>0 restricts to the window.
+// map's click-to-see-data panel). days>0 restricts to the window; thread (a
+// thread_ts) restricts to one thread's root+replies (for lazy expand).
 export async function fetchChannelMessages(
   channelId: string,
   days = 0,
-  limit = 20,
+  limit = 40,
+  thread = '',
 ): Promise<ChannelMessage[]> {
   const qs = new URLSearchParams({ id: channelId, limit: String(limit) });
   if (days > 0) qs.set('days', String(days));
+  if (thread) qs.set('thread', thread);
   const res = await authFetch(`${BASE}/api/graph/channel?${qs.toString()}`);
+  return res.json();
+}
+
+// ChannelTopic is one thread/standalone rollup with a one-line topic summary.
+export interface ChannelTopic {
+  thread_ts: string;
+  summary: string;
+  is_thread: boolean;
+  msg_count: number;
+  participants: string[];
+  first_ms: number;
+  last_ms: number;
+  url: string;
+}
+
+// fetchChannelTopics returns thread-level topic summaries for a channel.
+export async function fetchChannelTopics(
+  channelId: string,
+  days = 0,
+  limit = 30,
+): Promise<ChannelTopic[]> {
+  const qs = new URLSearchParams({ id: channelId, limit: String(limit) });
+  if (days > 0) qs.set('days', String(days));
+  const res = await authFetch(`${BASE}/api/graph/channel/topics?${qs.toString()}`);
   return res.json();
 }
 

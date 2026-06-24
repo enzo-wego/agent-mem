@@ -30,6 +30,11 @@ func (a *geminiAdapter) Embed(ctx context.Context, text string) ([]float32, erro
 	return a.c.Embed(ctx, text)
 }
 
+// Generate proxies directly to the underlying client.
+func (a *geminiAdapter) Generate(ctx context.Context, systemPrompt, userMessage string) (string, error) {
+	return a.c.Generate(ctx, systemPrompt, userMessage)
+}
+
 // Describe is not yet implemented in the underlying REST client.
 // Returns ErrFatal so the dispatcher marks the job failed cleanly instead of
 // retrying indefinitely. Once multimodal support lands in gemini.Client,

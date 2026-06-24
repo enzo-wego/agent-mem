@@ -40,6 +40,10 @@ func (m *mockGemini) Embed(_ context.Context, _ string) ([]float32, error) {
 	return []float32{0.1, 0.2}, nil
 }
 
+func (m *mockGemini) Generate(_ context.Context, _, _ string) (string, error) {
+	return "", nil
+}
+
 func TestDescribeAttachmentHandler_BadPayload(t *testing.T) {
 	deps := Deps{Logger: zerolog.Nop(), MachineID: "test"}
 	h := NewDescribeAttachmentHandler(deps)

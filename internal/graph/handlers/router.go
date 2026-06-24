@@ -36,9 +36,10 @@ func Mount(r chi.Router, deps Deps) {
 	r.Method("GET", "/api/graph/slack-users", NewSlackUsersHandler(deps))
 
 	// Globe feature: per-channel volume + channel→continent config.
-	channels := NewChannels(deps.DB)
+	channels := NewChannels(deps.DB, deps.Gemini)
 	r.Get("/api/graph/channels", channels.list)
 	r.Get("/api/graph/channel", channels.recent)
+	r.Get("/api/graph/channel/topics", channels.topics)
 	r.Get("/api/graph/continents", channels.getContinents)
 	r.Put("/api/graph/continents", channels.putContinents)
 

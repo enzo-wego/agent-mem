@@ -3,9 +3,11 @@ import {
   fetchChannels,
   fetchContinents,
   fetchChannelMessages,
+  fetchChannelTopics,
   type ChannelCount,
   type ContinentCfg,
   type ChannelMessage,
+  type ChannelTopic,
 } from '../api'
 import { applyGroupNames, assignCountries, continentOf, nameOf } from '../continents'
 
@@ -159,8 +161,16 @@ export function LiveGlobePage() {
   const [activity, setActivity] = useState<ActivityEntry[]>([])
   const [hovered, setHovered] = useState<string | null>(null)
   const [selected, setSelected] = useState<LivePoint | null>(null)
-  const [messages, setMessages] = useState<ChannelMessage[]>([])
-  const [msgsLoading, setMsgsLoading] = useState(false)
+  const [topics, setTopics] = useState<ChannelTopic[]>([])
+  const [topicsLoading, setTopicsLoading] = useState(false)
+  // Baseline (epoch ms) captured on open: topics with last_ms > this are NEW.
+  const [lastSeen, setLastSeen] = useState(0)
+  // Which thread rows are expanded, and the lazily-fetched messages per thread.
+  const [expanded, setExpanded] = useState<Set<string>>(new Set())
+  const [threadMsgs, setThreadMsgs] = useState<Record<string, ChannelMessage[]>>({})
+  const [threadLoading, setThreadLoading] = useState<Set<string>>(new Set())
+  // Guards the topics fetch so a refresh tick can't overlap an in-flight load.
+  const topicsInFlightRef = useRef(false)
 
   // ── Zoom + pan transform (viewBox space: 360×180) ────────────────────────────
   const [view, setView] = useState({ k: 1, tx: 0, ty: 0 })
@@ -305,26 +315,90 @@ export function LiveGlobePage() {
     return () => window.clearInterval(id)
   }, [])
 
-  // ── Click panel: (re)load messages for the selected channel + window ─────────
+  // ── Click panel: load TOPIC summaries for the selected channel + window ──────
+  // On open: capture the per-channel "last seen" baseline from localStorage (used
+  // to mark NEW topics), then fetch topics. On window change / refresh tick we
+  // re-fetch the same channel's topics (guarded against overlap). On close /
+  // channel switch / unmount we stamp localStorage so nothing stays NEW next open.
+  const selectedIdRef = useRef<string | null>(null)
   useEffect(() => {
-    if (!selected) return
+    if (!selected) {
+      selectedIdRef.current = null
+      setTopics([])
+      setExpanded(new Set())
+      setThreadMsgs({})
+      setThreadLoading(new Set())
+      return
+    }
+    const channelId = selected.channelId
+    selectedIdRef.current = channelId
+    // Capture the baseline BEFORE rendering so NEW reflects the prior visit.
+    const raw = localStorage.getItem('liveSeen:' + channelId)
+    setLastSeen(raw ? Number(raw) || 0 : 0)
+    // Reset expand state when switching channels.
+    setExpanded(new Set())
+    setThreadMsgs({})
+    setThreadLoading(new Set())
+
     let cancelled = false
-    setMsgsLoading(true)
-    setMessages([])
-    fetchChannelMessages(selected.channelId, windowDays, 20)
-      .then((m) => {
-        if (!cancelled) setMessages(m || [])
-      })
-      .catch(() => {
-        if (!cancelled) setMessages([])
-      })
-      .finally(() => {
-        if (!cancelled) setMsgsLoading(false)
-      })
+    async function loadTopics(showLoading: boolean) {
+      if (cancelled || topicsInFlightRef.current) return
+      topicsInFlightRef.current = true
+      if (showLoading) setTopicsLoading(true)
+      try {
+        const t = await fetchChannelTopics(channelId, windowDays)
+        if (!cancelled) setTopics(t || [])
+      } catch {
+        if (!cancelled && showLoading) setTopics([])
+      } finally {
+        topicsInFlightRef.current = false
+        if (!cancelled && showLoading) setTopicsLoading(false)
+      }
+    }
+    void loadTopics(true)
+    // Keep NEW/topics live: re-fetch on the same cadence as the marker poll.
+    const id = window.setInterval(() => {
+      if (document.hidden) return
+      void loadTopics(false)
+    }, interval * 1000)
+
     return () => {
       cancelled = true
+      window.clearInterval(id)
+      // Stamp "seen now" so these topics are no longer NEW on the next open.
+      try {
+        localStorage.setItem('liveSeen:' + channelId, String(Date.now()))
+      } catch {
+        /* ignore quota / disabled storage */
+      }
     }
-  }, [selected, windowDays])
+  }, [selected, windowDays, interval])
+
+  // ── Lazy-load a thread's messages when its row is expanded ───────────────────
+  function toggleTopic(t: ChannelTopic) {
+    if (!t.is_thread) return // single messages aren't expandable
+    const key = t.thread_ts
+    setExpanded((cur) => {
+      const next = new Set(cur)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+    // Fetch once (cache per thread); skip if already loaded or loading.
+    if (threadMsgs[key] || threadLoading.has(key) || !selected) return
+    const channelId = selected.channelId
+    setThreadLoading((cur) => new Set(cur).add(key))
+    fetchChannelMessages(channelId, windowDays, 100, key)
+      .then((m) => setThreadMsgs((cur) => ({ ...cur, [key]: m || [] })))
+      .catch(() => setThreadMsgs((cur) => ({ ...cur, [key]: [] })))
+      .finally(() =>
+        setThreadLoading((cur) => {
+          const next = new Set(cur)
+          next.delete(key)
+          return next
+        }),
+      )
+  }
 
   // ── Derived control-panel data ──────────────────────────────────────────────
   const legend = useMemo(() => {
@@ -355,57 +429,6 @@ export function LiveGlobePage() {
     if (!selected || !cfg) return null
     return cfg.continents.find((c) => c.id === selected.continentId) ?? null
   }, [selected, cfg])
-
-  // Group panel messages Slack-style. Threads (non-empty thread_ts) collapse under
-  // one group; consecutive standalone messages from the same author within 10 min
-  // merge into one group. Messages within a group are sorted by ts_ms ascending;
-  // groups are ordered by their latest message (desc).
-  const MERGE_WINDOW_MS = 10 * 60 * 1000
-  const threadGroups = useMemo(() => {
-    const sorted = [...messages].sort((a, b) => a.ts_ms - b.ts_ms)
-    interface Group {
-      key: string
-      msgs: ChannelMessage[]
-      isThread: boolean
-      author: string
-    }
-    const groups: Group[] = []
-    const threadByKey = new Map<string, Group>()
-    for (const m of sorted) {
-      if (m.thread_ts) {
-        const existing = threadByKey.get(m.thread_ts)
-        if (existing) {
-          existing.msgs.push(m)
-        } else {
-          const g: Group = { key: m.thread_ts, msgs: [m], isThread: true, author: m.author }
-          threadByKey.set(m.thread_ts, g)
-          groups.push(g)
-        }
-        continue
-      }
-      // Standalone: try to append to the most recently created/extended group if
-      // it's a same-author standalone group within the merge window.
-      const last = groups[groups.length - 1]
-      const lastMsg = last?.msgs[last.msgs.length - 1]
-      if (
-        last &&
-        !last.isThread &&
-        lastMsg &&
-        last.author === m.author &&
-        m.ts_ms - lastMsg.ts_ms <= MERGE_WINDOW_MS
-      ) {
-        last.msgs.push(m)
-      } else {
-        groups.push({ key: m.id, msgs: [m], isThread: false, author: m.author })
-      }
-    }
-    const withMeta = groups.map((g) => ({
-      ...g,
-      latestMs: Math.max(...g.msgs.map((m) => m.ts_ms)),
-    }))
-    withMeta.sort((a, b) => b.latestMs - a.latestMs)
-    return withMeta
-  }, [messages])
 
   function toggleContinent(id: string) {
     setHidden((cur) => {
@@ -1029,7 +1052,6 @@ export function LiveGlobePage() {
                 >
                   {selectedContinent?.label ?? selected.continentId}
                 </span>
-                <span style={{ color: C.dim, fontSize: 10 }}>· {selected.country}</span>
               </div>
               <div style={{ color: C.dim, fontSize: 10, marginTop: 4 }}>
                 {selected.count.toLocaleString()} MSGS · LAST {windowLabel}
@@ -1066,33 +1088,49 @@ export function LiveGlobePage() {
               marginBottom: 6,
             }}
           >
-            RECENT MESSAGES
+            TOPICS
             <span style={{ marginLeft: 6, fontFamily: MONO, fontSize: 8, color: C.dim, letterSpacing: '0.04em', textTransform: 'none' }}>
               times in {localTz}
             </span>
           </div>
 
-          <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {msgsLoading && <div style={{ color: C.dim, fontSize: 11 }}>Loading…</div>}
-            {!msgsLoading && messages.length === 0 && (
-              <div style={{ color: C.dim, fontSize: 11 }}>no messages in window</div>
+          <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {topicsLoading && <div style={{ color: C.dim, fontSize: 11 }}>Loading…</div>}
+            {!topicsLoading && topics.length === 0 && (
+              <div style={{ color: C.dim, fontSize: 11 }}>no topics in window</div>
             )}
-            {!msgsLoading &&
-              threadGroups.map((g) => {
-                const root = g.msgs[0]
-                const n = g.msgs.length
-                // Thread "open in Slack" link: prefer the root's url, else build a
-                // permalink from the channel + thread_ts (digits, "." removed).
-                let threadLink = root.url || ''
-                if (!threadLink && root.thread_ts) {
-                  const digits = root.thread_ts.replace('.', '')
+            {!topicsLoading &&
+              topics.map((t) => {
+                const isNew = t.last_ms > lastSeen
+                const isOpen = expanded.has(t.thread_ts)
+                // "open in Slack": prefer the topic's url, else build a permalink
+                // from the channel + thread_ts (digits, "." removed).
+                let slackLink = t.url || ''
+                if (!slackLink && t.thread_ts) {
+                  const digits = t.thread_ts.replace('.', '')
                   if (digits) {
-                    threadLink = `https://wego.slack.com/archives/${selected.channelId}/p${digits}`
+                    slackLink = `https://wego.slack.com/archives/${selected.channelId}/p${digits}`
                   }
                 }
+                const meta = [
+                  t.participants && t.participants.length > 0 ? t.participants.join(', ') : '',
+                  `${t.msg_count} msg${t.msg_count === 1 ? '' : 's'}`,
+                  t.last_ms
+                    ? new Date(t.last_ms).toLocaleString(undefined, {
+                        month: 'short',
+                        day: 'numeric',
+                        hour: 'numeric',
+                        minute: '2-digit',
+                      })
+                    : '',
+                ]
+                  .filter(Boolean)
+                  .join(' · ')
+                const msgs = threadMsgs[t.thread_ts]
+                const loadingThread = threadLoading.has(t.thread_ts)
                 return (
                   <div
-                    key={g.key}
+                    key={t.thread_ts}
                     style={{
                       background: 'rgba(255,255,255,0.02)',
                       border: `1px solid ${C.border}`,
@@ -1106,105 +1144,171 @@ export function LiveGlobePage() {
                     <div
                       style={{
                         display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'space-between',
-                        gap: 8,
+                        alignItems: 'flex-start',
+                        gap: 6,
+                        cursor: t.is_thread ? 'pointer' : 'default',
                       }}
+                      onClick={() => toggleTopic(t)}
                     >
                       <span
                         style={{
-                          color: C.dim,
-                          fontSize: 9,
-                          letterSpacing: '0.08em',
-                          textTransform: 'uppercase',
+                          color: isNew ? C.green : C.dim,
+                          fontSize: 11,
+                          lineHeight: '15px',
+                          flexShrink: 0,
                         }}
                       >
-                        {g.isThread
-                          ? `⧉ THREAD (${n})`
-                          : n > 1
-                            ? `${g.author || 'MESSAGES'} (${n})`
-                            : 'MESSAGE'}
+                        {isNew ? '◉' : '○'}
                       </span>
-                      {threadLink && (
-                        <a
-                          href={threadLink}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          style={{
-                            color: C.green,
-                            fontSize: 9,
-                            letterSpacing: '0.06em',
-                            textDecoration: 'none',
-                            flexShrink: 0,
-                          }}
-                        >
-                          open in Slack ↗
-                        </a>
-                      )}
-                    </div>
-                    {g.msgs.map((m) => {
-                      const raw =
-                        (m.title && m.title.trim()) || (m.body || '').split('\n')[0] || '(no content)'
-                      const named = cfg ? applyGroupNames(raw, cfg) : raw
-                      const text = named.length > 160 ? `${named.slice(0, 160)}…` : named
-                      const ts = m.ts_ms
-                        ? new Date(m.ts_ms).toLocaleString(undefined, {
-                            month: 'short',
-                            day: 'numeric',
-                            hour: 'numeric',
-                            minute: '2-digit',
-                          })
-                        : ''
-                      return (
-                        <div
-                          key={m.id}
-                          style={{ display: 'flex', flexDirection: 'column', gap: 2 }}
-                        >
-                          <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
-                            <span style={{ color: C.dim, fontSize: 9, flexShrink: 0 }}>{ts}</span>
-                            {m.author && (
-                              <span style={{ color: C.dim, fontSize: 9, flexShrink: 0 }}>
-                                {m.author}
-                              </span>
-                            )}
-                          </div>
-                          <span style={{ color: C.text, fontSize: 11, lineHeight: 1.35 }}>{text}</span>
-                          {m.refs && m.refs.length > 0 && (
-                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 2 }}>
-                              {m.refs.map((ref, i) => {
-                                const label = ref.key ? `↗ ${ref.key}` : `${ref.type}:${ref.key}`
-                                const chipStyle: React.CSSProperties = {
-                                  fontFamily: MONO,
-                                  fontSize: 9,
-                                  letterSpacing: '0.04em',
-                                  padding: '1px 5px',
-                                  border: `1px solid ${C.border}`,
-                                  borderRadius: 2,
-                                  color: C.dim,
-                                  textDecoration: 'none',
-                                  whiteSpace: 'nowrap',
-                                }
-                                return ref.url ? (
-                                  <a
-                                    key={`${ref.type}-${ref.key}-${i}`}
-                                    href={ref.url}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    style={chipStyle}
-                                  >
-                                    {label}
-                                  </a>
-                                ) : (
-                                  <span key={`${ref.type}-${ref.key}-${i}`} style={chipStyle}>
-                                    {label}
-                                  </span>
-                                )
-                              })}
-                            </div>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
+                          <span
+                            style={{
+                              flex: 1,
+                              color: C.text,
+                              fontSize: 11,
+                              lineHeight: 1.35,
+                              display: '-webkit-box',
+                              WebkitLineClamp: 2,
+                              WebkitBoxOrient: 'vertical',
+                              overflow: 'hidden',
+                            }}
+                          >
+                            {cfg ? applyGroupNames(t.summary, cfg) : t.summary}
+                          </span>
+                          {isNew && (
+                            <span
+                              style={{
+                                flexShrink: 0,
+                                color: C.green,
+                                fontSize: 8,
+                                letterSpacing: '0.08em',
+                                border: `1px solid ${C.green}`,
+                                borderRadius: 2,
+                                padding: '0 3px',
+                              }}
+                            >
+                              NEW
+                            </span>
                           )}
                         </div>
-                      )
-                    })}
+                        <div
+                          style={{
+                            color: C.dim,
+                            fontSize: 9,
+                            marginTop: 3,
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            whiteSpace: 'nowrap',
+                          }}
+                        >
+                          {meta}
+                          {t.is_thread && <span style={{ marginLeft: 6 }}>{isOpen ? '▾' : '▸'}</span>}
+                        </div>
+                      </div>
+                    </div>
+
+                    {slackLink && (
+                      <a
+                        href={slackLink}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        onClick={(e) => e.stopPropagation()}
+                        style={{
+                          color: C.green,
+                          fontSize: 9,
+                          letterSpacing: '0.06em',
+                          textDecoration: 'none',
+                          alignSelf: 'flex-start',
+                        }}
+                      >
+                        open in Slack ↗
+                      </a>
+                    )}
+
+                    {t.is_thread && isOpen && (
+                      <div
+                        style={{
+                          borderTop: `1px solid ${C.border}`,
+                          paddingTop: 6,
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: 6,
+                        }}
+                      >
+                        {loadingThread && <div style={{ color: C.dim, fontSize: 10 }}>Loading…</div>}
+                        {!loadingThread && msgs && msgs.length === 0 && (
+                          <div style={{ color: C.dim, fontSize: 10 }}>no messages</div>
+                        )}
+                        {!loadingThread &&
+                          msgs &&
+                          [...msgs]
+                            .sort((a, b) => a.ts_ms - b.ts_ms)
+                            .map((m) => {
+                              const raw = (m.title && m.title.trim()) || m.body || '(no content)'
+                              const text = cfg ? applyGroupNames(raw, cfg) : raw
+                              const ts = m.ts_ms
+                                ? new Date(m.ts_ms).toLocaleString(undefined, {
+                                    month: 'short',
+                                    day: 'numeric',
+                                    hour: 'numeric',
+                                    minute: '2-digit',
+                                  })
+                                : ''
+                              return (
+                                <div
+                                  key={m.id}
+                                  style={{ display: 'flex', flexDirection: 'column', gap: 2 }}
+                                >
+                                  <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
+                                    <span style={{ color: C.dim, fontSize: 9, flexShrink: 0 }}>{ts}</span>
+                                    {m.author && (
+                                      <span style={{ color: C.dim, fontSize: 9, flexShrink: 0 }}>
+                                        {m.author}
+                                      </span>
+                                    )}
+                                  </div>
+                                  <span style={{ color: C.text, fontSize: 11, lineHeight: 1.35 }}>
+                                    {text}
+                                  </span>
+                                  {m.refs && m.refs.length > 0 && (
+                                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 2 }}>
+                                      {m.refs.map((ref, i) => {
+                                        const label = ref.key ? `↗ ${ref.key}` : `${ref.type}:${ref.key}`
+                                        const chipStyle: React.CSSProperties = {
+                                          fontFamily: MONO,
+                                          fontSize: 9,
+                                          letterSpacing: '0.04em',
+                                          padding: '1px 5px',
+                                          border: `1px solid ${C.border}`,
+                                          borderRadius: 2,
+                                          color: C.dim,
+                                          textDecoration: 'none',
+                                          whiteSpace: 'nowrap',
+                                        }
+                                        return ref.url ? (
+                                          <a
+                                            key={`${ref.type}-${ref.key}-${i}`}
+                                            href={ref.url}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            style={chipStyle}
+                                          >
+                                            {label}
+                                          </a>
+                                        ) : (
+                                          <span key={`${ref.type}-${ref.key}-${i}`} style={chipStyle}>
+                                            {label}
+                                          </span>
+                                        )
+                                      })}
+                                    </div>
+                                  )}
+                                </div>
+                              )
+                            })}
+                      </div>
+                    )}
                   </div>
                 )
               })}
