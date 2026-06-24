@@ -104,7 +104,7 @@ type channelMessage struct {
 	Title    string   `json:"title"`
 	Body     string   `json:"body"`
 	URL      string   `json:"url"`
-	TS       string   `json:"ts"`
+	TSMs     int64    `json:"ts_ms"` // real Slack message time, epoch millis (UTC)
 	ThreadTS string   `json:"thread_ts"`
 	Author   string   `json:"author"`
 	Refs     []msgRef `json:"refs"`
@@ -134,13 +134,13 @@ func (h *Channels) recent(w http.ResponseWriter, r *http.Request) {
 	}
 	rows, err := h.db.Query(ctx, `
 SELECT id, COALESCE(title,''), LEFT(COALESCE(body,''),400), COALESCE(url,''),
-       COALESCE(first_seen_at::text,''),
+       (EXTRACT(EPOCH FROM COALESCE(to_timestamp(NULLIF(metadata->>'ts','')::float8), first_seen_at)) * 1000)::bigint AS ts_ms,
        COALESCE(metadata->>'thread_ts',''),
        COALESCE(metadata->'author'->>'display_name','')
 FROM graph.nodes
 WHERE scope = 'slack:' || $1 AND deleted_at IS NULL
   AND ($2 = 0 OR first_seen_at >= now() - make_interval(days => $2))
-ORDER BY first_seen_at DESC
+ORDER BY COALESCE(to_timestamp(NULLIF(metadata->>'ts','')::float8), first_seen_at) DESC
 LIMIT $3`, id, days, limit)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -152,7 +152,7 @@ LIMIT $3`, id, days, limit)
 	ids := []string{}
 	for rows.Next() {
 		var m channelMessage
-		if err := rows.Scan(&m.ID, &m.Title, &m.Body, &m.URL, &m.TS, &m.ThreadTS, &m.Author); err != nil {
+		if err := rows.Scan(&m.ID, &m.Title, &m.Body, &m.URL, &m.TSMs, &m.ThreadTS, &m.Author); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}

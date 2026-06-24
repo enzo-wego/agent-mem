@@ -33,6 +33,9 @@ const WINDOW_OPTIONS = [
 ] as const
 const PULSE_MS = 2000
 
+// Viewer's local IANA timezone, shown so message times are unambiguous.
+const localTz = Intl.DateTimeFormat().resolvedOptions().timeZone
+
 // Marker radii in viewBox units (360×180 space). sqrt-scaled by count, clamped so
 // tiny channels stay visible and the biggest doesn't dominate the map.
 const MIN_R = 0.6
@@ -353,25 +356,55 @@ export function LiveGlobePage() {
     return cfg.continents.find((c) => c.id === selected.continentId) ?? null
   }, [selected, cfg])
 
-  // Group panel messages by Slack thread. Key = thread_ts || id, so standalone
-  // messages each form their own single-message group and replies collapse under
-  // their root. Groups ordered by most-recent message (desc); messages within a
-  // group ordered by ts ascending (root first).
+  // Group panel messages Slack-style. Threads (non-empty thread_ts) collapse under
+  // one group; consecutive standalone messages from the same author within 10 min
+  // merge into one group. Messages within a group are sorted by ts_ms ascending;
+  // groups are ordered by their latest message (desc).
+  const MERGE_WINDOW_MS = 10 * 60 * 1000
   const threadGroups = useMemo(() => {
-    const byKey = new Map<string, ChannelMessage[]>()
-    for (const m of messages) {
-      const key = m.thread_ts || m.id
-      const list = byKey.get(key)
-      if (list) list.push(m)
-      else byKey.set(key, [m])
+    const sorted = [...messages].sort((a, b) => a.ts_ms - b.ts_ms)
+    interface Group {
+      key: string
+      msgs: ChannelMessage[]
+      isThread: boolean
+      author: string
     }
-    const groups = Array.from(byKey.entries()).map(([key, msgs]) => {
-      const sorted = [...msgs].sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0))
-      const latest = sorted.reduce((acc, m) => (m.ts > acc ? m.ts : acc), '')
-      return { key, msgs: sorted, latest }
-    })
-    groups.sort((a, b) => (a.latest < b.latest ? 1 : a.latest > b.latest ? -1 : 0))
-    return groups
+    const groups: Group[] = []
+    const threadByKey = new Map<string, Group>()
+    for (const m of sorted) {
+      if (m.thread_ts) {
+        const existing = threadByKey.get(m.thread_ts)
+        if (existing) {
+          existing.msgs.push(m)
+        } else {
+          const g: Group = { key: m.thread_ts, msgs: [m], isThread: true, author: m.author }
+          threadByKey.set(m.thread_ts, g)
+          groups.push(g)
+        }
+        continue
+      }
+      // Standalone: try to append to the most recently created/extended group if
+      // it's a same-author standalone group within the merge window.
+      const last = groups[groups.length - 1]
+      const lastMsg = last?.msgs[last.msgs.length - 1]
+      if (
+        last &&
+        !last.isThread &&
+        lastMsg &&
+        last.author === m.author &&
+        m.ts_ms - lastMsg.ts_ms <= MERGE_WINDOW_MS
+      ) {
+        last.msgs.push(m)
+      } else {
+        groups.push({ key: m.id, msgs: [m], isThread: false, author: m.author })
+      }
+    }
+    const withMeta = groups.map((g) => ({
+      ...g,
+      latestMs: Math.max(...g.msgs.map((m) => m.ts_ms)),
+    }))
+    withMeta.sort((a, b) => b.latestMs - a.latestMs)
+    return withMeta
   }, [messages])
 
   function toggleContinent(id: string) {
@@ -1034,6 +1067,9 @@ export function LiveGlobePage() {
             }}
           >
             RECENT MESSAGES
+            <span style={{ marginLeft: 6, fontFamily: MONO, fontSize: 8, color: C.dim, letterSpacing: '0.04em', textTransform: 'none' }}>
+              times in {localTz}
+            </span>
           </div>
 
           <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -1083,7 +1119,11 @@ export function LiveGlobePage() {
                           textTransform: 'uppercase',
                         }}
                       >
-                        {n > 1 ? `⧉ THREAD (${n})` : 'MESSAGE'}
+                        {g.isThread
+                          ? `⧉ THREAD (${n})`
+                          : n > 1
+                            ? `${g.author || 'MESSAGES'} (${n})`
+                            : 'MESSAGE'}
                       </span>
                       {threadLink && (
                         <a
@@ -1107,11 +1147,11 @@ export function LiveGlobePage() {
                         (m.title && m.title.trim()) || (m.body || '').split('\n')[0] || '(no content)'
                       const named = cfg ? applyGroupNames(raw, cfg) : raw
                       const text = named.length > 160 ? `${named.slice(0, 160)}…` : named
-                      const ts = m.ts
-                        ? new Date(m.ts).toLocaleString(undefined, {
+                      const ts = m.ts_ms
+                        ? new Date(m.ts_ms).toLocaleString(undefined, {
                             month: 'short',
                             day: 'numeric',
-                            hour: '2-digit',
+                            hour: 'numeric',
                             minute: '2-digit',
                           })
                         : ''

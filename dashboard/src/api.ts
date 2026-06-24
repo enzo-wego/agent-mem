@@ -453,7 +453,7 @@ export interface ChannelMessage {
   title: string;
   body: string;
   url: string;
-  ts: string;
+  ts_ms: number; // real Slack message time, epoch millis (UTC)
   thread_ts: string;
   author: string;
   refs: MsgRef[];
