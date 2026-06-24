@@ -433,8 +433,11 @@ export interface ContinentCfg {
   names: Record<string, string>; // channelId -> display name
 }
 
-export async function fetchChannels(): Promise<ChannelCount[]> {
-  const res = await authFetch(`${BASE}/api/graph/channels`);
+// fetchChannels returns per-channel message counts. Pass days>0 to restrict to
+// messages first seen in the last N days (e.g. 90 = ~3 months); 0 = all-time.
+export async function fetchChannels(days = 0): Promise<ChannelCount[]> {
+  const qs = days > 0 ? `?days=${days}` : '';
+  const res = await authFetch(`${BASE}/api/graph/channels${qs}`);
   return res.json();
 }
 

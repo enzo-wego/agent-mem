@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strconv"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -50,15 +51,23 @@ type channelCount struct {
 	Count     int    `json:"count"`
 }
 
-// list handles GET /api/graph/channels.
+// list handles GET /api/graph/channels. An optional ?days=N restricts the count
+// to messages first seen in the last N days (0 or absent = all-time).
 func (h *Channels) list(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	days := 0
+	if v := r.URL.Query().Get("days"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			days = n
+		}
+	}
 	rows, err := h.db.Query(ctx, `
 SELECT REPLACE(scope,'slack:','') AS channel_id, COUNT(*) AS count
 FROM graph.nodes
 WHERE scope LIKE 'slack:%' AND deleted_at IS NULL
+  AND ($1 = 0 OR first_seen_at >= now() - make_interval(days => $1))
 GROUP BY scope
-ORDER BY count DESC`)
+ORDER BY count DESC`, days)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

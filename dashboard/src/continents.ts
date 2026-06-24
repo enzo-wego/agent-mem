@@ -1,4 +1,5 @@
 import type { ContinentCfg } from './api'
+import { COUNTRIES } from './countries-data'
 
 // nameOf resolves a channel's display name from the config, falling back to the
 // channel id when no name is configured.
@@ -47,4 +48,67 @@ export function placement(
   const newLat = Math.max(-85, Math.min(85, lat + radius * Math.sin(angle)))
   const newLon = lon + radius * Math.cos(angle)
   return [newLat, newLon]
+}
+
+// ----- Channel -> country assignment ("every channel = one country") -----
+
+// Default country pool per continent id, ordered big -> small (by land area) so
+// the highest-volume channel in a continent lands on the largest country.
+// Lists are disjoint so a country is never claimed by two continents.
+export const DEFAULT_CONTINENT_COUNTRIES: Record<string, string[]> = {
+  // Payments Core -> Africa / Middle East / Europe
+  core: ['DZ','SA','LY','SD','TD','NE','AO','EG','ET','NG','ZA','TR','FR','ES','DE','PL','IT','GB','MA','KE'],
+  // Payment Partners -> South America
+  partners: ['BR','AR','PE','CO','BO','VE','CL','PY','EC','GY','UY','SR'],
+  // Other -> Asia
+  other: ['CN','IN','KZ','MN','ID','IR','MM','TH','JP','MY','VN','PH','KR','NP','PK','AF','UZ','TM','LA','KH'],
+}
+
+// Global fallback pool ordered by area, for unknown continents or overflow when a
+// continent has more channels than its country list. Used countries are skipped.
+const GLOBAL_BY_AREA = [
+  'RU','CA','US','CN','BR','AU','IN','AR','KZ','DZ','CD','SA','MX','ID','SD','LY','IR','MN','PE',
+  'TD','NE','AO','ML','ZA','CO','ET','BO','MR','EG','TZ','NG','VE','NA','MZ','PK','TR','CL','ZM',
+  'MM','AF','SO','CF','UA','MG','BW','KE','FR','YE','TH','ES','TM','CM','PG','SE','UZ','MA','IQ',
+  'PY','ZW','JP','DE','CG','FI','VN','MY','NO','PL','IT','PH','EC','BF','NZ','GA','GN','GB','UG','GH',
+]
+
+export type CountryAssignment = { iso: string; name: string; lat: number; lon: number }
+
+// assignCountries maps each channel to a unique real country. Channels are grouped
+// by continent, sorted by count desc, and assigned to that continent's ordered
+// country list (biggest channel -> biggest country); overflow draws from the
+// global-by-area pool. Returns channelId -> country (skips channels if the world
+// runs out of countries, which won't happen for <168 channels).
+export function assignCountries(
+  channels: { channel_id: string; count: number }[],
+  cfg: ContinentCfg,
+): Record<string, CountryAssignment> {
+  const byContinent: Record<string, { channel_id: string; count: number }[]> = {}
+  for (const ch of channels) {
+    const cid = continentOf(ch.channel_id, cfg) || '__none'
+    ;(byContinent[cid] ||= []).push(ch)
+  }
+  const used = new Set<string>()
+  const result: Record<string, CountryAssignment> = {}
+  const take = (pool: string[]): string | null => {
+    for (const iso of pool) {
+      if (!used.has(iso) && COUNTRIES[iso]) {
+        used.add(iso)
+        return iso
+      }
+    }
+    return null
+  }
+  for (const [cid, list] of Object.entries(byContinent)) {
+    list.sort((a, b) => b.count - a.count)
+    const primary = DEFAULT_CONTINENT_COUNTRIES[cid] || []
+    for (const ch of list) {
+      const iso = take(primary) || take(GLOBAL_BY_AREA)
+      if (!iso) continue
+      const c = COUNTRIES[iso]
+      result[ch.channel_id] = { iso, name: c.name, lat: c.lat, lon: c.lon }
+    }
+  }
+  return result
 }

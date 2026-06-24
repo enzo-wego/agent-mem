@@ -1,28 +1,54 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import Globe, { type GlobeInstance } from 'globe.gl'
 import { fetchChannels, fetchContinents, type ChannelCount, type ContinentCfg } from '../api'
-import { continentOf, nameOf, placement } from '../continents'
+import { assignCountries, continentOf, nameOf } from '../continents'
+
+// ── worldmonitor palette ──────────────────────────────────────────────────────
+const C = {
+  bg: '#0a0a0a',
+  panel: '#141414',
+  border: '#2a2a2a',
+  text: '#e8e8e8',
+  dim: '#888888',
+  green: '#44ff88',
+  amber: '#ffaa00',
+  red: '#ff4444',
+} as const
+
+const MONO = 'ui-monospace, "SF Mono", Menlo, monospace'
+
+const REFRESH_OPTIONS = [5, 10, 30] as const
+const WINDOW_OPTIONS = [
+  { days: 90, label: '3 MONTHS' },
+  { days: 365, label: 'THIS YEAR' },
+  { days: 0, label: 'ALL' },
+] as const
+const PULSE_MS = 2000
+
+// Marker pixel radii (sqrt-scaled by count, clamped so tiny channels stay
+// visible and the biggest doesn't dominate the globe).
+const MIN_R = 5
+const MAX_R = 26
 
 interface LivePoint {
   channelId: string
   name: string
+  country: string
   count: number
   lat: number
   lng: number
   color: string
   continentId: string
-  // pulseUntil: epoch ms until which this point is highlighted (count increased).
+  // Epoch ms until which this point is highlighted (its count just grew).
   pulseUntil: number
 }
 
 interface ActivityEntry {
+  country: string
   name: string
   delta: number
   at: number
 }
-
-const REFRESH_OPTIONS = [5, 10, 30] as const
-const PULSE_MS = 2000
 
 function lighten(hex: string, amount: number): string {
   // Lighten a #rrggbb color toward white by `amount` (0..1). Falls back to input.
@@ -43,19 +69,22 @@ function buildPoints(
   cfg: ContinentCfg,
   prevPulse: Map<string, number>,
 ): LivePoint[] {
-  const centerById = new Map(cfg.continents.map((c) => [c.id, c.center]))
+  // Country assignment is deterministic given the same sorted channel input, so
+  // a channel keeps its country within a window across polls.
+  const assigned = assignCountries(channels, cfg)
   const colorById = new Map(cfg.continents.map((c) => [c.id, c.color]))
   const pts: LivePoint[] = []
   for (const ch of channels) {
+    const country = assigned[ch.channel_id]
+    if (!country) continue // ran out of countries (won't happen for <168)
     const cid = continentOf(ch.channel_id, cfg)
-    const center = centerById.get(cid) ?? [0, 0]
-    const [lat, lng] = placement(ch.channel_id, center as [number, number])
     pts.push({
       channelId: ch.channel_id,
       name: nameOf(ch.channel_id, cfg),
+      country: country.name,
       count: ch.count,
-      lat,
-      lng,
+      lat: country.lat,
+      lng: country.lon,
       color: colorById.get(cid) ?? '#8b949e',
       continentId: cid,
       pulseUntil: prevPulse.get(ch.channel_id) ?? 0,
@@ -72,6 +101,7 @@ export function LiveGlobePage() {
   const [points, setPoints] = useState<LivePoint[]>([])
   const [hidden, setHidden] = useState<Set<string>>(new Set())
   const [interval, setIntervalSec] = useState<number>(10)
+  const [windowDays, setWindowDays] = useState<number>(90)
   const [lastUpdate, setLastUpdate] = useState<number>(0)
   const [tick, setTick] = useState(0)
   const [error, setError] = useState('')
@@ -81,10 +111,10 @@ export function LiveGlobePage() {
   const prevCountsRef = useRef<Map<string, number>>(new Map())
   const cfgRef = useRef<ContinentCfg | null>(null)
   const inFlightRef = useRef(false)
-  const intervalRef = useRef(10)
-  intervalRef.current = interval
+  const windowDaysRef = useRef(90)
+  windowDaysRef.current = windowDays
 
-  // ── Single channel poll (guarded against overlap) ───────────────────────────
+  // ── Channel poll (guarded against overlap, re-created on interval/window) ─────
   useEffect(() => {
     let cancelled = false
 
@@ -92,7 +122,7 @@ export function LiveGlobePage() {
       if (cancelled || inFlightRef.current || !cfgRef.current) return
       inFlightRef.current = true
       try {
-        const channels = await fetchChannels()
+        const channels = await fetchChannels(windowDaysRef.current)
         if (cancelled) return
         const cfgNow = cfgRef.current
         if (!cfgNow) return
@@ -101,11 +131,17 @@ export function LiveGlobePage() {
         const now = Date.now()
         const pulse = new Map<string, number>()
         const increases: ActivityEntry[] = []
+        const assigned = assignCountries(channels || [], cfgNow)
         for (const ch of channels || []) {
           const before = prev.get(ch.channel_id)
           if (before !== undefined && ch.count > before) {
             pulse.set(ch.channel_id, now + PULSE_MS)
-            increases.push({ name: nameOf(ch.channel_id, cfgNow), delta: ch.count - before, at: now })
+            increases.push({
+              country: assigned[ch.channel_id]?.name ?? '',
+              name: nameOf(ch.channel_id, cfgNow),
+              delta: ch.count - before,
+              at: now,
+            })
           }
         }
         // Record current counts for the next diff.
@@ -115,6 +151,7 @@ export function LiveGlobePage() {
 
         setPoints(buildPoints(channels || [], cfgNow, pulse))
         setLastUpdate(now)
+        setError('')
         if (increases.length > 0) {
           increases.sort((a, b) => b.delta - a.delta)
           setActivity((cur) => [...increases.slice(0, 5), ...cur].slice(0, 6))
@@ -125,6 +162,9 @@ export function LiveGlobePage() {
         inFlightRef.current = false
       }
     }
+
+    // Reset the diff baseline when the window changes (counts aren't comparable).
+    prevCountsRef.current = new Map()
 
     // Load continents config first, then begin polling.
     fetchContinents()
@@ -138,11 +178,10 @@ export function LiveGlobePage() {
         if (!cancelled) setError(err instanceof Error ? err.message : 'Failed to load config')
       })
 
-    // Re-created whenever the selected refresh rate changes (effect dep).
     const id = window.setInterval(() => {
       if (document.hidden) return
       void poll()
-    }, intervalRef.current * 1000)
+    }, interval * 1000)
 
     // Refresh continents config periodically so config edits show up.
     const cfgId = window.setInterval(() => {
@@ -169,8 +208,8 @@ export function LiveGlobePage() {
       window.clearInterval(cfgId)
       document.removeEventListener('visibilitychange', onVisibility)
     }
-    // Re-run when interval changes so the timer uses the new rate.
-  }, [interval])
+    // Re-run when interval or window changes so polling uses the new settings.
+  }, [interval, windowDays])
 
   // ── Ticker: drives "updated Xs ago" + decays pulses ─────────────────────────
   useEffect(() => {
@@ -182,23 +221,37 @@ export function LiveGlobePage() {
   useEffect(() => {
     if (!containerRef.current || globeRef.current) return
     const g = new Globe(containerRef.current)
-      .backgroundColor('#0d1117')
+      .globeImageUrl('/textures/earth-topo-bathy.jpg')
+      .backgroundImageUrl('/textures/night-sky.png')
+      .backgroundColor(C.bg)
       .showAtmosphere(true)
-      .atmosphereColor('#3fb950')
+      .atmosphereColor('#4466cc')
       .atmosphereAltitude(0.18)
-    const mat = g.globeMaterial() as {
-      color: { set: (c: string) => void }
-      emissive: { set: (c: string) => void }
-      emissiveIntensity: number
-      shininess: number
+      .htmlElementsData([])
+      .htmlLat((d) => (d as LivePoint).lat)
+      .htmlLng((d) => (d as LivePoint).lng)
+      .htmlElement((d) => markerElement(d as LivePoint))
+
+    const controls = g.controls() as {
+      autoRotate: boolean
+      autoRotateSpeed: number
+      enablePan: boolean
+      enableZoom: boolean
+      minDistance: number
+      maxDistance: number
+      addEventListener: (ev: string, fn: () => void) => void
     }
-    mat.color.set('#0f1620')
-    mat.emissive.set('#08160d')
-    mat.emissiveIntensity = 0.12
-    mat.shininess = 4
-    const controls = g.controls() as { autoRotate: boolean; autoRotateSpeed: number }
     controls.autoRotate = true
-    controls.autoRotateSpeed = 0.4
+    controls.autoRotateSpeed = 0.3
+    controls.enablePan = false
+    controls.enableZoom = true
+    controls.minDistance = 101
+    controls.maxDistance = 600
+    // Nice-to-have: pause autorotate while the user is dragging.
+    controls.addEventListener('start', () => {
+      controls.autoRotate = false
+    })
+
     g.width(window.innerWidth).height(window.innerHeight)
     globeRef.current = g
 
@@ -212,39 +265,111 @@ export function LiveGlobePage() {
     }
   }, [])
 
-  // ── Push point data into the globe (visible continents only) + pulse styling ─
+  // ── Build a glowing marker DOM node (worldmonitor look) ──────────────────────
+  function markerElement(p: LivePoint): HTMLElement {
+    const el = document.createElement('div')
+    el.className = 'globe-marker'
+
+    const dot = document.createElement('div')
+    dot.className = 'globe-dot'
+
+    const ring = document.createElement('div')
+    ring.className = 'globe-ring'
+
+    const label = document.createElement('div')
+    label.className = 'globe-label'
+    label.textContent = `${p.country.toUpperCase()} — ${p.name} · ${p.count.toLocaleString()} msgs`
+    label.style.borderColor = p.color
+
+    el.appendChild(ring)
+    el.appendChild(dot)
+    el.appendChild(label)
+    applyMarkerStyle(el, p, false)
+    return el
+  }
+
+  // ── Push markers into the globe (visible continents only) + pulse styling ────
   useEffect(() => {
     const g = globeRef.current
     if (!g) return
     const visible = points.filter((p) => !hidden.has(p.continentId))
     const maxCount = Math.max(1, ...visible.map((p) => p.count))
-    const norm = (c: number) => Math.sqrt(c) / Math.sqrt(maxCount)
     const now = Date.now()
 
-    g.pointsData(visible)
-      .pointLat((d) => (d as LivePoint).lat)
-      .pointLng((d) => (d as LivePoint).lng)
-      .pointColor((d) => {
+    g.htmlElementsData(visible)
+      .htmlElement((d) => {
         const p = d as LivePoint
-        return p.pulseUntil > now ? lighten(p.color, 0.6) : p.color
+        const el = markerElement(p)
+        applyMarkerStyle(el, p, p.pulseUntil > now, maxCount)
+        return el
       })
-      .pointAltitude((d) => {
-        const p = d as LivePoint
-        const base = 0.01 + 0.18 * norm(p.count)
-        return p.pulseUntil > now ? base + 0.22 : base
-      })
-      .pointRadius((d) => {
-        const p = d as LivePoint
-        const base = 0.25 + 0.7 * norm(p.count)
-        return p.pulseUntil > now ? base * 2 : base
-      })
-      .pointLabel((d) => {
-        const p = d as LivePoint
-        return `${p.name} — ${p.count} msgs`
-      })
-    g.pointsTransitionDuration(800)
-    // `tick` + `points` dependencies ensure pulses decay back to base each second.
+    // `tick` dep ensures pulses decay back to base styling each second.
   }, [points, hidden, tick])
+
+  // Size + color a marker element by count, with an enlarged/brightened pulse.
+  function applyMarkerStyle(el: HTMLElement, p: LivePoint, pulsing: boolean, maxCount = 1) {
+    const norm = Math.sqrt(p.count) / Math.sqrt(maxCount)
+    let r = MIN_R + (MAX_R - MIN_R) * norm
+    let color = p.color
+    if (pulsing) {
+      r *= 1.6
+      color = lighten(p.color, 0.5)
+    }
+    const size = Math.round(r * 2)
+
+    el.style.position = 'relative'
+    el.style.width = '0'
+    el.style.height = '0'
+    el.style.pointerEvents = 'auto'
+    el.style.cursor = 'pointer'
+    el.style.zIndex = String(Math.round(p.count))
+
+    const dot = el.querySelector('.globe-dot') as HTMLElement
+    dot.style.position = 'absolute'
+    dot.style.left = `${-r}px`
+    dot.style.top = `${-r}px`
+    dot.style.width = `${size}px`
+    dot.style.height = `${size}px`
+    dot.style.borderRadius = '50%'
+    dot.style.background = color
+    dot.style.boxShadow = `0 0 ${Math.round(r * 0.9)}px ${Math.round(r * 0.45)}px ${color}88, 0 0 2px ${color}`
+    dot.style.border = `1px solid ${lighten(color, 0.4)}`
+    dot.style.transition = 'all 0.6s ease'
+
+    const ring = el.querySelector('.globe-ring') as HTMLElement
+    const ringSize = size + 8
+    ring.style.position = 'absolute'
+    ring.style.left = `${-(ringSize / 2)}px`
+    ring.style.top = `${-(ringSize / 2)}px`
+    ring.style.width = `${ringSize}px`
+    ring.style.height = `${ringSize}px`
+    ring.style.borderRadius = '50%'
+    ring.style.border = `1.5px solid ${color}`
+    ring.style.animation = 'globe-pulse 2.4s ease-out infinite'
+
+    const label = el.querySelector('.globe-label') as HTMLElement
+    label.style.position = 'absolute'
+    label.style.left = `${r + 6}px`
+    label.style.top = `${-7}px`
+    label.style.whiteSpace = 'nowrap'
+    label.style.font = `10px ${MONO}`
+    label.style.letterSpacing = '0.04em'
+    label.style.color = C.text
+    label.style.background = 'rgba(10,10,10,0.82)'
+    label.style.border = `1px solid ${p.color}`
+    label.style.borderRadius = '2px'
+    label.style.padding = '2px 5px'
+    label.style.opacity = '0'
+    label.style.transition = 'opacity 0.15s'
+    label.style.pointerEvents = 'none'
+
+    el.onmouseenter = () => {
+      label.style.opacity = '1'
+    }
+    el.onmouseleave = () => {
+      label.style.opacity = '0'
+    }
+  }
 
   // ── Derived control-panel data ──────────────────────────────────────────────
   const legend = useMemo(() => {
@@ -265,6 +390,7 @@ export function LiveGlobePage() {
   const totalChannels = visiblePts.length
   const totalMsgs = visiblePts.reduce((s, p) => s + p.count, 0)
   const secsAgo = lastUpdate ? Math.max(0, Math.round((Date.now() - lastUpdate) / 1000)) : null
+  const windowLabel = WINDOW_OPTIONS.find((w) => w.days === windowDays)?.label ?? 'ALL'
   void tick // keeps secsAgo recomputing every second
 
   function toggleContinent(id: string) {
@@ -276,106 +402,289 @@ export function LiveGlobePage() {
     })
   }
 
+  // ── Shared chrome styles ─────────────────────────────────────────────────────
+  const panel: React.CSSProperties = {
+    background: C.panel,
+    border: `1px solid ${C.border}`,
+    fontFamily: MONO,
+    color: C.text,
+  }
+  const segBtn = (active: boolean): React.CSSProperties => ({
+    fontFamily: MONO,
+    fontSize: 10,
+    letterSpacing: '0.06em',
+    padding: '4px 8px',
+    background: active ? 'rgba(68,255,136,0.14)' : 'transparent',
+    color: active ? C.green : C.dim,
+    border: `1px solid ${active ? C.green : C.border}`,
+    borderRadius: 2,
+    cursor: 'pointer',
+    textTransform: 'uppercase',
+  })
+
   return (
-    <div className="fixed inset-0 w-screen h-screen overflow-hidden bg-[#0d1117] text-gray-100">
-      <div ref={containerRef} className="absolute inset-0" />
+    <div style={{ position: 'fixed', inset: 0, width: '100vw', height: '100vh', overflow: 'hidden', background: C.bg }}>
+      <style>{`
+        @keyframes globe-pulse {
+          0%   { transform: scale(0.6); opacity: 0.9; }
+          70%  { transform: scale(1.8); opacity: 0; }
+          100% { transform: scale(1.8); opacity: 0; }
+        }
+        @keyframes live-blink {
+          0%, 100% { opacity: 1; }
+          50%      { opacity: 0.25; }
+        }
+      `}</style>
 
-      {/* Control panel */}
-      <div className="absolute top-4 left-4 w-72 max-h-[calc(100vh-2rem)] overflow-y-auto rounded-lg bg-black/55 backdrop-blur border border-white/10 p-4 text-xs space-y-3">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <span className="relative flex h-2.5 w-2.5">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
-              <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-green-500" />
-            </span>
-            <span className="font-semibold tracking-wide text-sm">LIVE</span>
-          </div>
-          <span className="text-gray-400">
-            {secsAgo === null ? 'connecting…' : `updated ${secsAgo}s ago`}
+      <div ref={containerRef} style={{ position: 'absolute', inset: 0 }} />
+
+      {/* ── Top bar ──────────────────────────────────────────────────────────── */}
+      <div
+        style={{
+          position: 'absolute',
+          top: 0,
+          left: 0,
+          right: 0,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 12,
+          padding: '8px 14px',
+          background: 'linear-gradient(180deg, rgba(10,10,10,0.92), rgba(10,10,10,0))',
+          fontFamily: MONO,
+          flexWrap: 'wrap',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span
+            style={{
+              width: 8,
+              height: 8,
+              borderRadius: '50%',
+              background: C.green,
+              boxShadow: `0 0 8px ${C.green}`,
+              animation: 'live-blink 1.4s ease-in-out infinite',
+            }}
+          />
+          <span style={{ color: C.text, fontSize: 12, letterSpacing: '0.1em' }}>
+            LIVE — GLOBAL CHANNEL ACTIVITY
           </span>
+          <a
+            href="/"
+            style={{
+              marginLeft: 12,
+              color: C.dim,
+              fontSize: 10,
+              letterSpacing: '0.08em',
+              textDecoration: 'none',
+            }}
+          >
+            ← DASHBOARD
+          </a>
         </div>
 
-        {error && <p className="text-red-400">{error}</p>}
-
-        {/* Totals */}
-        <div className="grid grid-cols-2 gap-2 text-center">
-          <div className="rounded bg-white/5 py-2">
-            <div className="text-base font-semibold">{totalChannels}</div>
-            <div className="text-[10px] uppercase text-gray-400 tracking-wide">channels</div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+          <span style={{ color: C.dim, fontSize: 10, letterSpacing: '0.08em' }}>
+            {secsAgo === null ? 'CONNECTING…' : `UPDATED ${secsAgo}S AGO`}
+          </span>
+          <div style={{ display: 'flex', gap: 4 }}>
+            {WINDOW_OPTIONS.map((w) => (
+              <button key={w.days} onClick={() => setWindowDays(w.days)} style={segBtn(windowDays === w.days)}>
+                {w.label}
+              </button>
+            ))}
           </div>
-          <div className="rounded bg-white/5 py-2">
-            <div className="text-base font-semibold">{totalMsgs.toLocaleString()}</div>
-            <div className="text-[10px] uppercase text-gray-400 tracking-wide">messages</div>
-          </div>
-        </div>
-
-        {/* Refresh interval */}
-        <div>
-          <div className="text-[10px] uppercase text-gray-400 tracking-wide mb-1">Refresh</div>
-          <div className="flex gap-1">
+          <div style={{ display: 'flex', gap: 4 }}>
             {REFRESH_OPTIONS.map((s) => (
-              <button
-                key={s}
-                onClick={() => setIntervalSec(s)}
-                className={`flex-1 py-1 rounded border transition-colors ${
-                  interval === s
-                    ? 'border-green-500 bg-green-500/20 text-green-300'
-                    : 'border-white/10 text-gray-400 hover:text-gray-200'
-                }`}
-              >
-                {s}s
+              <button key={s} onClick={() => setIntervalSec(s)} style={segBtn(interval === s)}>
+                {s}S
               </button>
             ))}
           </div>
         </div>
+      </div>
 
-        {/* Continent layer toggles */}
-        <div>
-          <div className="text-[10px] uppercase text-gray-400 tracking-wide mb-1">Continents</div>
-          <div className="space-y-1">
-            {legend.map((c) => {
-              const on = !hidden.has(c.id)
-              return (
-                <button
-                  key={c.id}
-                  onClick={() => toggleContinent(c.id)}
-                  className={`w-full flex items-center gap-2 rounded px-2 py-1 text-left transition-colors ${
-                    on ? 'bg-white/5 hover:bg-white/10' : 'opacity-40 hover:opacity-70'
-                  }`}
+      {error && (
+        <div
+          style={{
+            position: 'absolute',
+            top: 48,
+            left: 14,
+            color: C.red,
+            fontFamily: MONO,
+            fontSize: 11,
+            background: 'rgba(10,10,10,0.85)',
+            padding: '4px 8px',
+            border: `1px solid ${C.red}`,
+            borderRadius: 2,
+          }}
+        >
+          {error}
+        </div>
+      )}
+
+      {/* ── Layer panel (bottom-left) ────────────────────────────────────────── */}
+      <div
+        style={{
+          ...panel,
+          position: 'absolute',
+          bottom: 14,
+          left: 14,
+          width: 248,
+          maxHeight: 'calc(100vh - 120px)',
+          overflowY: 'auto',
+          borderRadius: 3,
+          padding: 10,
+        }}
+      >
+        <div
+          style={{
+            color: C.dim,
+            fontSize: 10,
+            letterSpacing: '0.12em',
+            marginBottom: 8,
+            borderBottom: `1px solid ${C.border}`,
+            paddingBottom: 6,
+          }}
+        >
+          LAYERS
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+          {legend.map((c) => {
+            const on = !hidden.has(c.id)
+            return (
+              <button
+                key={c.id}
+                onClick={() => toggleContinent(c.id)}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  padding: '4px 4px',
+                  background: 'transparent',
+                  border: 'none',
+                  cursor: 'pointer',
+                  textAlign: 'left',
+                  opacity: on ? 1 : 0.4,
+                  fontFamily: MONO,
+                }}
+              >
+                <span
+                  style={{
+                    width: 11,
+                    height: 11,
+                    border: `1px solid ${C.border}`,
+                    background: on ? c.color : 'transparent',
+                    flexShrink: 0,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    fontSize: 9,
+                    color: C.bg,
+                  }}
                 >
-                  <span
-                    className="inline-block w-3 h-3 rounded-full shrink-0"
-                    style={{ backgroundColor: c.color }}
-                  />
-                  <span className="flex-1 truncate">{c.label}</span>
-                  <span className="text-gray-400">{c.channelCount}</span>
-                  <span className="text-gray-500 tabular-nums">{c.msgs.toLocaleString()}</span>
-                </button>
-              )
-            })}
+                  {on ? '✓' : ''}
+                </span>
+                <span
+                  style={{
+                    width: 9,
+                    height: 9,
+                    borderRadius: '50%',
+                    background: c.color,
+                    flexShrink: 0,
+                  }}
+                />
+                <span
+                  style={{
+                    flex: 1,
+                    color: C.text,
+                    fontSize: 10,
+                    letterSpacing: '0.06em',
+                    textTransform: 'uppercase',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {c.label}
+                </span>
+                <span style={{ color: C.dim, fontSize: 10 }}>
+                  {c.channelCount} · {c.msgs.toLocaleString()}
+                </span>
+              </button>
+            )
+          })}
+        </div>
+        <div
+          style={{
+            marginTop: 8,
+            paddingTop: 6,
+            borderTop: `1px solid ${C.border}`,
+            color: C.dim,
+            fontSize: 9,
+            letterSpacing: '0.06em',
+          }}
+        >
+          {totalChannels} CHANNELS · {totalMsgs.toLocaleString()} MSGS · LAST {windowLabel}
+        </div>
+      </div>
+
+      {/* ── Recent activity ticker (bottom-right) ────────────────────────────── */}
+      {activity.length > 0 && (
+        <div
+          style={{
+            ...panel,
+            position: 'absolute',
+            bottom: 14,
+            right: 14,
+            width: 220,
+            borderRadius: 3,
+            padding: 10,
+          }}
+        >
+          <div
+            style={{
+              color: C.dim,
+              fontSize: 10,
+              letterSpacing: '0.12em',
+              marginBottom: 6,
+              borderBottom: `1px solid ${C.border}`,
+              paddingBottom: 6,
+            }}
+          >
+            RECENT ACTIVITY
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+            {activity.map((a, i) => (
+              <div
+                key={`${a.name}-${a.at}-${i}`}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  fontSize: 10,
+                  fontFamily: MONO,
+                }}
+              >
+                <span style={{ color: C.green }}>▲</span>
+                <span
+                  style={{
+                    flex: 1,
+                    color: C.text,
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {a.country ? `${a.country.toUpperCase()} ` : ''}
+                  {a.name}
+                </span>
+                <span style={{ color: C.green }}>+{a.delta}</span>
+              </div>
+            ))}
           </div>
         </div>
-
-        {/* Recent activity */}
-        {activity.length > 0 && (
-          <div>
-            <div className="text-[10px] uppercase text-gray-400 tracking-wide mb-1">Recent activity</div>
-            <div className="space-y-0.5">
-              {activity.map((a, i) => (
-                <div key={`${a.name}-${a.at}-${i}`} className="flex items-center gap-1 text-green-300">
-                  <span>▲</span>
-                  <span className="flex-1 truncate text-gray-200">{a.name}</span>
-                  <span>+{a.delta}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        <a href="/" className="block text-center text-gray-400 hover:text-gray-200 pt-1">
-          ← back to dashboard
-        </a>
-      </div>
+      )}
     </div>
   )
 }
