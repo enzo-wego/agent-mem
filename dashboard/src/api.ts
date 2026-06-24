@@ -441,6 +441,27 @@ export async function fetchChannels(days = 0): Promise<ChannelCount[]> {
   return res.json();
 }
 
+export interface ChannelMessage {
+  id: string;
+  title: string;
+  body: string;
+  url: string;
+  ts: string;
+}
+
+// fetchChannelMessages returns recent messages for a single channel (for the
+// map's click-to-see-data panel). days>0 restricts to the window.
+export async function fetchChannelMessages(
+  channelId: string,
+  days = 0,
+  limit = 20,
+): Promise<ChannelMessage[]> {
+  const qs = new URLSearchParams({ id: channelId, limit: String(limit) });
+  if (days > 0) qs.set('days', String(days));
+  const res = await authFetch(`${BASE}/api/graph/channel?${qs.toString()}`);
+  return res.json();
+}
+
 export async function fetchContinents(): Promise<ContinentCfg> {
   const res = await authFetch(`${BASE}/api/graph/continents`);
   return res.json();

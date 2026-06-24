@@ -90,6 +90,64 @@ ORDER BY count DESC`, days)
 	json.NewEncoder(w).Encode(out)
 }
 
+type channelMessage struct {
+	ID    string `json:"id"`
+	Title string `json:"title"`
+	Body  string `json:"body"`
+	URL   string `json:"url"`
+	TS    string `json:"ts"`
+}
+
+// recent handles GET /api/graph/channel?id=C...&days=N&limit=M — the most recent
+// messages for a single channel, used by the map's click-to-see-data panel.
+func (h *Channels) recent(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	id := r.URL.Query().Get("id")
+	if id == "" {
+		http.Error(w, `{"error":"id required"}`, http.StatusBadRequest)
+		return
+	}
+	days := 0
+	if v := r.URL.Query().Get("days"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			days = n
+		}
+	}
+	limit := 20
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 100 {
+			limit = n
+		}
+	}
+	rows, err := h.db.Query(ctx, `
+SELECT id, COALESCE(title,''), LEFT(COALESCE(body,''),400), COALESCE(url,''), COALESCE(first_seen_at::text,'')
+FROM graph.nodes
+WHERE scope = 'slack:' || $1 AND deleted_at IS NULL
+  AND ($2 = 0 OR first_seen_at >= now() - make_interval(days => $2))
+ORDER BY first_seen_at DESC
+LIMIT $3`, id, days, limit)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+	out := []channelMessage{}
+	for rows.Next() {
+		var m channelMessage
+		if err := rows.Scan(&m.ID, &m.Title, &m.Body, &m.URL, &m.TS); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		out = append(out, m)
+	}
+	if err := rows.Err(); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(out)
+}
+
 // getContinents handles GET /api/graph/continents. Returns the raw JSON stored
 // under settings key graph_continents, lazily inserting the default if missing.
 func (h *Channels) getContinents(w http.ResponseWriter, r *http.Request) {

@@ -38,6 +38,7 @@ func Mount(r chi.Router, deps Deps) {
 	// Globe feature: per-channel volume + channel→continent config.
 	channels := NewChannels(deps.DB)
 	r.Get("/api/graph/channels", channels.list)
+	r.Get("/api/graph/channel", channels.recent)
 	r.Get("/api/graph/continents", channels.getContinents)
 	r.Put("/api/graph/continents", channels.putContinents)
 

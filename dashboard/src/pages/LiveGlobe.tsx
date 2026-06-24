@@ -1,6 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import Globe, { type GlobeInstance } from 'globe.gl'
-import { fetchChannels, fetchContinents, type ChannelCount, type ContinentCfg } from '../api'
+import {
+  fetchChannels,
+  fetchContinents,
+  fetchChannelMessages,
+  type ChannelCount,
+  type ContinentCfg,
+  type ChannelMessage,
+} from '../api'
 import { assignCountries, continentOf, nameOf } from '../continents'
 
 // ── worldmonitor palette ──────────────────────────────────────────────────────
@@ -13,6 +19,8 @@ const C = {
   green: '#44ff88',
   amber: '#ffaa00',
   red: '#ff4444',
+  land: '#141a17',
+  landStroke: '#2a2f36',
 } as const
 
 const MONO = 'ui-monospace, "SF Mono", Menlo, monospace'
@@ -25,10 +33,18 @@ const WINDOW_OPTIONS = [
 ] as const
 const PULSE_MS = 2000
 
-// Marker pixel radii (sqrt-scaled by count, clamped so tiny channels stay
-// visible and the biggest doesn't dominate the globe).
-const MIN_R = 5
-const MAX_R = 26
+// Marker radii in viewBox units (360×180 space). sqrt-scaled by count, clamped so
+// tiny channels stay visible and the biggest doesn't dominate the map.
+const MIN_R = 0.6
+const MAX_R = 4.5
+
+// equirectangular projection: viewBox is 0..360 x, 0..180 y.
+function projX(lon: number): number {
+  return lon + 180
+}
+function projY(lat: number): number {
+  return 90 - lat
+}
 
 interface LivePoint {
   channelId: string
@@ -50,18 +66,17 @@ interface ActivityEntry {
   at: number
 }
 
-function lighten(hex: string, amount: number): string {
-  // Lighten a #rrggbb color toward white by `amount` (0..1). Falls back to input.
-  const m = /^#?([0-9a-f]{6})$/i.exec(hex)
-  if (!m) return hex
-  const n = parseInt(m[1], 16)
-  const r = (n >> 16) & 0xff
-  const g = (n >> 8) & 0xff
-  const b = n & 0xff
-  const lr = Math.round(r + (255 - r) * amount)
-  const lg = Math.round(g + (255 - g) * amount)
-  const lb = Math.round(b + (255 - b) * amount)
-  return `#${((1 << 24) + (lr << 16) + (lg << 8) + lb).toString(16).slice(1)}`
+type GeoGeometry =
+  | { type: 'Polygon'; coordinates: number[][][] }
+  | { type: 'MultiPolygon'; coordinates: number[][][][] }
+
+interface GeoFeature {
+  geometry: GeoGeometry | null
+  properties: Record<string, unknown>
+}
+
+interface GeoJSON {
+  features: GeoFeature[]
 }
 
 function buildPoints(
@@ -93,12 +108,45 @@ function buildPoints(
   return pts
 }
 
-export function LiveGlobePage() {
-  const containerRef = useRef<HTMLDivElement>(null)
-  const globeRef = useRef<GlobeInstance | null>(null)
+// Convert one polygon (array of linear rings) into an SVG path string.
+function ringsToPath(rings: number[][][]): string {
+  let d = ''
+  for (const ring of rings) {
+    if (ring.length === 0) continue
+    for (let i = 0; i < ring.length; i++) {
+      const [lon, lat] = ring[i]
+      const x = projX(lon)
+      const y = projY(lat)
+      d += `${i === 0 ? 'M' : 'L'}${x.toFixed(2)},${y.toFixed(2)}`
+    }
+    d += 'Z'
+  }
+  return d
+}
 
+// Build SVG path strings for every country feature.
+function geometriesToPaths(geo: GeoJSON): string[] {
+  const paths: string[] = []
+  for (const f of geo.features) {
+    const g = f.geometry
+    if (!g) continue
+    if (g.type === 'Polygon') {
+      const d = ringsToPath(g.coordinates)
+      if (d) paths.push(d)
+    } else if (g.type === 'MultiPolygon') {
+      for (const poly of g.coordinates) {
+        const d = ringsToPath(poly)
+        if (d) paths.push(d)
+      }
+    }
+  }
+  return paths
+}
+
+export function LiveGlobePage() {
   const [cfg, setCfg] = useState<ContinentCfg | null>(null)
   const [points, setPoints] = useState<LivePoint[]>([])
+  const [countryPaths, setCountryPaths] = useState<string[]>([])
   const [hidden, setHidden] = useState<Set<string>>(new Set())
   const [interval, setIntervalSec] = useState<number>(10)
   const [windowDays, setWindowDays] = useState<number>(90)
@@ -106,6 +154,10 @@ export function LiveGlobePage() {
   const [tick, setTick] = useState(0)
   const [error, setError] = useState('')
   const [activity, setActivity] = useState<ActivityEntry[]>([])
+  const [hovered, setHovered] = useState<string | null>(null)
+  const [selected, setSelected] = useState<LivePoint | null>(null)
+  const [messages, setMessages] = useState<ChannelMessage[]>([])
+  const [msgsLoading, setMsgsLoading] = useState(false)
 
   // Refs mirror state for use inside the polling closure without re-subscribing.
   const prevCountsRef = useRef<Map<string, number>>(new Map())
@@ -113,6 +165,22 @@ export function LiveGlobePage() {
   const inFlightRef = useRef(false)
   const windowDaysRef = useRef(90)
   windowDaysRef.current = windowDays
+
+  // ── Load the basemap geojson once (same-origin static asset) ─────────────────
+  useEffect(() => {
+    let cancelled = false
+    fetch('/data/countries.geojson')
+      .then((r) => r.json())
+      .then((geo: GeoJSON) => {
+        if (!cancelled) setCountryPaths(geometriesToPaths(geo))
+      })
+      .catch(() => {
+        /* basemap is decorative; markers still render without it */
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   // ── Channel poll (guarded against overlap, re-created on interval/window) ─────
   useEffect(() => {
@@ -217,159 +285,26 @@ export function LiveGlobePage() {
     return () => window.clearInterval(id)
   }, [])
 
-  // ── Create the globe once ───────────────────────────────────────────────────
+  // ── Click panel: (re)load messages for the selected channel + window ─────────
   useEffect(() => {
-    if (!containerRef.current || globeRef.current) return
-    const g = new Globe(containerRef.current)
-      .globeImageUrl('/textures/earth-topo-bathy.jpg')
-      .backgroundImageUrl('/textures/night-sky.png')
-      .backgroundColor(C.bg)
-      .showAtmosphere(true)
-      .atmosphereColor('#4466cc')
-      .atmosphereAltitude(0.18)
-      .htmlElementsData([])
-      .htmlLat((d) => (d as LivePoint).lat)
-      .htmlLng((d) => (d as LivePoint).lng)
-      .htmlElement((d) => markerElement(d as LivePoint))
-
-    const controls = g.controls() as {
-      autoRotate: boolean
-      autoRotateSpeed: number
-      enablePan: boolean
-      enableZoom: boolean
-      minDistance: number
-      maxDistance: number
-      addEventListener: (ev: string, fn: () => void) => void
-    }
-    controls.autoRotate = true
-    controls.autoRotateSpeed = 0.3
-    controls.enablePan = false
-    controls.enableZoom = true
-    controls.minDistance = 101
-    controls.maxDistance = 600
-    // Nice-to-have: pause autorotate while the user is dragging.
-    controls.addEventListener('start', () => {
-      controls.autoRotate = false
-    })
-
-    g.width(window.innerWidth).height(window.innerHeight)
-    globeRef.current = g
-
-    const onResize = () => g.width(window.innerWidth).height(window.innerHeight)
-    window.addEventListener('resize', onResize)
-
-    return () => {
-      window.removeEventListener('resize', onResize)
-      g._destructor()
-      globeRef.current = null
-    }
-  }, [])
-
-  // ── Build a glowing marker DOM node (worldmonitor look) ──────────────────────
-  function markerElement(p: LivePoint): HTMLElement {
-    const el = document.createElement('div')
-    el.className = 'globe-marker'
-
-    const dot = document.createElement('div')
-    dot.className = 'globe-dot'
-
-    const ring = document.createElement('div')
-    ring.className = 'globe-ring'
-
-    const label = document.createElement('div')
-    label.className = 'globe-label'
-    label.textContent = `${p.country.toUpperCase()} — ${p.name} · ${p.count.toLocaleString()} msgs`
-    label.style.borderColor = p.color
-
-    el.appendChild(ring)
-    el.appendChild(dot)
-    el.appendChild(label)
-    applyMarkerStyle(el, p, false)
-    return el
-  }
-
-  // ── Push markers into the globe (visible continents only) + pulse styling ────
-  useEffect(() => {
-    const g = globeRef.current
-    if (!g) return
-    const visible = points.filter((p) => !hidden.has(p.continentId))
-    const maxCount = Math.max(1, ...visible.map((p) => p.count))
-    const now = Date.now()
-
-    g.htmlElementsData(visible)
-      .htmlElement((d) => {
-        const p = d as LivePoint
-        const el = markerElement(p)
-        applyMarkerStyle(el, p, p.pulseUntil > now, maxCount)
-        return el
+    if (!selected) return
+    let cancelled = false
+    setMsgsLoading(true)
+    setMessages([])
+    fetchChannelMessages(selected.channelId, windowDays, 20)
+      .then((m) => {
+        if (!cancelled) setMessages(m || [])
       })
-    // `tick` dep ensures pulses decay back to base styling each second.
-  }, [points, hidden, tick])
-
-  // Size + color a marker element by count, with an enlarged/brightened pulse.
-  function applyMarkerStyle(el: HTMLElement, p: LivePoint, pulsing: boolean, maxCount = 1) {
-    const norm = Math.sqrt(p.count) / Math.sqrt(maxCount)
-    let r = MIN_R + (MAX_R - MIN_R) * norm
-    let color = p.color
-    if (pulsing) {
-      r *= 1.6
-      color = lighten(p.color, 0.5)
+      .catch(() => {
+        if (!cancelled) setMessages([])
+      })
+      .finally(() => {
+        if (!cancelled) setMsgsLoading(false)
+      })
+    return () => {
+      cancelled = true
     }
-    const size = Math.round(r * 2)
-
-    el.style.position = 'relative'
-    el.style.width = '0'
-    el.style.height = '0'
-    el.style.pointerEvents = 'auto'
-    el.style.cursor = 'pointer'
-    el.style.zIndex = String(Math.round(p.count))
-
-    const dot = el.querySelector('.globe-dot') as HTMLElement
-    dot.style.position = 'absolute'
-    dot.style.left = `${-r}px`
-    dot.style.top = `${-r}px`
-    dot.style.width = `${size}px`
-    dot.style.height = `${size}px`
-    dot.style.borderRadius = '50%'
-    dot.style.background = color
-    dot.style.boxShadow = `0 0 ${Math.round(r * 0.9)}px ${Math.round(r * 0.45)}px ${color}88, 0 0 2px ${color}`
-    dot.style.border = `1px solid ${lighten(color, 0.4)}`
-    dot.style.transition = 'all 0.6s ease'
-
-    const ring = el.querySelector('.globe-ring') as HTMLElement
-    const ringSize = size + 8
-    ring.style.position = 'absolute'
-    ring.style.left = `${-(ringSize / 2)}px`
-    ring.style.top = `${-(ringSize / 2)}px`
-    ring.style.width = `${ringSize}px`
-    ring.style.height = `${ringSize}px`
-    ring.style.borderRadius = '50%'
-    ring.style.border = `1.5px solid ${color}`
-    ring.style.animation = 'globe-pulse 2.4s ease-out infinite'
-
-    const label = el.querySelector('.globe-label') as HTMLElement
-    label.style.position = 'absolute'
-    label.style.left = `${r + 6}px`
-    label.style.top = `${-7}px`
-    label.style.whiteSpace = 'nowrap'
-    label.style.font = `10px ${MONO}`
-    label.style.letterSpacing = '0.04em'
-    label.style.color = C.text
-    label.style.background = 'rgba(10,10,10,0.82)'
-    label.style.border = `1px solid ${p.color}`
-    label.style.borderRadius = '2px'
-    label.style.padding = '2px 5px'
-    label.style.opacity = '0'
-    label.style.transition = 'opacity 0.15s'
-    label.style.pointerEvents = 'none'
-
-    el.onmouseenter = () => {
-      label.style.opacity = '1'
-    }
-    el.onmouseleave = () => {
-      label.style.opacity = '0'
-    }
-  }
+  }, [selected, windowDays])
 
   // ── Derived control-panel data ──────────────────────────────────────────────
   const legend = useMemo(() => {
@@ -387,11 +322,19 @@ export function LiveGlobePage() {
   }, [cfg, points])
 
   const visiblePts = points.filter((p) => !hidden.has(p.continentId))
+  const maxCount = Math.max(1, ...visiblePts.map((p) => p.count))
   const totalChannels = visiblePts.length
   const totalMsgs = visiblePts.reduce((s, p) => s + p.count, 0)
   const secsAgo = lastUpdate ? Math.max(0, Math.round((Date.now() - lastUpdate) / 1000)) : null
   const windowLabel = WINDOW_OPTIONS.find((w) => w.days === windowDays)?.label ?? 'ALL'
-  void tick // keeps secsAgo recomputing every second
+  const now = Date.now()
+  void tick // keeps secsAgo recomputing + pulses decaying every second
+
+  // Continent label for the selected channel's panel.
+  const selectedContinent = useMemo(() => {
+    if (!selected || !cfg) return null
+    return cfg.continents.find((c) => c.id === selected.continentId) ?? null
+  }, [selected, cfg])
 
   function toggleContinent(id: string) {
     setHidden((cur) => {
@@ -400,6 +343,11 @@ export function LiveGlobePage() {
       else next.add(id)
       return next
     })
+  }
+
+  function radiusFor(count: number): number {
+    const norm = Math.sqrt(count) / Math.sqrt(maxCount)
+    return MIN_R + (MAX_R - MIN_R) * norm
   }
 
   // ── Shared chrome styles ─────────────────────────────────────────────────────
@@ -425,10 +373,9 @@ export function LiveGlobePage() {
   return (
     <div style={{ position: 'fixed', inset: 0, width: '100vw', height: '100vh', overflow: 'hidden', background: C.bg }}>
       <style>{`
-        @keyframes globe-pulse {
-          0%   { transform: scale(0.6); opacity: 0.9; }
-          70%  { transform: scale(1.8); opacity: 0; }
-          100% { transform: scale(1.8); opacity: 0; }
+        @keyframes map-pulse {
+          0%   { r: 0; opacity: 0.9; }
+          100% { r: 9; opacity: 0; }
         }
         @keyframes live-blink {
           0%, 100% { opacity: 1; }
@@ -436,7 +383,84 @@ export function LiveGlobePage() {
         }
       `}</style>
 
-      <div ref={containerRef} style={{ position: 'absolute', inset: 0 }} />
+      {/* ── 2D equirectangular world map ──────────────────────────────────────── */}
+      <svg
+        viewBox="0 0 360 180"
+        preserveAspectRatio="xMidYMid meet"
+        style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', background: C.bg }}
+      >
+        <defs>
+          <filter id="marker-glow" x="-200%" y="-200%" width="500%" height="500%">
+            <feGaussianBlur stdDeviation="1.2" result="blur" />
+            <feMerge>
+              <feMergeNode in="blur" />
+              <feMergeNode in="SourceGraphic" />
+            </feMerge>
+          </filter>
+        </defs>
+
+        {/* Countries */}
+        <g>
+          {countryPaths.map((d, i) => (
+            <path key={i} d={d} fill={C.land} stroke={C.landStroke} strokeWidth={0.15} />
+          ))}
+        </g>
+
+        {/* Channel markers (visible continents only) */}
+        <g>
+          {visiblePts.map((p) => {
+            const cx = projX(p.lng)
+            const cy = projY(p.lat)
+            const r = radiusFor(p.count)
+            const isHover = hovered === p.channelId
+            const isSel = selected?.channelId === p.channelId
+            const pulsing = p.pulseUntil > now
+            return (
+              <g
+                key={p.channelId}
+                style={{ cursor: 'pointer' }}
+                onMouseEnter={() => setHovered(p.channelId)}
+                onMouseLeave={() => setHovered((h) => (h === p.channelId ? null : h))}
+                onClick={() => setSelected(p)}
+              >
+                {/* soft halo */}
+                <circle cx={cx} cy={cy} r={r * 2.2} fill={p.color} opacity={isHover || isSel ? 0.22 : 0.12} />
+                {/* expanding ring when count just grew */}
+                {pulsing && (
+                  <circle cx={cx} cy={cy} fill="none" stroke={p.color} strokeWidth={0.4} opacity={0.8}>
+                    <animate attributeName="r" from={r} to={r + 9} dur="2s" repeatCount="indefinite" />
+                    <animate attributeName="opacity" from="0.8" to="0" dur="2s" repeatCount="indefinite" />
+                  </circle>
+                )}
+                {/* core dot */}
+                <circle
+                  cx={cx}
+                  cy={cy}
+                  r={isHover ? r * 1.25 : r}
+                  fill={p.color}
+                  opacity={0.85}
+                  stroke={isSel ? C.text : 'none'}
+                  strokeWidth={isSel ? 0.4 : 0}
+                  filter="url(#marker-glow)"
+                />
+                {/* channel name label (no country name) */}
+                <text
+                  x={cx + r + 1}
+                  y={cy + 0.7}
+                  fontSize={2}
+                  fontFamily={MONO}
+                  fill="#cbd5e1"
+                  style={{ paintOrder: 'stroke', pointerEvents: 'none' }}
+                  stroke="#0a0a0a"
+                  strokeWidth={0.4}
+                >
+                  {p.name}
+                </text>
+              </g>
+            )
+          })}
+        </g>
+      </svg>
 
       {/* ── Top bar ──────────────────────────────────────────────────────────── */}
       <div
@@ -629,8 +653,8 @@ export function LiveGlobePage() {
         </div>
       </div>
 
-      {/* ── Recent activity ticker (bottom-right) ────────────────────────────── */}
-      {activity.length > 0 && (
+      {/* ── Recent activity ticker (bottom-right, hidden when a panel is open) ── */}
+      {activity.length > 0 && !selected && (
         <div
           style={{
             ...panel,
@@ -676,12 +700,161 @@ export function LiveGlobePage() {
                     whiteSpace: 'nowrap',
                   }}
                 >
-                  {a.country ? `${a.country.toUpperCase()} ` : ''}
                   {a.name}
                 </span>
                 <span style={{ color: C.green }}>+{a.delta}</span>
               </div>
             ))}
+          </div>
+        </div>
+      )}
+
+      {/* ── Channel data panel (right side, opens on marker click) ───────────── */}
+      {selected && (
+        <div
+          style={{
+            ...panel,
+            position: 'absolute',
+            top: 48,
+            right: 14,
+            bottom: 14,
+            width: 340,
+            maxWidth: 'calc(100vw - 28px)',
+            borderRadius: 3,
+            padding: 12,
+            display: 'flex',
+            flexDirection: 'column',
+            overflow: 'hidden',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
+            <div style={{ minWidth: 0 }}>
+              <div
+                style={{
+                  color: C.text,
+                  fontSize: 13,
+                  letterSpacing: '0.04em',
+                  fontWeight: 600,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {selected.name}
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4 }}>
+                <span
+                  style={{
+                    width: 8,
+                    height: 8,
+                    borderRadius: '50%',
+                    background: selected.color,
+                    flexShrink: 0,
+                  }}
+                />
+                <span
+                  style={{
+                    color: selected.color,
+                    fontSize: 10,
+                    letterSpacing: '0.06em',
+                    textTransform: 'uppercase',
+                  }}
+                >
+                  {selectedContinent?.label ?? selected.continentId}
+                </span>
+                <span style={{ color: C.dim, fontSize: 10 }}>· {selected.country}</span>
+              </div>
+              <div style={{ color: C.dim, fontSize: 10, marginTop: 4 }}>
+                {selected.count.toLocaleString()} MSGS · LAST {windowLabel}
+              </div>
+            </div>
+            <button
+              onClick={() => setSelected(null)}
+              style={{
+                background: 'transparent',
+                border: `1px solid ${C.border}`,
+                color: C.dim,
+                cursor: 'pointer',
+                fontFamily: MONO,
+                fontSize: 14,
+                lineHeight: '14px',
+                borderRadius: 2,
+                padding: '2px 6px',
+                flexShrink: 0,
+              }}
+              aria-label="Close"
+            >
+              ×
+            </button>
+          </div>
+
+          <div
+            style={{
+              marginTop: 10,
+              paddingTop: 8,
+              borderTop: `1px solid ${C.border}`,
+              color: C.dim,
+              fontSize: 9,
+              letterSpacing: '0.12em',
+              marginBottom: 6,
+            }}
+          >
+            RECENT MESSAGES
+          </div>
+
+          <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {msgsLoading && <div style={{ color: C.dim, fontSize: 11 }}>Loading…</div>}
+            {!msgsLoading && messages.length === 0 && (
+              <div style={{ color: C.dim, fontSize: 11 }}>no messages in window</div>
+            )}
+            {!msgsLoading &&
+              messages.map((m) => {
+                const raw = (m.title && m.title.trim()) || (m.body || '').split('\n')[0] || '(no content)'
+                const text = raw.length > 120 ? `${raw.slice(0, 120)}…` : raw
+                const ts = m.ts ? new Date(m.ts).toLocaleString(undefined, {
+                  month: 'short',
+                  day: 'numeric',
+                  hour: '2-digit',
+                  minute: '2-digit',
+                }) : ''
+                const Row = (
+                  <>
+                    <span style={{ color: C.dim, fontSize: 9, flexShrink: 0 }}>{ts}</span>
+                    <span style={{ color: C.text, fontSize: 11, lineHeight: 1.35 }}>{text}</span>
+                  </>
+                )
+                return m.url ? (
+                  <a
+                    key={m.id}
+                    href={m.url}
+                    target="_blank"
+                    rel="noreferrer"
+                    style={{
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: 2,
+                      textDecoration: 'none',
+                      paddingBottom: 6,
+                      borderBottom: `1px solid ${C.border}`,
+                    }}
+                  >
+                    {Row}
+                  </a>
+                ) : (
+                  <div
+                    key={m.id}
+                    style={{
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: 2,
+                      paddingBottom: 6,
+                      borderBottom: `1px solid ${C.border}`,
+                    }}
+                  >
+                    {Row}
+                  </div>
+                )
+              })}
           </div>
         </div>
       )}

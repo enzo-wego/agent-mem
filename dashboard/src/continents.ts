@@ -56,12 +56,12 @@ export function placement(
 // the highest-volume channel in a continent lands on the largest country.
 // Lists are disjoint so a country is never claimed by two continents.
 export const DEFAULT_CONTINENT_COUNTRIES: Record<string, string[]> = {
-  // Payments Core -> Africa / Middle East / Europe
-  core: ['DZ','SA','LY','SD','TD','NE','AO','EG','ET','NG','ZA','TR','FR','ES','DE','PL','IT','GB','MA','KE'],
-  // Payment Partners -> South America
-  partners: ['BR','AR','PE','CO','BO','VE','CL','PY','EC','GY','UY','SR'],
-  // Other -> Asia
-  other: ['CN','IN','KZ','MN','ID','IR','MM','TH','JP','MY','VN','PH','KR','NP','PK','AF','UZ','TM','LA','KH'],
+  // payments -> Asia
+  core: ['CN','IN','KZ','SA','IR','MN','ID','PK','TR','MM','AF','YE','TH','TM','UZ','JP','VN','MY','PH','KR'],
+  // payments-partner -> Europe
+  partners: ['UA','FR','ES','SE','DE','FI','NO','PL','IT','GB','RO','BY','GR','BG','IS','PT','CZ','IE','AT','RS'],
+  // other -> Africa
+  other: ['DZ','CD','SD','LY','TD','NE','AO','ML','ZA','ET','NG','MR','EG','TZ','MZ','NA','ZM','MA','SO','KE'],
 }
 
 // Global fallback pool ordered by area, for unknown continents or overflow when a
