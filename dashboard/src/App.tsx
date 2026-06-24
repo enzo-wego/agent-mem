@@ -9,6 +9,7 @@ import { GraphPage } from './pages/Graph'
 import { JobsPage } from './pages/Jobs'
 import { BackfillPage } from './pages/Backfill'
 import { GlobePage } from './pages/Globe'
+import { LiveGlobePage } from './pages/LiveGlobe'
 import { ContinentsPage } from './pages/Continents'
 import { fetchProjects, getApiKey, setApiKey, clearApiKey, type ProjectInfo } from './api'
 import './index.css'
@@ -119,12 +120,22 @@ function App() {
   if (!authChecked) return null
   if (needsAuth) return <LoginForm onLogin={handleLogin} />
 
+  // Full-screen live globe lives at /live, bypassing the tabbed chrome.
+  const isLive = window.location.pathname.startsWith('/live')
+  if (isLive) return <LiveGlobePage />
+
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900 text-gray-900 dark:text-gray-100">
       <header className="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 px-6 py-3">
         <div className="max-w-6xl mx-auto flex items-center justify-between">
           <div className="flex items-center gap-4">
             <h1 className="text-lg font-semibold">agent-mem</h1>
+            <a
+              href="/live"
+              className="text-sm text-green-600 dark:text-green-400 hover:underline"
+            >
+              ↗ Live
+            </a>
           </div>
           <div className="flex items-center gap-2">
             <select
