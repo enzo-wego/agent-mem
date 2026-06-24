@@ -77,7 +77,8 @@ func backfillSlackThreadHandler(deps Deps) jobs.Handler {
 			}
 		}
 
-		// If there are more pages, re-enqueue self with the next cursor.
+		// If there are more pages, re-enqueue self with the next cursor; otherwise
+		// the thread is complete — (re)generate its topic summary in the background.
 		if repliesResp.ResponseMetadata.NextCursor != "" {
 			nextPayload := backfillSlackThreadPayload{
 				ChannelID: p.ChannelID,
@@ -91,6 +92,8 @@ func backfillSlackThreadHandler(deps Deps) jobs.Handler {
 			}); jErr != nil {
 				return fmt.Errorf("backfill_slack_thread: re-enqueue next page: %w", jErr)
 			}
+		} else {
+			enqueueSummarizeThread(ctx, deps.DB, p.ChannelID, p.ThreadTs)
 		}
 
 		return nil

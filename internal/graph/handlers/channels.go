@@ -1,16 +1,13 @@
 package handlers
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -46,13 +43,12 @@ const defaultContinents = `{
 // Channels serves the Globe feature endpoints: per-channel message volume and
 // the channel→continent config stored in the public settings table.
 type Channels struct {
-	db     *pgxpool.Pool
-	gemini GeminiClient
+	db *pgxpool.Pool
 }
 
 // NewChannels creates a new Channels handler.
-func NewChannels(db *pgxpool.Pool, gemini GeminiClient) *Channels {
-	return &Channels{db: db, gemini: gemini}
+func NewChannels(db *pgxpool.Pool) *Channels {
+	return &Channels{db: db}
 }
 
 type channelCount struct {
@@ -327,84 +323,51 @@ LIMIT 3000`, id, days)
 		views = views[:limit]
 	}
 
-	// Resolve summaries: single message -> first line (no LLM); thread -> cache or LLM.
-	type pending struct {
-		idx  int
-		sig  string
-		txt  string
-		root string
-	}
-	var todo []pending
+	// Summaries are READ-ONLY here so clicking a channel is instant. Single
+	// messages use their first line. Threads use the cached LLM summary if present;
+	// on a miss we show the first line as a placeholder and enqueue a background
+	// summarize_thread job (the cache is normally kept warm by ingest-triggered
+	// jobs, so misses are rare).
 	cacheKeys := []string{}
+	rootText := map[int]string{}
 	for i, v := range views {
 		g := groups[groupKeyFor(v, groups)]
-		if g == nil || !v.IsThread {
-			if g != nil {
-				views[i].Summary = firstLine(bodyOf(g.msgs[0]), 90)
-			}
+		if g == nil {
 			continue
 		}
-		sig := fmt.Sprintf("%d:%d", v.MsgCount, v.LastMs)
-		cacheKeys = append(cacheKeys, v.ThreadTS)
-		var b strings.Builder
-		for _, m := range g.msgs {
-			line := m.Author + ": " + firstLine(bodyOf(m), 200) + "\n"
-			if b.Len()+len(line) > 4000 {
-				break
-			}
-			b.WriteString(line)
+		if !v.IsThread {
+			views[i].Summary = firstLine(bodyOf(g.msgs[0]), 90)
+			continue
 		}
-		todo = append(todo, pending{idx: i, sig: sig, txt: b.String(), root: bodyOf(g.msgs[0])})
+		cacheKeys = append(cacheKeys, v.ThreadTS)
+		rootText[i] = bodyOf(g.msgs[0])
 	}
-
-	// Load cached summaries (matching signature) in one query.
-	cached := map[string]string{} // thread_ts -> summary (only if signature matches)
+	cached := map[string]string{} // thread_ts -> summary
 	if len(cacheKeys) > 0 {
 		crows, cerr := h.db.Query(ctx,
-			`SELECT thread_ts, signature, summary FROM graph.thread_summaries WHERE channel_id=$1 AND thread_ts = ANY($2)`,
+			`SELECT thread_ts, summary FROM graph.thread_summaries WHERE channel_id=$1 AND thread_ts = ANY($2)`,
 			id, cacheKeys)
 		if cerr == nil {
-			defer crows.Close()
 			for crows.Next() {
-				var tt, sig, sum string
-				if crows.Scan(&tt, &sig, &sum) == nil {
-					cached[tt+"|"+sig] = sum
+				var tt, sum string
+				if crows.Scan(&tt, &sum) == nil {
+					cached[tt] = sum
 				}
 			}
+			crows.Close()
 		}
 	}
-
-	// Summarize cache-misses with bounded concurrency.
-	sem := make(chan struct{}, 6)
-	var wg sync.WaitGroup
-	for _, p := range todo {
-		v := views[p.idx]
-		if s, ok := cached[v.ThreadTS+"|"+p.sig]; ok {
-			views[p.idx].Summary = s
+	for i, v := range views {
+		if !v.IsThread {
 			continue
 		}
-		if h.gemini == nil {
-			views[p.idx].Summary = firstLine(p.root, 90)
-			continue
+		if s, ok := cached[v.ThreadTS]; ok && s != "" {
+			views[i].Summary = s
+		} else {
+			views[i].Summary = firstLine(rootText[i], 90)
+			enqueueSummarizeThread(ctx, h.db, id, v.ThreadTS)
 		}
-		wg.Add(1)
-		sem <- struct{}{}
-		go func(p pending, threadTS string) {
-			defer wg.Done()
-			defer func() { <-sem }()
-			sum := h.summarizeThread(ctx, p.txt)
-			if sum == "" {
-				sum = firstLine(p.root, 90)
-			}
-			views[p.idx].Summary = sum
-			_, _ = h.db.Exec(ctx,
-				`INSERT INTO graph.thread_summaries(channel_id,thread_ts,signature,summary,updated_at)
-				 VALUES($1,$2,$3,$4,NOW())
-				 ON CONFLICT (channel_id,thread_ts) DO UPDATE SET signature=excluded.signature, summary=excluded.summary, updated_at=NOW()`,
-				id, threadTS, p.sig, sum)
-		}(p, v.ThreadTS)
 	}
-	wg.Wait()
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(views)
@@ -437,22 +400,6 @@ func groupKeyFor(v *topicView, groups map[string]*threadGroup) string {
 		}
 	}
 	return ""
-}
-
-// summarizeThread asks Gemini for a one-line topic label. Returns "" on any error.
-func (h *Channels) summarizeThread(ctx context.Context, transcript string) string {
-	const sys = `You label a Slack conversation with a short, factual topic (max 10 words). No quotes, no trailing period. Respond as JSON: {"topic":"..."}`
-	out, err := h.gemini.Generate(ctx, sys, transcript)
-	if err != nil || out == "" {
-		return ""
-	}
-	var parsed struct {
-		Topic string `json:"topic"`
-	}
-	if json.Unmarshal([]byte(out), &parsed) != nil {
-		return ""
-	}
-	return firstLine(parsed.Topic, 90)
 }
 
 // getContinents handles GET /api/graph/continents. Returns the raw JSON stored

@@ -360,6 +360,12 @@ func NewIngestContentHandler(deps Deps) http.Handler {
 			}
 		}
 
+		// Keep the thread's topic summary fresh (background; deduped). Covers both
+		// replies (thread_ts = root) and roots-with-replies (thread_ts = own ts).
+		if req.Source == "slack" && req.Metadata.ThreadTs != "" && outcome != "unchanged" {
+			enqueueSummarizeThread(ctx, deps.DB, req.Metadata.ChannelID, req.Metadata.ThreadTs)
+		}
+
 		// Enqueue resolve_identity if author has no email yet.
 		if authorPersonID != nil && deps.Identity != nil {
 			var emailVal *string
