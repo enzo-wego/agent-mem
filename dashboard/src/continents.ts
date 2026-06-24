@@ -23,6 +23,19 @@ export function continentOf(channelId: string, cfg: ContinentCfg): string {
   return ''
 }
 
+// applyGroupNames replaces unresolved Slack usergroup ids in a message body
+// (e.g. "@S01TMG8Q65R") with their configured name ("@payments-geeks") from
+// cfg.groups. No-op when no groups are configured.
+export function applyGroupNames(text: string, cfg: ContinentCfg): string {
+  const groups = cfg.groups
+  if (!groups) return text
+  let out = text
+  for (const [gid, name] of Object.entries(groups)) {
+    out = out.split('@' + gid).join('@' + name).split(gid).join('@' + name)
+  }
+  return out
+}
+
 // stringHash is a stable, deterministic 32-bit string hash (djb2). Used to place
 // channels at a fixed spot around their continent center.
 export function stringHash(s: string): number {

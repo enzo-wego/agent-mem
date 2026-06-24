@@ -431,6 +431,7 @@ export interface ContinentCfg {
   continents: Continent[];
   overrides: Record<string, string>; // channelId -> continent id
   names: Record<string, string>; // channelId -> display name
+  groups?: Record<string, string>; // slack usergroup id (S...) -> name
 }
 
 // fetchChannels returns per-channel message counts. Pass days>0 to restrict to
@@ -441,12 +442,21 @@ export async function fetchChannels(days = 0): Promise<ChannelCount[]> {
   return res.json();
 }
 
+export interface MsgRef {
+  type: string; // jira | gh_pr | cf | slack_file | ...
+  key: string; // natural key, e.g. PAY-2204
+  url: string;
+}
+
 export interface ChannelMessage {
   id: string;
   title: string;
   body: string;
   url: string;
   ts: string;
+  thread_ts: string;
+  author: string;
+  refs: MsgRef[];
 }
 
 // fetchChannelMessages returns recent messages for a single channel (for the

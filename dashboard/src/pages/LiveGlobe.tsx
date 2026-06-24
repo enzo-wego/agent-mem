@@ -7,7 +7,7 @@ import {
   type ContinentCfg,
   type ChannelMessage,
 } from '../api'
-import { assignCountries, continentOf, nameOf } from '../continents'
+import { applyGroupNames, assignCountries, continentOf, nameOf } from '../continents'
 
 // ── worldmonitor palette ──────────────────────────────────────────────────────
 const C = {
@@ -352,6 +352,27 @@ export function LiveGlobePage() {
     if (!selected || !cfg) return null
     return cfg.continents.find((c) => c.id === selected.continentId) ?? null
   }, [selected, cfg])
+
+  // Group panel messages by Slack thread. Key = thread_ts || id, so standalone
+  // messages each form their own single-message group and replies collapse under
+  // their root. Groups ordered by most-recent message (desc); messages within a
+  // group ordered by ts ascending (root first).
+  const threadGroups = useMemo(() => {
+    const byKey = new Map<string, ChannelMessage[]>()
+    for (const m of messages) {
+      const key = m.thread_ts || m.id
+      const list = byKey.get(key)
+      if (list) list.push(m)
+      else byKey.set(key, [m])
+    }
+    const groups = Array.from(byKey.entries()).map(([key, msgs]) => {
+      const sorted = [...msgs].sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0))
+      const latest = sorted.reduce((acc, m) => (m.ts > acc ? m.ts : acc), '')
+      return { key, msgs: sorted, latest }
+    })
+    groups.sort((a, b) => (a.latest < b.latest ? 1 : a.latest > b.latest ? -1 : 0))
+    return groups
+  }, [messages])
 
   function toggleContinent(id: string) {
     setHidden((cur) => {
@@ -1015,56 +1036,135 @@ export function LiveGlobePage() {
             RECENT MESSAGES
           </div>
 
-          <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 8 }}>
             {msgsLoading && <div style={{ color: C.dim, fontSize: 11 }}>Loading…</div>}
             {!msgsLoading && messages.length === 0 && (
               <div style={{ color: C.dim, fontSize: 11 }}>no messages in window</div>
             )}
             {!msgsLoading &&
-              messages.map((m) => {
-                const raw = (m.title && m.title.trim()) || (m.body || '').split('\n')[0] || '(no content)'
-                const text = raw.length > 120 ? `${raw.slice(0, 120)}…` : raw
-                const ts = m.ts ? new Date(m.ts).toLocaleString(undefined, {
-                  month: 'short',
-                  day: 'numeric',
-                  hour: '2-digit',
-                  minute: '2-digit',
-                }) : ''
-                const Row = (
-                  <>
-                    <span style={{ color: C.dim, fontSize: 9, flexShrink: 0 }}>{ts}</span>
-                    <span style={{ color: C.text, fontSize: 11, lineHeight: 1.35 }}>{text}</span>
-                  </>
-                )
-                return m.url ? (
-                  <a
-                    key={m.id}
-                    href={m.url}
-                    target="_blank"
-                    rel="noreferrer"
-                    style={{
-                      display: 'flex',
-                      flexDirection: 'column',
-                      gap: 2,
-                      textDecoration: 'none',
-                      paddingBottom: 6,
-                      borderBottom: `1px solid ${C.border}`,
-                    }}
-                  >
-                    {Row}
-                  </a>
-                ) : (
+              threadGroups.map((g) => {
+                const root = g.msgs[0]
+                const n = g.msgs.length
+                // Thread "open in Slack" link: prefer the root's url, else build a
+                // permalink from the channel + thread_ts (digits, "." removed).
+                let threadLink = root.url || ''
+                if (!threadLink && root.thread_ts) {
+                  const digits = root.thread_ts.replace('.', '')
+                  if (digits) {
+                    threadLink = `https://wego.slack.com/archives/${selected.channelId}/p${digits}`
+                  }
+                }
+                return (
                   <div
-                    key={m.id}
+                    key={g.key}
                     style={{
+                      background: 'rgba(255,255,255,0.02)',
+                      border: `1px solid ${C.border}`,
+                      borderRadius: 3,
+                      padding: 8,
                       display: 'flex',
                       flexDirection: 'column',
-                      gap: 2,
-                      paddingBottom: 6,
-                      borderBottom: `1px solid ${C.border}`,
+                      gap: 6,
                     }}
                   >
-                    {Row}
+                    <div
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: 8,
+                      }}
+                    >
+                      <span
+                        style={{
+                          color: C.dim,
+                          fontSize: 9,
+                          letterSpacing: '0.08em',
+                          textTransform: 'uppercase',
+                        }}
+                      >
+                        {n > 1 ? `⧉ THREAD (${n})` : 'MESSAGE'}
+                      </span>
+                      {threadLink && (
+                        <a
+                          href={threadLink}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          style={{
+                            color: C.green,
+                            fontSize: 9,
+                            letterSpacing: '0.06em',
+                            textDecoration: 'none',
+                            flexShrink: 0,
+                          }}
+                        >
+                          open in Slack ↗
+                        </a>
+                      )}
+                    </div>
+                    {g.msgs.map((m) => {
+                      const raw =
+                        (m.title && m.title.trim()) || (m.body || '').split('\n')[0] || '(no content)'
+                      const named = cfg ? applyGroupNames(raw, cfg) : raw
+                      const text = named.length > 160 ? `${named.slice(0, 160)}…` : named
+                      const ts = m.ts
+                        ? new Date(m.ts).toLocaleString(undefined, {
+                            month: 'short',
+                            day: 'numeric',
+                            hour: '2-digit',
+                            minute: '2-digit',
+                          })
+                        : ''
+                      return (
+                        <div
+                          key={m.id}
+                          style={{ display: 'flex', flexDirection: 'column', gap: 2 }}
+                        >
+                          <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
+                            <span style={{ color: C.dim, fontSize: 9, flexShrink: 0 }}>{ts}</span>
+                            {m.author && (
+                              <span style={{ color: C.dim, fontSize: 9, flexShrink: 0 }}>
+                                {m.author}
+                              </span>
+                            )}
+                          </div>
+                          <span style={{ color: C.text, fontSize: 11, lineHeight: 1.35 }}>{text}</span>
+                          {m.refs && m.refs.length > 0 && (
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 2 }}>
+                              {m.refs.map((ref, i) => {
+                                const label = ref.key ? `↗ ${ref.key}` : `${ref.type}:${ref.key}`
+                                const chipStyle: React.CSSProperties = {
+                                  fontFamily: MONO,
+                                  fontSize: 9,
+                                  letterSpacing: '0.04em',
+                                  padding: '1px 5px',
+                                  border: `1px solid ${C.border}`,
+                                  borderRadius: 2,
+                                  color: C.dim,
+                                  textDecoration: 'none',
+                                  whiteSpace: 'nowrap',
+                                }
+                                return ref.url ? (
+                                  <a
+                                    key={`${ref.type}-${ref.key}-${i}`}
+                                    href={ref.url}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    style={chipStyle}
+                                  >
+                                    {label}
+                                  </a>
+                                ) : (
+                                  <span key={`${ref.type}-${ref.key}-${i}`} style={chipStyle}>
+                                    {label}
+                                  </span>
+                                )
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })}
                   </div>
                 )
               })}

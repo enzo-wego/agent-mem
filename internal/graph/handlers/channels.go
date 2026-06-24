@@ -32,6 +32,9 @@ const defaultContinents = `{
     "C09AHGY5WJV":"vat_data_ota_ksa","C09H1QMK882":"vat_data_ota_pk","CPP5EH3A8":"task-alerts-production",
     "C0A7D29E5ED":"alerts-itops-tech-and-ai-news","C012A121AQJ":"pm-design","C09USC3U9A9":"sandbox-enzo",
     "C0AJ3JPRA9L":"enzo-private","C0AV14LGPMG":"partner-saudi-rail"
+  },
+  "groups": {
+    "S01TMG8Q65R":"payments-geeks"
   }
 }`
 
@@ -90,16 +93,26 @@ ORDER BY count DESC`, days)
 	json.NewEncoder(w).Encode(out)
 }
 
+type msgRef struct {
+	Type string `json:"type"` // jira | gh_pr | cf | slack_file | ...
+	Key  string `json:"key"`  // natural key, e.g. PAY-2204
+	URL  string `json:"url"`
+}
+
 type channelMessage struct {
-	ID    string `json:"id"`
-	Title string `json:"title"`
-	Body  string `json:"body"`
-	URL   string `json:"url"`
-	TS    string `json:"ts"`
+	ID       string   `json:"id"`
+	Title    string   `json:"title"`
+	Body     string   `json:"body"`
+	URL      string   `json:"url"`
+	TS       string   `json:"ts"`
+	ThreadTS string   `json:"thread_ts"`
+	Author   string   `json:"author"`
+	Refs     []msgRef `json:"refs"`
 }
 
 // recent handles GET /api/graph/channel?id=C...&days=N&limit=M — the most recent
-// messages for a single channel, used by the map's click-to-see-data panel.
+// messages for a single channel, used by the map's click-to-see-data panel. Each
+// message carries its thread_ts, author, and REFERENCES edges (linked artifacts).
 func (h *Channels) recent(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	id := r.URL.Query().Get("id")
@@ -113,14 +126,17 @@ func (h *Channels) recent(w http.ResponseWriter, r *http.Request) {
 			days = n
 		}
 	}
-	limit := 20
+	limit := 40
 	if v := r.URL.Query().Get("limit"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 100 {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 200 {
 			limit = n
 		}
 	}
 	rows, err := h.db.Query(ctx, `
-SELECT id, COALESCE(title,''), LEFT(COALESCE(body,''),400), COALESCE(url,''), COALESCE(first_seen_at::text,'')
+SELECT id, COALESCE(title,''), LEFT(COALESCE(body,''),400), COALESCE(url,''),
+       COALESCE(first_seen_at::text,''),
+       COALESCE(metadata->>'thread_ts',''),
+       COALESCE(metadata->'author'->>'display_name','')
 FROM graph.nodes
 WHERE scope = 'slack:' || $1 AND deleted_at IS NULL
   AND ($2 = 0 OR first_seen_at >= now() - make_interval(days => $2))
@@ -132,17 +148,52 @@ LIMIT $3`, id, days, limit)
 	}
 	defer rows.Close()
 	out := []channelMessage{}
+	byID := map[string]*channelMessage{}
+	ids := []string{}
 	for rows.Next() {
 		var m channelMessage
-		if err := rows.Scan(&m.ID, &m.Title, &m.Body, &m.URL, &m.TS); err != nil {
+		if err := rows.Scan(&m.ID, &m.Title, &m.Body, &m.URL, &m.TS, &m.ThreadTS, &m.Author); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		m.Refs = []msgRef{}
 		out = append(out, m)
+		ids = append(ids, m.ID)
 	}
 	if err := rows.Err(); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+	for i := range out {
+		byID[out[i].ID] = &out[i]
+	}
+	// Attach REFERENCES edges (linked Jira/PR/Confluence/Slack-file artifacts).
+	if len(ids) > 0 {
+		erows, err := h.db.Query(ctx, `
+SELECT e.from_node_id, n.type, n.natural_key, COALESCE(n.url,'')
+FROM graph.edges e
+JOIN graph.nodes n ON n.id = e.to_node_id
+WHERE e.kind = 'REFERENCES' AND e.from_node_id = ANY($1) AND n.deleted_at IS NULL`, ids)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		defer erows.Close()
+		for erows.Next() {
+			var from string
+			var ref msgRef
+			if err := erows.Scan(&from, &ref.Type, &ref.Key, &ref.URL); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			if m := byID[from]; m != nil {
+				m.Refs = append(m.Refs, ref)
+			}
+		}
+		if err := erows.Err(); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(out)
