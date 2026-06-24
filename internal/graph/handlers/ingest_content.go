@@ -44,6 +44,7 @@ type ingestContentMetadata struct {
 	ThreadTs  string  `json:"thread_ts"`
 	Subtype   *string `json:"subtype"`
 	Edited    bool    `json:"edited"`
+	Deleted   bool    `json:"deleted"`
 	Files     []ingestFileRef `json:"files"`
 	Scope     string          `json:"scope"`
 
@@ -154,6 +155,19 @@ func NewIngestContentHandler(deps Deps) http.Handler {
 		nodeID, err := buildNodeID(req.Source, req.CanonicalURL, req.Metadata)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, "cannot derive node_id: "+err.Error())
+			return
+		}
+
+		// Deletion: the source message was deleted upstream — soft-delete our copy
+		// (sets deleted_at so it stops showing) instead of upserting content.
+		if req.Metadata.Deleted || (req.Metadata.Subtype != nil && *req.Metadata.Subtype == "message_deleted") {
+			if _, delErr := deps.DB.Exec(ctx,
+				`UPDATE graph.nodes SET deleted_at = NOW(), updated_at = NOW() WHERE id = $1 AND deleted_at IS NULL`,
+				nodeID); delErr != nil {
+				writeError(w, http.StatusInternalServerError, "soft-delete: "+delErr.Error())
+				return
+			}
+			writeJSON(w, http.StatusOK, ingestResponse{NodeID: nodeID, Outcome: "deleted"})
 			return
 		}
 
