@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"strconv"
 
 	"github.com/go-chi/chi/v5"
@@ -40,6 +41,11 @@ type neighborItem struct {
 func (h *neighborsHandler) serve(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	id := chi.URLParam(r, "id")
+	// Node ids contain ':' which the client URL-encodes (%3A); chi does not decode
+	// path params, so unescape here or the node lookup misses.
+	if dec, err := url.PathUnescape(id); err == nil {
+		id = dec
+	}
 	depth, _ := strconv.Atoi(r.URL.Query().Get("depth"))
 	if depth < 1 || depth > 3 {
 		depth = 1

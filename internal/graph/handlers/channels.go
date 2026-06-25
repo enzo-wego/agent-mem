@@ -137,7 +137,7 @@ func (h *Channels) recent(w http.ResponseWriter, r *http.Request) {
 	// Optional ?thread= restricts to one thread (root + replies) for lazy expand.
 	thread := r.URL.Query().Get("thread")
 	rows, err := h.db.Query(ctx, `
-SELECT id, COALESCE(title,''), LEFT(COALESCE(body,''),400), COALESCE(url,''),
+SELECT id, ''::text AS title, LEFT(COALESCE(body,''),400), COALESCE(url,''),
        (EXTRACT(EPOCH FROM COALESCE(to_timestamp(NULLIF(metadata->>'ts','')::float8), first_seen_at)) * 1000)::bigint AS ts_ms,
        COALESCE(metadata->>'thread_ts',''),
        COALESCE(metadata->'author'->>'display_name','')
@@ -254,7 +254,7 @@ func (h *Channels) topics(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rows, err := h.db.Query(ctx, `
-SELECT id, COALESCE(title,''), LEFT(COALESCE(body,''),600), COALESCE(url,''),
+SELECT id, ''::text AS title, LEFT(COALESCE(body,''),600), COALESCE(url,''),
        (EXTRACT(EPOCH FROM COALESCE(to_timestamp(NULLIF(metadata->>'ts','')::float8), first_seen_at)) * 1000)::bigint AS ts_ms,
        COALESCE(metadata->>'thread_ts',''),
        COALESCE(metadata->'author'->>'display_name','')
