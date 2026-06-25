@@ -1590,7 +1590,7 @@ export function LiveGlobePage() {
                   const s = summaryCache[rootId]
                   if (!s || s === 'loading')
                     return <div style={{ color: C.dim, fontSize: 11 }}>Loading graph…</div>
-                  if (!s.nodes || s.nodes.length === 0)
+                  if (!s.nodes || s.nodes.length <= 1 || !s.edges || s.edges.length === 0)
                     return <div style={{ color: C.dim, fontSize: 11 }}>no graph for this node</div>
                   return (
                     <ClusterGraph

@@ -64,7 +64,7 @@ export default function ClusterGraph({
         url: n.url,
         root: !!n.root,
       })),
-      links: edges
+      links: (edges ?? [])
         .filter((e) => ids.has(e.from) && ids.has(e.to))
         .map((e) => ({ source: e.from, target: e.to, kind: e.kind })),
     }
