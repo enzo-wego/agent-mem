@@ -132,6 +132,20 @@ func NewServer(cfg *config.Config, logBuf *LogBuffer) (*Server, error) {
 	}
 	reg := jobs.NewRegistry()
 	graphhandlers.RegisterAll(reg, graphDeps)
+
+	// Refresh Slack channel id→name on startup so the map labels channels by name
+	// (covers channels added since the last boot). Deduped: skip if one is already
+	// queued/running. Best-effort — a failure just leaves names unresolved.
+	var refreshPending bool
+	_ = pool.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM graph.jobs WHERE type='refresh_slack_channels' AND status IN ('queued','running'))`).
+		Scan(&refreshPending)
+	if !refreshPending {
+		if _, err := jobs.Enqueue(ctx, pool, "refresh_slack_channels", map[string]any{},
+			jobs.EnqueueOptions{TargetRunner: cfg.Graph.Runner, MachineID: cfg.MachineID}); err != nil {
+			graphLog.Warn().Err(err).Msg("startup: enqueue refresh_slack_channels failed")
+		}
+	}
 	mgr := jobs.NewManager(jobs.ManagerConfig{
 		Registry:            reg,
 		DB:                  pool,
