@@ -147,6 +147,7 @@ WHERE id = ANY($1) AND deleted_at IS NULL`, ordered)
 	type clusterNode struct {
 		id, typ, title, body, author string
 		ts                           time.Time
+		depth                        int // author org-depth (0=CEO); -1 unknown
 	}
 	counts := map[string]int{}
 	var slackMsgs []clusterNode
@@ -175,10 +176,12 @@ WHERE id = ANY($1) AND deleted_at IS NULL`, ordered)
 		})
 		src := friendlySource(n.typ)
 		counts[src]++
-		if n.typ == "slack" || n.typ == "slack_thread" {
-			slackMsgs = append(slackMsgs, n)
-		} else if t := strings.TrimSpace(n.title); t != "" {
-			otherTitles = append(otherTitles, src+": "+firstLine(t, 120))
+		// Slack messages are gathered later from full threads (with seniority); here
+		// we only collect non-slack resource titles.
+		if n.typ != "slack" && n.typ != "slack_thread" {
+			if t := strings.TrimSpace(n.title); t != "" {
+				otherTitles = append(otherTitles, src+": "+firstLine(t, 120))
+			}
 		}
 	}
 	rows.Close()
@@ -224,41 +227,69 @@ WHERE id = ANY($1) AND deleted_at IS NULL`, ordered)
 		return resp.Resources[i].Source < resp.Resources[j].Source
 	})
 
-	// Ground the summary in the actual Slack thread: graph edges don't connect a
-	// thread's replies to its root, so the cluster alone can be just one message —
-	// too little context, and the LLM confabulates. Pull the whole thread (root +
-	// replies) by thread_ts and merge it in (deduped by id).
-	if rest, ok := strings.CutPrefix(id, "slack:"); ok {
+	// Ground the summary in the FULL Slack discussion. Graph edges don't connect a
+	// thread's replies to its root, and a cluster spans several threads (e.g. the
+	// originating report and the later fix), so we pull every distinct thread in the
+	// cluster — not just the opened one — and merge all their messages (deduped by
+	// id). Each message carries its author's org-depth (BambooHR; 0=CEO) so the LLM
+	// can foreground the originating reporter and senior voices.
+	seenMsg := map[string]bool{}
+	for _, m := range slackMsgs {
+		seenMsg[m.id] = true
+	}
+	slackIDs := []string{}
+	for _, gn := range gnodes {
+		if gn.Type == "slack" || gn.Type == "slack_thread" {
+			slackIDs = append(slackIDs, gn.ID)
+		}
+	}
+	type threadKey struct{ channel, ts string }
+	threads := map[threadKey]bool{}
+	if rest, ok := strings.CutPrefix(id, "slack:"); ok { // always include the opened thread
 		if parts := strings.SplitN(rest, ":", 2); len(parts) == 2 {
-			channel, rootTs := parts[0], parts[1]
-			var threadTs string
-			_ = h.db.QueryRow(ctx,
-				`SELECT COALESCE(NULLIF(metadata->>'thread_ts',''), $2) FROM graph.nodes WHERE id=$1`,
-				id, rootTs).Scan(&threadTs)
-			if channel != "" && threadTs != "" {
-				seenMsg := map[string]bool{}
-				for _, m := range slackMsgs {
-					seenMsg[m.id] = true
-				}
-				trows, terr := h.db.Query(ctx, `
-SELECT id, COALESCE(body,''), COALESCE(metadata->'author'->>'display_name',''),
-       COALESCE(to_timestamp(NULLIF(metadata->>'ts','')::float8), first_seen_at) AS ts
-FROM graph.nodes
-WHERE scope = 'slack:' || $1 AND deleted_at IS NULL AND COALESCE(metadata->>'thread_ts','') = $2
-ORDER BY ts ASC`, channel, threadTs)
-				if terr == nil {
-					for trows.Next() {
-						var m clusterNode
-						m.typ = "slack"
-						if trows.Scan(&m.id, &m.body, &m.author, &m.ts) == nil && m.body != "" && !seenMsg[m.id] {
-							slackMsgs = append(slackMsgs, m)
-							seenMsg[m.id] = true
-						}
-					}
-					trows.Close()
-				}
+			var tt string
+			_ = h.db.QueryRow(ctx, `SELECT COALESCE(NULLIF(metadata->>'thread_ts',''), $2) FROM graph.nodes WHERE id=$1`, id, parts[1]).Scan(&tt)
+			if tt != "" {
+				threads[threadKey{parts[0], tt}] = true
 			}
 		}
+	}
+	if len(slackIDs) > 0 {
+		if trows, terr := h.db.Query(ctx, `
+SELECT DISTINCT REPLACE(scope,'slack:',''), COALESCE(NULLIF(metadata->>'thread_ts',''), split_part(id,':',3))
+FROM graph.nodes WHERE id = ANY($1) AND scope LIKE 'slack:%'`, slackIDs); terr == nil {
+			for trows.Next() {
+				var ch, tt string
+				if trows.Scan(&ch, &tt) == nil && ch != "" && tt != "" {
+					threads[threadKey{ch, tt}] = true
+				}
+			}
+			trows.Close()
+		}
+	}
+	for tk := range threads {
+		trows, terr := h.db.Query(ctx, `
+SELECT n.id, COALESCE(n.body,''), COALESCE(n.metadata->'author'->>'display_name',''),
+       COALESCE(p.depth_from_root, -1),
+       COALESCE(to_timestamp(NULLIF(n.metadata->>'ts','')::float8), n.first_seen_at) AS ts
+FROM graph.nodes n
+LEFT JOIN graph.people p ON p.id = n.author_person_id
+WHERE n.scope = 'slack:' || $1 AND n.deleted_at IS NULL AND COALESCE(n.metadata->>'thread_ts','') = $2
+ORDER BY ts ASC`, tk.channel, tk.ts)
+		if terr != nil {
+			continue
+		}
+		for trows.Next() {
+			var m clusterNode
+			m.typ = "slack"
+			var depth int
+			if trows.Scan(&m.id, &m.body, &m.author, &depth, &m.ts) == nil && m.body != "" && !seenMsg[m.id] {
+				m.depth = depth
+				slackMsgs = append(slackMsgs, m)
+				seenMsg[m.id] = true
+			}
+		}
+		trows.Close()
 	}
 
 	sort.Slice(slackMsgs, func(i, j int) bool { return slackMsgs[i].ts.Before(slackMsgs[j].ts) })
@@ -271,7 +302,9 @@ ORDER BY ts ASC`, channel, threadTs)
 	if n := len(slackMsgs); n > 0 {
 		lastMs = slackMsgs[n-1].ts.UnixMilli()
 	}
-	sig := fmt.Sprintf("%d:%d:%d", total, len(slackMsgs), lastMs)
+	// v2: all-threads + seniority-aware grounding; the version prefix invalidates
+	// summaries cached under the old single-thread logic so they regenerate.
+	sig := fmt.Sprintf("v2:%d:%d:%d", total, len(slackMsgs), lastMs)
 
 	var cachedSig, cachedOverview string
 	var cachedHl []byte
@@ -291,7 +324,7 @@ ORDER BY ts ASC`, channel, threadTs)
 			}
 			b.WriteString("\nSlack discussion (oldest first):\n")
 		}
-		for _, m := range slackMsgs {
+		for i, m := range slackMsgs {
 			text := firstLine(m.body, 280)
 			if text == "" {
 				text = firstLine(m.title, 280)
@@ -302,6 +335,14 @@ ORDER BY ts ASC`, channel, threadTs)
 			author := m.author
 			if author == "" {
 				author = "someone"
+			}
+			// Tag seniority (lower org-depth = more senior) and the originating msg so
+			// the LLM can foreground who raised it and weight leadership input.
+			if m.depth >= 0 && m.depth <= 2 {
+				author += " [leadership]"
+			}
+			if i == 0 {
+				author += " [originator]"
 			}
 			line := author + ": " + text + "\n"
 			if b.Len()+len(line) > 7000 {
@@ -336,6 +377,14 @@ func genClusterSummary(ctx context.Context, g GeminiClient, transcript string) (
 Write a factual synthesis for a teammate skimming this. Respond as JSON:
 {"overview":"2-3 sentences: what this is about and the current state",
  "highlights":["chronological key events / decisions, each one short line, max 6 items"]}
+
+EMPHASIS:
+- START the overview with what originally prompted this — the message tagged
+  [originator] (who raised it and what the actual problem/request was). This is the
+  most important context; never omit it.
+- Give extra weight to messages tagged [leadership] (senior people); surface their
+  asks and decisions explicitly and attribute them by name.
+- Strip the [originator]/[leadership] tags from your output — they are hints, not text.
 
 STRICT GROUNDING RULES — follow exactly:
 - Use ONLY facts, names, and ticket ids that literally appear in the provided text.
