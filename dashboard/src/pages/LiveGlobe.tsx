@@ -5,11 +5,13 @@ import {
   fetchChannelMessages,
   fetchChannelTopics,
   fetchNeighbors,
+  fetchClusterSummary,
   type ChannelCount,
   type ContinentCfg,
   type ChannelMessage,
   type ChannelTopic,
   type GraphNeighbor,
+  type ClusterSummary,
 } from '../api'
 import { applyGroupNames, assignCountries, continentOf, nameOf } from '../continents'
 
@@ -222,6 +224,8 @@ export function LiveGlobePage() {
   // into a neighbor pushes it here, so we walk the graph one hop at a time
   // instead of fetching an ever-deeper (and exponentially larger) single query.
   const [graphStack, setGraphStack] = useState<{ id: string; label: string }[]>([])
+  // LLM cluster synthesis per node_id (what this is + what happened on Slack).
+  const [summaryCache, setSummaryCache] = useState<Record<string, ClusterSummary | 'loading'>>({})
 
   // ── Zoom + pan transform (viewBox space: 360×180) ────────────────────────────
   const [view, setView] = useState({ k: 1, tx: 0, ty: 0 })
@@ -463,11 +467,26 @@ export function LiveGlobePage() {
       .finally(() => setGraphLoading(false))
   }
 
+  // loadSummary fetches the LLM cluster synthesis for a node (cached per session).
+  function loadSummary(nodeId: string, depth = 2) {
+    if (summaryCache[nodeId]) return
+    setSummaryCache((cur) => ({ ...cur, [nodeId]: 'loading' }))
+    fetchClusterSummary(nodeId, depth)
+      .then((s) => setSummaryCache((cur) => ({ ...cur, [nodeId]: s })))
+      .catch(() =>
+        setSummaryCache((cur) => ({
+          ...cur,
+          [nodeId]: { overview: '', highlights: [], resources: [], node_count: 0 },
+        })),
+      )
+  }
+
   function openGraph(t: ChannelTopic) {
     if (!t.node_id) return
     setGraphTopic(t)
     setGraphStack([{ id: t.node_id, label: cfg ? applyGroupNames(t.summary, cfg) : t.summary }])
     loadNeighbors(t.node_id, 2)
+    loadSummary(t.node_id, 2)
   }
 
   // drillInto re-roots the overlay at a neighbor, loading its own links — this is
@@ -475,6 +494,7 @@ export function LiveGlobePage() {
   function drillInto(nodeId: string, label: string) {
     setGraphStack((cur) => [...cur, { id: nodeId, label }])
     loadNeighbors(nodeId)
+    loadSummary(nodeId, 2)
   }
 
   function graphBack() {
@@ -1526,6 +1546,69 @@ export function LiveGlobePage() {
                 gap: 14,
               }}
             >
+              {(() => {
+                const rootId = graphStack[graphStack.length - 1]?.id ?? graphTopic.node_id
+                const s = summaryCache[rootId]
+                if (!s) return null
+                if (s === 'loading') {
+                  return <div style={{ color: C.dim, fontSize: 11 }}>Summarizing…</div>
+                }
+                if (!s.overview && s.resources.length === 0) return null
+                return (
+                  <div
+                    style={{
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: 8,
+                      padding: '10px 12px',
+                      background: 'rgba(68,255,136,0.04)',
+                      border: `1px solid ${C.border}`,
+                      borderRadius: 4,
+                    }}
+                  >
+                    <div
+                      style={{
+                        color: C.green,
+                        fontSize: 9,
+                        letterSpacing: '0.12em',
+                        textTransform: 'uppercase',
+                      }}
+                    >
+                      Summary
+                    </div>
+                    {s.overview && (
+                      <div style={{ color: C.text, fontSize: 12, lineHeight: 1.5 }}>{s.overview}</div>
+                    )}
+                    {s.highlights.length > 0 && (
+                      <ul style={{ margin: 0, paddingLeft: 16, display: 'flex', flexDirection: 'column', gap: 4 }}>
+                        {s.highlights.map((h, i) => (
+                          <li key={i} style={{ color: C.dim, fontSize: 11, lineHeight: 1.45 }}>
+                            {cfg ? applyGroupNames(h, cfg) : h}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                    {s.resources.length > 0 && (
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 2 }}>
+                        {s.resources.map((r) => (
+                          <span
+                            key={r.source}
+                            style={{
+                              color: C.dim,
+                              fontSize: 10,
+                              border: `1px solid ${C.border}`,
+                              borderRadius: 3,
+                              padding: '2px 6px',
+                            }}
+                          >
+                            {r.source} · {r.count}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )
+              })()}
               {graphLoading && !neighborCache[graphStack[graphStack.length - 1]?.id ?? graphTopic.node_id] && (
                 <div style={{ color: C.dim, fontSize: 11 }}>Loading…</div>
               )}

@@ -497,6 +497,23 @@ export async function fetchNeighbors(nodeId: string, depth = 2): Promise<GraphNe
   return d.neighbors || [];
 }
 
+// ClusterSummary is an LLM synthesis of a node's surrounding cluster.
+export interface ClusterSummary {
+  overview: string;
+  highlights: string[];
+  resources: { source: string; count: number }[];
+  node_count: number;
+}
+
+// fetchClusterSummary asks the server to summarize what a node's cluster is about
+// (overview + key events on Slack + resource counts) instead of a raw row list.
+export async function fetchClusterSummary(nodeId: string, depth = 2): Promise<ClusterSummary> {
+  const res = await authFetch(
+    `${BASE}/api/graph/cluster/summary?node=${encodeURIComponent(nodeId)}&depth=${depth}`,
+  );
+  return res.json();
+}
+
 // fetchChannelTopics returns thread-level topic summaries for a channel.
 export async function fetchChannelTopics(
   channelId: string,

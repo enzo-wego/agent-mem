@@ -40,6 +40,7 @@ func Mount(r chi.Router, deps Deps) {
 	r.Get("/api/graph/channels", channels.list)
 	r.Get("/api/graph/channel", channels.recent)
 	r.Get("/api/graph/channel/topics", channels.topics)
+	r.Get("/api/graph/cluster/summary", NewClusterSummary(deps))
 	r.Get("/api/graph/continents", channels.getContinents)
 	r.Put("/api/graph/continents", channels.putContinents)
 
