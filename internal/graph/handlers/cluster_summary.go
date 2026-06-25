@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/url"
 	"sort"
@@ -144,8 +145,8 @@ WHERE id = ANY($1) AND deleted_at IS NULL`, ordered)
 		return
 	}
 	type clusterNode struct {
-		typ, title, body, author string
-		ts                       time.Time
+		id, typ, title, body, author string
+		ts                           time.Time
 	}
 	counts := map[string]int{}
 	var slackMsgs []clusterNode
@@ -155,12 +156,13 @@ WHERE id = ANY($1) AND deleted_at IS NULL`, ordered)
 	total := 0
 	for rows.Next() {
 		var n clusterNode
-		var idCol, urlCol string
-		if err := rows.Scan(&idCol, &n.typ, &n.title, &urlCol, &n.body, &n.author, &n.ts); err != nil {
+		var urlCol string
+		if err := rows.Scan(&n.id, &n.typ, &n.title, &urlCol, &n.body, &n.author, &n.ts); err != nil {
 			rows.Close()
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		idCol := n.id
 		total++
 		present[idCol] = true
 		// Node label: real title, else the first line of the body (Slack messages).
@@ -222,8 +224,65 @@ WHERE id = ANY($1) AND deleted_at IS NULL`, ordered)
 		return resp.Resources[i].Source < resp.Resources[j].Source
 	})
 
-	if h.gemini != nil && len(slackMsgs) > 0 {
-		sort.Slice(slackMsgs, func(i, j int) bool { return slackMsgs[i].ts.Before(slackMsgs[j].ts) })
+	// Ground the summary in the actual Slack thread: graph edges don't connect a
+	// thread's replies to its root, so the cluster alone can be just one message —
+	// too little context, and the LLM confabulates. Pull the whole thread (root +
+	// replies) by thread_ts and merge it in (deduped by id).
+	if rest, ok := strings.CutPrefix(id, "slack:"); ok {
+		if parts := strings.SplitN(rest, ":", 2); len(parts) == 2 {
+			channel, rootTs := parts[0], parts[1]
+			var threadTs string
+			_ = h.db.QueryRow(ctx,
+				`SELECT COALESCE(NULLIF(metadata->>'thread_ts',''), $2) FROM graph.nodes WHERE id=$1`,
+				id, rootTs).Scan(&threadTs)
+			if channel != "" && threadTs != "" {
+				seenMsg := map[string]bool{}
+				for _, m := range slackMsgs {
+					seenMsg[m.id] = true
+				}
+				trows, terr := h.db.Query(ctx, `
+SELECT id, COALESCE(body,''), COALESCE(metadata->'author'->>'display_name',''),
+       COALESCE(to_timestamp(NULLIF(metadata->>'ts','')::float8), first_seen_at) AS ts
+FROM graph.nodes
+WHERE scope = 'slack:' || $1 AND deleted_at IS NULL AND COALESCE(metadata->>'thread_ts','') = $2
+ORDER BY ts ASC`, channel, threadTs)
+				if terr == nil {
+					for trows.Next() {
+						var m clusterNode
+						m.typ = "slack"
+						if trows.Scan(&m.id, &m.body, &m.author, &m.ts) == nil && m.body != "" && !seenMsg[m.id] {
+							slackMsgs = append(slackMsgs, m)
+							seenMsg[m.id] = true
+						}
+					}
+					trows.Close()
+				}
+			}
+		}
+	}
+
+	sort.Slice(slackMsgs, func(i, j int) bool { return slackMsgs[i].ts.Before(slackMsgs[j].ts) })
+
+	// Cache key: the summary text is reused verbatim until the cluster's content
+	// changes (so it stays consistent across clicks/sessions instead of being
+	// re-generated — and re-worded — on every open). signature = node count +
+	// message count + latest message ts.
+	var lastMs int64
+	if n := len(slackMsgs); n > 0 {
+		lastMs = slackMsgs[n-1].ts.UnixMilli()
+	}
+	sig := fmt.Sprintf("%d:%d:%d", total, len(slackMsgs), lastMs)
+
+	var cachedSig, cachedOverview string
+	var cachedHl []byte
+	if err := h.db.QueryRow(ctx,
+		`SELECT signature, overview, highlights FROM graph.cluster_summaries WHERE node_id=$1`, id).
+		Scan(&cachedSig, &cachedOverview, &cachedHl); err == nil && cachedSig == sig {
+		resp.Overview = cachedOverview
+		_ = json.Unmarshal(cachedHl, &resp.Highlights)
+	}
+
+	if resp.Overview == "" && h.gemini != nil && len(slackMsgs) > 0 {
 		var b strings.Builder
 		if len(otherTitles) > 0 {
 			b.WriteString("Linked resources:\n")
@@ -253,6 +312,17 @@ WHERE id = ANY($1) AND deleted_at IS NULL`, ordered)
 		if ov, hl := genClusterSummary(ctx, h.gemini, b.String()); ov != "" {
 			resp.Overview = ov
 			resp.Highlights = hl
+			hlJSON, e := json.Marshal(hl)
+			if e != nil || hlJSON == nil {
+				hlJSON = []byte("[]")
+			}
+			_, _ = h.db.Exec(ctx,
+				`INSERT INTO graph.cluster_summaries(node_id,signature,overview,highlights,updated_at)
+				 VALUES($1,$2,$3,$4,NOW())
+				 ON CONFLICT (node_id) DO UPDATE SET
+				   signature=excluded.signature, overview=excluded.overview,
+				   highlights=excluded.highlights, updated_at=NOW()`,
+				id, sig, ov, hlJSON)
 		}
 	}
 
@@ -266,7 +336,15 @@ func genClusterSummary(ctx context.Context, g GeminiClient, transcript string) (
 Write a factual synthesis for a teammate skimming this. Respond as JSON:
 {"overview":"2-3 sentences: what this is about and the current state",
  "highlights":["chronological key events / decisions, each one short line, max 6 items"]}
-Use names and ticket ids that appear in the text. No markdown, no quotes around the whole thing.`
+
+STRICT GROUNDING RULES — follow exactly:
+- Use ONLY facts, names, and ticket ids that literally appear in the provided text.
+- NEVER invent ticket ids (e.g. JIRA-123), people, dates, fixes, or outcomes. If it
+  is not in the text, do not state it.
+- Do not assume the issue was resolved/deployed unless the text says so.
+- If the text is thin or inconclusive, write a short overview and return fewer (or
+  zero) highlights rather than filling gaps.
+No markdown, no quotes around the whole thing.`
 	out, err := g.Generate(ctx, sys, transcript)
 	if err != nil || out == "" {
 		return "", nil
