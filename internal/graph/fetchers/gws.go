@@ -22,16 +22,36 @@ var (
 	gwsDriveURLRe = regexp.MustCompile(`\bdrive\.google\.com/file/d/([\w-]+)\b`)
 )
 
-// gwsFetcher retrieves Google Workspace document bodies.
-// Production use requires a service-account bearer token set in GWS_BEARER_TOKEN
-// env var; the GWSServiceKeyPath field is reserved for future JWT exchange wiring.
+// gwsFetcher retrieves Google Workspace document bodies. Auth is either a static
+// GWS_BEARER_TOKEN (override, e.g. one-shot) or — preferred, durable — a
+// service-account key at GWSServiceKeyPath, from which it mints and auto-refreshes
+// access tokens via the JWT-bearer grant (see gwsTokenSource).
 type gwsFetcher struct {
 	cfg Config
 	log zerolog.Logger
+	ts  *gwsTokenSource // nil unless a service-account key is configured
 }
 
 func newGWSFetcher(cfg Config, log zerolog.Logger) *gwsFetcher {
-	return &gwsFetcher{cfg: cfg, log: log}
+	f := &gwsFetcher{cfg: cfg, log: log}
+	if cfg.GWSServiceKeyPath != "" {
+		// AGENT_MEM_GWS_SUBJECT enables domain-wide delegation (impersonate a user)
+		// so the SA can read docs across the org, not just ones shared with it.
+		f.ts = newGWSTokenSource(cfg.GWSServiceKeyPath, os.Getenv("AGENT_MEM_GWS_SUBJECT"), cfg.HTTPClient)
+	}
+	return f
+}
+
+// accessToken returns the bearer token to use: a static GWS_BEARER_TOKEN if set
+// (override), otherwise a minted/cached service-account token.
+func (f *gwsFetcher) accessToken(ctx context.Context) (string, error) {
+	if t := os.Getenv("GWS_BEARER_TOKEN"); t != "" {
+		return t, nil
+	}
+	if f.ts != nil {
+		return f.ts.Token(ctx)
+	}
+	return "", fmt.Errorf("gws fetcher not configured: set AGENT_MEM_GWS_SERVICE_KEY_PATH (service account) or GWS_BEARER_TOKEN")
 }
 
 func (f *gwsFetcher) Source() string { return "gws" }
@@ -57,6 +77,7 @@ type gwsFileResponse struct {
 	ID           string    `json:"id"`
 	Name         string    `json:"name"`
 	MimeType     string    `json:"mimeType"`
+	CreatedTime  time.Time `json:"createdTime"`
 	ModifiedTime time.Time `json:"modifiedTime"`
 	Owners       []gwsOwner `json:"owners"`
 }
@@ -66,22 +87,12 @@ type gwsOwner struct {
 	EmailAddress string `json:"emailAddress"`
 }
 
-// Fetch retrieves the GWS document.
-//
-// Production note: this fetcher reads a bearer token from the GWS_BEARER_TOKEN
-// environment variable. The GWSServiceKeyPath field is reserved for a future
-// service-account JWT exchange implementation. When GWSServiceKeyPath is set but
-// GWS_BEARER_TOKEN is empty, the fetcher returns an error rather than crashing.
+// Fetch retrieves the GWS document. Auth comes from accessToken (static
+// GWS_BEARER_TOKEN override, else a minted service-account token).
 func (f *gwsFetcher) Fetch(ctx context.Context, node string) (FetchedBody, error) {
-	// Check that we are configured enough to proceed.
-	if f.cfg.GWSServiceKeyPath == "" && os.Getenv("GWS_BEARER_TOKEN") == "" {
-		return FetchedBody{}, fmt.Errorf("gws fetcher not configured: set GWS_BEARER_TOKEN or GWSServiceKeyPath")
-	}
-
-	token := os.Getenv("GWS_BEARER_TOKEN")
-	if token == "" {
-		// GWSServiceKeyPath is set but JWT exchange not implemented yet.
-		return FetchedBody{}, fmt.Errorf("gws fetcher not configured: GWS_BEARER_TOKEN not set; JWT exchange from GWSServiceKeyPath is not yet implemented")
+	token, err := f.accessToken(ctx)
+	if err != nil {
+		return FetchedBody{}, err
 	}
 
 	fileID, err := f.parseNode(node)
@@ -95,7 +106,40 @@ func (f *gwsFetcher) Fetch(ctx context.Context, node string) (FetchedBody, error
 		f.log.Debug().Str("file_id", fileID).Err(err).Msg("gws fetcher: docs API failed, falling back to drive export")
 		return f.fetchDriveExport(ctx, fileID, token)
 	}
+	// The Docs API carries no timestamps/owner; enrich from Drive metadata so the
+	// node gets a real created_at (best-effort — keep the body even if this fails).
+	if meta, mErr := f.driveMeta(ctx, fileID, token); mErr == nil {
+		body.CreatedAt = meta.CreatedTime
+		body.BodyTS = meta.ModifiedTime
+		if len(meta.Owners) > 0 {
+			body.Author = AuthorRef{Source: "gws", DisplayName: meta.Owners[0].DisplayName, Email: meta.Owners[0].EmailAddress}
+		}
+	}
 	return body, nil
+}
+
+// driveMeta fetches a Drive file's metadata (timestamps + owner).
+func (f *gwsFetcher) driveMeta(ctx context.Context, fileID, token string) (gwsFileResponse, error) {
+	metaURL := fmt.Sprintf("https://www.googleapis.com/drive/v3/files/%s?fields=id,name,mimeType,createdTime,modifiedTime,owners", fileID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, metaURL, nil)
+	if err != nil {
+		return gwsFileResponse{}, fmt.Errorf("gws fetcher: build meta request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := f.cfg.HTTPClient.Do(req)
+	if err != nil {
+		return gwsFileResponse{}, fmt.Errorf("gws fetcher: meta request: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
+		return gwsFileResponse{}, fmt.Errorf("gws fetcher meta status %d: %s", resp.StatusCode, string(body))
+	}
+	var fileMeta gwsFileResponse
+	if err := json.NewDecoder(resp.Body).Decode(&fileMeta); err != nil {
+		return gwsFileResponse{}, fmt.Errorf("gws fetcher: decode meta: %w", err)
+	}
+	return fileMeta, nil
 }
 
 // fetchDocsAPI calls the Google Docs API and returns JSON body.
@@ -147,28 +191,9 @@ func (f *gwsFetcher) fetchDocsAPI(ctx context.Context, fileID, token string) (Fe
 
 // fetchDriveExport calls the Drive export API and returns plain-text body.
 func (f *gwsFetcher) fetchDriveExport(ctx context.Context, fileID, token string) (FetchedBody, error) {
-	// First get file metadata.
-	metaURL := fmt.Sprintf("https://www.googleapis.com/drive/v3/files/%s?fields=id,name,mimeType,modifiedTime,owners", fileID)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, metaURL, nil)
+	fileMeta, err := f.driveMeta(ctx, fileID, token)
 	if err != nil {
-		return FetchedBody{}, fmt.Errorf("gws fetcher: build meta request: %w", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+token)
-
-	resp, err := f.cfg.HTTPClient.Do(req)
-	if err != nil {
-		return FetchedBody{}, fmt.Errorf("gws fetcher: meta request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
-		return FetchedBody{}, fmt.Errorf("gws fetcher status %d: %s", resp.StatusCode, string(body))
-	}
-
-	var fileMeta gwsFileResponse
-	if err := json.NewDecoder(resp.Body).Decode(&fileMeta); err != nil {
-		return FetchedBody{}, fmt.Errorf("gws fetcher: decode meta: %w", err)
+		return FetchedBody{}, err
 	}
 
 	// Export as plain text.
@@ -217,6 +242,7 @@ func (f *gwsFetcher) fetchDriveExport(ctx context.Context, fileID, token string)
 		ContentType: "text/plain",
 		Author:      author,
 		BodyTS:      fileMeta.ModifiedTime,
+		CreatedAt:   fileMeta.CreatedTime,
 	}, nil
 }
 
