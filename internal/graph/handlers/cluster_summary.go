@@ -47,6 +47,8 @@ func friendlySource(nodeType string) string {
 		return "Features"
 	case "person":
 		return "People"
+	case "gws_doc", "gws":
+		return "Google Docs"
 	default:
 		return nodeType
 	}
@@ -57,10 +59,26 @@ type clusterResource struct {
 	Count  int    `json:"count"`
 }
 
+type clusterGraphNode struct {
+	ID    string `json:"id"`
+	Type  string `json:"type"`
+	Title string `json:"title"`
+	URL   string `json:"url"`
+	Root  bool   `json:"root,omitempty"`
+}
+
+type clusterGraphEdge struct {
+	From string `json:"from"`
+	To   string `json:"to"`
+	Kind string `json:"kind"`
+}
+
 type clusterSummaryResponse struct {
-	Overview   string            `json:"overview"`
-	Highlights []string          `json:"highlights"`
-	Resources  []clusterResource `json:"resources"`
+	Overview   string             `json:"overview"`
+	Highlights []string           `json:"highlights"`
+	Resources  []clusterResource  `json:"resources"`
+	Nodes      []clusterGraphNode `json:"nodes"`
+	Edges      []clusterGraphEdge `json:"edges"`
 	NodeCount  int               `json:"node_count"`
 }
 
@@ -116,7 +134,7 @@ func (h *clusterSummaryHandler) serve(w http.ResponseWriter, r *http.Request) {
 
 	// Load the cluster's nodes with the fields we need for counts + transcript.
 	rows, err := h.db.Query(ctx, `
-SELECT id, type, COALESCE(title,''), COALESCE(body,''),
+SELECT id, type, COALESCE(title,''), COALESCE(url,''), COALESCE(body,''),
        COALESCE(metadata->'author'->>'display_name',''),
        COALESCE(to_timestamp(NULLIF(metadata->>'ts','')::float8), first_seen_at) AS ts
 FROM graph.nodes
@@ -132,16 +150,27 @@ WHERE id = ANY($1) AND deleted_at IS NULL`, ordered)
 	counts := map[string]int{}
 	var slackMsgs []clusterNode
 	var otherTitles []string
+	var gnodes []clusterGraphNode
+	present := map[string]bool{}
 	total := 0
 	for rows.Next() {
 		var n clusterNode
-		var idCol string
-		if err := rows.Scan(&idCol, &n.typ, &n.title, &n.body, &n.author, &n.ts); err != nil {
+		var idCol, urlCol string
+		if err := rows.Scan(&idCol, &n.typ, &n.title, &urlCol, &n.body, &n.author, &n.ts); err != nil {
 			rows.Close()
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 		total++
+		present[idCol] = true
+		// Node label: real title, else the first line of the body (Slack messages).
+		label := strings.TrimSpace(n.title)
+		if label == "" {
+			label = firstLine(n.body, 80)
+		}
+		gnodes = append(gnodes, clusterGraphNode{
+			ID: idCol, Type: n.typ, Title: label, URL: urlCol, Root: idCol == id,
+		})
 		src := friendlySource(n.typ)
 		counts[src]++
 		if n.typ == "slack" || n.typ == "slack_thread" {
@@ -156,7 +185,33 @@ WHERE id = ANY($1) AND deleted_at IS NULL`, ordered)
 		return
 	}
 
-	resp := clusterSummaryResponse{NodeCount: total}
+	// Induced edges: only those whose both endpoints survived in the cluster.
+	var gedges []clusterGraphEdge
+	erows, err := h.db.Query(ctx,
+		`SELECT from_node_id, to_node_id, kind FROM graph.edges
+		 WHERE from_node_id = ANY($1) AND to_node_id = ANY($1)`, ordered)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	for erows.Next() {
+		var e clusterGraphEdge
+		if err := erows.Scan(&e.From, &e.To, &e.Kind); err != nil {
+			erows.Close()
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if present[e.From] && present[e.To] {
+			gedges = append(gedges, e)
+		}
+	}
+	erows.Close()
+	if err := erows.Err(); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	resp := clusterSummaryResponse{NodeCount: total, Nodes: gnodes, Edges: gedges}
 	for src, c := range counts {
 		resp.Resources = append(resp.Resources, clusterResource{Source: src, Count: c})
 	}

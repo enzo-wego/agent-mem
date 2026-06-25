@@ -14,6 +14,7 @@ import {
   type ClusterSummary,
 } from '../api'
 import { applyGroupNames, assignCountries, continentOf, nameOf } from '../continents'
+import ClusterGraph from './ClusterGraph'
 
 // ── worldmonitor palette ──────────────────────────────────────────────────────
 const C = {
@@ -42,6 +43,9 @@ const GRAPH_TYPE_GROUPS: Record<string, { label: string; order: number }> = {
   slack: { label: 'Slack threads', order: 3 },
   slack_file: { label: 'Files', order: 4 },
   person: { label: 'People', order: 5 },
+  gws_doc: { label: 'Google Docs', order: 2 },
+  gws: { label: 'Google Docs', order: 2 },
+  feature: { label: 'Features', order: 6 },
 }
 
 interface NeighborGroup {
@@ -226,6 +230,8 @@ export function LiveGlobePage() {
   const [graphStack, setGraphStack] = useState<{ id: string; label: string }[]>([])
   // LLM cluster synthesis per node_id (what this is + what happened on Slack).
   const [summaryCache, setSummaryCache] = useState<Record<string, ClusterSummary | 'loading'>>({})
+  // Overlay view: the readable synthesis, or the visual node-link diagram.
+  const [graphView, setGraphView] = useState<'summary' | 'diagram'>('summary')
 
   // ── Zoom + pan transform (viewBox space: 360×180) ────────────────────────────
   const [view, setView] = useState({ k: 1, tx: 0, ty: 0 })
@@ -476,7 +482,7 @@ export function LiveGlobePage() {
       .catch(() =>
         setSummaryCache((cur) => ({
           ...cur,
-          [nodeId]: { overview: '', highlights: [], resources: [], node_count: 0 },
+          [nodeId]: { overview: '', highlights: [], resources: [], nodes: [], edges: [], node_count: 0 },
         })),
       )
   }
@@ -1502,16 +1508,27 @@ export function LiveGlobePage() {
                   {graphStack[graphStack.length - 1]?.label ??
                     (cfg ? applyGroupNames(graphTopic.summary, cfg) : graphTopic.summary)}
                 </div>
-                <div
-                  style={{
-                    color: C.dim,
-                    fontSize: 9,
-                    letterSpacing: '0.12em',
-                    marginTop: 6,
-                    textTransform: 'uppercase',
-                  }}
-                >
-                  Related Resources
+                <div style={{ display: 'flex', gap: 4, marginTop: 8 }}>
+                  {(['summary', 'diagram'] as const).map((v) => (
+                    <button
+                      key={v}
+                      onClick={() => setGraphView(v)}
+                      style={{
+                        background: graphView === v ? 'rgba(68,255,136,0.12)' : 'transparent',
+                        border: `1px solid ${graphView === v ? C.green : C.border}`,
+                        color: graphView === v ? C.green : C.dim,
+                        cursor: 'pointer',
+                        fontFamily: MONO,
+                        fontSize: 9,
+                        letterSpacing: '0.1em',
+                        textTransform: 'uppercase',
+                        borderRadius: 3,
+                        padding: '3px 8px',
+                      }}
+                    >
+                      {v === 'summary' ? 'Summary' : 'Graph'}
+                    </button>
+                  ))}
                 </div>
               </div>
               <button
@@ -1546,7 +1563,29 @@ export function LiveGlobePage() {
                 gap: 14,
               }}
             >
-              {(() => {
+              {graphView === 'diagram' &&
+                (() => {
+                  const rootId = graphStack[graphStack.length - 1]?.id ?? graphTopic.node_id
+                  const s = summaryCache[rootId]
+                  if (!s || s === 'loading')
+                    return <div style={{ color: C.dim, fontSize: 11 }}>Loading graph…</div>
+                  if (!s.nodes || s.nodes.length === 0)
+                    return <div style={{ color: C.dim, fontSize: 11 }}>no graph for this node</div>
+                  return (
+                    <ClusterGraph
+                      nodes={s.nodes}
+                      edges={s.edges}
+                      width={Math.min(512, window.innerWidth - 64)}
+                      height={440}
+                      onDrill={(id, label) => {
+                        setGraphView('summary')
+                        drillInto(id, label)
+                      }}
+                    />
+                  )
+                })()}
+              {graphView === 'summary' &&
+                (() => {
                 const rootId = graphStack[graphStack.length - 1]?.id ?? graphTopic.node_id
                 const s = summaryCache[rootId]
                 if (!s) return null
@@ -1609,10 +1648,13 @@ export function LiveGlobePage() {
                   </div>
                 )
               })()}
-              {graphLoading && !neighborCache[graphStack[graphStack.length - 1]?.id ?? graphTopic.node_id] && (
-                <div style={{ color: C.dim, fontSize: 11 }}>Loading…</div>
-              )}
-              {(() => {
+              {graphView === 'summary' &&
+                graphLoading &&
+                !neighborCache[graphStack[graphStack.length - 1]?.id ?? graphTopic.node_id] && (
+                  <div style={{ color: C.dim, fontSize: 11 }}>Loading…</div>
+                )}
+              {graphView === 'summary' &&
+                (() => {
                 const rootId = graphStack[graphStack.length - 1]?.id ?? graphTopic.node_id
                 const neighbors = neighborCache[rootId]
                 if (!neighbors) return null

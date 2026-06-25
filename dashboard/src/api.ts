@@ -497,11 +497,26 @@ export async function fetchNeighbors(nodeId: string, depth = 2): Promise<GraphNe
   return d.neighbors || [];
 }
 
-// ClusterSummary is an LLM synthesis of a node's surrounding cluster.
+// ClusterSummary is an LLM synthesis of a node's surrounding cluster, plus the
+// cluster's graph topology (nodes + induced edges) for the visual diagram.
+export interface ClusterGraphNode {
+  id: string;
+  type: string;
+  title: string;
+  url: string;
+  root?: boolean;
+}
+export interface ClusterGraphEdge {
+  from: string;
+  to: string;
+  kind: string;
+}
 export interface ClusterSummary {
   overview: string;
   highlights: string[];
   resources: { source: string; count: number }[];
+  nodes: ClusterGraphNode[];
+  edges: ClusterGraphEdge[];
   node_count: number;
 }
 
