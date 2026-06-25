@@ -11,7 +11,7 @@ import (
 // fetching the source artifact (Slack is excluded: its created_at is already the
 // message ts, set at ingest). cf/cf_page cover both confluence id schemes.
 var fetchableForCreatedAt = []string{
-	"jira", "gh_pr", "cf", "cf_page", "confluence", "pagerduty", "datadog", "sentry", "gws",
+	"jira", "gh_pr", "cf", "cf_page", "confluence", "pagerduty", "datadog", "sentry", "gws", "gws_doc",
 }
 
 // NewBackfillCreatedAtHandler returns the job entry for "backfill_created_at": it
