@@ -54,11 +54,20 @@ interface NeighborGroup {
   items: GraphNeighbor[]
 }
 
-// Group neighbors by friendly type label, preserving server order within a group
-// and sorting groups so Jira/PRs/Confluence/Slack come first.
+// Group neighbors by friendly type label. Slack messages sharing a thread collapse
+// to one row (the thread summary). Groups sort Jira/PRs/Docs/Slack first; items
+// within a group sort alphabetically by title so the order is stable, not the
+// arbitrary order the graph happened to return them in.
 function groupNeighbors(neighbors: GraphNeighbor[]): NeighborGroup[] {
   const byLabel = new Map<string, NeighborGroup>()
+  const seenThread = new Set<string>()
   for (const n of neighbors) {
+    // Collapse a Slack thread's messages into a single row.
+    const tt = n.node.thread_ts
+    if ((n.node.type === 'slack' || n.node.type === 'slack_thread') && tt) {
+      if (seenThread.has(tt)) continue
+      seenThread.add(tt)
+    }
     const cfg = GRAPH_TYPE_GROUPS[n.node.type]
     const label = cfg?.label ?? n.node.type
     const order = cfg?.order ?? 99
@@ -68,6 +77,11 @@ function groupNeighbors(neighbors: GraphNeighbor[]): NeighborGroup[] {
       byLabel.set(label, g)
     }
     g.items.push(n)
+  }
+  for (const g of byLabel.values()) {
+    g.items.sort((a, b) =>
+      (a.node.title || a.node.node_id).localeCompare(b.node.title || b.node.node_id),
+    )
   }
   return [...byLabel.values()].sort((a, b) => a.order - b.order || a.label.localeCompare(b.label))
 }
