@@ -215,8 +215,13 @@ export function LiveGlobePage() {
   // graphTopic is the topic whose neighbors are shown; null = overlay closed.
   const [graphTopic, setGraphTopic] = useState<ChannelTopic | null>(null)
   const [graphLoading, setGraphLoading] = useState(false)
-  // Cache neighbors per node_id so reopening the same thread is instant.
+  // Cache neighbors per node_id so reopening the same node is instant.
   const [neighborCache, setNeighborCache] = useState<Record<string, GraphNeighbor[]>>({})
+  // Drill stack: each entry is one "root" the overlay is currently showing.
+  // The last entry is the active root; earlier entries are breadcrumbs. Drilling
+  // into a neighbor pushes it here, so we walk the graph one hop at a time
+  // instead of fetching an ever-deeper (and exponentially larger) single query.
+  const [graphStack, setGraphStack] = useState<{ id: string; label: string }[]>([])
 
   // ── Zoom + pan transform (viewBox space: 360×180) ────────────────────────────
   const [view, setView] = useState({ k: 1, tx: 0, ty: 0 })
@@ -447,18 +452,33 @@ export function LiveGlobePage() {
   }
 
   // ── Open the "related resources" graph overlay for a topic ───────────────────
-  function openGraph(t: ChannelTopic) {
-    if (!t.node_id) return
-    setGraphTopic(t)
-    // Serve from cache instantly; otherwise fetch this node's neighbors (depth 3
-    // so cross-source discussions one hop past the linked tickets show up).
-    if (neighborCache[t.node_id]) return
-    const nodeId = t.node_id
+  // loadNeighbors fetches a node's neighbors into the cache (depth 1 — drilling
+  // gives the user explicit control over how deep to go).
+  function loadNeighbors(nodeId: string, depth = 1) {
+    if (neighborCache[nodeId]) return
     setGraphLoading(true)
-    fetchNeighbors(nodeId, 3)
+    fetchNeighbors(nodeId, depth)
       .then((ns) => setNeighborCache((cur) => ({ ...cur, [nodeId]: ns || [] })))
       .catch(() => setNeighborCache((cur) => ({ ...cur, [nodeId]: [] })))
       .finally(() => setGraphLoading(false))
+  }
+
+  function openGraph(t: ChannelTopic) {
+    if (!t.node_id) return
+    setGraphTopic(t)
+    setGraphStack([{ id: t.node_id, label: cfg ? applyGroupNames(t.summary, cfg) : t.summary }])
+    loadNeighbors(t.node_id, 2)
+  }
+
+  // drillInto re-roots the overlay at a neighbor, loading its own links — this is
+  // the "load more" path: walk as deep as you want, one controlled hop at a time.
+  function drillInto(nodeId: string, label: string) {
+    setGraphStack((cur) => [...cur, { id: nodeId, label }])
+    loadNeighbors(nodeId)
+  }
+
+  function graphBack() {
+    setGraphStack((cur) => (cur.length > 1 ? cur.slice(0, -1) : cur))
   }
 
   // ── Derived control-panel data ──────────────────────────────────────────────
@@ -1429,6 +1449,24 @@ export function LiveGlobePage() {
           >
             <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
               <div style={{ minWidth: 0 }}>
+                {graphStack.length > 1 && (
+                  <button
+                    onClick={graphBack}
+                    style={{
+                      background: 'transparent',
+                      border: 'none',
+                      color: C.dim,
+                      cursor: 'pointer',
+                      fontFamily: MONO,
+                      fontSize: 10,
+                      padding: 0,
+                      marginBottom: 6,
+                      letterSpacing: '0.08em',
+                    }}
+                  >
+                    ‹ back · {graphStack.length} levels
+                  </button>
+                )}
                 <div
                   style={{
                     color: C.text,
@@ -1441,7 +1479,8 @@ export function LiveGlobePage() {
                     overflow: 'hidden',
                   }}
                 >
-                  {cfg ? applyGroupNames(graphTopic.summary, cfg) : graphTopic.summary}
+                  {graphStack[graphStack.length - 1]?.label ??
+                    (cfg ? applyGroupNames(graphTopic.summary, cfg) : graphTopic.summary)}
                 </div>
                 <div
                   style={{
@@ -1487,11 +1526,12 @@ export function LiveGlobePage() {
                 gap: 14,
               }}
             >
-              {graphLoading && !neighborCache[graphTopic.node_id] && (
+              {graphLoading && !neighborCache[graphStack[graphStack.length - 1]?.id ?? graphTopic.node_id] && (
                 <div style={{ color: C.dim, fontSize: 11 }}>Loading…</div>
               )}
               {(() => {
-                const neighbors = neighborCache[graphTopic.node_id]
+                const rootId = graphStack[graphStack.length - 1]?.id ?? graphTopic.node_id
+                const neighbors = neighborCache[rootId]
                 if (!neighbors) return null
                 if (neighbors.length === 0) {
                   return <div style={{ color: C.dim, fontSize: 11 }}>no linked resources yet</div>
@@ -1554,20 +1594,46 @@ export function LiveGlobePage() {
                           </span>
                         </>
                       )
-                      return n.node.url ? (
-                        <a
-                          key={`${n.node.node_id}-${i}`}
-                          href={n.node.url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          style={itemStyle}
+                      const drillBtn = (
+                        <button
+                          onClick={(e) => {
+                            e.preventDefault()
+                            e.stopPropagation()
+                            drillInto(n.node.node_id, label)
+                          }}
+                          title="Expand this node's links"
+                          style={{
+                            flexShrink: 0,
+                            background: 'transparent',
+                            border: `1px solid ${C.border}`,
+                            borderRadius: 3,
+                            color: C.dim,
+                            cursor: 'pointer',
+                            fontFamily: MONO,
+                            fontSize: 12,
+                            lineHeight: '12px',
+                            padding: '0 8px',
+                          }}
                         >
-                          {inner}
-                        </a>
-                      ) : (
-                        <span key={`${n.node.node_id}-${i}`} style={itemStyle}>
-                          {inner}
-                        </span>
+                          ⤵
+                        </button>
+                      )
+                      return (
+                        <div key={`${n.node.node_id}-${i}`} style={{ display: 'flex', gap: 6 }}>
+                          {n.node.url ? (
+                            <a
+                              href={n.node.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              style={{ ...itemStyle, flex: 1, minWidth: 0 }}
+                            >
+                              {inner}
+                            </a>
+                          ) : (
+                            <span style={{ ...itemStyle, flex: 1, minWidth: 0 }}>{inner}</span>
+                          )}
+                          {drillBtn}
+                        </div>
                       )
                     })}
                   </div>
