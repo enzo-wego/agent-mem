@@ -302,9 +302,10 @@ ORDER BY ts ASC`, tk.channel, tk.ts)
 	if n := len(slackMsgs); n > 0 {
 		lastMs = slackMsgs[n-1].ts.UnixMilli()
 	}
-	// v2: all-threads + seniority-aware grounding; the version prefix invalidates
-	// summaries cached under the old single-thread logic so they regenerate.
-	sig := fmt.Sprintf("v2:%d:%d:%d", total, len(slackMsgs), lastMs)
+	// v3: after the identity merge, author org-depth now resolves for merged people
+	// (e.g. Ross = 0), so bump the version to regenerate summaries with leadership
+	// weighting. The prefix invalidates anything cached under older logic.
+	sig := fmt.Sprintf("v3:%d:%d:%d", total, len(slackMsgs), lastMs)
 
 	var cachedSig, cachedOverview string
 	var cachedHl []byte
