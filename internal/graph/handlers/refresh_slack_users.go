@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/agent-mem/agent-mem/internal/graph/jobs"
@@ -60,6 +61,18 @@ func refreshSlackUsersHandler(deps Deps) jobs.Handler {
 			); e != nil {
 				deps.Logger.Warn().Err(e).Str("uid", u.ID).Msg("refresh_slack_users: update people failed")
 			}
+			// Fill the person's email (the key that merges them with BambooHR/Jira).
+			// Guard against the UNIQUE(email) constraint: only set if free.
+			if email := strings.ToLower(strings.TrimSpace(u.Profile.Email)); email != "" {
+				if _, e := deps.DB.Exec(ctx, `
+					UPDATE graph.people SET email = $2
+					WHERE slack_user_id = $1 AND email IS NULL
+					  AND NOT EXISTS (SELECT 1 FROM graph.people WHERE email = $2)`,
+					u.ID, email,
+				); e != nil {
+					deps.Logger.Warn().Err(e).Str("uid", u.ID).Msg("refresh_slack_users: update email failed")
+				}
+			}
 		}
 
 		deps.Logger.Info().Int("count", len(users)).Msg("refresh_slack_users: done")
@@ -76,6 +89,7 @@ type slackUser struct {
 	Profile struct {
 		DisplayName string `json:"display_name"`
 		RealName    string `json:"real_name"`
+		Email       string `json:"email"` // requires users:read.email scope; "" otherwise
 	} `json:"profile"`
 }
 

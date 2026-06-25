@@ -5,10 +5,13 @@ import (
 	"encoding/base64"
 	"encoding/csv"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 
 	"github.com/agent-mem/agent-mem/internal/graph/jobs"
 )
@@ -24,6 +27,7 @@ type importBambooHRPayload struct {
 type bambooRow struct {
 	EEID       string
 	FullName   string
+	Email      string
 	ReportsTo  string
 	DepthFromRoot int
 }
@@ -85,6 +89,12 @@ func importBambooHRHandler(deps Deps) jobs.Handler {
 		if !hasEEID || !hasName || !hasReports {
 			return fmt.Errorf("%w: import_bamboohr: CSV must have columns EEID, Full Name, Reports To", jobs.ErrFatal)
 		}
+		// Email is optional but is the key that merges BambooHR identities with
+		// Slack/Jira/etc., so org seniority attaches to those messages.
+		emailCol, hasEmail := colIdx["work email"]
+		if !hasEmail {
+			emailCol, hasEmail = colIdx["email"]
+		}
 
 		// Parse rows.
 		var rows []bambooRow
@@ -102,7 +112,11 @@ func importBambooHRHandler(deps Deps) jobs.Handler {
 			if eeid == "" || name == "" {
 				continue
 			}
-			rows = append(rows, bambooRow{EEID: eeid, FullName: name, ReportsTo: reportsTo})
+			email := ""
+			if hasEmail && len(rec) > emailCol {
+				email = strings.ToLower(strings.TrimSpace(rec[emailCol]))
+			}
+			rows = append(rows, bambooRow{EEID: eeid, FullName: name, Email: email, ReportsTo: reportsTo})
 		}
 
 		if len(rows) == 0 {
@@ -116,6 +130,9 @@ func importBambooHRHandler(deps Deps) jobs.Handler {
 				deps.Logger.Warn().Str("eeid", row.EEID).Msg("import_bamboohr: skip non-numeric EEID")
 				continue
 			}
+			// Upsert by eeid WITHOUT email here — email is set in the reconcile step
+			// below, which first merges any pre-existing Slack/etc. person that already
+			// owns the email (email is UNIQUE, so a naive set would collide).
 			_, execErr := deps.DB.Exec(ctx, `
 				INSERT INTO graph.people (eeid, display_name, reports_to, machine_id)
 				VALUES ($1, $2, $3, $4)
@@ -156,8 +173,94 @@ func importBambooHRHandler(deps Deps) jobs.Handler {
 			}
 		}
 
+		// Step 4: attach emails + merge with any pre-existing Slack/Jira/etc. person
+		// that already owns the email, so org seniority flows onto their messages.
+		merged := 0
+		for _, row := range rows {
+			eeidInt, err := parseEEID(row.EEID)
+			if err != nil || row.Email == "" {
+				continue
+			}
+			didMerge, e := reconcileBambooEmail(ctx, deps, eeidInt, row.Email)
+			if e != nil {
+				deps.Logger.Warn().Err(e).Str("eeid", row.EEID).Msg("import_bamboohr: reconcile email failed")
+				continue
+			}
+			if didMerge {
+				merged++
+			}
+		}
+		deps.Logger.Info().Int("rows", len(rows)).Int("merged", merged).Msg("import_bamboohr: done")
+
 		return nil
 	}
+}
+
+// reconcileBambooEmail attaches email to the eeid person and, if another person
+// (Slack/Jira/…) already owns that email, merges it into the eeid person so a single
+// row carries both org info (eeid/depth) and the source identifiers. Returns whether
+// a merge happened.
+func reconcileBambooEmail(ctx context.Context, deps Deps, eeid int, email string) (bool, error) {
+	var canonicalID int64
+	if err := deps.DB.QueryRow(ctx, `SELECT id FROM graph.people WHERE eeid=$1`, eeid).Scan(&canonicalID); err != nil {
+		return false, err
+	}
+	var otherID int64
+	err := deps.DB.QueryRow(ctx,
+		`SELECT id FROM graph.people WHERE email=$1 AND merged_into IS NULL`, email).Scan(&otherID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		// Nobody owns the email yet — safe to set it on the eeid person.
+		_, e := deps.DB.Exec(ctx, `UPDATE graph.people SET email=$2 WHERE id=$1 AND email IS NULL`, canonicalID, email)
+		return false, e
+	}
+	if err != nil {
+		return false, err
+	}
+	if otherID == canonicalID {
+		return false, nil // already attached
+	}
+
+	tx, err := deps.DB.Begin(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback(ctx)
+
+	var slackUID, jiraAcct, ghLogin, pdUser *string
+	if err := tx.QueryRow(ctx,
+		`SELECT slack_user_id, jira_account_id, github_login, pagerduty_user_id FROM graph.people WHERE id=$1`,
+		otherID).Scan(&slackUID, &jiraAcct, &ghLogin, &pdUser); err != nil {
+		return false, err
+	}
+	// Free the loser's UNIQUE columns and mark it merged.
+	if _, err := tx.Exec(ctx,
+		`UPDATE graph.people SET email=NULL, slack_user_id=NULL, jira_account_id=NULL,
+		 github_login=NULL, pagerduty_user_id=NULL, merged_into=$2 WHERE id=$1`,
+		otherID, canonicalID); err != nil {
+		return false, err
+	}
+	// Move email + identifiers onto the canonical (eeid) person.
+	if _, err := tx.Exec(ctx,
+		`UPDATE graph.people SET email=$2,
+		 slack_user_id=COALESCE(slack_user_id,$3), jira_account_id=COALESCE(jira_account_id,$4),
+		 github_login=COALESCE(github_login,$5), pagerduty_user_id=COALESCE(pagerduty_user_id,$6)
+		 WHERE id=$1`,
+		canonicalID, email, slackUID, jiraAcct, ghLogin, pdUser); err != nil {
+		return false, err
+	}
+	// Repoint references from the loser to the canonical person.
+	if _, err := tx.Exec(ctx,
+		`UPDATE graph.nodes SET author_person_id=$1 WHERE author_person_id=$2`, canonicalID, otherID); err != nil {
+		return false, err
+	}
+	if _, err := tx.Exec(ctx,
+		`UPDATE graph.identity_map SET person_id=$1 WHERE person_id=$2`, canonicalID, otherID); err != nil {
+		return false, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // computeDepth recursively computes the depth of a row from the root (person with no manager).

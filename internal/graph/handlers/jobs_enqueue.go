@@ -15,6 +15,7 @@ var enqueuableTypes = map[string]bool{
 	"refresh_slack_channels": true,
 	"refresh_slack_users":    true,
 	"refresh_slack_groups":   true,
+	"import_bamboohr":        true, // payload: {csv_path} or {csv_bytes}
 }
 
 type jobsEnqueueRequest struct {
