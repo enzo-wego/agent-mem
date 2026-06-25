@@ -23,6 +23,82 @@ import (
 // gwsScopes are the read-only scopes the service account requests.
 const gwsScopes = "https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/documents.readonly"
 
+// gwsTokenProvider yields a valid Google access token, refreshing as needed.
+// Implemented by both the service-account (JWT-bearer) and the OAuth user
+// (refresh-token) sources.
+type gwsTokenProvider interface {
+	Token(ctx context.Context) (string, error)
+}
+
+const gwsOAuthTokenURI = "https://oauth2.googleapis.com/token"
+
+// gwsOAuthTokenSource mints and caches Google access tokens from an installed-app
+// OAuth client + a long-lived refresh token (the credentials the `gws` CLI already
+// holds for the logged-in user). Durable and reuses the user's existing doc access,
+// so no service account or domain-wide delegation is needed. Safe for concurrent use.
+type gwsOAuthTokenSource struct {
+	clientID     string
+	clientSecret string
+	refreshToken string
+	client       *http.Client
+
+	mu    sync.Mutex
+	token string
+	exp   time.Time
+}
+
+func newGWSOAuthTokenSource(clientID, clientSecret, refreshToken string, client *http.Client) *gwsOAuthTokenSource {
+	if client == nil {
+		client = http.DefaultClient
+	}
+	return &gwsOAuthTokenSource{clientID: clientID, clientSecret: clientSecret, refreshToken: refreshToken, client: client}
+}
+
+func (ts *gwsOAuthTokenSource) Token(ctx context.Context) (string, error) {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+
+	if ts.token != "" && time.Now().Before(ts.exp.Add(-60*time.Second)) {
+		return ts.token, nil
+	}
+
+	form := url.Values{}
+	form.Set("client_id", ts.clientID)
+	form.Set("client_secret", ts.clientSecret)
+	form.Set("refresh_token", ts.refreshToken)
+	form.Set("grant_type", "refresh_token")
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, gwsOAuthTokenURI, strings.NewReader(form.Encode()))
+	if err != nil {
+		return "", fmt.Errorf("gws oauth: build request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	resp, err := ts.client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("gws oauth: refresh: %w", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("gws oauth: refresh status %d: %s", resp.StatusCode, string(body))
+	}
+
+	var tok struct {
+		AccessToken string `json:"access_token"`
+		ExpiresIn   int    `json:"expires_in"`
+	}
+	if err := json.Unmarshal(body, &tok); err != nil {
+		return "", fmt.Errorf("gws oauth: decode: %w", err)
+	}
+	if tok.AccessToken == "" {
+		return "", fmt.Errorf("gws oauth: empty access_token in response")
+	}
+	ts.token = tok.AccessToken
+	ts.exp = time.Now().Add(time.Duration(tok.ExpiresIn) * time.Second)
+	return ts.token, nil
+}
+
 // gwsServiceAccount is the relevant slice of a Google service-account key JSON.
 type gwsServiceAccount struct {
 	ClientEmail string `json:"client_email"`

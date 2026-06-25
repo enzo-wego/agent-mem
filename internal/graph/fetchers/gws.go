@@ -29,12 +29,21 @@ var (
 type gwsFetcher struct {
 	cfg Config
 	log zerolog.Logger
-	ts  *gwsTokenSource // nil unless a service-account key is configured
+	ts  gwsTokenProvider // nil unless OAuth refresh token or a service-account key is configured
 }
 
 func newGWSFetcher(cfg Config, log zerolog.Logger) *gwsFetcher {
 	f := &gwsFetcher{cfg: cfg, log: log}
-	if cfg.GWSServiceKeyPath != "" {
+	switch {
+	case os.Getenv("AGENT_MEM_GWS_REFRESH_TOKEN") != "":
+		// Preferred when present: reuse the gws CLI's OAuth user grant (the logged-in
+		// user already has access to the docs — no service account / delegation needed).
+		f.ts = newGWSOAuthTokenSource(
+			os.Getenv("AGENT_MEM_GWS_CLIENT_ID"),
+			os.Getenv("AGENT_MEM_GWS_CLIENT_SECRET"),
+			os.Getenv("AGENT_MEM_GWS_REFRESH_TOKEN"),
+			cfg.HTTPClient)
+	case cfg.GWSServiceKeyPath != "":
 		// AGENT_MEM_GWS_SUBJECT enables domain-wide delegation (impersonate a user)
 		// so the SA can read docs across the org, not just ones shared with it.
 		f.ts = newGWSTokenSource(cfg.GWSServiceKeyPath, os.Getenv("AGENT_MEM_GWS_SUBJECT"), cfg.HTTPClient)
@@ -51,7 +60,7 @@ func (f *gwsFetcher) accessToken(ctx context.Context) (string, error) {
 	if f.ts != nil {
 		return f.ts.Token(ctx)
 	}
-	return "", fmt.Errorf("gws fetcher not configured: set AGENT_MEM_GWS_SERVICE_KEY_PATH (service account) or GWS_BEARER_TOKEN")
+	return "", fmt.Errorf("gws fetcher not configured: set AGENT_MEM_GWS_REFRESH_TOKEN (+CLIENT_ID/SECRET), AGENT_MEM_GWS_SERVICE_KEY_PATH, or GWS_BEARER_TOKEN")
 }
 
 func (f *gwsFetcher) Source() string { return "gws" }
