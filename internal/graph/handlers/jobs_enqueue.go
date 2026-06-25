@@ -11,11 +11,12 @@ import (
 // trigger. Kept narrow (maintenance/refresh jobs) so the API-key boundary can't
 // be used to inject arbitrary work.
 var enqueuableTypes = map[string]bool{
-	"backfill_created_at":    true,
-	"refresh_slack_channels": true,
-	"refresh_slack_users":    true,
-	"refresh_slack_groups":   true,
-	"import_bamboohr":        true, // payload: {csv_path} or {csv_bytes}
+	"backfill_created_at":      true,
+	"refresh_slack_channels":   true,
+	"refresh_slack_users":      true,
+	"refresh_slack_groups":     true,
+	"import_bamboohr":          true, // payload: {csv_path} or {csv_bytes}
+	"merge_identities_by_name": true,
 }
 
 type jobsEnqueueRequest struct {

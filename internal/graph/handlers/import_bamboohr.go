@@ -190,7 +190,10 @@ func importBambooHRHandler(deps Deps) jobs.Handler {
 				merged++
 			}
 		}
-		deps.Logger.Info().Int("rows", len(rows)).Int("merged", merged).Msg("import_bamboohr: done")
+		// Step 5: bridge by exact full-name match for anyone without a shared email
+		// (e.g. when the Slack bot lacks users:read.email).
+		nameMerged := reconcileBambooNames(ctx, deps, rows)
+		deps.Logger.Info().Int("rows", len(rows)).Int("merged_by_email", merged).Int("merged_by_name", nameMerged).Msg("import_bamboohr: done")
 
 		return nil
 	}
@@ -219,10 +222,70 @@ func reconcileBambooEmail(ctx context.Context, deps Deps, eeid int, email string
 	if otherID == canonicalID {
 		return false, nil // already attached
 	}
+	return true, mergePersonInto(ctx, deps, canonicalID, otherID, email)
+}
 
+// reconcileBambooNames bridges identities by exact full-name match when no shared
+// email exists: a unique BambooHR Full Name that maps to exactly one un-merged
+// Slack person (by real_name) merges that person into the eeid person. Conservative
+// — skips any name that is ambiguous on either side. Returns merge count.
+func reconcileBambooNames(ctx context.Context, deps Deps, rows []bambooRow) int {
+	// Only consider full names that are unique within the BambooHR set.
+	nameCount := map[string]int{}
+	nameEEID := map[string]int{}
+	for _, r := range rows {
+		ln := strings.ToLower(strings.TrimSpace(r.FullName))
+		if ln == "" {
+			continue
+		}
+		nameCount[ln]++
+		if eeid, err := parseEEID(r.EEID); err == nil {
+			nameEEID[ln] = eeid
+		}
+	}
+	merged := 0
+	for ln, cnt := range nameCount {
+		if cnt != 1 {
+			continue // ambiguous BambooHR name
+		}
+		eeid, ok := nameEEID[ln]
+		if !ok {
+			continue
+		}
+		var canonicalID int64
+		if err := deps.DB.QueryRow(ctx, `SELECT id FROM graph.people WHERE eeid=$1`, eeid).Scan(&canonicalID); err != nil {
+			continue
+		}
+		// Exactly one un-merged, eeid-less Slack person with that real_name.
+		var otherID int64
+		var matches int
+		if err := deps.DB.QueryRow(ctx, `
+			SELECT count(*), COALESCE(min(p.id),0)
+			FROM graph.slack_users su
+			JOIN graph.people p ON p.slack_user_id = su.slack_user_id
+			WHERE lower(su.real_name) = $1 AND p.merged_into IS NULL AND p.eeid IS NULL`,
+			ln).Scan(&matches, &otherID); err != nil {
+			continue
+		}
+		if matches != 1 || otherID == 0 || otherID == canonicalID {
+			continue
+		}
+		if err := mergePersonInto(ctx, deps, canonicalID, otherID, ""); err != nil {
+			deps.Logger.Warn().Err(err).Str("name", ln).Msg("import_bamboohr: name merge failed")
+			continue
+		}
+		merged++
+	}
+	return merged
+}
+
+// mergePersonInto folds person otherID into canonicalID: frees the loser's UNIQUE
+// columns, moves its source identifiers + (optional) email onto the canonical row,
+// repoints author_person_id / identity_map, and marks the loser merged_into.
+func mergePersonInto(ctx context.Context, deps Deps, canonicalID, otherID int64, email string) error {
 	tx, err := deps.DB.Begin(ctx)
 	if err != nil {
-		return false, err
+		return err
 	}
 	defer tx.Rollback(ctx)
 
@@ -230,37 +293,31 @@ func reconcileBambooEmail(ctx context.Context, deps Deps, eeid int, email string
 	if err := tx.QueryRow(ctx,
 		`SELECT slack_user_id, jira_account_id, github_login, pagerduty_user_id FROM graph.people WHERE id=$1`,
 		otherID).Scan(&slackUID, &jiraAcct, &ghLogin, &pdUser); err != nil {
-		return false, err
+		return err
 	}
-	// Free the loser's UNIQUE columns and mark it merged.
 	if _, err := tx.Exec(ctx,
 		`UPDATE graph.people SET email=NULL, slack_user_id=NULL, jira_account_id=NULL,
 		 github_login=NULL, pagerduty_user_id=NULL, merged_into=$2 WHERE id=$1`,
 		otherID, canonicalID); err != nil {
-		return false, err
+		return err
 	}
-	// Move email + identifiers onto the canonical (eeid) person.
 	if _, err := tx.Exec(ctx,
-		`UPDATE graph.people SET email=$2,
+		`UPDATE graph.people SET email=COALESCE($2,email),
 		 slack_user_id=COALESCE(slack_user_id,$3), jira_account_id=COALESCE(jira_account_id,$4),
 		 github_login=COALESCE(github_login,$5), pagerduty_user_id=COALESCE(pagerduty_user_id,$6)
 		 WHERE id=$1`,
-		canonicalID, email, slackUID, jiraAcct, ghLogin, pdUser); err != nil {
-		return false, err
+		canonicalID, nullableStringVal(email), slackUID, jiraAcct, ghLogin, pdUser); err != nil {
+		return err
 	}
-	// Repoint references from the loser to the canonical person.
 	if _, err := tx.Exec(ctx,
 		`UPDATE graph.nodes SET author_person_id=$1 WHERE author_person_id=$2`, canonicalID, otherID); err != nil {
-		return false, err
+		return err
 	}
 	if _, err := tx.Exec(ctx,
 		`UPDATE graph.identity_map SET person_id=$1 WHERE person_id=$2`, canonicalID, otherID); err != nil {
-		return false, err
+		return err
 	}
-	if err := tx.Commit(ctx); err != nil {
-		return false, err
-	}
-	return true, nil
+	return tx.Commit(ctx)
 }
 
 // computeDepth recursively computes the depth of a row from the root (person with no manager).

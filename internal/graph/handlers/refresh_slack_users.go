@@ -42,13 +42,14 @@ func refreshSlackUsersHandler(deps Deps) jobs.Handler {
 				continue
 			}
 			if _, e := deps.DB.Exec(ctx, `
-				INSERT INTO graph.slack_users (slack_user_id, display_name, is_bot, refreshed_at, machine_id)
-				VALUES ($1, $2, $3, NOW(), $4)
+				INSERT INTO graph.slack_users (slack_user_id, display_name, real_name, is_bot, refreshed_at, machine_id)
+				VALUES ($1, $2, $3, $4, NOW(), $5)
 				ON CONFLICT (slack_user_id) DO UPDATE SET
 					display_name = EXCLUDED.display_name,
+					real_name    = EXCLUDED.real_name,
 					is_bot       = EXCLUDED.is_bot,
 					refreshed_at = NOW()`,
-				u.ID, name, u.IsBot, deps.MachineID,
+				u.ID, name, strings.TrimSpace(u.Profile.RealName), u.IsBot, deps.MachineID,
 			); e != nil {
 				deps.Logger.Warn().Err(e).Str("uid", u.ID).Msg("refresh_slack_users: upsert slack_users failed")
 				continue
