@@ -366,6 +366,12 @@ func NewIngestContentHandler(deps Deps) http.Handler {
 			enqueueSummarizeThread(ctx, deps.DB, req.Metadata.ChannelID, req.Metadata.ThreadTs)
 		}
 
+		// Derive a feature entity from newly-ingested/updated Jira tickets so the
+		// extractor can auto-link Slack messages mentioning the feature.
+		if req.Source == "jira" && outcome != "unchanged" {
+			enqueueDeriveFeatureEntity(ctx, deps.DB, nodeID)
+		}
+
 		// Enqueue resolve_identity if author has no email yet.
 		if authorPersonID != nil && deps.Identity != nil {
 			var emailVal *string

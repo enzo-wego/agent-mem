@@ -59,4 +59,5 @@ func RegisterAll(reg *jobs.Registry, deps Deps) {
 	reg.Register("backfill_slack_channel", NewBackfillSlackChannelHandler(deps))
 	reg.Register("summarize_thread", NewSummarizeThreadHandler(deps))
 	reg.Register("backfill_slack_thread", NewBackfillSlackThreadHandler(deps))
+	reg.Register("derive_feature_entity", NewDeriveFeatureEntityHandler(deps))
 }
