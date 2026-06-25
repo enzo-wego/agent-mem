@@ -1,0 +1,216 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>agent-mem — how the knowledge graph is built</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --panel2:#1c2330; --line:#30363d;
+    --ink:#e6edf3; --muted:#8b949e; --green:#3fb950; --greenbg:#0f2417;
+    --amber:#d29922; --amberbg:#2a210a; --red:#f85149; --redbg:#2a1213;
+    --blue:#58a6ff; --bluebg:#0d2136; --purple:#bc8cff; --purplebg:#1d1430;
+    --mono:"SF Mono",ui-monospace,"JetBrains Mono",Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
+    line-height:1.55;padding:32px 20px 72px}
+  .wrap{max-width:1060px;margin:0 auto}
+  h1{font-size:25px;margin:0 0 4px;letter-spacing:-.2px}
+  .sub{color:var(--muted);font-size:14px;margin-bottom:8px}
+  .lead{font-size:14.5px;color:var(--ink);background:var(--panel);border:1px solid var(--line);
+    border-left:3px solid var(--blue);border-radius:8px;padding:12px 16px;margin:18px 0 4px}
+  h2{font-size:13px;text-transform:uppercase;letter-spacing:1.2px;color:var(--muted);
+    margin:36px 0 14px;border-bottom:1px solid var(--line);padding-bottom:8px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;
+    padding:18px 20px;margin-bottom:14px}
+  code,.k{font-family:var(--mono);font-size:12.5px;background:#222b38;color:#9fd1ff;
+    padding:1px 6px;border-radius:5px;border:1px solid #2a3543;white-space:nowrap}
+  .step{display:flex;gap:14px;align-items:flex-start;margin:0 0 14px}
+  .step:last-child{margin-bottom:0}
+  .num{flex:0 0 28px;height:28px;border-radius:50%;background:var(--bluebg);
+    color:var(--blue);border:1px solid #1d4e7a;display:grid;place-items:center;
+    font-weight:700;font-size:13px;font-family:var(--mono)}
+  .step .t{font-weight:600;font-size:15px}
+  .step .d{color:var(--muted);font-size:13.5px;margin-top:2px}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px}
+  @media(max-width:780px){.grid2,.grid3{grid-template-columns:1fr}}
+  .tile{border:1px solid var(--line);border-radius:10px;padding:13px 15px;background:var(--panel)}
+  .tile h3{margin:0 0 6px;font-size:14px;display:flex;align-items:center;gap:8px}
+  .tile p{margin:0;color:var(--muted);font-size:13px}
+  .tag{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;
+    padding:2px 7px;border-radius:5px;font-family:var(--mono)}
+  .tag.green{background:var(--greenbg);color:var(--green);border:1px solid #1f6f37}
+  .tag.blue{background:var(--bluebg);color:var(--blue);border:1px solid #1d4e7a}
+  .tag.amber{background:var(--amberbg);color:var(--amber);border:1px solid #5a4410}
+  .tag.purple{background:var(--purplebg);color:var(--purple);border:1px solid #3a2a5a}
+  .tag.red{background:var(--redbg);color:var(--red);border:1px solid #5a2020}
+  .pill{display:inline-block;font-family:var(--mono);font-size:11.5px;color:var(--purple);
+    background:var(--purplebg);border:1px solid #3a2a5a;padding:2px 8px;border-radius:6px;margin:2px 4px 2px 0}
+  .pill.g{color:var(--green);background:var(--greenbg);border-color:#1f6f37}
+  .note{font-size:12.5px;color:var(--muted);margin-top:10px}
+  .arrow{text-align:center;color:var(--line);font-size:16px;line-height:1;margin:-4px 0 10px}
+  /* flow diagram */
+  .flow{display:flex;flex-wrap:wrap;align-items:center;gap:8px;font-family:var(--mono);font-size:12px}
+  .flow .box{border:1px solid var(--line);border-radius:7px;padding:7px 10px;background:var(--panel2)}
+  .flow .box.g{border-color:#1f6f37;color:var(--green)}
+  .flow .box.b{border-color:#1d4e7a;color:var(--blue)}
+  .flow .box.p{border-color:#3a2a5a;color:var(--purple)}
+  .flow .box.a{border-color:#5a4410;color:var(--amber)}
+  .flow .sep{color:var(--muted)}
+  table{width:100%;border-collapse:collapse;font-size:13px;margin-top:4px}
+  th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.6px;font-weight:600}
+  td code{white-space:normal}
+  .foot{color:var(--muted);font-size:12px;margin-top:30px;border-top:1px solid var(--line);padding-top:14px}
+  .layers{display:flex;flex-direction:column;gap:0}
+  .layer{display:flex;gap:12px;align-items:center;padding:11px 14px;border:1px solid var(--line);border-radius:9px;margin-bottom:8px}
+  .layer .lr{flex:0 0 150px;font-family:var(--mono);font-size:12.5px}
+  .layer .ld{flex:1;color:var(--muted);font-size:13px}
+  .layer .hot{flex:0 0 70px;text-align:right}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>agent-mem — how the knowledge graph is built</h1>
+  <div class="sub">From a Slack message (or Jira / GitHub / Confluence / …) to a cross-source graph of typed nodes and edges.</div>
+
+  <div class="lead">
+    Everything that flows in becomes a <strong>node</strong> with a deterministic ID; references between
+    things become typed <strong>edges</strong>. One graph spans all sources, so you can traverse
+    <em>message → ticket → PR → people</em>. Heavy work (full bodies, embeddings, identity) happens
+    asynchronously off a Postgres job queue.
+  </div>
+
+  <h2>1 · The data model</h2>
+  <div class="grid2">
+    <div class="tile">
+      <h3><span class="tag blue">nodes</span> things</h3>
+      <p>Each artifact = one row in <code>graph.nodes</code>, keyed by a <strong>deterministic ID</strong> so the same thing always lands on the same node (idempotent).</p>
+      <div style="margin-top:9px">
+        <span class="pill">slack:C05…:1782281414.679019</span>
+        <span class="pill">jira:PAY-2204</span>
+        <span class="pill">gh_pr:wego/payments#1960</span>
+        <span class="pill">cf:3962896432</span>
+        <span class="pill">person:…</span>
+      </div>
+    </div>
+    <div class="tile">
+      <h3><span class="tag green">edges</span> relationships</h3>
+      <p>A typed link in <code>graph.edges</code> between two nodes. Schema supports <code>REFERENCES · PART_OF · MENTIONS · TOUCHES · REPLIES_TO · AUTHORED_BY · OWNED_BY</code>.</p>
+      <p class="note">Today essentially all populated edges are <span class="tag green">REFERENCES</span> — e.g. a Slack message that mentions <code>PAY-2204</code> → <code>REFERENCES</code> → <code>jira:PAY-2204</code>.</p>
+    </div>
+  </div>
+  <div class="card" style="margin-top:14px">
+    <div style="font-size:13px;color:var(--muted);margin-bottom:8px">10 sources, one graph:</div>
+    <span class="pill g">slack</span><span class="pill g">jira</span><span class="pill g">github</span>
+    <span class="pill g">confluence</span><span class="pill g">pagerduty</span><span class="pill g">datadog</span>
+    <span class="pill g">sentry</span><span class="pill g">gws</span>
+    <span class="pill">wegohub</span><span class="pill">claude_artifact</span>
+    <div class="note">
+      <span class="pill g" style="margin:0 4px 0 0">green</span> arrive via the content-push path
+      (<code>/ingest/content</code>, 8 sources). <span class="pill" style="margin:0 4px 0 0">purple</span>
+      <code>wegohub</code> &amp; <code>claude_artifact</code> arrive via the <strong>URL path</strong>
+      (<code>/ingest/url</code>) — a pasted claude.ai artifact or Wego Hub link is matched, turned into a node, then
+      <code>fetch_body</code> + <code>index_artifact</code> pull and embed its content.
+    </div>
+  </div>
+
+  <h2>2 · Three ways content enters</h2>
+  <div class="grid3">
+    <div class="tile">
+      <h3><span class="tag green">push</span> content</h3>
+      <p>EnzoBot's Slack socket forwards each message, already normalized, to
+      <code>POST /api/graph/ingest/content</code> with <code>{source, canonical_url, body, metadata}</code>.
+      The hot path — 8 sources.</p>
+    </div>
+    <div class="tile">
+      <h3><span class="tag blue">push</span> URL</h3>
+      <p><code>POST /api/graph/ingest/url</code> — a pasted link is matched to a source, turned into a node, and
+      enriched by jobs. The only way <code>wegohub</code> &amp; <code>claude_artifact</code> enter (claude.ai &amp; Wego Hub links).</p>
+    </div>
+    <div class="tile">
+      <h3><span class="tag amber">pull</span> backfill</h3>
+      <p>Jobs fetch full content from each source's API and run it through agent-mem's own
+      <code>normalizer/{slack,jira,…}.go</code> to parse mentions, links and structure.</p>
+    </div>
+  </div>
+
+  <h2>3 · What one ingest does</h2>
+  <div class="card">
+    <div class="step"><div class="num">1</div><div><div class="t">Derive node ID</div><div class="d"><code>buildNodeID()</code> — deterministic per source (e.g. <code>slack:&lt;channel&gt;:&lt;ts&gt;</code>). Same input → same node.</div></div></div>
+    <div class="step"><div class="num">2</div><div><div class="t">Resolve author → person</div><div class="d"><code>identity.EnsurePerson()</code> — the author (and mentions) become <code>graph.people</code>, deduped across slack uid / jira uid / gh login into one person.</div></div></div>
+    <div class="step"><div class="num">3</div><div><div class="t">Upsert the node (with a freshness guard)</div><div class="d"><code>upsertNodeOutcome()</code> returns <span class="tag green">created</span> / <span class="tag blue">updated</span> / <span class="tag amber">unchanged</span>. An older edit can't clobber a newer one: <code>WHERE EXCLUDED.body_ts &gt;= nodes.body_ts</code>. Sets <code>scope = slack:&lt;channel&gt;</code> (what the map counts).</div></div></div>
+    <div class="step"><div class="num">4</div><div><div class="t">Store the body</div><div class="d">Written into the 3 storage tiers (see §5).</div></div></div>
+    <div class="step"><div class="num">5</div><div><div class="t">Extract references → reconcile edges</div><div class="d">The extractor finds links/IDs/entities and upserts edges; stale edges are pruned (see §4).</div></div></div>
+    <div class="step"><div class="num">6</div><div><div class="t">Register attachments</div><div class="d">Each file → a <code>slack_file</code> node + a <code>REFERENCES</code> edge + a <code>describe_attachment</code> job (OCR / Gemini description).</div></div></div>
+    <div class="step"><div class="num">7</div><div><div class="t">Enqueue async enrichment</div><div class="d"><code>fetch_body</code> (priority 0), <code>resolve_identity</code> (if the author has no email yet), plus the attachment jobs — all off the queue (see §6).</div></div></div>
+  </div>
+
+  <h2>4 · How relationships form — the extractor</h2>
+  <div class="card">
+    <p style="margin:0 0 12px;font-size:13.5px;color:var(--muted)">The extractor scans the normalized body three ways and emits <strong>Findings</strong>, each pointing at a target node with a suggested edge kind:</p>
+    <div class="grid3">
+      <div class="tile"><h3><span class="tag blue">url</span></h3><p>URL regex → links to Jira / PR / Confluence / Datadog / etc.</p></div>
+      <div class="tile"><h3><span class="tag purple">id_regex</span></h3><p>Bare keys like <code>PAY-2204</code>, <code>wego/payments#1960</code>.</p></div>
+      <div class="tile"><h3><span class="tag green">entity</span></h3><p>Alias match against <code>graph.entities</code> (cached trie, 5-min TTL) — features, partners, currencies.</p></div>
+    </div>
+    <div class="arrow" style="margin:14px 0">▼</div>
+    <div class="flow" style="justify-content:center">
+      <span class="box">body</span><span class="sep">→</span>
+      <span class="box b">Findings</span><span class="sep">→</span>
+      <span class="box g">reconcileEdges (upsert)</span><span class="sep">+</span>
+      <span class="box a">pruneStaleEdges (delete)</span>
+    </div>
+    <div class="note">Edges are reconciled on every revision: editing a message <strong>adds</strong> edges it now implies and <strong>removes</strong> ones it no longer does. The target node is auto-created as a stub even if that Jira ticket / PR was never ingested — backfill fills it in later.</div>
+  </div>
+
+  <h2>5 · Body storage — 3 tiers (cost-managed)</h2>
+  <div class="layers">
+    <div class="layer"><div class="lr" style="color:var(--green)">graph.nodes.body</div><div class="ld">Normalized plain text — the hot tier, always present.</div><div class="hot"><span class="tag green">hot</span></div></div>
+    <div class="layer"><div class="lr" style="color:var(--amber)">graph.artifact_bodies</div><div class="ld">Full body / OCR / attachment descriptions. Has an <code>expires_at</code> TTL so bulk can age out.</div><div class="hot"><span class="tag amber">warm</span></div></div>
+    <div class="layer"><div class="lr" style="color:var(--purple)">graph.artifact_index</div><div class="ld">Summary + <strong>768-dim Gemini embedding</strong> for semantic search. The expensive tier (~9 KB/row + HNSW index), written by the <code>index_artifact</code> job.</div><div class="hot"><span class="tag purple">cold</span></div></div>
+  </div>
+
+  <h2>6 · Async enrichment — a Postgres job queue</h2>
+  <div class="card">
+    <p style="margin:0 0 12px;font-size:13.5px;color:var(--muted)">Ingest returns fast; the heavy work is queued in <code>graph.jobs</code> and run by workers with priorities (0 = urgent).</p>
+    <table>
+      <tr><th>Job</th><th>Priority</th><th>What it does</th></tr>
+      <tr><td><code>fetch_body</code></td><td><span class="tag red">0</span></td><td>Pull full content from the source API, re-normalize, re-extract.</td></tr>
+      <tr><td><code>index_artifact</code></td><td><span class="tag amber">5</span></td><td>Summarize + compute the Gemini embedding for search.</td></tr>
+      <tr><td><code>describe_attachment</code></td><td><span class="tag amber">5</span></td><td>OCR / Gemini-describe images &amp; files.</td></tr>
+      <tr><td><code>resolve_identity</code></td><td><span class="tag amber">5</span></td><td>Backfill a person's email / identity across systems.</td></tr>
+      <tr><td><code>refresh_slack_users</code> · <code>refresh_slack_groups</code></td><td><span class="tag amber">5</span></td><td>Populate name lookups (the group one needs the Slack <code>usergroups:read</code> scope).</td></tr>
+    </table>
+  </div>
+
+  <h2>7 · End to end</h2>
+  <div class="card">
+    <div class="flow">
+      <span class="box g">Slack msg</span><span class="sep">→</span>
+      <span class="box">/ingest/content</span><span class="sep">→</span>
+      <span class="box b">node slack:CH:TS</span><span class="sep">→</span>
+      <span class="box p">author → person</span><span class="sep">→</span>
+      <span class="box">3-tier body</span>
+    </div>
+    <div class="arrow" style="text-align:left;margin:8px 0 8px 4px">↳</div>
+    <div class="flow">
+      <span class="box a">extractor</span><span class="sep">→</span>
+      <span class="box g">edges → jira / PR / entities</span><span class="sep">→</span>
+      <span class="box">jobs: full body · embedding · OCR · identity</span>
+    </div>
+    <div class="note">The result is one cross-source graph. It powers <code>/resolve</code> (context for a question), semantic <code>/search</code>, and the map panel's thread grouping &amp; reference chips.</div>
+  </div>
+
+  <div class="foot">
+    Source of truth: <code>internal/graph/handlers/ingest_content.go</code>, <code>internal/graph/extractor/extractor.go</code>,
+    <code>internal/graph/normalizer/*</code>, <code>internal/graph/jobs/</code>, migration <code>20260527000001_graph_schema.sql</code>.
+  </div>
+
+</div>
+</body>
+</html>

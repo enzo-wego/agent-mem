@@ -450,11 +450,12 @@ export function LiveGlobePage() {
   function openGraph(t: ChannelTopic) {
     if (!t.node_id) return
     setGraphTopic(t)
-    // Serve from cache instantly; otherwise fetch this node's neighbors (depth 2).
+    // Serve from cache instantly; otherwise fetch this node's neighbors (depth 3
+    // so cross-source discussions one hop past the linked tickets show up).
     if (neighborCache[t.node_id]) return
     const nodeId = t.node_id
     setGraphLoading(true)
-    fetchNeighbors(nodeId, 2)
+    fetchNeighbors(nodeId, 3)
       .then((ns) => setNeighborCache((cur) => ({ ...cur, [nodeId]: ns || [] })))
       .catch(() => setNeighborCache((cur) => ({ ...cur, [nodeId]: [] })))
       .finally(() => setGraphLoading(false))

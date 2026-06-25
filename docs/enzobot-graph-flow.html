@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>EnzoBot × Graph Memory — restart & request flow</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --panel2:#1c2330; --line:#30363d;
+    --ink:#e6edf3; --muted:#8b949e; --green:#3fb950; --greenbg:#0f2417;
+    --amber:#d29922; --amberbg:#2a210a; --red:#f85149; --redbg:#2a1213;
+    --blue:#58a6ff; --bluebg:#0d2136; --purple:#bc8cff;
+    --mono:"SF Mono",ui-monospace,"JetBrains Mono",Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
+    line-height:1.5;padding:32px 20px 64px}
+  .wrap{max-width:1040px;margin:0 auto}
+  h1{font-size:24px;margin:0 0 4px;letter-spacing:-.2px}
+  .sub{color:var(--muted);font-size:14px;margin-bottom:6px}
+  .state{display:inline-flex;align-items:center;gap:8px;font-size:13px;font-weight:600;
+    background:var(--greenbg);color:var(--green);border:1px solid #1f6f37;
+    padding:6px 12px;border-radius:999px;margin:14px 0 28px}
+  .state .dot{width:8px;height:8px;border-radius:50%;background:var(--green);
+    box-shadow:0 0 0 4px rgba(63,185,80,.18)}
+  h2{font-size:13px;text-transform:uppercase;letter-spacing:1.2px;color:var(--muted);
+    margin:34px 0 14px;border-bottom:1px solid var(--line);padding-bottom:8px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;
+    padding:20px 22px;margin-bottom:14px}
+  .step{display:flex;gap:14px;align-items:flex-start;margin:0 0 6px}
+  .num{flex:0 0 28px;height:28px;border-radius:50%;background:var(--bluebg);
+    color:var(--blue);border:1px solid #1d4e7a;display:grid;place-items:center;
+    font-weight:700;font-size:13px;font-family:var(--mono)}
+  .step .body{flex:1}
+  .step .t{font-weight:600;font-size:15px}
+  .step .d{color:var(--muted);font-size:13.5px;margin-top:2px}
+  code,.k{font-family:var(--mono);font-size:12.5px;background:#222b38;color:#9fd1ff;
+    padding:1px 6px;border-radius:5px;border:1px solid #2a3543}
+  .arrow{text-align:center;color:var(--line);font-size:18px;line-height:1;margin:2px 0}
+  .branch{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:6px}
+  .lane{border-radius:10px;padding:14px 16px;border:1px solid}
+  .lane.no{background:#161b22;border-color:var(--line)}
+  .lane.yes{background:var(--greenbg);border-color:#1f6f37}
+  .lane h3{margin:0 0 8px;font-size:13px;letter-spacing:.4px}
+  .lane.no h3{color:var(--muted)}
+  .lane.yes h3{color:var(--green)}
+  .lane ul{margin:0;padding-left:18px;font-size:13.5px;color:var(--ink)}
+  .lane li{margin:3px 0}
+  .lane .tag{font-size:11px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.6px}
+  .acl{margin-top:10px;border:1px solid var(--line);border-radius:10px;overflow:hidden}
+  .acl .row{display:flex;align-items:center;gap:12px;padding:11px 14px;font-size:13.5px;
+    border-top:1px solid var(--line)}
+  .acl .row:first-child{border-top:none}
+  .acl .row .lab{flex:1}
+  .acl .row .res{font-family:var(--mono);font-size:12px;padding:3px 9px;border-radius:6px;white-space:nowrap}
+  .res.amber{background:var(--amberbg);color:var(--amber);border:1px solid #5a4410}
+  .res.green{background:var(--greenbg);color:var(--green);border:1px solid #1f6f37}
+  .res.empty{background:#21262d;color:var(--muted);border:1px solid var(--line)}
+  .pill{display:inline-block;font-family:var(--mono);font-size:11.5px;color:var(--purple);
+    background:#1d1430;border:1px solid #3a2a5a;padding:2px 8px;border-radius:6px;margin:2px 4px 2px 0}
+  .chan{font-family:var(--mono);font-size:12px;color:var(--green);background:var(--greenbg);
+    border:1px solid #1f6f37;padding:2px 8px;border-radius:6px;margin:2px 4px 2px 0;display:inline-block}
+  .note{font-size:12.5px;color:var(--muted);margin-top:10px}
+  .flow{display:flex;flex-direction:column;gap:0}
+  .actor{font-family:var(--mono);font-size:12px;color:var(--blue)}
+  .foot{color:var(--muted);font-size:12px;margin-top:28px;border-top:1px solid var(--line);padding-top:14px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>EnzoBot × Graph Memory</h1>
+  <div class="sub">What happens on restart, and the request flow when the integration is enabled.</div>
+  <div class="state"><span class="dot"></span> LIVE — enabled, scoped to payments channels (as of 2026-06-23)</div>
+
+  <h2>On restart</h2>
+  <div class="card">
+    <div class="step">
+      <div class="num">1</div>
+      <div class="body">
+        <div class="t">Load config + env</div>
+        <div class="d">
+          Reads <code>AGENT_MEM_GRAPH_URL</code>, <code>AGENT_MEM_API_KEY</code>,
+          and the master switches <code>GRAPH_CONTEXT_ENABLED</code> / <code>GRAPH_INGEST_ENABLED</code>,
+          plus per-channel <code>graph-context.yaml</code> (global default: <strong>false</strong>).
+        </div>
+      </div>
+    </div>
+    <div class="arrow">▼</div>
+    <div class="step">
+      <div class="num">2</div>
+      <div class="body"><div class="t">Branch on the master switch</div></div>
+    </div>
+
+    <div class="branch">
+      <div class="lane no">
+        <div class="tag">switch off (default)</div>
+        <h3>Dormant — no change</h3>
+        <ul>
+          <li>New graph code is loaded but inert.</li>
+          <li>No ingest, no injection, no DM commands.</li>
+          <li>Bot behaves exactly as before.</li>
+        </ul>
+      </div>
+      <div class="lane yes">
+        <div class="tag">switch on ← current</div>
+        <h3>Graph features active</h3>
+        <ul>
+          <li><strong>Ingest forwarder</strong> — new Slack msgs ▶ <code>/ingest</code></li>
+          <li><strong>Context injection</strong> — on questions in enabled channels</li>
+          <li><code>/whygraph</code>, <code>/search</code> DM commands</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="note">
+      Enabled channels (both directions scoped to these):
+      <span class="chan">payments-incidents · C08S954G2LX</span>
+      <span class="chan">payments-cko · C05RNSE8TBR</span>
+      <span class="chan">payments-eng · CUV9EAYGY</span>
+      <span class="chan">payments-pr-review · C0597404MS6</span>
+      <br>Every other channel inherits the global <code>enabled: false</code> → untouched.
+    </div>
+  </div>
+
+  <h2>When enabled — a user asks in an enabled channel</h2>
+  <div class="card">
+    <div class="actor">Slack user ──▶ EnzoBot</div>
+    <div style="height:10px"></div>
+
+    <div class="step">
+      <div class="num">1</div>
+      <div class="body">
+        <div class="t">Forward the message</div>
+        <div class="d">msg ▶ agent-mem <code>/ingest</code> — the graph keeps growing.</div>
+      </div>
+    </div>
+    <div class="arrow">▼</div>
+    <div class="step">
+      <div class="num">2</div>
+      <div class="body">
+        <div class="t">Resolve context</div>
+        <div class="d">
+          <code>POST /resolve</code> with <span class="pill">seeds from msg</span>
+          <span class="pill">asker_eeid = that user</span>, then ACL-filter on the asker:
+        </div>
+        <div class="acl">
+          <div class="row">
+            <div class="lab">Real user, no <code>slack_groups</code> yet <span style="color:var(--muted)">(today's state)</span></div>
+            <div class="res empty">public / unscoped only → ~empty</div>
+          </div>
+          <div class="row">
+            <div class="lab">Unfiltered — eeid 0 / trusted caller</div>
+            <div class="res green">full cross-source context</div>
+          </div>
+        </div>
+        <div class="note">ACL tightens to per-user once BambooHR eeids + <code>usergroups:read</code> land.</div>
+      </div>
+    </div>
+    <div class="arrow">▼</div>
+    <div class="step">
+      <div class="num">3</div>
+      <div class="body">
+        <div class="t">Prepend context block</div>
+        <div class="d">“<strong>## Related context from the graph</strong>” — cited artifacts, authors, scores.</div>
+      </div>
+    </div>
+    <div class="arrow">▼</div>
+    <div class="step">
+      <div class="num">4</div>
+      <div class="body">
+        <div class="t">Dispatch to the LLM</div>
+        <div class="d">prompt + context block ▶ claude / codex CLI.</div>
+      </div>
+    </div>
+    <div class="arrow">▼</div>
+    <div class="actor" style="color:var(--green)">answer posted back to Slack ◀ the “why this ticket” answer</div>
+  </div>
+
+  <div class="foot">
+    Verified end-to-end 2026-06-23: <code>/resolve</code> on <code>jira:PAY-2196</code> + <code>jira:PAY-2190</code> →
+    6 cross-source artifacts (Jira↔Slack), 41&nbsp;ms.
+  </div>
+
+</div>
+</body>
+</html>
