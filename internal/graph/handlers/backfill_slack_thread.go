@@ -51,15 +51,11 @@ func backfillSlackThreadHandler(deps Deps) jobs.Handler {
 			return err
 		}
 
-		// Process each reply (skip the first message which is the parent, already ingested).
-		for i, msg := range repliesResp.Messages {
-			// The first message in replies is the parent thread message — skip it on the
-			// first page (cursor == "") to avoid re-processing it. On subsequent pages
-			// (cursor != "") all messages are replies.
-			if i == 0 && p.Cursor == "" {
-				continue
-			}
-
+		// Ingest every message in the thread, INCLUDING the parent/root. Ingestion is
+		// an idempotent upsert, so re-processing the root (which Slack returns first on
+		// each page) is harmless — and crucial when the root predates the channel
+		// backfill window and isn't ingested yet (old thread, fresh reply).
+		for _, msg := range repliesResp.Messages {
 			// Skip bot self and subtype messages.
 			if msg.Subtype != "" {
 				continue

@@ -80,7 +80,7 @@ func (e *Extractor) Refresh(ctx context.Context) error {
 		return nil
 	}
 	rows, err := e.db.Query(ctx,
-		`SELECT id, kind, aliases FROM graph.entities WHERE deleted_at IS NULL OR deleted_at > NOW()`)
+		`SELECT id, kind, aliases FROM graph.entities`)
 	if err != nil {
 		return fmt.Errorf("extractor: load entities: %w", err)
 	}
