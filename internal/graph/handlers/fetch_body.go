@@ -100,6 +100,14 @@ func fetchBodyHandler(deps Deps) jobs.Handler {
 			}
 		}
 
+		// Slack messages have no real title; the fetcher fills body.Title with the
+		// raw message text (un-normalized <@U…> mentions). Use a snippet of the
+		// NORMALIZED body instead so titles/labels never show raw ids.
+		title := body.Title
+		if fetcher.Source() == "slack" {
+			title = firstLine(plainText, 120)
+		}
+
 		// Step 5: derive natural_key and scope.
 		naturalKey, _ := ids.ParseNaturalKey(body.NodeID)
 		scope := deriveScope(fetcher.Source(), body.Metadata)
@@ -138,7 +146,7 @@ func fetchBodyHandler(deps Deps) jobs.Handler {
 			string(body.Type),
 			naturalKey,
 			body.URL,
-			body.Title,
+			title,
 			plainText,
 			body.BodyTS,
 			authorPersonID,
