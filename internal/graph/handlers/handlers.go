@@ -48,6 +48,7 @@ func RegisterAll(reg *jobs.Registry, deps Deps) {
 	reg.Register("index_artifact", NewIndexArtifactHandler(deps))
 	reg.Register("refresh_slack_groups", NewRefreshSlackGroupsHandler(deps))
 	reg.Register("refresh_slack_users", NewRefreshSlackUsersHandler(deps))
+	reg.Register("refresh_slack_channels", NewRefreshSlackChannelsHandler(deps))
 	reg.Register("import_bamboohr", NewImportBambooHRHandler(deps))
 	reg.Register("recompute_person_distance", jobs.Entry{
 		Handler:   RecomputePersonDistance(deps.DB, deps.Logger),

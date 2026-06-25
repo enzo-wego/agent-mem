@@ -1,20 +1,20 @@
 import type { ContinentCfg } from './api'
 import { COUNTRIES } from './countries-data'
 
-// nameOf resolves a channel's display name from the config, falling back to the
-// channel id when no name is configured.
-export function nameOf(channelId: string, cfg: ContinentCfg): string {
-  return cfg.names[channelId] || channelId
+// nameOf resolves a channel's display name: a curated config name wins, then the
+// resolved Slack name (from the server), then the raw channel id as last resort.
+export function nameOf(channelId: string, cfg: ContinentCfg, fallback?: string): string {
+  return cfg.names[channelId] || fallback || channelId
 }
 
 // continentOf classifies a channel into a continent id. An explicit override
 // wins; otherwise the first continent whose `match` list contains a prefix of
 // the channel name (where "*" always matches) is used. Returns '' if nothing
 // matches (no catch-all configured).
-export function continentOf(channelId: string, cfg: ContinentCfg): string {
+export function continentOf(channelId: string, cfg: ContinentCfg, fallback?: string): string {
   const override = cfg.overrides[channelId]
   if (override) return override
-  const name = nameOf(channelId, cfg)
+  const name = nameOf(channelId, cfg, fallback)
   for (const c of cfg.continents) {
     for (const m of c.match) {
       if (m === '*' || name.startsWith(m)) return c.id
@@ -94,12 +94,12 @@ export type CountryAssignment = { iso: string; name: string; lat: number; lon: n
 // global-by-area pool. Returns channelId -> country (skips channels if the world
 // runs out of countries, which won't happen for <168 channels).
 export function assignCountries(
-  channels: { channel_id: string; count: number }[],
+  channels: { channel_id: string; count: number; name?: string }[],
   cfg: ContinentCfg,
 ): Record<string, CountryAssignment> {
-  const byContinent: Record<string, { channel_id: string; count: number }[]> = {}
+  const byContinent: Record<string, { channel_id: string; count: number; name?: string }[]> = {}
   for (const ch of channels) {
-    const cid = continentOf(ch.channel_id, cfg) || '__none'
+    const cid = continentOf(ch.channel_id, cfg, ch.name) || '__none'
     ;(byContinent[cid] ||= []).push(ch)
   }
   const used = new Set<string>()

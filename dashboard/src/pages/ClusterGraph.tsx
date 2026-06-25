@@ -21,6 +21,17 @@ const TYPE_COLOR: Record<string, string> = {
 // avoid a 50-label hairball; their text shows on hover.
 const LABELLED = new Set(['jira', 'gh_pr', 'cf', 'cf_page', 'gws_doc', 'gws', 'feature'])
 
+// Friendly legend label per type (groups variants under one entry).
+const LEGEND: { color: string; label: string; match: string[] }[] = [
+  { color: '#ff5599', label: 'Feature (hub)', match: ['feature'] },
+  { color: '#ffaa00', label: 'Jira', match: ['jira'] },
+  { color: '#b48cff', label: 'Pull request', match: ['gh_pr'] },
+  { color: '#4aa3ff', label: 'Doc (Confluence / Google)', match: ['cf', 'cf_page', 'gws_doc', 'gws'] },
+  { color: '#44ff88', label: 'Slack message', match: ['slack', 'slack_thread'] },
+  { color: '#7fd1b9', label: 'File', match: ['slack_file'] },
+  { color: '#999999', label: 'Person', match: ['person'] },
+]
+
 interface GNode {
   id: string
   type: string
@@ -59,7 +70,11 @@ export default function ClusterGraph({
     }
   }, [nodes, edges])
 
+  const present = new Set(nodes.map((n) => n.type))
+  const legend = LEGEND.filter((l) => l.match.some((m) => present.has(m)))
+
   return (
+    <div style={{ width, display: 'flex', flexDirection: 'column', gap: 8 }}>
     <div style={{ width, height, borderRadius: 4, overflow: 'hidden', background: '#0a0a0a' }}>
       <ForceGraph2D
         ref={fgRef}
@@ -107,6 +122,44 @@ export default function ClusterGraph({
           }
         }}
       />
+    </div>
+      <div
+        style={{
+          display: 'flex',
+          flexWrap: 'wrap',
+          gap: '4px 14px',
+          padding: '0 2px',
+          fontFamily: 'ui-monospace, monospace',
+        }}
+      >
+        {legend.map((l) => (
+          <span key={l.label} style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+            <span
+              style={{
+                width: 8,
+                height: 8,
+                borderRadius: '50%',
+                background: l.color,
+                flexShrink: 0,
+              }}
+            />
+            <span style={{ color: '#999999', fontSize: 10 }}>{l.label}</span>
+          </span>
+        ))}
+        <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+          <span
+            style={{
+              width: 8,
+              height: 8,
+              borderRadius: '50%',
+              background: 'transparent',
+              border: '1.5px solid #ffffff',
+              flexShrink: 0,
+            }}
+          />
+          <span style={{ color: '#999999', fontSize: 10 }}>This thread (root)</span>
+        </span>
+      </div>
     </div>
   )
 }

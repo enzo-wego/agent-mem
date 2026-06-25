@@ -411,6 +411,7 @@ export async function graphSlackUsers(): Promise<Record<string, string>> {
 export interface ChannelCount {
   channel_id: string;
   count: number;
+  name?: string; // resolved Slack channel name, absent/"" if unknown
 }
 
 export interface Continent {

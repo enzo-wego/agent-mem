@@ -142,10 +142,10 @@ function buildPoints(
   for (const ch of channels) {
     const country = assigned[ch.channel_id]
     if (!country) continue // ran out of countries (won't happen for <168)
-    const cid = continentOf(ch.channel_id, cfg)
+    const cid = continentOf(ch.channel_id, cfg, ch.name)
     pts.push({
       channelId: ch.channel_id,
-      name: nameOf(ch.channel_id, cfg),
+      name: nameOf(ch.channel_id, cfg, ch.name),
       country: country.name,
       count: ch.count,
       lat: country.lat,
@@ -297,7 +297,7 @@ export function LiveGlobePage() {
             pulse.set(ch.channel_id, now + PULSE_MS)
             increases.push({
               country: assigned[ch.channel_id]?.name ?? '',
-              name: nameOf(ch.channel_id, cfgNow),
+              name: nameOf(ch.channel_id, cfgNow, ch.name),
               delta: ch.count - before,
               at: now,
             })

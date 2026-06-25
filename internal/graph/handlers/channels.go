@@ -54,6 +54,7 @@ func NewChannels(db *pgxpool.Pool) *Channels {
 type channelCount struct {
 	ChannelID string `json:"channel_id"`
 	Count     int    `json:"count"`
+	Name      string `json:"name"` // resolved Slack channel name, "" if unknown
 }
 
 // list handles GET /api/graph/channels. An optional ?days=N restricts the count
@@ -67,11 +68,13 @@ func (h *Channels) list(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	rows, err := h.db.Query(ctx, `
-SELECT REPLACE(scope,'slack:','') AS channel_id, COUNT(*) AS count
-FROM graph.nodes
-WHERE scope LIKE 'slack:%' AND deleted_at IS NULL
-  AND ($1 = 0 OR first_seen_at >= now() - make_interval(days => $1))
-GROUP BY scope
+SELECT REPLACE(n.scope,'slack:','') AS channel_id, COUNT(*) AS count,
+       COALESCE(sc.name,'') AS name
+FROM graph.nodes n
+LEFT JOIN graph.slack_channels sc ON sc.slack_channel_id = REPLACE(n.scope,'slack:','')
+WHERE n.scope LIKE 'slack:%' AND n.deleted_at IS NULL
+  AND ($1 = 0 OR n.first_seen_at >= now() - make_interval(days => $1))
+GROUP BY n.scope, sc.name
 ORDER BY count DESC`, days)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -81,7 +84,7 @@ ORDER BY count DESC`, days)
 	out := []channelCount{}
 	for rows.Next() {
 		var c channelCount
-		if err := rows.Scan(&c.ChannelID, &c.Count); err != nil {
+		if err := rows.Scan(&c.ChannelID, &c.Count, &c.Name); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
