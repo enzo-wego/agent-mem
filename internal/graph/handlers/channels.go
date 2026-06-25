@@ -206,6 +206,7 @@ WHERE e.kind = 'REFERENCES' AND e.from_node_id = ANY($1) AND n.deleted_at IS NUL
 
 type topicView struct {
 	ThreadTS     string   `json:"thread_ts"`
+	NodeID       string   `json:"node_id"` // graph node id of the root/standalone msg (for /neighbors)
 	Summary      string   `json:"summary"`
 	IsThread     bool     `json:"is_thread"`
 	MsgCount     int      `json:"msg_count"`
@@ -308,11 +309,14 @@ LIMIT 3000`, id, days)
 			}
 		}
 		v.IsThread = len(g.msgs) > 1
-		// thread_ts + canonical url: prefer the thread root (id ends with the key).
+		// thread_ts, node id + canonical url. Standalone groups are keyed by node
+		// id; thread groups are keyed by thread_ts (root id = slack:<chan>:<ts>).
 		if strings.HasPrefix(g.key, "slack:") {
-			v.ThreadTS = "" // standalone message group keyed by node id
+			v.ThreadTS = ""
+			v.NodeID = g.key
 		} else {
 			v.ThreadTS = g.key
+			v.NodeID = "slack:" + id + ":" + g.key
 		}
 		v.URL = g.msgs[0].URL
 		views = append(views, v)

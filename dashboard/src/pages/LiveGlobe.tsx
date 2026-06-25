@@ -4,10 +4,12 @@ import {
   fetchContinents,
   fetchChannelMessages,
   fetchChannelTopics,
+  fetchNeighbors,
   type ChannelCount,
   type ContinentCfg,
   type ChannelMessage,
   type ChannelTopic,
+  type GraphNeighbor,
 } from '../api'
 import { applyGroupNames, assignCountries, continentOf, nameOf } from '../continents'
 
@@ -26,6 +28,43 @@ const C = {
 } as const
 
 const MONO = 'ui-monospace, "SF Mono", Menlo, monospace'
+
+// Friendly group heading + sort order for the "open in Graph" overlay. Lower
+// `order` sorts first; unknown types fall back to the raw type and sort last.
+const GRAPH_TYPE_GROUPS: Record<string, { label: string; order: number }> = {
+  jira: { label: 'Jira', order: 0 },
+  gh_pr: { label: 'Pull Requests', order: 1 },
+  cf: { label: 'Confluence', order: 2 },
+  cf_page: { label: 'Confluence', order: 2 },
+  slack_thread: { label: 'Slack threads', order: 3 },
+  slack: { label: 'Slack threads', order: 3 },
+  slack_file: { label: 'Files', order: 4 },
+  person: { label: 'People', order: 5 },
+}
+
+interface NeighborGroup {
+  label: string
+  order: number
+  items: GraphNeighbor[]
+}
+
+// Group neighbors by friendly type label, preserving server order within a group
+// and sorting groups so Jira/PRs/Confluence/Slack come first.
+function groupNeighbors(neighbors: GraphNeighbor[]): NeighborGroup[] {
+  const byLabel = new Map<string, NeighborGroup>()
+  for (const n of neighbors) {
+    const cfg = GRAPH_TYPE_GROUPS[n.node.type]
+    const label = cfg?.label ?? n.node.type
+    const order = cfg?.order ?? 99
+    let g = byLabel.get(label)
+    if (!g) {
+      g = { label, order, items: [] }
+      byLabel.set(label, g)
+    }
+    g.items.push(n)
+  }
+  return [...byLabel.values()].sort((a, b) => a.order - b.order || a.label.localeCompare(b.label))
+}
 
 const REFRESH_OPTIONS = [5, 10, 30] as const
 const WINDOW_OPTIONS = [
@@ -171,6 +210,13 @@ export function LiveGlobePage() {
   const [threadLoading, setThreadLoading] = useState<Set<string>>(new Set())
   // Guards the topics fetch so a refresh tick can't overlap an in-flight load.
   const topicsInFlightRef = useRef(false)
+
+  // ── "Open in Graph" overlay: shows a thread's related cross-source resources ──
+  // graphTopic is the topic whose neighbors are shown; null = overlay closed.
+  const [graphTopic, setGraphTopic] = useState<ChannelTopic | null>(null)
+  const [graphLoading, setGraphLoading] = useState(false)
+  // Cache neighbors per node_id so reopening the same thread is instant.
+  const [neighborCache, setNeighborCache] = useState<Record<string, GraphNeighbor[]>>({})
 
   // ── Zoom + pan transform (viewBox space: 360×180) ────────────────────────────
   const [view, setView] = useState({ k: 1, tx: 0, ty: 0 })
@@ -398,6 +444,20 @@ export function LiveGlobePage() {
           return next
         }),
       )
+  }
+
+  // ── Open the "related resources" graph overlay for a topic ───────────────────
+  function openGraph(t: ChannelTopic) {
+    if (!t.node_id) return
+    setGraphTopic(t)
+    // Serve from cache instantly; otherwise fetch this node's neighbors (depth 2).
+    if (neighborCache[t.node_id]) return
+    const nodeId = t.node_id
+    setGraphLoading(true)
+    fetchNeighbors(nodeId, 2)
+      .then((ns) => setNeighborCache((cur) => ({ ...cur, [nodeId]: ns || [] })))
+      .catch(() => setNeighborCache((cur) => ({ ...cur, [nodeId]: [] })))
+      .finally(() => setGraphLoading(false))
   }
 
   // ── Derived control-panel data ──────────────────────────────────────────────
@@ -1208,22 +1268,45 @@ export function LiveGlobePage() {
                       </div>
                     </div>
 
-                    {slackLink && (
-                      <a
-                        href={slackLink}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        onClick={(e) => e.stopPropagation()}
-                        style={{
-                          color: C.green,
-                          fontSize: 9,
-                          letterSpacing: '0.06em',
-                          textDecoration: 'none',
-                          alignSelf: 'flex-start',
-                        }}
-                      >
-                        open in Slack ↗
-                      </a>
+                    {(slackLink || t.node_id) && (
+                      <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+                        {slackLink && (
+                          <a
+                            href={slackLink}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={(e) => e.stopPropagation()}
+                            style={{
+                              color: C.green,
+                              fontSize: 9,
+                              letterSpacing: '0.06em',
+                              textDecoration: 'none',
+                            }}
+                          >
+                            open in Slack ↗
+                          </a>
+                        )}
+                        {t.node_id && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              openGraph(t)
+                            }}
+                            style={{
+                              background: 'transparent',
+                              border: 'none',
+                              padding: 0,
+                              cursor: 'pointer',
+                              fontFamily: MONO,
+                              color: C.green,
+                              fontSize: 9,
+                              letterSpacing: '0.06em',
+                            }}
+                          >
+                            open in Graph ↗
+                          </button>
+                        )}
+                      </div>
                     )}
 
                     {t.is_thread && isOpen && (
@@ -1312,6 +1395,184 @@ export function LiveGlobePage() {
                   </div>
                 )
               })}
+          </div>
+        </div>
+      )}
+
+      {/* ── "Open in Graph" overlay: this thread's related cross-source resources ─ */}
+      {graphTopic && (
+        <div
+          onClick={() => setGraphTopic(null)}
+          style={{
+            position: 'absolute',
+            inset: 0,
+            background: 'rgba(0,0,0,0.55)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 20,
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              ...panel,
+              width: 'min(560px, calc(100vw - 32px))',
+              maxHeight: 'calc(100vh - 64px)',
+              borderRadius: 4,
+              padding: 16,
+              display: 'flex',
+              flexDirection: 'column',
+              overflow: 'hidden',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
+              <div style={{ minWidth: 0 }}>
+                <div
+                  style={{
+                    color: C.text,
+                    fontSize: 13,
+                    lineHeight: 1.4,
+                    fontWeight: 600,
+                    display: '-webkit-box',
+                    WebkitLineClamp: 2,
+                    WebkitBoxOrient: 'vertical',
+                    overflow: 'hidden',
+                  }}
+                >
+                  {cfg ? applyGroupNames(graphTopic.summary, cfg) : graphTopic.summary}
+                </div>
+                <div
+                  style={{
+                    color: C.dim,
+                    fontSize: 9,
+                    letterSpacing: '0.12em',
+                    marginTop: 6,
+                    textTransform: 'uppercase',
+                  }}
+                >
+                  Related Resources
+                </div>
+              </div>
+              <button
+                onClick={() => setGraphTopic(null)}
+                style={{
+                  background: 'transparent',
+                  border: `1px solid ${C.border}`,
+                  color: C.dim,
+                  cursor: 'pointer',
+                  fontFamily: MONO,
+                  fontSize: 14,
+                  lineHeight: '14px',
+                  borderRadius: 2,
+                  padding: '2px 6px',
+                  flexShrink: 0,
+                }}
+                aria-label="Close"
+              >
+                ×
+              </button>
+            </div>
+
+            <div
+              style={{
+                marginTop: 12,
+                paddingTop: 12,
+                borderTop: `1px solid ${C.border}`,
+                flex: 1,
+                overflowY: 'auto',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 14,
+              }}
+            >
+              {graphLoading && !neighborCache[graphTopic.node_id] && (
+                <div style={{ color: C.dim, fontSize: 11 }}>Loading…</div>
+              )}
+              {(() => {
+                const neighbors = neighborCache[graphTopic.node_id]
+                if (!neighbors) return null
+                if (neighbors.length === 0) {
+                  return <div style={{ color: C.dim, fontSize: 11 }}>no linked resources yet</div>
+                }
+                return groupNeighbors(neighbors).map((g) => (
+                  <div key={g.label} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    <div
+                      style={{
+                        display: 'flex',
+                        alignItems: 'baseline',
+                        gap: 6,
+                        color: C.dim,
+                        fontSize: 10,
+                        letterSpacing: '0.1em',
+                        textTransform: 'uppercase',
+                      }}
+                    >
+                      <span>{g.label}</span>
+                      <span style={{ color: C.dim, opacity: 0.7 }}>· {g.items.length}</span>
+                    </div>
+                    {g.items.map((n, i) => {
+                      const label = n.node.title || n.node.node_id
+                      const itemStyle: React.CSSProperties = {
+                        display: 'flex',
+                        alignItems: 'baseline',
+                        gap: 8,
+                        background: 'rgba(255,255,255,0.02)',
+                        border: `1px solid ${C.border}`,
+                        borderRadius: 3,
+                        padding: '6px 8px',
+                        textDecoration: 'none',
+                        color: C.text,
+                      }
+                      const inner = (
+                        <>
+                          <span
+                            style={{
+                              flex: 1,
+                              minWidth: 0,
+                              color: C.text,
+                              fontSize: 11,
+                              lineHeight: 1.35,
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                              whiteSpace: 'nowrap',
+                            }}
+                          >
+                            {label}
+                          </span>
+                          <span
+                            style={{
+                              flexShrink: 0,
+                              color: C.dim,
+                              fontSize: 8,
+                              letterSpacing: '0.06em',
+                              textTransform: 'uppercase',
+                            }}
+                          >
+                            {n.edge.kind}
+                          </span>
+                        </>
+                      )
+                      return n.node.url ? (
+                        <a
+                          key={`${n.node.node_id}-${i}`}
+                          href={n.node.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          style={itemStyle}
+                        >
+                          {inner}
+                        </a>
+                      ) : (
+                        <span key={`${n.node.node_id}-${i}`} style={itemStyle}>
+                          {inner}
+                        </span>
+                      )
+                    })}
+                  </div>
+                ))
+              })()}
+            </div>
           </div>
         </div>
       )}

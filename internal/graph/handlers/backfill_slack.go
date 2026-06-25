@@ -246,12 +246,30 @@ func ingestSlackMessage(ctx context.Context, deps Deps, channelID string, msg sl
 		})
 	}
 
+	// Normalize the raw Slack text: resolve <@U…>/<!subteam^S…> mentions to names
+	// and <url|label> links, matching the live ingest path so stored/displayed
+	// bodies never contain raw Slack ids. Extraction below runs on the normalized
+	// text (the normalizer preserves URLs as "label (url)").
+	text := msg.Text
+	if sn, ok := deps.Normalizers.For("slack"); ok {
+		if res, nErr := sn.Normalize(ctx, []byte(msg.Text), nil); nErr == nil {
+			text = res.Text
+			for _, m := range res.Mentions {
+				tag := "slack_uid"
+				if m.Source == "slack_group" {
+					tag = "slack_group"
+				}
+				meta.Mentions = append(meta.Mentions, ingestMentionRef{Ref: tag + ":" + m.ExternalID, DisplayName: m.DisplayName})
+			}
+		}
+	}
+
 	metaJSON, _ := json.Marshal(meta)
 
 	outcome, upsertErr := upsertNodeOutcome(
 		ctx, deps,
 		nodeID, string(nodeType), naturalKey,
-		canonicalURL, "", msg.Text,
+		canonicalURL, "", text,
 		bodyTS, authorPersonID, scope, metaJSON,
 	)
 	if upsertErr != nil {
@@ -265,13 +283,13 @@ func ingestSlackMessage(ctx context.Context, deps Deps, channelID string, msg sl
 		ON CONFLICT (node_id) DO UPDATE SET
 			body_full  = EXCLUDED.body_full,
 			fetched_at = NOW()`,
-		nodeID, msg.Text, deps.MachineID,
+		nodeID, text, deps.MachineID,
 	); abErr != nil {
 		deps.Logger.Warn().Err(abErr).Str("node_id", nodeID).Msg("ingestSlackMessage: upsert artifact_bodies failed")
 	}
 
 	// Enqueue index_artifact so semantic search has embeddings.
-	if msg.Text != "" {
+	if text != "" {
 		if _, jErr := jobs.Enqueue(ctx, deps.DB, "index_artifact", map[string]any{
 			"node_id": nodeID,
 			"force":   false,
@@ -284,8 +302,8 @@ func ingestSlackMessage(ctx context.Context, deps Deps, channelID string, msg sl
 	}
 
 	// Reconcile edges if extractor available.
-	if deps.Extractor != nil && msg.Text != "" {
-		extractResult, extErr := deps.Extractor.Extract(ctx, msg.Text)
+	if deps.Extractor != nil && text != "" {
+		extractResult, extErr := deps.Extractor.Extract(ctx, text)
 		if extErr == nil {
 			upsertedIDs, _ := reconcileEdges(ctx, deps, nodeID, extractResult.Findings)
 			_ = pruneStaleEdges(ctx, deps, nodeID, upsertedIDs)

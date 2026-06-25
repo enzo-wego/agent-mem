@@ -401,12 +401,6 @@ export async function graphNode(url?: string, id?: string): Promise<GraphNodeDet
   return res.json();
 }
 
-export interface GraphNeighbor {
-  node: { node_id: string; type: string; url: string; title: string };
-  edge: { kind: string };
-  hop: number;
-}
-
 export async function graphSlackUsers(): Promise<Record<string, string>> {
   const res = await authFetch(`${BASE}/api/graph/slack-users`);
   return res.json();
@@ -478,6 +472,7 @@ export async function fetchChannelMessages(
 // ChannelTopic is one thread/standalone rollup with a one-line topic summary.
 export interface ChannelTopic {
   thread_ts: string;
+  node_id: string;
   summary: string;
   is_thread: boolean;
   msg_count: number;
@@ -485,6 +480,21 @@ export interface ChannelTopic {
   first_ms: number;
   last_ms: number;
   url: string;
+}
+
+// GraphNeighbor is one related node reachable from a given node (for "open in Graph").
+export interface GraphNeighbor {
+  hop: number;
+  edge: { kind: string };
+  node: { node_id: string; type: string; url: string; title: string };
+}
+
+// fetchNeighbors returns the related resources around a node (depth 1-3) — the
+// thread/message plus the tickets, PRs, docs, people, and other threads it links.
+export async function fetchNeighbors(nodeId: string, depth = 2): Promise<GraphNeighbor[]> {
+  const res = await authFetch(`${BASE}/api/graph/node/${encodeURIComponent(nodeId)}/neighbors?depth=${depth}`);
+  const d = await res.json();
+  return d.neighbors || [];
 }
 
 // fetchChannelTopics returns thread-level topic summaries for a channel.
