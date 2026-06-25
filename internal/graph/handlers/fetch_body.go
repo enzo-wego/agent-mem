@@ -122,20 +122,28 @@ func fetchBodyHandler(deps Deps) jobs.Handler {
 			}
 		}
 
+		// Canonical created_at = the artifact's reported created time (fall back to
+		// its body_ts/updated time, which is still a real source time, when absent).
+		createdAt := body.CreatedAt
+		if createdAt.IsZero() {
+			createdAt = body.BodyTS
+		}
+
 		// Upsert graph.nodes — never overwrite newer body_ts.
 		_, err = deps.DB.Exec(ctx, `
 			INSERT INTO graph.nodes
 				(id, type, natural_key, url, title, body, body_revision, body_ts,
-				 author_person_id, scope, metadata, updated_at, machine_id)
+				 created_at, author_person_id, scope, metadata, updated_at, machine_id)
 			VALUES
 				($1, $2, $3, $4, $5, $6, 1, $7,
-				 $8, $9, $10, NOW(), $11)
+				 $8, $9, $10, $11, NOW(), $12)
 			ON CONFLICT (id) DO UPDATE SET
 				url              = EXCLUDED.url,
 				title            = EXCLUDED.title,
 				body             = EXCLUDED.body,
 				body_revision    = graph.nodes.body_revision + 1,
 				body_ts          = EXCLUDED.body_ts,
+				created_at       = COALESCE(graph.nodes.created_at, EXCLUDED.created_at),
 				author_person_id = COALESCE(EXCLUDED.author_person_id, graph.nodes.author_person_id),
 				scope            = EXCLUDED.scope,
 				metadata         = EXCLUDED.metadata,
@@ -149,6 +157,7 @@ func fetchBodyHandler(deps Deps) jobs.Handler {
 			title,
 			plainText,
 			body.BodyTS,
+			createdAt,
 			authorPersonID,
 			scope,
 			metaJSON,

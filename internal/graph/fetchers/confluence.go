@@ -42,10 +42,11 @@ func (f *confluenceFetcher) Matches(nodeIDorURL string) bool {
 }
 
 type cfPageResponse struct {
-	ID      string  `json:"id"`
-	Title   string  `json:"title"`
-	Body    cfBody  `json:"body"`
-	Version cfVersion `json:"version"`
+	ID        string    `json:"id"`
+	Title     string    `json:"title"`
+	Body      cfBody    `json:"body"`
+	Version   cfVersion `json:"version"`
+	CreatedAt time.Time `json:"createdAt"` // page creation time (v2 API)
 }
 
 type cfBody struct {
@@ -118,7 +119,8 @@ func (f *confluenceFetcher) Fetch(ctx context.Context, node string) (FetchedBody
 			Source:     "confluence",
 			ExternalID: page.Version.AuthorID,
 		},
-		BodyTS: page.Version.CreatedAt,
+		BodyTS:    page.Version.CreatedAt,
+		CreatedAt: page.CreatedAt,
 	}, nil
 }
 

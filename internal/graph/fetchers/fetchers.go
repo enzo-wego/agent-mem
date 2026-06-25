@@ -35,6 +35,7 @@ type FetchedBody struct {
 	ContentType string         // "application/json","text/markdown",...
 	Author      AuthorRef
 	BodyTS      time.Time      // source-reported updated_at; used by ingest tiebreaker
+	CreatedAt   time.Time      // source-reported created-at; populates graph.nodes.created_at (zero → BodyTS)
 	Attachments []Attachment
 	Metadata    map[string]any
 }

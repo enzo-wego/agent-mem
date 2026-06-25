@@ -45,6 +45,7 @@ type ghPR struct {
 	Title     string    `json:"title"`
 	Body      string    `json:"body"`
 	HTMLURL   string    `json:"html_url"`
+	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 	User      ghUser    `json:"user"`
 }
@@ -110,7 +111,8 @@ func (f *gitHubFetcher) Fetch(ctx context.Context, node string) (FetchedBody, er
 			ExternalID:  pr.User.Login,
 			DisplayName: pr.User.Login,
 		},
-		BodyTS: pr.UpdatedAt,
+		BodyTS:    pr.UpdatedAt,
+		CreatedAt: pr.CreatedAt,
 	}, nil
 }
 

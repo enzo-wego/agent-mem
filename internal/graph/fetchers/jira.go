@@ -49,6 +49,7 @@ type jiraIssueResponse struct {
 type jiraFields struct {
 	Summary     string          `json:"summary"`
 	Description json.RawMessage `json:"description"`
+	Created     string          `json:"created"`
 	Updated     string          `json:"updated"`
 	Reporter    *jiraUser       `json:"reporter"`
 	Assignee    *jiraUser       `json:"assignee"`
@@ -77,7 +78,7 @@ func (f *jiraFetcher) Fetch(ctx context.Context, node string) (FetchedBody, erro
 	}
 
 	baseURL := strings.TrimRight(f.cfg.JiraBaseURL, "/")
-	apiURL := fmt.Sprintf("%s/rest/api/3/issue/%s?fields=summary,description,status,assignee,reporter,creator,labels,updated,attachment", baseURL, key)
+	apiURL := fmt.Sprintf("%s/rest/api/3/issue/%s?fields=summary,description,status,assignee,reporter,creator,labels,created,updated,attachment", baseURL, key)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
 	if err != nil {
@@ -108,12 +109,8 @@ func (f *jiraFetcher) Fetch(ctx context.Context, node string) (FetchedBody, erro
 		raw = []byte("{}")
 	}
 
-	bodyTS := time.Time{}
-	if issue.Fields.Updated != "" {
-		if t, err := time.Parse(time.RFC3339, issue.Fields.Updated); err == nil {
-			bodyTS = t
-		}
-	}
+	bodyTS := parseJiraTime(issue.Fields.Updated)
+	createdAt := parseJiraTime(issue.Fields.Created)
 
 	var author AuthorRef
 	if r := issue.Fields.Reporter; r != nil {
@@ -146,8 +143,23 @@ func (f *jiraFetcher) Fetch(ctx context.Context, node string) (FetchedBody, erro
 		ContentType: "application/json",
 		Author:      author,
 		BodyTS:      bodyTS,
+		CreatedAt:   createdAt,
 		Attachments: attachments,
 	}, nil
+}
+
+// parseJiraTime parses Jira's timestamps. Jira returns "2006-01-02T15:04:05.000-0700"
+// (numeric tz offset, no colon), which isn't quite RFC3339; try both. Zero on failure.
+func parseJiraTime(s string) time.Time {
+	if s == "" {
+		return time.Time{}
+	}
+	for _, layout := range []string{"2006-01-02T15:04:05.000-0700", time.RFC3339} {
+		if t, err := time.Parse(layout, s); err == nil {
+			return t
+		}
+	}
+	return time.Time{}
 }
 
 // parseNode extracts the Jira key from a node ID or browse URL.
