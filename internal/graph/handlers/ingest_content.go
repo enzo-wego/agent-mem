@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -209,8 +210,12 @@ func NewIngestContentHandler(deps Deps) http.Handler {
 		// Build metadata JSONB.
 		metaJSON, _ := json.Marshal(req.Metadata)
 
+		// Canonical created_at = the source artifact's event time, if the sender
+		// provided one (nil otherwise → stays NULL, falls back to first_seen_at).
+		createdAt := eventTimeFromMeta(req.Metadata)
+
 		// Upsert graph.nodes. Track outcome.
-		outcome, upsertErr := upsertNodeOutcome(ctx, deps, nodeID, string(nodeType), naturalKey, req.CanonicalURL, "", req.Body, bodyTS, authorPersonID, scope, metaJSON)
+		outcome, upsertErr := upsertNodeOutcome(ctx, deps, nodeID, string(nodeType), naturalKey, req.CanonicalURL, "", req.Body, bodyTS, createdAt, authorPersonID, scope, metaJSON)
 		if upsertErr != nil {
 			deps.Logger.Error().Err(upsertErr).Str("node_id", nodeID).Msg("ingest_content: upsert node failed")
 			writeError(w, http.StatusInternalServerError, "upsert node: "+upsertErr.Error())
@@ -418,11 +423,30 @@ func NewIngestContentHandler(deps Deps) http.Handler {
 }
 
 // upsertNodeOutcome upserts into graph.nodes and returns "created", "updated", or "unchanged".
+// eventTimeFromMeta returns the source artifact's creation/event time from the
+// ingest metadata. Slack sends a float epoch ts ("1782355843.155339"); other
+// sources may send RFC3339. Returns nil when unknown so created_at stays NULL.
+func eventTimeFromMeta(m ingestContentMetadata) *time.Time {
+	if m.Ts == "" {
+		return nil
+	}
+	if f, err := strconv.ParseFloat(m.Ts, 64); err == nil && f > 0 {
+		sec := int64(f)
+		t := time.Unix(sec, int64((f-float64(sec))*1e9)).UTC()
+		return &t
+	}
+	if t, err := time.Parse(time.RFC3339, m.Ts); err == nil {
+		return &t
+	}
+	return nil
+}
+
 func upsertNodeOutcome(
 	ctx context.Context,
 	deps Deps,
 	nodeID, nodeType, naturalKey, url, title, body string,
 	bodyTS time.Time,
+	createdAt *time.Time,
 	authorPersonID *int64,
 	scope string,
 	metaJSON []byte,
@@ -438,16 +462,17 @@ func upsertNodeOutcome(
 	_, execErr := deps.DB.Exec(ctx, `
 		INSERT INTO graph.nodes
 			(id, type, natural_key, url, title, body, body_revision, body_ts,
-			 author_person_id, scope, metadata, updated_at, machine_id)
+			 created_at, author_person_id, scope, metadata, updated_at, machine_id)
 		VALUES
 			($1, $2, $3, $4, $5, $6, 1, $7,
-			 $8, $9, $10, NOW(), $11)
+			 $8, $9, $10, $11, NOW(), $12)
 		ON CONFLICT (id) DO UPDATE SET
 			url              = EXCLUDED.url,
 			title            = COALESCE(NULLIF(EXCLUDED.title,''), graph.nodes.title),
 			body             = EXCLUDED.body,
 			body_revision    = graph.nodes.body_revision + 1,
 			body_ts          = EXCLUDED.body_ts,
+			created_at       = COALESCE(graph.nodes.created_at, EXCLUDED.created_at),
 			author_person_id = COALESCE(EXCLUDED.author_person_id, graph.nodes.author_person_id),
 			scope            = EXCLUDED.scope,
 			metadata         = EXCLUDED.metadata,
@@ -461,6 +486,7 @@ func upsertNodeOutcome(
 		title,
 		body,
 		bodyTS,
+		createdAt,
 		authorPersonID,
 		scope,
 		metaJSON,

@@ -33,6 +33,7 @@ type neighborItem struct {
 		URL      string `json:"url"`
 		Title    string `json:"title"`
 		ThreadTS string `json:"thread_ts"` // slack only; lets the UI collapse a thread's messages into one row
+		TSMs     int64  `json:"ts_ms"`     // node time (slack message ts, else first_seen_at), epoch millis
 	} `json:"node"`
 	Edge struct {
 		Kind string `json:"kind"`
@@ -93,14 +94,15 @@ func (h *neighborsHandler) serve(w http.ResponseWriter, r *http.Request) {
 SELECT n.id, n.type, COALESCE(n.url,''), COALESCE(n.title,''),
        LEFT(COALESCE(n.body,''),200),
        COALESCE(n.metadata->>'thread_ts',''),
-       COALESCE(ts.summary,'')
+       COALESCE(ts.summary,''),
+       (EXTRACT(EPOCH FROM COALESCE(n.created_at, to_timestamp(NULLIF(n.metadata->>'ts','')::float8), n.first_seen_at)) * 1000)::bigint
 FROM graph.nodes n
 LEFT JOIN graph.thread_summaries ts
   ON ts.channel_id = REPLACE(n.scope,'slack:','')
   AND ts.thread_ts = COALESCE(n.metadata->>'thread_ts','')
 WHERE n.id=$1`, n.NodeID)
 			if err := row.Scan(&item.Node.NodeID, &item.Node.Type, &item.Node.URL,
-				&title, &body, &item.Node.ThreadTS, &threadSummary); err != nil {
+				&title, &body, &item.Node.ThreadTS, &threadSummary, &item.Node.TSMs); err != nil {
 				continue
 			}
 			if item.Node.Type == "slack" || item.Node.Type == "slack_thread" {

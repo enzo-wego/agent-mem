@@ -266,11 +266,13 @@ func ingestSlackMessage(ctx context.Context, deps Deps, channelID string, msg sl
 
 	metaJSON, _ := json.Marshal(meta)
 
+	// For Slack the message post time is the canonical created_at.
+	createdAt := bodyTS
 	outcome, upsertErr := upsertNodeOutcome(
 		ctx, deps,
 		nodeID, string(nodeType), naturalKey,
 		canonicalURL, "", text,
-		bodyTS, authorPersonID, scope, metaJSON,
+		bodyTS, &createdAt, authorPersonID, scope, metaJSON,
 	)
 	if upsertErr != nil {
 		return fmt.Errorf("upsert node: %w", upsertErr)

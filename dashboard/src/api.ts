@@ -487,7 +487,7 @@ export interface ChannelTopic {
 export interface GraphNeighbor {
   hop: number;
   edge: { kind: string };
-  node: { node_id: string; type: string; url: string; title: string; thread_ts?: string };
+  node: { node_id: string; type: string; url: string; title: string; thread_ts?: string; ts_ms?: number };
 }
 
 // fetchNeighbors returns the related resources around a node (depth 1-3) — the

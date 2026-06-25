@@ -55,10 +55,19 @@ interface NeighborGroup {
 }
 
 // Group neighbors by friendly type label. Slack messages sharing a thread collapse
-// to one row (the thread summary). Groups sort Jira/PRs/Docs/Slack first; items
-// within a group sort alphabetically by title so the order is stable, not the
-// arbitrary order the graph happened to return them in.
+// to one row (the thread summary, dated by the thread's latest message). Groups
+// sort Jira/PRs/Docs/Slack first; items within a group sort by time, newest first.
 function groupNeighbors(neighbors: GraphNeighbor[]): NeighborGroup[] {
+  // A collapsed thread sorts by its most recent message, so first compute the max
+  // ts per thread across all its messages.
+  const threadMax = new Map<string, number>()
+  for (const n of neighbors) {
+    const tt = n.node.thread_ts
+    if (tt) threadMax.set(tt, Math.max(threadMax.get(tt) ?? 0, n.node.ts_ms ?? 0))
+  }
+  const effTs = (n: GraphNeighbor): number =>
+    (n.node.thread_ts && threadMax.get(n.node.thread_ts)) || n.node.ts_ms || 0
+
   const byLabel = new Map<string, NeighborGroup>()
   const seenThread = new Set<string>()
   for (const n of neighbors) {
@@ -79,9 +88,7 @@ function groupNeighbors(neighbors: GraphNeighbor[]): NeighborGroup[] {
     g.items.push(n)
   }
   for (const g of byLabel.values()) {
-    g.items.sort((a, b) =>
-      (a.node.title || a.node.node_id).localeCompare(b.node.title || b.node.node_id),
-    )
+    g.items.sort((a, b) => effTs(b) - effTs(a)) // newest first
   }
   return [...byLabel.values()].sort((a, b) => a.order - b.order || a.label.localeCompare(b.label))
 }
