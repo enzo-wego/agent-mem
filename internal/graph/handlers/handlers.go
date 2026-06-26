@@ -68,4 +68,9 @@ func RegisterAll(reg *jobs.Registry, deps Deps) {
 	reg.Register("summarize_thread", NewSummarizeThreadHandler(deps))
 	reg.Register("backfill_slack_thread", NewBackfillSlackThreadHandler(deps))
 	reg.Register("derive_feature_entity", NewDeriveFeatureEntityHandler(deps))
+	reg.Register("detect_hot_topics", jobs.Entry{
+		Handler:  NewDetectHotTopics(deps),
+		PoolSize: 1,
+		Lease:    120 * time.Second,
+	})
 }

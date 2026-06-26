@@ -125,6 +125,10 @@ func NewServer(cfg *config.Config, logBuf *LogBuffer) (*Server, error) {
 		Identity:    identity.NewService(pool, graphLog),
 		Gemini:      graphhandlers.NewGeminiAdapter(geminiClient, summaryLLM),
 		LiteParse:   liteparseConfigFromEnv(),
+
+		SlackBotToken: cfg.Graph.SlackBotToken,
+		SlackDMUserID: cfg.Graph.SlackDMUserID,
+		Runner:        cfg.Graph.Runner,
 	}
 
 	rate := rateFromAppConfig(cfg)
@@ -153,6 +157,19 @@ func NewServer(cfg *config.Config, logBuf *LogBuffer) (*Server, error) {
 		if _, err := jobs.Enqueue(ctx, pool, "refresh_slack_channels", map[string]any{},
 			jobs.EnqueueOptions{TargetRunner: cfg.Graph.Runner, MachineID: cfg.MachineID}); err != nil {
 			graphLog.Warn().Err(err).Msg("startup: enqueue refresh_slack_channels failed")
+		}
+	}
+
+	// Kick off the self-rescheduling hot-topic detector (deduped: skip if one is
+	// already queued/running). Each run re-enqueues the next tick.
+	var detectPending bool
+	_ = pool.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM graph.jobs WHERE type='detect_hot_topics' AND status IN ('queued','running'))`).
+		Scan(&detectPending)
+	if !detectPending {
+		if _, err := jobs.Enqueue(ctx, pool, "detect_hot_topics", map[string]any{},
+			jobs.EnqueueOptions{TargetRunner: cfg.Graph.Runner, MachineID: cfg.MachineID}); err != nil {
+			graphLog.Warn().Err(err).Msg("startup: enqueue detect_hot_topics failed")
 		}
 	}
 	mgr := jobs.NewManager(jobs.ManagerConfig{

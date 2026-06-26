@@ -45,5 +45,11 @@ func Mount(r chi.Router, deps Deps) {
 	r.Get("/api/graph/continents", channels.getContinents)
 	r.Put("/api/graph/continents", channels.putContinents)
 
+	// Topic subscriptions (hot-topic enzobot alerts).
+	subs := NewSubscriptions(deps)
+	r.Get("/api/graph/subscriptions", subs.list)
+	r.Post("/api/graph/subscriptions", subs.create)
+	r.Delete("/api/graph/subscriptions/{id}", subs.delete)
+
 	r.Mount("/api/graph", NewNeighbors(deps.DB))
 }
