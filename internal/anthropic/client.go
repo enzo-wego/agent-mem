@@ -60,17 +60,15 @@ type generateResponse struct {
 }
 
 // Generate sends system+user to Claude and returns the response text. Callers
-// here expect a JSON object, so we prefill the assistant turn with "{" to force
-// a clean object (no markdown fences, no preamble) and re-prepend it.
+// here expect a JSON object; this model rejects assistant prefill, so we let the
+// model answer and then extract the {...} object (tolerating markdown fences or
+// surrounding prose).
 func (c *Client) Generate(ctx context.Context, systemPrompt, userMessage string) (string, error) {
 	req := generateRequest{
 		Model:     c.model,
 		MaxTokens: 2048,
 		System:    systemPrompt,
-		Messages: []message{
-			{Role: "user", Content: userMessage},
-			{Role: "assistant", Content: "{"}, // prefill: forces JSON-object output
-		},
+		Messages:  []message{{Role: "user", Content: userMessage}},
 	}
 
 	var resp generateResponse
@@ -83,10 +81,12 @@ func (c *Client) Generate(ctx context.Context, systemPrompt, userMessage string)
 	if len(resp.Content) == 0 || resp.Content[0].Text == "" {
 		return "", fmt.Errorf("empty response from Claude")
 	}
-	// Re-attach the prefilled "{" and trim anything after the final "}".
-	out := "{" + resp.Content[0].Text
-	if i := strings.LastIndex(out, "}"); i >= 0 {
-		out = out[:i+1]
+	// Extract the JSON object: first "{" to last "}", dropping any fences/prose.
+	out := resp.Content[0].Text
+	if start := strings.IndexByte(out, '{'); start >= 0 {
+		if end := strings.LastIndexByte(out, '}'); end > start {
+			out = out[start : end+1]
+		}
 	}
 	return out, nil
 }

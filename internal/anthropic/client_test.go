@@ -8,15 +8,15 @@ import (
 	"testing"
 )
 
-// TestGenerateReassemblesJSON verifies the "{" prefill is re-attached and any
-// trailing text past the final "}" is trimmed, so callers get a clean JSON object.
-func TestGenerateReassemblesJSON(t *testing.T) {
+// TestGenerateExtractsJSON verifies the JSON object is extracted from a response
+// wrapped in markdown fences / prose, so callers get clean JSON.
+func TestGenerateExtractsJSON(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("x-api-key") == "" || r.Header.Get("anthropic-version") == "" {
 			t.Errorf("missing required headers")
 		}
-		// Model echoes the body Claude would return AFTER the prefilled "{".
-		_, _ = w.Write([]byte(`{"content":[{"type":"text","text":"\"overview\":\"hi\"}\n\nextra"}]}`))
+		// Claude wraps the object in a ```json fence with trailing prose.
+		_, _ = w.Write([]byte(`{"content":[{"type":"text","text":"` + "```json\\n{\\\"overview\\\":\\\"hi\\\"}\\n```\\nDone." + `"}]}`))
 	}))
 	defer srv.Close()
 
