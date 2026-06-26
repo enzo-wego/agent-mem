@@ -8,31 +8,40 @@ import (
 	"github.com/agent-mem/agent-mem/internal/graph/jobs"
 )
 
-// geminiAdapter wraps *gemini.Client to satisfy the GeminiClient interface.
-// The existing gemini.Client supports Generate + Embed; multimodal Describe is
-// not yet implemented, so it returns ErrFatal so the dispatcher marks those
-// jobs failed cleanly until multimodal support lands.
-type geminiAdapter struct {
-	c *gemini.Client
+// TextGenerator is the minimal text-generation surface (Claude or Gemini).
+type TextGenerator interface {
+	Generate(ctx context.Context, systemPrompt, userMessage string) (string, error)
 }
 
-// NewGeminiAdapter returns a GeminiClient backed by the given *gemini.Client.
-// Returns nil (safely) when c is nil.
-func NewGeminiAdapter(c *gemini.Client) GeminiClient {
+// geminiAdapter wraps *gemini.Client to satisfy the GeminiClient interface.
+// Embed/Describe always use Gemini; Generate is routed to gen, which is Claude
+// when an Anthropic key is configured (better grounding, fewer hallucinated
+// ticket ids/outcomes) and the Gemini client otherwise.
+type geminiAdapter struct {
+	c   *gemini.Client
+	gen TextGenerator
+}
+
+// NewGeminiAdapter returns a GeminiClient. Embeddings use c (required); text
+// generation uses gen when non-nil, else falls back to c. Returns nil when c is nil.
+func NewGeminiAdapter(c *gemini.Client, gen TextGenerator) GeminiClient {
 	if c == nil {
 		return nil
 	}
-	return &geminiAdapter{c: c}
+	if gen == nil {
+		gen = c
+	}
+	return &geminiAdapter{c: c, gen: gen}
 }
 
-// Embed proxies directly to the underlying client.
+// Embed proxies directly to the underlying Gemini client.
 func (a *geminiAdapter) Embed(ctx context.Context, text string) ([]float32, error) {
 	return a.c.Embed(ctx, text)
 }
 
-// Generate proxies directly to the underlying client.
+// Generate proxies to the configured text generator (Claude or Gemini).
 func (a *geminiAdapter) Generate(ctx context.Context, systemPrompt, userMessage string) (string, error) {
-	return a.c.Generate(ctx, systemPrompt, userMessage)
+	return a.gen.Generate(ctx, systemPrompt, userMessage)
 }
 
 // Describe is not yet implemented in the underlying REST client.

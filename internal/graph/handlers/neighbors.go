@@ -32,6 +32,7 @@ type neighborItem struct {
 		Type     string `json:"type"`
 		URL      string `json:"url"`
 		Title    string `json:"title"`
+		Channel  string `json:"channel"`   // slack only: human channel name (e.g. payments-dev), for display
 		ThreadTS string `json:"thread_ts"` // slack only; lets the UI collapse a thread's messages into one row
 		TSMs     int64  `json:"ts_ms"`     // node time (slack message ts, else first_seen_at), epoch millis
 	} `json:"node"`
@@ -95,14 +96,17 @@ SELECT n.id, n.type, COALESCE(n.url,''), COALESCE(n.title,''),
        LEFT(COALESCE(n.body,''),200),
        COALESCE(n.metadata->>'thread_ts',''),
        COALESCE(ts.summary,''),
+       COALESCE(sc.name,''),
        (EXTRACT(EPOCH FROM COALESCE(n.created_at, to_timestamp(NULLIF(n.metadata->>'ts','')::float8), n.first_seen_at)) * 1000)::bigint
 FROM graph.nodes n
 LEFT JOIN graph.thread_summaries ts
   ON ts.channel_id = REPLACE(n.scope,'slack:','')
   AND ts.thread_ts = COALESCE(n.metadata->>'thread_ts','')
+LEFT JOIN graph.slack_channels sc
+  ON sc.slack_channel_id = REPLACE(n.scope,'slack:','')
 WHERE n.id=$1`, n.NodeID)
 			if err := row.Scan(&item.Node.NodeID, &item.Node.Type, &item.Node.URL,
-				&title, &body, &item.Node.ThreadTS, &threadSummary, &item.Node.TSMs); err != nil {
+				&title, &body, &item.Node.ThreadTS, &threadSummary, &item.Node.Channel, &item.Node.TSMs); err != nil {
 				continue
 			}
 			if item.Node.Type == "slack" || item.Node.Type == "slack_thread" {
@@ -111,6 +115,15 @@ WHERE n.id=$1`, n.NodeID)
 					title = threadSummary
 				case strings.TrimSpace(title) == "":
 					title = firstLine(body, 120)
+				}
+				// Never surface a raw slack:CHANNEL:TS id: when there's no summary or
+				// body, fall back to a readable channel-scoped label.
+				if strings.TrimSpace(title) == "" {
+					if item.Node.Channel != "" {
+						title = "Slack thread in #" + item.Node.Channel
+					} else {
+						title = "Slack thread"
+					}
 				}
 			} else if strings.TrimSpace(title) == "" {
 				title = firstLine(body, 120)

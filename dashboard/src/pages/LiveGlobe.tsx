@@ -1727,6 +1727,18 @@ export function LiveGlobePage() {
                           >
                             {label}
                           </span>
+                          {n.node.channel && (
+                            <span
+                              style={{
+                                flexShrink: 0,
+                                color: C.dim,
+                                fontSize: 9,
+                                opacity: 0.85,
+                              }}
+                            >
+                              #{n.node.channel}
+                            </span>
+                          )}
                           <span
                             style={{
                               flexShrink: 0,

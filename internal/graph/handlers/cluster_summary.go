@@ -155,6 +155,7 @@ WHERE id = ANY($1) AND deleted_at IS NULL`, ordered)
 	var gnodes []clusterGraphNode
 	present := map[string]bool{}
 	total := 0
+	var rootType, rootTitle string
 	for rows.Next() {
 		var n clusterNode
 		var urlCol string
@@ -170,6 +171,10 @@ WHERE id = ANY($1) AND deleted_at IS NULL`, ordered)
 		label := strings.TrimSpace(n.title)
 		if label == "" {
 			label = firstLine(n.body, 80)
+		}
+		if idCol == id {
+			rootType = n.typ
+			rootTitle = label
 		}
 		gnodes = append(gnodes, clusterGraphNode{
 			ID: idCol, Type: n.typ, Title: label, URL: urlCol, Root: idCol == id,
@@ -305,7 +310,9 @@ ORDER BY ts ASC`, tk.channel, tk.ts)
 	// v3: after the identity merge, author org-depth now resolves for merged people
 	// (e.g. Ross = 0), so bump the version to regenerate summaries with leadership
 	// weighting. The prefix invalidates anything cached under older logic.
-	sig := fmt.Sprintf("v3:%d:%d:%d", total, len(slackMsgs), lastMs)
+	// v4: root-anchored summaries (non-slack roots no longer crown an arbitrary
+	// co-mentioned thread as originator) + Claude generation. Bump to regenerate.
+	sig := fmt.Sprintf("v4:%d:%d:%d", total, len(slackMsgs), lastMs)
 
 	var cachedSig, cachedOverview string
 	var cachedHl []byte
@@ -316,8 +323,18 @@ ORDER BY ts ASC`, tk.channel, tk.ts)
 		_ = json.Unmarshal(cachedHl, &resp.Highlights)
 	}
 
+	// The opened ("root") node anchors the summary. When it's a Slack thread the
+	// oldest message IS the originating report; when it's a Jira/PR/doc, the cluster
+	// may also include unrelated threads pulled in only by a co-mention, so we anchor
+	// on the root resource itself and do NOT crown an arbitrary thread's first message.
+	rootIsSlack := rootType == "slack" || rootType == "slack_thread"
+
 	if resp.Overview == "" && h.gemini != nil && len(slackMsgs) > 0 {
 		var b strings.Builder
+		if !rootIsSlack && rootTitle != "" {
+			b.WriteString("PRIMARY RESOURCE (the summary is about this): " +
+				friendlySource(rootType) + " — " + rootTitle + "\n\n")
+		}
 		if len(otherTitles) > 0 {
 			b.WriteString("Linked resources:\n")
 			for _, t := range otherTitles {
@@ -342,7 +359,7 @@ ORDER BY ts ASC`, tk.channel, tk.ts)
 			if m.depth >= 0 && m.depth <= 2 {
 				author += " [leadership]"
 			}
-			if i == 0 {
+			if i == 0 && rootIsSlack {
 				author += " [originator]"
 			}
 			line := author + ": " + text + "\n"
@@ -380,9 +397,13 @@ Write a factual synthesis for a teammate skimming this. Respond as JSON:
  "highlights":["chronological key events / decisions, each one short line, max 6 items"]}
 
 EMPHASIS:
-- START the overview with what originally prompted this — the message tagged
-  [originator] (who raised it and what the actual problem/request was). This is the
-  most important context; never omit it.
+- If a "PRIMARY RESOURCE" line is given, the summary is ABOUT that resource. Center the
+  overview on it. The Slack discussion is supporting context — some messages may be only
+  loosely related (pulled in because they mention a ticket id in passing), so do NOT
+  force a single narrative tying every ticket together, and do NOT open with an unrelated
+  ticket just because its message is oldest.
+- If a message is tagged [originator], START the overview with what it raised (who, and
+  the actual problem/request). This is the most important context; never omit it.
 - Give extra weight to messages tagged [leadership] (senior people); surface their
   asks and decisions explicitly and attribute them by name.
 - Strip the [originator]/[leadership] tags from your output — they are hints, not text.
@@ -391,6 +412,8 @@ STRICT GROUNDING RULES — follow exactly:
 - Use ONLY facts, names, and ticket ids that literally appear in the provided text.
 - NEVER invent ticket ids (e.g. JIRA-123), people, dates, fixes, or outcomes. If it
   is not in the text, do not state it.
+- Do NOT assert that two tickets are related unless the text explicitly says so; a
+  shared channel or thread is not a relationship.
 - Do not assume the issue was resolved/deployed unless the text says so.
 - If the text is thin or inconclusive, write a short overview and return fewer (or
   zero) highlights rather than filling gaps.

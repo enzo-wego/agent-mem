@@ -71,6 +71,11 @@ type Config struct {
 	GeminiEmbeddingModel string `json:"gemini_embedding_model"`
 	GeminiEmbeddingDims  int    `json:"gemini_embedding_dims"`
 
+	// AnthropicAPIKey, when set, routes graph summaries (cluster/thread/feature)
+	// to Claude instead of Gemini Flash. Embeddings always stay on Gemini.
+	AnthropicAPIKey string `json:"anthropic_api_key"`
+	AnthropicModel  string `json:"anthropic_model"`
+
 	ContextObservations int    `json:"context_observations"`
 	ContextFullCount    int    `json:"context_full_count"`
 	ContextSessionCount int    `json:"context_session_count"`
@@ -337,6 +342,7 @@ func defaults() *Config {
 		GeminiModel:          "gemini-2.5-flash",
 		GeminiEmbeddingModel: "gemini-embedding-001",
 		GeminiEmbeddingDims:  768,
+		AnthropicModel:       "claude-sonnet-4-6",
 		ContextObservations:  50,
 		ContextFullCount:     5,
 		ContextSessionCount:  10,
@@ -392,6 +398,14 @@ func ApplyEnv(cfg *Config) {
 		cfg.GeminiAPIKey = v
 	} else if v := os.Getenv("GEMINI_API_KEY"); v != "" && cfg.GeminiAPIKey == "" {
 		cfg.GeminiAPIKey = v
+	}
+	if v := os.Getenv("AGENT_MEM_ANTHROPIC_API_KEY"); v != "" {
+		cfg.AnthropicAPIKey = v
+	} else if v := os.Getenv("ANTHROPIC_API_KEY"); v != "" && cfg.AnthropicAPIKey == "" {
+		cfg.AnthropicAPIKey = v
+	}
+	if v := os.Getenv("AGENT_MEM_ANTHROPIC_MODEL"); v != "" {
+		cfg.AnthropicModel = v
 	}
 	if v := os.Getenv("AGENT_MEM_GEMINI_MODEL"); v != "" {
 		cfg.GeminiModel = v

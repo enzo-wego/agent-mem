@@ -16,6 +16,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"golang.org/x/sync/semaphore"
 
+	"github.com/agent-mem/agent-mem/internal/anthropic"
 	"github.com/agent-mem/agent-mem/internal/config"
 	memctx "github.com/agent-mem/agent-mem/internal/context"
 	"github.com/agent-mem/agent-mem/internal/database"
@@ -93,6 +94,14 @@ func NewServer(cfg *config.Config, logBuf *LogBuffer) (*Server, error) {
 		log.Warn().Msg("No Gemini API key configured, observation extraction disabled")
 	}
 
+	// When an Anthropic key is set, graph summaries (cluster/thread/feature) run
+	// on Claude instead of Gemini Flash to cut hallucination. Embeddings stay on Gemini.
+	var summaryLLM graphhandlers.TextGenerator
+	if cfg.AnthropicAPIKey != "" {
+		summaryLLM = anthropic.NewClient(cfg.AnthropicAPIKey, cfg.AnthropicModel)
+		log.Info().Str("model", cfg.AnthropicModel).Msg("Anthropic client initialized for graph summaries")
+	}
+
 	var searcher *search.Searcher
 	if geminiClient != nil {
 		searcher = search.NewSearcher(db, geminiClient)
@@ -114,7 +123,7 @@ func NewServer(cfg *config.Config, logBuf *LogBuffer) (*Server, error) {
 		Normalizers: normalizer.NewDefault(newDBNameCache(pool)),
 		Extractor:   extractor.New(pool, graphLog),
 		Identity:    identity.NewService(pool, graphLog),
-		Gemini:      graphhandlers.NewGeminiAdapter(geminiClient),
+		Gemini:      graphhandlers.NewGeminiAdapter(geminiClient, summaryLLM),
 		LiteParse:   liteparseConfigFromEnv(),
 	}
 
