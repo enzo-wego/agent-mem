@@ -46,7 +46,7 @@ func summarizeThreadHandler(deps Deps) jobs.Handler {
 		// Load the thread's messages (root + replies), oldest first.
 		rows, err := deps.DB.Query(ctx, `
 SELECT COALESCE(NULLIF(title,''), body), COALESCE(metadata->'author'->>'display_name',''),
-       (EXTRACT(EPOCH FROM COALESCE(to_timestamp(NULLIF(metadata->>'ts','')::float8), first_seen_at)) * 1000)::bigint AS ts_ms
+       (EXTRACT(EPOCH FROM updated_at) * 1000)::bigint AS upd_ms
 FROM graph.nodes
 WHERE scope = 'slack:' || $1 AND deleted_at IS NULL AND COALESCE(metadata->>'thread_ts','') = $2
 ORDER BY COALESCE(to_timestamp(NULLIF(metadata->>'ts','')::float8), first_seen_at) ASC`,
@@ -56,17 +56,17 @@ ORDER BY COALESCE(to_timestamp(NULLIF(metadata->>'ts','')::float8), first_seen_a
 		}
 		var b strings.Builder
 		var count int
-		var lastMs int64
+		var maxUpdated int64
 		for rows.Next() {
 			var body, author string
-			var ts int64
-			if err := rows.Scan(&body, &author, &ts); err != nil {
+			var upd int64
+			if err := rows.Scan(&body, &author, &upd); err != nil {
 				rows.Close()
 				return err
 			}
 			count++
-			if ts > lastMs {
-				lastMs = ts
+			if upd > maxUpdated {
+				maxUpdated = upd
 			}
 			line := author + ": " + firstLine(body, 200) + "\n"
 			if b.Len()+len(line) <= 4000 {
@@ -81,7 +81,10 @@ ORDER BY COALESCE(to_timestamp(NULLIF(metadata->>'ts','')::float8), first_seen_a
 			return nil // single message: /topics shows its first line, no LLM needed
 		}
 
-		sig := fmt.Sprintf("%d:%d", count, lastMs)
+		// Signature reflects content state: message count + newest updated_at. A new
+		// reply (count), an edit (updated_at bumps), or a delete (count) all change it,
+		// so the cached topic regenerates instead of going stale.
+		sig := fmt.Sprintf("%d:%d", count, maxUpdated)
 		// Skip if the cached summary already matches the current signature.
 		var existingSig string
 		_ = deps.DB.QueryRow(ctx,

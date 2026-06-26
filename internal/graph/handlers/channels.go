@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"sort"
@@ -349,29 +350,61 @@ LIMIT 3000`, id, days)
 		cacheKeys = append(cacheKeys, v.ThreadTS)
 		rootText[i] = bodyOf(g.msgs[0])
 	}
-	cached := map[string]string{} // thread_ts -> summary
+	cached := map[string]string{}    // thread_ts -> summary
+	cachedSig := map[string]string{} // thread_ts -> signature it was generated for
 	if len(cacheKeys) > 0 {
 		crows, cerr := h.db.Query(ctx,
-			`SELECT thread_ts, summary FROM graph.thread_summaries WHERE channel_id=$1 AND thread_ts = ANY($2)`,
+			`SELECT thread_ts, summary, COALESCE(signature,'') FROM graph.thread_summaries WHERE channel_id=$1 AND thread_ts = ANY($2)`,
 			id, cacheKeys)
 		if cerr == nil {
 			for crows.Next() {
-				var tt, sum string
-				if crows.Scan(&tt, &sum) == nil {
+				var tt, sum, sig string
+				if crows.Scan(&tt, &sum, &sig) == nil {
 					cached[tt] = sum
+					cachedSig[tt] = sig
 				}
 			}
 			crows.Close()
+		}
+	}
+	// Live signature per visible thread — the same count:lastMs that summarize_thread
+	// keys on. A cached summary whose signature no longer matches is stale (a reply
+	// arrived since it was generated), so we re-enqueue regeneration even though a
+	// summary already exists. Without this, opening the channel never refreshes a
+	// topic once it has any summary.
+	liveSig := map[string]string{}
+	if len(cacheKeys) > 0 {
+		lrows, lerr := h.db.Query(ctx, `
+SELECT COALESCE(metadata->>'thread_ts',''), count(*),
+       max((EXTRACT(EPOCH FROM updated_at) * 1000)::bigint)
+FROM graph.nodes
+WHERE scope = 'slack:' || $1 AND deleted_at IS NULL AND COALESCE(metadata->>'thread_ts','') = ANY($2)
+GROUP BY 1`, id, cacheKeys)
+		if lerr == nil {
+			for lrows.Next() {
+				var tt string
+				var cnt int
+				var last int64
+				if lrows.Scan(&tt, &cnt, &last) == nil {
+					liveSig[tt] = fmt.Sprintf("%d:%d", cnt, last)
+				}
+			}
+			lrows.Close()
 		}
 	}
 	for i, v := range views {
 		if !v.IsThread {
 			continue
 		}
-		if s, ok := cached[v.ThreadTS]; ok && s != "" {
-			views[i].Summary = s
+		s, ok := cached[v.ThreadTS]
+		if ok && s != "" {
+			views[i].Summary = s // show the cached text (even if stale) rather than blank
 		} else {
 			views[i].Summary = firstLine(rootText[i], 90)
+		}
+		// Refresh on a miss OR when the cached summary is stale vs the live thread.
+		stale := !ok || s == "" || cachedSig[v.ThreadTS] != liveSig[v.ThreadTS]
+		if stale {
 			enqueueSummarizeThread(ctx, h.db, id, v.ThreadTS)
 		}
 	}

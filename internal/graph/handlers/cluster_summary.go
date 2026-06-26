@@ -142,7 +142,8 @@ func (h *clusterSummaryHandler) serve(w http.ResponseWriter, r *http.Request) {
 	rows, err := h.db.Query(ctx, `
 SELECT id, type, COALESCE(title,''), COALESCE(url,''), COALESCE(body,''),
        COALESCE(metadata->'author'->>'display_name',''),
-       COALESCE(to_timestamp(NULLIF(metadata->>'ts','')::float8), first_seen_at) AS ts
+       COALESCE(to_timestamp(NULLIF(metadata->>'ts','')::float8), first_seen_at) AS ts,
+       (EXTRACT(EPOCH FROM updated_at) * 1000)::bigint AS upd
 FROM graph.nodes
 WHERE id = ANY($1) AND deleted_at IS NULL`, ordered)
 	if err != nil {
@@ -160,14 +161,19 @@ WHERE id = ANY($1) AND deleted_at IS NULL`, ordered)
 	var gnodes []clusterGraphNode
 	present := map[string]bool{}
 	total := 0
+	var maxUpdated int64 // newest updated_at across all cluster nodes (signature input)
 	var rootType, rootTitle string
 	for rows.Next() {
 		var n clusterNode
 		var urlCol string
-		if err := rows.Scan(&n.id, &n.typ, &n.title, &urlCol, &n.body, &n.author, &n.ts); err != nil {
+		var upd int64
+		if err := rows.Scan(&n.id, &n.typ, &n.title, &urlCol, &n.body, &n.author, &n.ts, &upd); err != nil {
 			rows.Close()
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
+		}
+		if upd > maxUpdated {
+			maxUpdated = upd
 		}
 		idCol := n.id
 		total++
@@ -342,9 +348,12 @@ WHERE n.id = ANY($1) AND n.deleted_at IS NULL AND COALESCE(n.body,'') <> ''`, sl
 	// v3: after the identity merge, author org-depth now resolves for merged people
 	// (e.g. Ross = 0), so bump the version to regenerate summaries with leadership
 	// weighting. The prefix invalidates anything cached under older logic.
-	// v4: root-anchored summaries (non-slack roots no longer crown an arbitrary
-	// co-mentioned thread as originator) + Claude generation. Bump to regenerate.
-	sig := fmt.Sprintf("v4:%d:%d:%d", total, len(slackMsgs), lastMs)
+	// v5: signature now reflects the cluster's full content state — node count plus
+	// the newest updated_at across ALL member nodes (any type). So an add (count),
+	// delete (count), or update to any Slack/Jira/PR/doc node (updated_at bumps)
+	// invalidates the cache and the summary regenerates on the next open. lastMs is
+	// kept so a new Slack reply also triggers it even if updated_at lags.
+	sig := fmt.Sprintf("v5:%d:%d:%d:%d", total, maxUpdated, len(slackMsgs), lastMs)
 
 	var cachedSig, cachedOverview string
 	var cachedHl []byte
