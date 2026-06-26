@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -77,6 +78,41 @@ func TestSlackFetcher_HappyPath_Thread(t *testing.T) {
 	}
 	if body.Title == "" {
 		t.Error("title is empty")
+	}
+}
+
+func TestSlackFetcher_SharedMessage(t *testing.T) {
+	// A "FYI @x" share: the real content (forwarded text + PDF) lives in
+	// attachments, not the top-level Text.
+	payload := slackAPIResponse{
+		OK: true,
+		Messages: []slackMessage{{
+			User: "U123", Text: "FYI @Surbhi Babbar", Ts: "1779710863.216389",
+			Attachments: []slackAttachment{{
+				AuthorName: "mohan",
+				Text:       "Hi attached flow of Pay at Hotel journey.",
+				Files:      []slackFile{{ID: "F999", Name: "Booking.com-Certification.pdf", Mimetype: "application/pdf"}},
+			}},
+		}},
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(payload)
+	}))
+	defer srv.Close()
+
+	cfg := Config{SlackBotToken: "test-token", HTTPClient: newRewriteClient(srv.URL, srv.Client())}
+	f := newSlackFetcher(cfg, noLogger())
+	body, err := f.Fetch(context.Background(), "slack:C08S954G2LX:1779710863.216389")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	raw := string(body.Raw)
+	if !strings.Contains(raw, "mohan") || !strings.Contains(raw, "Pay at Hotel journey") {
+		t.Errorf("shared content not folded into body: %q", raw)
+	}
+	if len(body.Attachments) != 1 || body.Attachments[0].Filename != "Booking.com-Certification.pdf" {
+		t.Errorf("shared file not collected: %+v", body.Attachments)
 	}
 }
 

@@ -55,6 +55,18 @@ type slackMessage struct {
 	Ts      string       `json:"ts"`
 	ThreadTs string      `json:"thread_ts"`
 	Files   []slackFile  `json:"files"`
+	// Attachments holds shared/forwarded messages and link unfurls. A forwarded
+	// message keeps its real content here (author_name, text, nested files), not in
+	// the top-level Text — so without this a "FYI @x" share shows nothing.
+	Attachments []slackAttachment `json:"attachments"`
+}
+
+type slackAttachment struct {
+	AuthorName string      `json:"author_name"`
+	Title      string      `json:"title"`
+	Text       string      `json:"text"`
+	Fallback   string      `json:"fallback"`
+	Files      []slackFile `json:"files"`
 }
 
 type slackFile struct {
@@ -81,14 +93,35 @@ func (f *slackFetcher) Fetch(ctx context.Context, node string) (FetchedBody, err
 		return FetchedBody{}, fmt.Errorf("slack fetcher: no messages returned for %s", node)
 	}
 
-	// Build body text: parent + replies.
+	// Build body text: parent + replies, each including any shared/forwarded content.
 	var sb strings.Builder
+	appendMsg := func(m slackMessage) {
+		sb.WriteString(m.Text)
+		for _, at := range m.Attachments {
+			text := at.Text
+			if text == "" {
+				text = at.Fallback
+			}
+			if at.AuthorName == "" && at.Title == "" && text == "" {
+				continue
+			}
+			sb.WriteString("\n\n--- shared")
+			if at.AuthorName != "" {
+				sb.WriteString(" from " + at.AuthorName)
+			}
+			sb.WriteString(" ---\n")
+			if at.Title != "" {
+				sb.WriteString(at.Title + "\n")
+			}
+			sb.WriteString(text)
+		}
+	}
 	parent := msgs[0]
-	sb.WriteString(parent.Text)
+	appendMsg(parent)
 
 	for _, msg := range msgs[1:] {
 		sb.WriteString(fmt.Sprintf("\n\n--- reply by %s @ %s ---\n\n", msg.User, msg.Ts))
-		sb.WriteString(msg.Text)
+		appendMsg(msg)
 	}
 	bodyText := sb.String()
 
@@ -98,18 +131,27 @@ func (f *slackFetcher) Fetch(ctx context.Context, node string) (FetchedBody, err
 		title = title[:80]
 	}
 
-	// Collect attachments.
+	// Collect file attachments — both directly attached files and files inside
+	// shared/forwarded messages (e.g. a PDF in a forwarded message).
 	var attachments []Attachment
+	addFile := func(fi slackFile) {
+		attachments = append(attachments, Attachment{
+			NodeID:     ids.SlackFile(fi.ID),
+			MimeType:   fi.Mimetype,
+			Filename:   fi.Name,
+			SizeBytes:  fi.Size,
+			URLPrivate: fi.URLPrivate,
+			ThumbURL:   fi.Thumb360,
+		})
+	}
 	for _, msg := range msgs {
 		for _, fi := range msg.Files {
-			attachments = append(attachments, Attachment{
-				NodeID:     ids.SlackFile(fi.ID),
-				MimeType:   fi.Mimetype,
-				Filename:   fi.Name,
-				SizeBytes:  fi.Size,
-				URLPrivate: fi.URLPrivate,
-				ThumbURL:   fi.Thumb360,
-			})
+			addFile(fi)
+		}
+		for _, at := range msg.Attachments {
+			for _, fi := range at.Files {
+				addFile(fi)
+			}
 		}
 	}
 
