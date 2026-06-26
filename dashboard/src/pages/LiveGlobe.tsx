@@ -7,6 +7,9 @@ import {
   fetchNeighbors,
   fetchClusterSummary,
   graphSearch,
+  listSubscriptions,
+  createSubscription,
+  deleteSubscription,
   type ChannelCount,
   type ContinentCfg,
   type ChannelMessage,
@@ -14,6 +17,7 @@ import {
   type GraphNeighbor,
   type ClusterSummary,
   type GraphNode,
+  type TopicSubscription,
 } from '../api'
 import { applyGroupNames, assignCountries, continentOf, nameOf } from '../continents'
 import ClusterGraph from './ClusterGraph'
@@ -273,6 +277,48 @@ export function LiveGlobePage() {
       .catch(() => setSearchResults([]))
       .finally(() => setSearchLoading(false))
   }
+
+  // ── Topic subscriptions (enzobot hot-topic DM alerts) ─────────────────────────
+  const [subsOpen, setSubsOpen] = useState(false)
+  const [subs, setSubs] = useState<TopicSubscription[]>([])
+  const [subTopic, setSubTopic] = useState('')
+  const [subChannel, setSubChannel] = useState('') // optional: limit to one channel
+  const [subBusy, setSubBusy] = useState(false)
+  const [subError, setSubError] = useState('')
+
+  function refreshSubs() {
+    listSubscriptions()
+      .then((s) => setSubs(s || []))
+      .catch(() => setSubs([]))
+  }
+
+  function addSub() {
+    const topic = subTopic.trim()
+    if (!topic) return
+    setSubBusy(true)
+    setSubError('')
+    createSubscription({
+      topic,
+      channel_filter: subChannel.trim() ? [subChannel.trim()] : undefined,
+    })
+      .then(() => {
+        setSubTopic('')
+        setSubChannel('')
+        refreshSubs()
+      })
+      .catch((e: unknown) => setSubError(e instanceof Error ? e.message : 'failed to subscribe'))
+      .finally(() => setSubBusy(false))
+  }
+
+  function removeSub(id: number) {
+    deleteSubscription(id)
+      .then(refreshSubs)
+      .catch(() => {})
+  }
+
+  useEffect(() => {
+    if (subsOpen) refreshSubs()
+  }, [subsOpen])
 
   // Open the existing "Graph" overlay for a search hit by adapting it to a topic.
   function openGraphForNode(n: GraphNode) {
@@ -955,6 +1001,9 @@ export function LiveGlobePage() {
               </button>
             )}
           </form>
+          <button type="button" onClick={() => setSubsOpen(true)} style={segBtn(subsOpen)}>
+            🔔 ALERTS
+          </button>
           <span style={{ color: C.dim, fontSize: 10, letterSpacing: '0.08em' }}>
             {secsAgo === null ? 'CONNECTING…' : `UPDATED ${secsAgo}S AGO`}
           </span>
@@ -1657,6 +1706,168 @@ export function LiveGlobePage() {
                   </div>
                 )
               })}
+          </div>
+        </div>
+      )}
+
+      {/* ── Subscriptions overlay: enzobot hot-topic DM alerts ──────────────── */}
+      {subsOpen && (
+        <div
+          onClick={() => setSubsOpen(false)}
+          style={{
+            position: 'absolute',
+            inset: 0,
+            background: 'rgba(0,0,0,0.55)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 20,
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              ...panel,
+              width: 'min(520px, calc(100vw - 32px))',
+              maxHeight: 'calc(100vh - 64px)',
+              borderRadius: 4,
+              padding: 16,
+              display: 'flex',
+              flexDirection: 'column',
+              overflow: 'hidden',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+              <div style={{ color: C.text, fontSize: 13, fontWeight: 600, letterSpacing: '0.04em' }}>
+                🔔 HOT-TOPIC ALERTS
+              </div>
+              <button
+                onClick={() => setSubsOpen(false)}
+                style={{
+                  background: 'transparent',
+                  border: `1px solid ${C.border}`,
+                  color: C.dim,
+                  cursor: 'pointer',
+                  fontFamily: MONO,
+                  fontSize: 14,
+                  lineHeight: '14px',
+                  borderRadius: 2,
+                  padding: '2px 6px',
+                }}
+                aria-label="Close"
+              >
+                ×
+              </button>
+            </div>
+            <div style={{ color: C.dim, fontSize: 10, lineHeight: 1.5, marginTop: 8 }}>
+              enzobot DMs you when a Slack thread matching a topic gets hot — a senior
+              person raises it, or many people start discussing it.
+            </div>
+
+            {/* Add form */}
+            <form
+              onSubmit={(e) => {
+                e.preventDefault()
+                addSub()
+              }}
+              style={{ display: 'flex', gap: 6, marginTop: 12, flexWrap: 'wrap' }}
+            >
+              <input
+                value={subTopic}
+                onChange={(e) => setSubTopic(e.target.value)}
+                placeholder="topic, e.g. payments"
+                style={{
+                  flex: 2,
+                  minWidth: 140,
+                  background: C.panel,
+                  border: `1px solid ${C.border}`,
+                  color: C.text,
+                  fontFamily: MONO,
+                  fontSize: 11,
+                  padding: '6px 8px',
+                  borderRadius: 2,
+                  outline: 'none',
+                }}
+              />
+              <input
+                value={subChannel}
+                onChange={(e) => setSubChannel(e.target.value)}
+                placeholder="channel id (optional)"
+                style={{
+                  flex: 1,
+                  minWidth: 120,
+                  background: C.panel,
+                  border: `1px solid ${C.border}`,
+                  color: C.text,
+                  fontFamily: MONO,
+                  fontSize: 11,
+                  padding: '6px 8px',
+                  borderRadius: 2,
+                  outline: 'none',
+                }}
+              />
+              <button type="submit" disabled={subBusy || !subTopic.trim()} style={segBtn(true)}>
+                {subBusy ? '…' : 'SUBSCRIBE'}
+              </button>
+            </form>
+            {subError && (
+              <div style={{ color: C.red, fontSize: 10, marginTop: 6 }}>{subError}</div>
+            )}
+
+            {/* List */}
+            <div
+              style={{
+                marginTop: 14,
+                paddingTop: 10,
+                borderTop: `1px solid ${C.border}`,
+                flex: 1,
+                overflowY: 'auto',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 6,
+              }}
+            >
+              {subs.length === 0 && (
+                <div style={{ color: C.dim, fontSize: 11 }}>no subscriptions yet</div>
+              )}
+              {subs.map((s) => (
+                <div
+                  key={s.id}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8,
+                    background: 'rgba(255,255,255,0.02)',
+                    border: `1px solid ${C.border}`,
+                    borderRadius: 3,
+                    padding: 8,
+                  }}
+                >
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ color: C.text, fontSize: 12 }}>{s.topic}</div>
+                    <div style={{ color: C.dim, fontSize: 9, marginTop: 2 }}>
+                      {s.channel_filter.length > 0 ? `#${s.channel_filter.join(', #')}` : 'all channels'}
+                      {' · '}≥{s.min_participants} ppl or org-depth ≤{s.max_author_depth}
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => removeSub(s.id)}
+                    style={{
+                      background: 'transparent',
+                      border: `1px solid ${C.border}`,
+                      color: C.dim,
+                      cursor: 'pointer',
+                      fontFamily: MONO,
+                      fontSize: 10,
+                      borderRadius: 2,
+                      padding: '2px 8px',
+                    }}
+                  >
+                    delete
+                  </button>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
       )}

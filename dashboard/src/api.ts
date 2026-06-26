@@ -439,6 +439,50 @@ export async function fetchChannels(days = 0): Promise<ChannelCount[]> {
   return res.json();
 }
 
+// ── Topic subscriptions (hot-topic enzobot alerts) ───────────────────────────
+
+export interface TopicSubscription {
+  id: number;
+  subscriber_slack_id: string;
+  topic: string;
+  channel_filter: string[];
+  min_participants: number;
+  max_author_depth: number;
+  active: boolean;
+  created_at: string;
+}
+
+export async function listSubscriptions(): Promise<TopicSubscription[]> {
+  const res = await authFetch(`${BASE}/api/graph/subscriptions`);
+  return res.json();
+}
+
+export async function createSubscription(body: {
+  topic: string;
+  channel_filter?: string[];
+  min_participants?: number;
+  max_author_depth?: number;
+  subscriber_slack_id?: string;
+}): Promise<TopicSubscription> {
+  const res = await authFetch(`${BASE}/api/graph/subscriptions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const err = await res.text().catch(() => '');
+    throw new Error(err || `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function deleteSubscription(id: number): Promise<void> {
+  await authFetch(`${BASE}/api/graph/subscriptions/${id}`, {
+    method: 'DELETE',
+    headers: authHeaders(),
+  });
+}
+
 export interface MsgRef {
   type: string; // jira | gh_pr | cf | slack_file | ...
   key: string; // natural key, e.g. PAY-2204
