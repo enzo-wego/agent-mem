@@ -328,7 +328,9 @@ export interface GraphNode {
   score?: number;
   score_breakdown?: Record<string, number>;
   author?: string;
+  summary?: string;
   updated_at?: string;
+  created_at?: string;
 }
 
 export interface GraphSearchResponse {

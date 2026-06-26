@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -64,6 +65,7 @@ type searchResult struct {
 	Score          float64            `json:"score"`
 	ScoreBreakdown scoring.Components `json:"score_breakdown"`
 	Author         string             `json:"author,omitempty"`
+	CreatedAt      time.Time          `json:"created_at"`
 }
 
 func (s *Search) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -113,6 +115,7 @@ SELECT n.id, n.type, COALESCE(n.title,''), COALESCE(n.url,''),
        COALESCE(p.display_name,''),
        1.0 - (ai.embedding <=> $1) AS cosine,
        n.updated_at,
+       COALESCE(n.created_at, n.first_seen_at) AS created_at,
        COALESCE(p.depth_from_root, 0),
        COALESCE(p.is_bot, false),
        COALESCE(p.eeid, 0)
@@ -140,6 +143,7 @@ SELECT n.id, n.type, COALESCE(n.title,''), COALESCE(n.url,''),
        COALESCE(p.display_name,''),
        0.5 AS cosine,
        n.updated_at,
+       COALESCE(n.created_at, n.first_seen_at) AS created_at,
        COALESCE(p.depth_from_root, 0),
        COALESCE(p.is_bot, false),
        COALESCE(p.eeid, 0)
@@ -172,12 +176,13 @@ LIMIT $4
 			id, typ, title, url, summary, authorName string
 			cosine                                    float64
 			updatedAt                                 time.Time
+			createdAt                                 time.Time
 			depth                                     int16
 			isBot                                     bool
 			authorEEID                                int
 		)
 		if err := rows.Scan(&id, &typ, &title, &url, &summary, &authorName,
-			&cosine, &updatedAt, &depth, &isBot, &authorEEID); err != nil {
+			&cosine, &updatedAt, &createdAt, &depth, &isBot, &authorEEID); err != nil {
 			continue
 		}
 		c := scoring.Components{
@@ -191,7 +196,7 @@ LIMIT $4
 		results = append(results, searchResult{
 			NodeID: id, ID: id, Type: typ, Title: title, URL: url,
 			Summary: summary, Score: score, ScoreBreakdown: c,
-			Author: authorName,
+			Author: authorName, CreatedAt: createdAt,
 		})
 	}
 	if rows.Err() != nil {
@@ -283,12 +288,15 @@ SELECT EXISTS (
 	return ok
 }
 
+// sortByScore orders results by score descending, breaking ties by created_at
+// descending (newest first) so equally-relevant results surface the most recent.
 func sortByScore(rs []searchResult) {
-	for i := 1; i < len(rs); i++ {
-		for j := i; j > 0 && rs[j].Score > rs[j-1].Score; j-- {
-			rs[j], rs[j-1] = rs[j-1], rs[j]
+	sort.SliceStable(rs, func(i, j int) bool {
+		if rs[i].Score != rs[j].Score {
+			return rs[i].Score > rs[j].Score
 		}
-	}
+		return rs[i].CreatedAt.After(rs[j].CreatedAt)
+	})
 }
 
 // lookupAskerEEID resolves the X-Asker-User header (slack uid or email)

@@ -6,12 +6,14 @@ import {
   fetchChannelTopics,
   fetchNeighbors,
   fetchClusterSummary,
+  graphSearch,
   type ChannelCount,
   type ContinentCfg,
   type ChannelMessage,
   type ChannelTopic,
   type GraphNeighbor,
   type ClusterSummary,
+  type GraphNode,
 } from '../api'
 import { applyGroupNames, assignCountries, continentOf, nameOf } from '../continents'
 import ClusterGraph from './ClusterGraph'
@@ -253,6 +255,39 @@ export function LiveGlobePage() {
   const [summaryCache, setSummaryCache] = useState<Record<string, ClusterSummary | 'loading'>>({})
   // Overlay view: the readable synthesis, or the visual node-link diagram.
   const [graphView, setGraphView] = useState<'summary' | 'diagram'>('summary')
+
+  // ── Graph search (ordered by score, then created_at desc — server-side) ───────
+  const [searchQ, setSearchQ] = useState('')
+  const [searchResults, setSearchResults] = useState<GraphNode[] | null>(null)
+  const [searchLoading, setSearchLoading] = useState(false)
+
+  function runSearch(q: string) {
+    const term = q.trim()
+    if (!term) {
+      setSearchResults(null)
+      return
+    }
+    setSearchLoading(true)
+    graphSearch(term, undefined, 20)
+      .then((r) => setSearchResults(r.results || []))
+      .catch(() => setSearchResults([]))
+      .finally(() => setSearchLoading(false))
+  }
+
+  // Open the existing "Graph" overlay for a search hit by adapting it to a topic.
+  function openGraphForNode(n: GraphNode) {
+    openGraph({
+      thread_ts: '',
+      node_id: n.id,
+      summary: n.title || n.summary || n.id,
+      is_thread: false,
+      msg_count: 0,
+      participants: [],
+      first_ms: 0,
+      last_ms: 0,
+      url: n.url || '',
+    })
+  }
 
   // ── Zoom + pan transform (viewBox space: 360×180) ────────────────────────────
   const [view, setView] = useState({ k: 1, tx: 0, ty: 0 })
@@ -883,6 +918,43 @@ export function LiveGlobePage() {
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault()
+              runSearch(searchQ)
+            }}
+            style={{ display: 'flex', alignItems: 'center', gap: 4 }}
+          >
+            <input
+              value={searchQ}
+              onChange={(e) => setSearchQ(e.target.value)}
+              placeholder="SEARCH GRAPH…"
+              style={{
+                width: 200,
+                background: C.panel,
+                border: `1px solid ${C.border}`,
+                color: C.text,
+                fontFamily: MONO,
+                fontSize: 10,
+                letterSpacing: '0.06em',
+                padding: '4px 8px',
+                borderRadius: 2,
+                outline: 'none',
+              }}
+            />
+            {searchResults !== null && (
+              <button
+                type="button"
+                onClick={() => {
+                  setSearchQ('')
+                  setSearchResults(null)
+                }}
+                style={segBtn(false)}
+              >
+                ✕
+              </button>
+            )}
+          </form>
           <span style={{ color: C.dim, fontSize: 10, letterSpacing: '0.08em' }}>
             {secsAgo === null ? 'CONNECTING…' : `UPDATED ${secsAgo}S AGO`}
           </span>
@@ -919,6 +991,128 @@ export function LiveGlobePage() {
           }}
         >
           {error}
+        </div>
+      )}
+
+      {/* ── Search results panel (top-left, ordered by score then newest) ─────── */}
+      {searchResults !== null && (
+        <div
+          style={{
+            ...panel,
+            position: 'absolute',
+            top: 48,
+            left: 14,
+            width: 360,
+            maxWidth: 'calc(100vw - 28px)',
+            maxHeight: 'calc(100vh - 140px)',
+            borderRadius: 3,
+            padding: 12,
+            display: 'flex',
+            flexDirection: 'column',
+            overflow: 'hidden',
+            zIndex: 15,
+          }}
+        >
+          <div
+            style={{
+              color: C.dim,
+              fontSize: 9,
+              letterSpacing: '0.12em',
+              marginBottom: 8,
+              borderBottom: `1px solid ${C.border}`,
+              paddingBottom: 6,
+            }}
+          >
+            SEARCH · {searchLoading ? 'SEARCHING…' : `${searchResults.length} RESULTS`}
+          </div>
+          <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {!searchLoading && searchResults.length === 0 && (
+              <div style={{ color: C.dim, fontSize: 11 }}>no matches</div>
+            )}
+            {searchResults.map((n) => {
+              const label = n.title || n.summary || n.id
+              const when = n.created_at
+                ? new Date(n.created_at).toLocaleString(undefined, {
+                    month: 'short',
+                    day: 'numeric',
+                    year: 'numeric',
+                  })
+                : ''
+              const meta = [
+                GRAPH_TYPE_GROUPS[n.type]?.label ?? n.type,
+                n.author || '',
+                when,
+              ]
+                .filter(Boolean)
+                .join(' · ')
+              return (
+                <div
+                  key={n.id}
+                  style={{
+                    background: 'rgba(255,255,255,0.02)',
+                    border: `1px solid ${C.border}`,
+                    borderRadius: 3,
+                    padding: 8,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 4,
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
+                    <span
+                      style={{
+                        flex: 1,
+                        color: C.text,
+                        fontSize: 11,
+                        lineHeight: 1.35,
+                        display: '-webkit-box',
+                        WebkitLineClamp: 2,
+                        WebkitBoxOrient: 'vertical',
+                        overflow: 'hidden',
+                      }}
+                    >
+                      {cfg ? applyGroupNames(label, cfg) : label}
+                    </span>
+                    {typeof n.score === 'number' && (
+                      <span style={{ flexShrink: 0, color: C.green, fontSize: 9 }}>
+                        {n.score.toFixed(2)}
+                      </span>
+                    )}
+                  </div>
+                  <div style={{ color: C.dim, fontSize: 9, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {meta}
+                  </div>
+                  <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+                    {n.url && (
+                      <a
+                        href={n.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style={{ color: C.green, fontSize: 9, letterSpacing: '0.06em', textDecoration: 'none' }}
+                      >
+                        open ↗
+                      </a>
+                    )}
+                    <button
+                      onClick={() => openGraphForNode(n)}
+                      style={{
+                        background: 'transparent',
+                        border: 'none',
+                        padding: 0,
+                        cursor: 'pointer',
+                        fontFamily: MONO,
+                        color: C.green,
+                        fontSize: 9,
+                        letterSpacing: '0.06em',
+                      }}
+                    >
+                      open in Graph ↗
+                    </button>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
         </div>
       )}
 
