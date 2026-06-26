@@ -72,7 +72,7 @@ SELECT REPLACE(n.scope,'slack:','') AS channel_id, COUNT(*) AS count,
        COALESCE(sc.name,'') AS name
 FROM graph.nodes n
 LEFT JOIN graph.slack_channels sc ON sc.slack_channel_id = REPLACE(n.scope,'slack:','')
-WHERE n.scope LIKE 'slack:%' AND n.deleted_at IS NULL
+WHERE n.scope LIKE 'slack:%' AND n.scope NOT LIKE 'slack:D%' AND n.deleted_at IS NULL
   AND ($1 = 0 OR n.first_seen_at >= now() - make_interval(days => $1))
 GROUP BY n.scope, sc.name
 ORDER BY count DESC`, days)

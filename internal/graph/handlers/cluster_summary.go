@@ -121,6 +121,11 @@ func (h *clusterSummaryHandler) serve(w http.ResponseWriter, r *http.Request) {
 			if seen[n.NodeID] {
 				continue
 			}
+			// Skip Slack DMs (slack:D…): private 1:1 conversations don't belong in a
+			// shared cluster and have no channel name.
+			if strings.HasPrefix(n.NodeID, "slack:D") {
+				continue
+			}
 			seen[n.NodeID] = true
 			ordered = append(ordered, n.NodeID)
 			frontier = append(frontier, struct {
@@ -295,6 +300,33 @@ ORDER BY ts ASC`, tk.channel, tk.ts)
 			}
 		}
 		trows.Close()
+	}
+
+	// Standalone messages: a cluster's Slack nodes are often non-threaded (e.g. bot
+	// notifications like "@x created Task PAY-…"), which the thread pass above misses
+	// because their thread_ts is empty. Pull every cluster Slack node's own body so
+	// these still ground the summary instead of leaving it blank.
+	if len(slackIDs) > 0 {
+		srows, serr := h.db.Query(ctx, `
+SELECT n.id, COALESCE(n.body,''), COALESCE(n.metadata->'author'->>'display_name',''),
+       COALESCE(p.depth_from_root, -1),
+       COALESCE(to_timestamp(NULLIF(n.metadata->>'ts','')::float8), n.first_seen_at) AS ts
+FROM graph.nodes n
+LEFT JOIN graph.people p ON p.id = n.author_person_id
+WHERE n.id = ANY($1) AND n.deleted_at IS NULL AND COALESCE(n.body,'') <> ''`, slackIDs)
+		if serr == nil {
+			for srows.Next() {
+				var m clusterNode
+				m.typ = "slack"
+				var depth int
+				if srows.Scan(&m.id, &m.body, &m.author, &depth, &m.ts) == nil && m.body != "" && !seenMsg[m.id] {
+					m.depth = depth
+					slackMsgs = append(slackMsgs, m)
+					seenMsg[m.id] = true
+				}
+			}
+			srows.Close()
+		}
 	}
 
 	sort.Slice(slackMsgs, func(i, j int) bool { return slackMsgs[i].ts.Before(slackMsgs[j].ts) })

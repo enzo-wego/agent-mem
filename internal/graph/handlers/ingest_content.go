@@ -172,6 +172,14 @@ func NewIngestContentHandler(deps Deps) http.Handler {
 			return
 		}
 
+		// Privacy: never ingest Slack direct messages (channel ids start with 'D').
+		// A DM has no channel name and is a 1:1 private conversation that shouldn't
+		// land on a shared knowledge graph (it can only ever render as a raw id).
+		if req.Source == "slack" && strings.HasPrefix(req.Metadata.ChannelID, "D") {
+			writeJSON(w, http.StatusOK, ingestResponse{NodeID: nodeID, Outcome: "skipped_dm"})
+			return
+		}
+
 		// Derive natural key and type prefix.
 		naturalKey, _ := ids.ParseNaturalKey(nodeID)
 		nodeType, _ := ids.ParseType(nodeID)
