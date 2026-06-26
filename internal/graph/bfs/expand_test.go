@@ -67,6 +67,58 @@ ON CONFLICT (from_node_id, to_node_id, kind) DO NOTHING`, from, to, kind)
 	}
 }
 
+func seedSlackMsg(t *testing.T, pool *pgxpool.Pool, id, scope, threadTs string) {
+	t.Helper()
+	_, err := pool.Exec(context.Background(), `
+INSERT INTO graph.nodes (id, type, natural_key, scope, metadata, machine_id)
+VALUES ($1, 'slack', $1, $2, jsonb_build_object('thread_ts', $3), 'test')
+ON CONFLICT (id) DO UPDATE SET scope=excluded.scope, metadata=excluded.metadata`,
+		id, scope, threadTs)
+	if err != nil {
+		t.Fatalf("seedSlackMsg %s: %v", id, err)
+	}
+}
+
+// A reply's resource (jira) must be reachable from the thread root even though no
+// edge connects root↔reply — thread siblings bridge it.
+func TestExpand_ThreadSiblingsBridgeToReplyResources(t *testing.T) {
+	ctx := context.Background()
+	pool := testDB(t)
+	seedSlackMsg(t, pool, "slack:C:100", "slack:C", "")    // root (thread key = own ts 100)
+	seedSlackMsg(t, pool, "slack:C:200", "slack:C", "100") // reply in thread 100
+	seedNode(t, pool, "jira:PAY-1", "jira", "PAY-1")
+	seedEdge(t, pool, "slack:C:200", "jira:PAY-1", "REFERENCES")
+
+	e := bfs.NewExpander(pool)
+
+	// Root expands to the reply via a synthetic THREAD link.
+	rootNbrs, err := e.Expand(ctx, "slack:C:100", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasNeighbor(rootNbrs, "slack:C:200") {
+		t.Errorf("root did not reach reply via thread: %v", rootNbrs)
+	}
+
+	// Reply expands to both the root (THREAD) and the jira (REFERENCES).
+	replyNbrs, err := e.Expand(ctx, "slack:C:200", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasNeighbor(replyNbrs, "slack:C:100") || !hasNeighbor(replyNbrs, "jira:PAY-1") {
+		t.Errorf("reply missing root or jira: %v", replyNbrs)
+	}
+}
+
+func hasNeighbor(ns []bfs.Neighbor, id string) bool {
+	for _, n := range ns {
+		if n.NodeID == id {
+			return true
+		}
+	}
+	return false
+}
+
 func TestExpand_ReturnsNeighborsInBothDirections(t *testing.T) {
 	ctx := context.Background()
 	pool := testDB(t)

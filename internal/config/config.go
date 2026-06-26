@@ -29,6 +29,11 @@ type GraphConfig struct {
 	// Fetcher tokens / base URLs
 	SlackBotToken string `json:"slack_bot_token"`
 
+	// SlackDMUserID is the Slack user id (U…) enzobot DMs for hot-topic alerts
+	// when a subscription doesn't specify its own subscriber. Env:
+	// AGENT_MEM_SLACK_DM_USER.
+	SlackDMUserID string `json:"slack_dm_user_id"`
+
 	JiraEmail   string `json:"jira_email"`
 	JiraToken   string `json:"jira_token"`
 	JiraBaseURL string `json:"jira_base_url"`
@@ -464,6 +469,9 @@ func ApplyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("AGENT_MEM_SLACK_BOT_TOKEN"); v != "" {
 		cfg.Graph.SlackBotToken = v
+	}
+	if v := os.Getenv("AGENT_MEM_SLACK_DM_USER"); v != "" {
+		cfg.Graph.SlackDMUserID = v
 	}
 	if v := os.Getenv("AGENT_MEM_JIRA_EMAIL"); v != "" {
 		cfg.Graph.JiraEmail = v

@@ -38,6 +38,11 @@ type Deps struct {
 	Identity    *identity.Service
 	Gemini      GeminiClient
 	LiteParse   LiteParseConfig
+
+	// Hot-topic alerts (Feature: topic subscriptions → enzobot DM).
+	SlackBotToken string // bot token used to DM via chat.postMessage
+	SlackDMUserID string // default Slack user id (U…) to DM when a sub omits one
+	Runner        string // target_runner for self-rescheduled jobs ("any"|"vps"|"local")
 }
 
 // RegisterAll registers all handlers with the given Registry.
