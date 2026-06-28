@@ -49,7 +49,9 @@ func TestFindHotThreads(t *testing.T) {
 	qroot := ts(now, 30)
 	insSlack(t, pool, "C3", ts(now, 31), qroot, ic[0], "payments minor question")
 	insSlack(t, pool, "C3", ts(now, 32), qroot, ic[1], "payments reply")
-	// 4) Senior but off-topic: Ross talks about lunch → topic gate excludes it.
+	// 4) Senior, different subject: Ross talks about lunch. findHotThreads is now
+	// topic-agnostic (semantic filtering happens in the handler), so this passes
+	// the HOT gate via seniority; topicMatches would later reject it.
 	insSlack(t, pool, "C4", ts(now, 40), "", ross, "anyone up for lunch")
 
 	sub := subscription{Topic: "payments", MinParticipants: 4, MaxAuthorDepth: 2}
@@ -68,13 +70,46 @@ func TestFindHotThreads(t *testing.T) {
 		t.Errorf("expected C2 (volume) to fire; got channels %v", keys(got))
 	}
 	if _, ok := got["C3"]; ok {
-		t.Errorf("C3 is quiet (2 ICs) and must NOT fire")
+		t.Errorf("C3 is quiet (2 ICs) and must NOT pass the hot gate")
 	}
-	if _, ok := got["C4"]; ok {
-		t.Errorf("C4 is off-topic and must NOT fire")
+	if _, ok := got["C4"]; !ok {
+		t.Errorf("C4 should pass the hot gate via seniority (topic filtered later); got %v", keys(got))
 	}
 	if c2 := got["C2"]; c2.Participants != 4 {
 		t.Errorf("C2 participants = %d, want 4", c2.Participants)
+	}
+	if c1 := got["C1"]; c1.Blob == "" {
+		t.Errorf("C1 blob should be populated for semantic matching")
+	}
+}
+
+// TestCosine checks the similarity helper: identical vectors ≈ 1, orthogonal ≈ 0.
+func TestCosine(t *testing.T) {
+	a := []float32{1, 0, 1}
+	if s := cosine(a, a); s < 0.999 {
+		t.Errorf("cosine(a,a) = %v, want ~1", s)
+	}
+	if s := cosine([]float32{1, 0}, []float32{0, 1}); s != 0 {
+		t.Errorf("cosine(orthogonal) = %v, want 0", s)
+	}
+	if s := cosine([]float32{1, 2}, nil); s != 0 {
+		t.Errorf("cosine(mismatched) = %v, want 0", s)
+	}
+}
+
+// TestTopicMatches_KeywordFallback verifies that with no embedder, topicMatches
+// falls back to a literal keyword check over thread text + channel name.
+func TestTopicMatches_KeywordFallback(t *testing.T) {
+	deps := Deps{} // no Gemini ⇒ keyword fallback
+	s := subscription{Topic: "payments"}
+	if !topicMatches(context.Background(), deps, s, nil, hotThread{Blob: "the payments service is down"}) {
+		t.Errorf("expected keyword match on blob")
+	}
+	if !topicMatches(context.Background(), deps, s, nil, hotThread{ChannelName: "payments-ops"}) {
+		t.Errorf("expected keyword match on channel name")
+	}
+	if topicMatches(context.Background(), deps, s, nil, hotThread{Blob: "lunch plans"}) {
+		t.Errorf("did not expect match for unrelated text")
 	}
 }
 
