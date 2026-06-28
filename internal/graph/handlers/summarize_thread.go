@@ -68,8 +68,11 @@ ORDER BY COALESCE(to_timestamp(NULLIF(metadata->>'ts','')::float8), first_seen_a
 			if upd > maxUpdated {
 				maxUpdated = upd
 			}
-			line := author + ": " + firstLine(body, 200) + "\n"
-			if b.Len()+len(line) <= 4000 {
+			if author == "" {
+				author = "someone"
+			}
+			line := author + ": " + firstLine(body, 280) + "\n"
+			if b.Len()+len(line) <= 7000 {
 				b.WriteString(line)
 			}
 		}
@@ -83,8 +86,10 @@ ORDER BY COALESCE(to_timestamp(NULLIF(metadata->>'ts','')::float8), first_seen_a
 
 		// Signature reflects content state: message count + newest updated_at. A new
 		// reply (count), an edit (updated_at bumps), or a delete (count) all change it,
-		// so the cached topic regenerates instead of going stale.
-		sig := fmt.Sprintf("%d:%d", count, maxUpdated)
+		// so the cached summary regenerates instead of going stale. The "v2:" prefix
+		// invalidates rows cached under the old one-line-only logic so they regenerate
+		// with the deep overview+highlights. Keep this prefix in sync with channels.go.
+		sig := fmt.Sprintf("v2:%d:%d", count, maxUpdated)
 		// Skip if the cached summary already matches the current signature.
 		var existingSig string
 		_ = deps.DB.QueryRow(ctx,
@@ -94,33 +99,55 @@ ORDER BY COALESCE(to_timestamp(NULLIF(metadata->>'ts','')::float8), first_seen_a
 			return nil
 		}
 
-		summary := genThreadSummary(ctx, deps.Gemini, b.String())
-		if summary == "" {
+		topic, overview, highlights := genThreadDeepSummary(ctx, deps.Gemini, b.String())
+		if topic == "" && overview == "" {
 			return nil // transient LLM failure; leave prior summary, retry later
 		}
+		hlJSON, e := json.Marshal(highlights)
+		if e != nil || hlJSON == nil {
+			hlJSON = []byte("[]")
+		}
 		_, err = deps.DB.Exec(ctx,
-			`INSERT INTO graph.thread_summaries(channel_id,thread_ts,signature,summary,updated_at)
-			 VALUES($1,$2,$3,$4,NOW())
-			 ON CONFLICT (channel_id,thread_ts) DO UPDATE SET signature=excluded.signature, summary=excluded.summary, updated_at=NOW()`,
-			p.ChannelID, p.ThreadTs, sig, summary)
+			`INSERT INTO graph.thread_summaries(channel_id,thread_ts,signature,summary,overview,highlights,updated_at)
+			 VALUES($1,$2,$3,$4,$5,$6,NOW())
+			 ON CONFLICT (channel_id,thread_ts) DO UPDATE SET
+			   signature=excluded.signature, summary=excluded.summary,
+			   overview=excluded.overview, highlights=excluded.highlights, updated_at=NOW()`,
+			p.ChannelID, p.ThreadTs, sig, topic, overview, hlJSON)
 		return err
 	}
 }
 
-// genThreadSummary asks Gemini for a one-line topic label. Returns "" on error.
-func genThreadSummary(ctx context.Context, g GeminiClient, transcript string) string {
-	const sys = `You label a Slack conversation with a short, factual topic (max 10 words). No quotes, no trailing period. Respond as JSON: {"topic":"..."}`
+// genThreadDeepSummary asks the LLM for a one-line topic label PLUS a short
+// overview and chronological highlights for a single Slack thread, so a thread
+// can be understood quickly and deeply. Returns ("","",nil) on error.
+func genThreadDeepSummary(ctx context.Context, g GeminiClient, transcript string) (string, string, []string) {
+	const sys = `You are given one Slack thread (messages oldest first, as "author: text").
+Summarize it so a teammate understands it quickly and deeply. Respond as JSON:
+{"topic":"short factual label, max 10 words, no trailing period",
+ "overview":"2-3 sentences: what was raised and the current state/outcome",
+ "highlights":["chronological key points / decisions, each one short line, max 6 items"]}
+
+STRICT GROUNDING — follow exactly:
+- Use ONLY facts, names, and ids that literally appear in the thread.
+- NEVER invent ticket ids, people, dates, fixes, or outcomes.
+- Do NOT assume the issue was resolved/deployed unless the text says so.
+- If the thread is thin or inconclusive, write a short overview and return fewer
+  (or zero) highlights rather than filling gaps.
+No markdown, no quotes around the whole thing.`
 	out, err := g.Generate(ctx, sys, transcript)
 	if err != nil || out == "" {
-		return ""
+		return "", "", nil
 	}
 	var parsed struct {
-		Topic string `json:"topic"`
+		Topic      string   `json:"topic"`
+		Overview   string   `json:"overview"`
+		Highlights []string `json:"highlights"`
 	}
 	if json.Unmarshal([]byte(out), &parsed) != nil {
-		return ""
+		return "", "", nil
 	}
-	return firstLine(parsed.Topic, 90)
+	return firstLine(parsed.Topic, 90), strings.TrimSpace(parsed.Overview), parsed.Highlights
 }
 
 // enqueueSummarizeThread enqueues a summarize_thread job unless one is already

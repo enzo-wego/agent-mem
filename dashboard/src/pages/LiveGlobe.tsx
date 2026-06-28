@@ -1644,6 +1644,53 @@ export function LiveGlobePage() {
                           gap: 6,
                         }}
                       >
+                        {/* Deep thread summary (overview + highlights), Slack-only. */}
+                        {(t.overview || (t.highlights && t.highlights.length > 0)) && (
+                          <div
+                            style={{
+                              display: 'flex',
+                              flexDirection: 'column',
+                              gap: 6,
+                              padding: '8px 10px',
+                              background: 'rgba(68,255,136,0.04)',
+                              border: `1px solid ${C.border}`,
+                              borderRadius: 4,
+                            }}
+                          >
+                            <div
+                              style={{
+                                color: C.green,
+                                fontSize: 8,
+                                letterSpacing: '0.12em',
+                                textTransform: 'uppercase',
+                              }}
+                            >
+                              Thread summary
+                            </div>
+                            {t.overview && (
+                              <div style={{ color: C.text, fontSize: 11, lineHeight: 1.5 }}>
+                                {cfg ? applyGroupNames(t.overview, cfg) : t.overview}
+                              </div>
+                            )}
+                            {t.highlights && t.highlights.length > 0 && (
+                              <ul
+                                style={{
+                                  margin: 0,
+                                  paddingLeft: 16,
+                                  display: 'flex',
+                                  flexDirection: 'column',
+                                  gap: 3,
+                                }}
+                              >
+                                {t.highlights.map((h, i) => (
+                                  <li key={i} style={{ color: C.dim, fontSize: 10, lineHeight: 1.4 }}>
+                                    {cfg ? applyGroupNames(h, cfg) : h}
+                                  </li>
+                                ))}
+                              </ul>
+                            )}
+                          </div>
+                        )}
                         {loadingThread && <div style={{ color: C.dim, fontSize: 10 }}>Loading…</div>}
                         {!loadingThread && msgs && msgs.length === 0 && (
                           <div style={{ color: C.dim, fontSize: 10 }}>no messages</div>

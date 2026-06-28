@@ -521,6 +521,8 @@ export interface ChannelTopic {
   thread_ts: string;
   node_id: string;
   summary: string;
+  overview?: string; // deep 2-3 sentence summary (threads only)
+  highlights?: string[]; // chronological key points (threads only)
   is_thread: boolean;
   msg_count: number;
   participants: string[];

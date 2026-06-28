@@ -20,8 +20,9 @@ type mockGemini struct {
 	describeCalls atomic.Int32
 	embedCalls    atomic.Int32
 
-	describeResult func() (string, string, []string, error)
-	embedResult    func() ([]float32, error)
+	describeResult  func() (string, string, []string, error)
+	embedResult     func() ([]float32, error)
+	generateResult  func() (string, error)
 }
 
 func (m *mockGemini) Describe(_ context.Context, _ string, _ []byte, _ string) (string, string, []string, error) {
@@ -41,6 +42,9 @@ func (m *mockGemini) Embed(_ context.Context, _ string) ([]float32, error) {
 }
 
 func (m *mockGemini) Generate(_ context.Context, _, _ string) (string, error) {
+	if m.generateResult != nil {
+		return m.generateResult()
+	}
 	return "", nil
 }
 

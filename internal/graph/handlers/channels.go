@@ -211,7 +211,9 @@ WHERE e.kind = 'REFERENCES' AND e.from_node_id = ANY($1) AND n.deleted_at IS NUL
 type topicView struct {
 	ThreadTS     string   `json:"thread_ts"`
 	NodeID       string   `json:"node_id"` // graph node id of the root/standalone msg (for /neighbors)
-	Summary      string   `json:"summary"`
+	Summary      string   `json:"summary"` // one-line topic label
+	Overview     string   `json:"overview"`    // 2-3 sentence deep summary (threads only)
+	Highlights   []string `json:"highlights"`  // chronological key points (threads only)
 	IsThread     bool     `json:"is_thread"`
 	MsgCount     int      `json:"msg_count"`
 	Participants []string `json:"participants"`
@@ -350,18 +352,27 @@ LIMIT 3000`, id, days)
 		cacheKeys = append(cacheKeys, v.ThreadTS)
 		rootText[i] = bodyOf(g.msgs[0])
 	}
-	cached := map[string]string{}    // thread_ts -> summary
-	cachedSig := map[string]string{} // thread_ts -> signature it was generated for
+	cached := map[string]string{}            // thread_ts -> one-line topic
+	cachedSig := map[string]string{}         // thread_ts -> signature it was generated for
+	cachedOverview := map[string]string{}    // thread_ts -> deep overview
+	cachedHl := map[string][]string{}        // thread_ts -> highlights
 	if len(cacheKeys) > 0 {
 		crows, cerr := h.db.Query(ctx,
-			`SELECT thread_ts, summary, COALESCE(signature,'') FROM graph.thread_summaries WHERE channel_id=$1 AND thread_ts = ANY($2)`,
+			`SELECT thread_ts, summary, COALESCE(signature,''), COALESCE(overview,''), COALESCE(highlights,'[]'::jsonb)
+			 FROM graph.thread_summaries WHERE channel_id=$1 AND thread_ts = ANY($2)`,
 			id, cacheKeys)
 		if cerr == nil {
 			for crows.Next() {
-				var tt, sum, sig string
-				if crows.Scan(&tt, &sum, &sig) == nil {
+				var tt, sum, sig, overview string
+				var hlRaw []byte
+				if crows.Scan(&tt, &sum, &sig, &overview, &hlRaw) == nil {
 					cached[tt] = sum
 					cachedSig[tt] = sig
+					cachedOverview[tt] = overview
+					var hl []string
+					if json.Unmarshal(hlRaw, &hl) == nil {
+						cachedHl[tt] = hl
+					}
 				}
 			}
 			crows.Close()
@@ -386,7 +397,8 @@ GROUP BY 1`, id, cacheKeys)
 				var cnt int
 				var last int64
 				if lrows.Scan(&tt, &cnt, &last) == nil {
-					liveSig[tt] = fmt.Sprintf("%d:%d", cnt, last)
+					// Must match summarize_thread's sig format ("v2:" prefix).
+					liveSig[tt] = fmt.Sprintf("v2:%d:%d", cnt, last)
 				}
 			}
 			lrows.Close()
@@ -402,6 +414,9 @@ GROUP BY 1`, id, cacheKeys)
 		} else {
 			views[i].Summary = firstLine(rootText[i], 90)
 		}
+		// Deep fields (overview + highlights) are shown when a thread is expanded.
+		views[i].Overview = cachedOverview[v.ThreadTS]
+		views[i].Highlights = cachedHl[v.ThreadTS]
 		// Refresh on a miss OR when the cached summary is stale vs the live thread.
 		stale := !ok || s == "" || cachedSig[v.ThreadTS] != liveSig[v.ThreadTS]
 		if stale {
