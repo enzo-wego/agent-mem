@@ -6,24 +6,27 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/agent-mem/agent-mem/internal/graph/acl"
 	"github.com/agent-mem/agent-mem/internal/graph/bfs"
 )
 
 // NewNeighbors returns a chi.Router that owns /node/{id}/neighbors.
 func NewNeighbors(db *pgxpool.Pool) chi.Router {
 	r := chi.NewRouter()
-	h := &neighborsHandler{db: db, exp: bfs.NewExpander(db)}
+	h := &neighborsHandler{db: db, exp: bfs.NewExpander(db), aclBld: acl.NewBuilder(db, 5*time.Minute)}
 	r.Get("/node/{id}/neighbors", h.serve)
 	return r
 }
 
 type neighborsHandler struct {
-	db  *pgxpool.Pool
-	exp *bfs.Expander
+	db     *pgxpool.Pool
+	exp    *bfs.Expander
+	aclBld *acl.Builder
 }
 
 type neighborItem struct {
@@ -56,6 +59,12 @@ func (h *neighborsHandler) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	kindFilter := r.URL.Query()["kind"]
 
+	// ACL: a real asker (eeid != 0) only sees neighbors in scope; eeid 0 is the
+	// trusted unfiltered view. Hidden nodes are neither surfaced nor traversed
+	// through, so the walk can't leak private structure or content.
+	eeid, scopeSet := askerScopeSet(ctx, h.db, h.aclBld, r.Header.Get("X-Asker-User"))
+	noFilter := eeid == 0
+
 	seen := map[string]bool{id: true}
 	frontier := []struct {
 		id  string
@@ -79,10 +88,6 @@ func (h *neighborsHandler) serve(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			seen[n.NodeID] = true
-			frontier = append(frontier, struct {
-				id  string
-				hop int
-			}{n.NodeID, next.hop + 1})
 
 			var item neighborItem
 			item.Hop = next.hop + 1
@@ -91,13 +96,15 @@ func (h *neighborsHandler) serve(w http.ResponseWriter, r *http.Request) {
 			// body — so a row shows readable text (and a whole thread one label),
 			// never a raw slack:CHANNEL:TS id.
 			var title, body, threadSummary string
+			var scope *string
 			row := h.db.QueryRow(ctx, `
 SELECT n.id, n.type, COALESCE(n.url,''), COALESCE(n.title,''),
        LEFT(COALESCE(n.body,''),200),
        COALESCE(n.metadata->>'thread_ts',''),
        COALESCE(ts.summary,''),
        COALESCE(sc.name,''),
-       (EXTRACT(EPOCH FROM COALESCE(n.created_at, to_timestamp(NULLIF(n.metadata->>'ts','')::float8), n.first_seen_at)) * 1000)::bigint
+       (EXTRACT(EPOCH FROM COALESCE(n.created_at, to_timestamp(NULLIF(n.metadata->>'ts','')::float8), n.first_seen_at)) * 1000)::bigint,
+       n.scope
 FROM graph.nodes n
 LEFT JOIN graph.thread_summaries ts
   ON ts.channel_id = REPLACE(n.scope,'slack:','')
@@ -106,9 +113,17 @@ LEFT JOIN graph.slack_channels sc
   ON sc.slack_channel_id = REPLACE(n.scope,'slack:','')
 WHERE n.id=$1`, n.NodeID)
 			if err := row.Scan(&item.Node.NodeID, &item.Node.Type, &item.Node.URL,
-				&title, &body, &item.Node.ThreadTS, &threadSummary, &item.Node.Channel, &item.Node.TSMs); err != nil {
+				&title, &body, &item.Node.ThreadTS, &threadSummary, &item.Node.Channel, &item.Node.TSMs, &scope); err != nil {
 				continue
 			}
+			// Hidden from this asker: don't surface it and don't expand through it.
+			if !scopeVisible(scope, scopeSet, noFilter) {
+				continue
+			}
+			frontier = append(frontier, struct {
+				id  string
+				hop int
+			}{n.NodeID, next.hop + 1})
 			if item.Node.Type == "slack" || item.Node.Type == "slack_thread" {
 				switch {
 				case threadSummary != "":

@@ -124,7 +124,7 @@ JOIN graph.nodes n ON n.id = ai.node_id
 LEFT JOIN graph.people p ON p.id = n.author_person_id
 WHERE n.deleted_at IS NULL
   AND ($2::text[] IS NULL OR n.type = ANY($2))
-  AND ($3::text[] IS NULL OR n.scope = ANY($3))
+  AND ($3::text[] IS NULL OR n.scope IS NULL OR n.scope = '' OR n.scope = ANY($3))
 ORDER BY ai.embedding <=> $1
 LIMIT $4
 `
@@ -152,7 +152,7 @@ LEFT JOIN graph.artifact_index ai ON ai.node_id = n.id
 LEFT JOIN graph.people p ON p.id = n.author_person_id
 WHERE n.deleted_at IS NULL
   AND ($1::text[] IS NULL OR n.type = ANY($1))
-  AND ($2::text[] IS NULL OR n.scope = ANY($2))
+  AND ($2::text[] IS NULL OR n.scope IS NULL OR n.scope = '' OR n.scope = ANY($2))
   AND (n.title ILIKE '%' || $3 || '%' OR n.body ILIKE '%' || $3 || '%')
 ORDER BY n.updated_at DESC
 LIMIT $4

@@ -74,17 +74,28 @@ ON CONFLICT (id) DO UPDATE SET member_user_ids = EXCLUDED.member_user_ids`,
 	}
 }
 
-func seedSlackGroupChannel(t *testing.T, pool *pgxpool.Pool, _ string, channelScopes []string) {
+func seedSlackChannelNode(t *testing.T, pool *pgxpool.Pool, channelScopes []string) {
 	t.Helper()
 	ctx := context.Background()
-	// Insert nodes with those scopes so the ACL query can find them.
 	for _, scope := range channelScopes {
 		_, err := pool.Exec(ctx, `
 INSERT INTO graph.nodes (id, type, natural_key, scope, machine_id)
 VALUES ($1, 'slack_thread', $1, $2, 'test')
 ON CONFLICT (id) DO NOTHING`, scope+":1", scope)
 		if err != nil {
-			t.Fatalf("seedSlackGroupChannel: %v", err)
+			t.Fatalf("seedSlackChannelNode: %v", err)
+		}
+	}
+}
+
+func seedMemberScope(t *testing.T, pool *pgxpool.Pool, eeid int, scopes ...string) {
+	t.Helper()
+	ctx := context.Background()
+	for _, s := range scopes {
+		if _, err := pool.Exec(ctx, `
+INSERT INTO graph.member_scopes (eeid, scope) VALUES ($1, $2)
+ON CONFLICT (eeid, scope) DO NOTHING`, eeid, s); err != nil {
+			t.Fatalf("seedMemberScope: %v", err)
 		}
 	}
 }
@@ -92,10 +103,10 @@ ON CONFLICT (id) DO NOTHING`, scope+":1", scope)
 func TestBuilder_ReturnsAccessibleScopes(t *testing.T) {
 	ctx := context.Background()
 	pool := testDB(t)
-	seedAsker(t, pool, 982, "U07UAC0J7T3", []string{"S01TMG8Q65R", "S09JHFPD0GJ"})
-	seedSlackGroupMembers(t, pool, "S01TMG8Q65R", []string{"U07UAC0J7T3", "UUK3WPNNQ"})
-	seedSlackGroupMembers(t, pool, "S09JHFPD0GJ", []string{"U07UAC0J7T3", "U061HHMF540"})
-	seedSlackGroupChannel(t, pool, "S01TMG8Q65R", []string{"slack:C05RNSE8TBR"})
+	seedAsker(t, pool, 982, "U07UAC0J7T3", nil)
+	// Memberships come from member_scopes (populated by the per-source refresh
+	// jobs), regardless of source.
+	seedMemberScope(t, pool, 982, "slack:C05RNSE8TBR", "jira:PROJ")
 
 	b := acl.NewBuilder(pool, 5*time.Minute)
 	scopes, err := b.For(ctx, 982)
@@ -104,6 +115,7 @@ func TestBuilder_ReturnsAccessibleScopes(t *testing.T) {
 	}
 	want := map[string]bool{
 		"slack:C05RNSE8TBR": true,
+		"jira:PROJ":         true,
 	}
 	for w := range want {
 		found := false
@@ -115,6 +127,29 @@ func TestBuilder_ReturnsAccessibleScopes(t *testing.T) {
 		}
 		if !found {
 			t.Errorf("missing scope %q in %v", w, scopes)
+		}
+	}
+}
+
+// Regression for the cross-channel leak (issue agent-mem-7h1): being in a Slack
+// *usergroup* must NOT grant any slack:CHANNEL scope. Channel access is only
+// conferred by an explicit member_scopes row.
+func TestBuilder_SlackUsergroupDoesNotGrantChannelScope(t *testing.T) {
+	ctx := context.Background()
+	pool := testDB(t)
+	seedAsker(t, pool, 555, "U_INGROUP", nil)
+	seedSlackGroupMembers(t, pool, "S01TMG8Q65R", []string{"U_INGROUP"})
+	seedSlackChannelNode(t, pool, []string{"slack:C_PRIVATE"})
+	// Note: no member_scopes row for eeid 555.
+
+	b := acl.NewBuilder(pool, 5*time.Minute)
+	scopes, err := b.For(ctx, 555)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range scopes {
+		if s == "slack:C_PRIVATE" {
+			t.Fatalf("usergroup membership leaked channel scope %q (scopes=%v)", s, scopes)
 		}
 	}
 }
@@ -147,13 +182,9 @@ func TestBuilder_CachesSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Mutate underlying scopes after first call.
-	seedSlackGroupMembers(t, pool, "S_NEW", []string{"U07UAC0J7T3"})
-	// Seed a channel node for the new group (not yet in cache).
-	ctx2 := context.Background()
-	pool.Exec(ctx2, `INSERT INTO graph.nodes (id, type, natural_key, scope, machine_id)
-		VALUES ('slack:C_NEW:1', 'slack_thread', 'slack:C_NEW:1', 'slack:C_NEW', 'test')
-		ON CONFLICT (id) DO NOTHING`)
+	// Mutate underlying memberships after the first call; the cached snapshot
+	// (1-minute TTL) must not pick this up until it expires or is invalidated.
+	seedMemberScope(t, pool, 982, "slack:C_NEW")
 
 	s2, _ := b.For(ctx, 982)
 	if len(s1) != len(s2) {

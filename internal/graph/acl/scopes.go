@@ -53,27 +53,25 @@ func (b *Builder) For(ctx context.Context, askerEEID int) ([]string, error) {
 	return scopes, nil
 }
 
-// build computes the scope list by joining people → slack_groups (for Slack
-// scopes) and reading graph.member_scopes for other source memberships.
+// build computes the scope list from graph.member_scopes — the single,
+// per-source membership table populated by the refresh jobs (one row per
+// (eeid, scope), e.g. 'slack:C123', 'jira:PROJ', 'github:org/repo').
+//
+// NOTE: there is no separate Slack path. graph.slack_groups stores Slack
+// *usergroups* (@team-x handles), not channel membership, so it cannot answer
+// "is this asker in channel C?"; the previous Slack query joined slack_groups to
+// itself and effectively granted every slack:* scope to anyone in any usergroup
+// — a cross-channel leak. Until a channel-membership source exists (a
+// conversations.members refresh job writing slack:CHANNEL rows into
+// member_scopes — see issue agent-mem-7h1), Slack ACL fails closed: a real asker
+// gets no slack:* scope and so sees only public/unscoped Slack content. The
+// trusted unfiltered view (eeid 0) is unaffected.
 func (b *Builder) build(ctx context.Context, eeid int) ([]string, error) {
-	// 1. Slack channel scopes: find channels whose scope appears on nodes and
-	//    the asker's slack_user_id is in the group's member_user_ids.
-	//    We derive the scope from distinct node.scope values for slack channels
-	//    where the asker is a group member.
 	rows, err := b.db.Query(ctx, `
-SELECT DISTINCT n.scope
-FROM graph.nodes n
-WHERE n.scope LIKE 'slack:%'
-  AND n.deleted_at IS NULL
-  AND EXISTS (
-    SELECT 1 FROM graph.slack_groups g
-    JOIN graph.people p ON p.slack_user_id = ANY(g.member_user_ids)
-    WHERE p.eeid = $1
-      AND n.scope = 'slack:' || split_part(n.scope, ':', 2)
-  )
+SELECT DISTINCT scope FROM graph.member_scopes WHERE eeid = $1
 `, eeid)
 	if err != nil {
-		return nil, fmt.Errorf("acl slack scopes: %w", err)
+		return nil, fmt.Errorf("acl member_scopes: %w", err)
 	}
 	defer rows.Close()
 	var scopes []string
@@ -87,23 +85,6 @@ WHERE n.scope LIKE 'slack:%'
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-
-	// 2. Other scopes from the denormalised member_scopes table
-	//    (Jira/GH/CF membership, populated by per-source refresh jobs).
-	rows2, err := b.db.Query(ctx, `
-SELECT DISTINCT scope FROM graph.member_scopes WHERE eeid = $1
-`, eeid)
-	if err == nil {
-		defer rows2.Close()
-		for rows2.Next() {
-			var s string
-			if err := rows2.Scan(&s); err != nil {
-				return nil, err
-			}
-			scopes = append(scopes, s)
-		}
-	}
-	// Ignore error on member_scopes (table may be empty but should exist after migrations).
 
 	// Returns the asker's real memberships only. Visibility of internal-public
 	// ("public") content is handled at the read endpoints (search/resolve), not

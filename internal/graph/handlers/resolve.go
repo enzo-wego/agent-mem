@@ -283,13 +283,9 @@ func (h *Resolve) checkScope(ctx context.Context, nodeID string, scopeSet map[st
 	if err := row.Scan(&scope); err != nil {
 		return false, err
 	}
-	if scope == nil || *scope == "" {
-		return true, nil // unscoped = open
-	}
-	if *scope == "public" {
-		return true, nil // internal-public, visible to everyone
-	}
-	return scopeSet[*scope], nil
+	// noFilter is handled by the caller (eeid 0 skips checkScope entirely), so a
+	// real asker reaching here is always filtered through the shared rule.
+	return scopeVisible(scope, scopeSet, false), nil
 }
 
 func (h *Resolve) enqueueFetchBody(ctx context.Context, nodeID string) {

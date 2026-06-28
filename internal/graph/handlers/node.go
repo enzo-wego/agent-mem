@@ -9,16 +9,19 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/agent-mem/agent-mem/internal/graph/acl"
 )
 
 // Node handles GET /api/graph/node?url=... or ?id=...
 type Node struct {
-	db *pgxpool.Pool
+	db     *pgxpool.Pool
+	aclBld *acl.Builder
 }
 
 // NewNode creates a new Node handler.
 func NewNode(db *pgxpool.Pool) *Node {
-	return &Node{db: db}
+	return &Node{db: db, aclBld: acl.NewBuilder(db, 5*time.Minute)}
 }
 
 type nodeResponse struct {
@@ -53,7 +56,8 @@ SELECT n.id, n.type, COALESCE(n.url,''), n.title,
        COALESCE(ai.summary, ''),
        COALESCE(ab.body_full, ''),
        COALESCE(p.display_name, ''),
-       n.updated_at
+       n.updated_at,
+       n.scope
 FROM graph.nodes n
 LEFT JOIN graph.artifact_index ai ON ai.node_id = n.id
 LEFT JOIN graph.artifact_bodies ab ON ab.node_id = n.id
@@ -64,9 +68,18 @@ LIMIT 1
 `, url, id)
 	var resp nodeResponse
 	var updatedAt time.Time
+	var scope *string
 	err := row.Scan(&resp.NodeID, &resp.Type, &resp.URL, &resp.Title,
-		&resp.Summary, &resp.Body, &resp.AuthorName, &updatedAt)
+		&resp.Summary, &resp.Body, &resp.AuthorName, &updatedAt, &scope)
 	if errors.Is(err, pgx.ErrNoRows) || err != nil {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	// ACL: a real asker (eeid != 0) may only read nodes in scope; eeid 0 is the
+	// trusted unfiltered view. Hidden nodes return 404 (not 403) so their
+	// existence/body is not disclosed by id or url.
+	eeid, scopeSet := askerScopeSet(ctx, h.db, h.aclBld, r.Header.Get("X-Asker-User"))
+	if !scopeVisible(scope, scopeSet, eeid == 0) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
