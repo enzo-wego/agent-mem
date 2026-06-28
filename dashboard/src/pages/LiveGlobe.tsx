@@ -849,6 +849,14 @@ export function LiveGlobePage() {
             const fontSecondary = fontPrimary * 0.7
             const labelStroke = 0.4 / k
             const hasName = p.name !== p.channelId
+            // Invisible hit area spanning the dot + label so the whole marker is
+            // hoverable/clickable, not just the (often tiny) core dot. Monospace
+            // glyphs are ~0.6em wide; size the box to the longest visible line.
+            const maxChars = Math.max(p.name.length, hasName ? p.channelId.length : 0)
+            const hitLeft = cx - r * 1.6
+            const hitTop = cy - Math.max(r * 1.6, fontPrimary * 1.2)
+            const hitW = labelX - hitLeft + maxChars * fontPrimary * 0.62 + 1 / k
+            const hitH = Math.max(r * 3.2, fontPrimary * 3)
             return (
               <g
                 key={p.channelId}
@@ -864,6 +872,9 @@ export function LiveGlobePage() {
                   setSelected(p)
                 }}
               >
+                {/* invisible hit target (dot + label) — fill="transparent" still
+                    receives pointer events, unlike fill="none" */}
+                <rect x={hitLeft} y={hitTop} width={hitW} height={hitH} fill="transparent" />
                 {/* soft halo */}
                 <circle cx={cx} cy={cy} r={r * 2.2} fill={p.color} opacity={isHover || isSel ? 0.22 : 0.12} />
                 {/* expanding ring when count just grew */}
