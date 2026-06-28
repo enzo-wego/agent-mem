@@ -197,9 +197,10 @@ LIMIT 50`
 }
 
 // topicSimThreshold is the minimum cosine similarity between the subscription
-// topic and a thread for a semantic match. Tuned conservative; similarity scores
-// are logged at debug so it can be adjusted without guessing.
-const topicSimThreshold = 0.5
+// topic and a thread for a semantic match. Set to 0.45 for recall: a real
+// payments thread ("Juspay blocked pk / card 403") scored 0.512, so 0.50 left
+// little margin. Similarity scores are logged at Info so this can be re-tuned.
+const topicSimThreshold = 0.45
 
 // loadNotified returns the set of root_node_ids already notified for a sub.
 func loadNotified(ctx context.Context, db *pgxpool.Pool, subID int64) map[string]bool {
