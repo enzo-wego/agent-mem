@@ -845,9 +845,12 @@ export function LiveGlobePage() {
             // Label: primary = channel name, secondary = raw id. If nameOf
             // returned the id itself (no name configured), show only the id.
             const labelX = cx + r + 1 / k
-            const fontPrimary = 2 / k
+            // Soft counter-scale (k^0.6, not k): labels stay the same on-screen
+            // size at min zoom but grow as you zoom in (~2.3x at K_MAX=8).
+            const labelK = Math.pow(k, 0.6)
+            const fontPrimary = 2 / labelK
             const fontSecondary = fontPrimary * 0.7
-            const labelStroke = 0.4 / k
+            const labelStroke = 0.4 / labelK
             const hasName = p.name !== p.channelId
             // Invisible hit area spanning the dot + label so the whole marker is
             // hoverable/clickable, not just the (often tiny) core dot. Monospace
