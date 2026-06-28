@@ -44,3 +44,27 @@ a raw `C…`/`U…`/`S…` id to the user, that is a bug — resolve the name.
 `refresh_slack_users` and `refresh_slack_groups` populate the name tables. New
 people/groups appear with raw ids until the next refresh; re-running the refresh
 job (or a re-backfill) resolves them.
+
+## Deploy: build here, the VPS only ever pulls
+
+The VPS (`enzo@enzogo.io.vn`, Ubuntu/x86_64) is too small to build images — it
+runs out of resources. NEVER run `docker build`/`docker compose build` on it.
+Build the `linux/amd64` image on the dev machine, push to GHCR, and let the VPS
+pull. `make deploy` does exactly this; use it. The VPS pins the image via a
+gitignored `docker-compose.override.yml` (`pull_policy: always`), which is why
+`docker compose pull worker` works there even though the committed compose has
+`build: .`.
+
+The dashboard is a React/Vite app embedded into the Go binary via
+`//go:embed all:dashboard` in `internal/worker/dashboard.go`. After any
+`dashboard/src` change you MUST rebuild and re-sync the embed dir before
+deploying, or the binary ships the stale UI:
+
+```bash
+cd dashboard && npm run build && cd ..
+rm -rf internal/worker/dashboard/* && cp -R dashboard/dist/* internal/worker/dashboard/
+make deploy   # buildx amd64 -> push GHCR -> ssh VPS pull-only
+```
+
+Commit the regenerated `internal/worker/dashboard/` contents along with the
+source change (the hashed asset filenames change each build).
