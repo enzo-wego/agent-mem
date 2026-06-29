@@ -100,6 +100,7 @@ func defaultHTTPClient() *http.Client {
 // Registry binds Config to fetcher instances.
 type Registry struct {
 	fetchers []Fetcher
+	cfg      Config // retained for source-tree reads (Confluence descendants, repo markdown)
 }
 
 // NewRegistry creates a Registry with all eight fetchers registered.
@@ -123,7 +124,7 @@ func NewRegistry(cfg Config, log zerolog.Logger) *Registry {
 		cfg.WegoHubBaseURL = "https://internal.wego.com/hub"
 	}
 
-	r := &Registry{}
+	r := &Registry{cfg: cfg}
 	r.fetchers = []Fetcher{
 		newSlackFetcher(cfg, log),
 		newJiraFetcher(cfg, log),
