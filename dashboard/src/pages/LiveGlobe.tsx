@@ -10,6 +10,7 @@ import {
   listSubscriptions,
   createSubscription,
   deleteSubscription,
+  refreshSubscription,
   type ChannelCount,
   type ContinentCfg,
   type ChannelMessage,
@@ -18,6 +19,7 @@ import {
   type ClusterSummary,
   type GraphNode,
   type TopicSubscription,
+  type TopicSource,
 } from '../api'
 import { applyGroupNames, assignCountries, continentOf, nameOf } from '../continents'
 import ClusterGraph from './ClusterGraph'
@@ -106,6 +108,9 @@ const WINDOW_OPTIONS = [
   { days: 0, label: 'ALL' },
 ] as const
 const PULSE_MS = 2000
+// Recent-activity ticker: persist across refresh, retain a rolling 15-minute window.
+const ACTIVITY_WINDOW_MS = 15 * 60 * 1000
+const ACTIVITY_KEY = 'liveActivity'
 
 // Viewer's local IANA timezone, shown so message times are unambiguous.
 const localTz = Intl.DateTimeFormat().resolvedOptions().timeZone
@@ -137,6 +142,7 @@ interface LivePoint {
 }
 
 interface ActivityEntry {
+  channelId: string
   country: string
   name: string
   delta: number
@@ -230,7 +236,16 @@ export function LiveGlobePage() {
   const [lastUpdate, setLastUpdate] = useState<number>(0)
   const [tick, setTick] = useState(0)
   const [error, setError] = useState('')
-  const [activity, setActivity] = useState<ActivityEntry[]>([])
+  const [activity, setActivity] = useState<ActivityEntry[]>(() => {
+    try {
+      const raw = localStorage.getItem(ACTIVITY_KEY)
+      if (!raw) return []
+      const cutoff = Date.now() - ACTIVITY_WINDOW_MS
+      return (JSON.parse(raw) as ActivityEntry[]).filter((a) => a.at >= cutoff)
+    } catch {
+      return []
+    }
+  })
   const [hovered, setHovered] = useState<string | null>(null)
   const [selected, setSelected] = useState<LivePoint | null>(null)
   const [topics, setTopics] = useState<ChannelTopic[]>([])
@@ -283,6 +298,8 @@ export function LiveGlobePage() {
   const [subs, setSubs] = useState<TopicSubscription[]>([])
   const [subTopic, setSubTopic] = useState('')
   const [subChannel, setSubChannel] = useState('') // optional: limit to one channel
+  const [subConfluence, setSubConfluence] = useState('') // optional: Confluence page/tree URL
+  const [subRepo, setSubRepo] = useState('') // optional: GitHub repo URL
   const [subBusy, setSubBusy] = useState(false)
   const [subError, setSubError] = useState('')
 
@@ -292,22 +309,61 @@ export function LiveGlobePage() {
       .catch(() => setSubs([]))
   }
 
+  // buildSources turns the optional Confluence/GitHub inputs into a sources list.
+  function buildSources(): TopicSource[] {
+    const out: TopicSource[] = []
+    if (subConfluence.trim()) out.push({ type: 'confluence', url: subConfluence.trim() })
+    if (subRepo.trim()) out.push({ type: 'github', url: subRepo.trim() })
+    return out
+  }
+
   function addSub() {
     const topic = subTopic.trim()
     if (!topic) return
     setSubBusy(true)
     setSubError('')
+    const sources = buildSources()
     createSubscription({
       topic,
       channel_filter: subChannel.trim() ? [subChannel.trim()] : undefined,
+      sources: sources.length ? sources : undefined,
     })
-      .then(() => {
+      .then((created) => {
         setSubTopic('')
         setSubChannel('')
-        refreshSubs()
+        setSubConfluence('')
+        setSubRepo('')
+        // If sources were given, kick off the read/analyze so the scope summary fills in.
+        if (sources.length && created?.id) {
+          refreshSubScope(created.id)
+        } else {
+          refreshSubs()
+        }
       })
       .catch((e: unknown) => setSubError(e instanceof Error ? e.message : 'failed to subscribe'))
       .finally(() => setSubBusy(false))
+  }
+
+  // refreshSubScope triggers a source re-read and polls until the scope is ready.
+  function refreshSubScope(id: number) {
+    refreshSubscription(id)
+      .then(() => {
+        refreshSubs()
+        let tries = 0
+        const poll = window.setInterval(() => {
+          tries++
+          listSubscriptions()
+            .then((list) => {
+              setSubs(list || [])
+              const me = (list || []).find((x) => x.id === id)
+              if (!me || me.scope_status !== 'refreshing' || tries > 40) {
+                window.clearInterval(poll)
+              }
+            })
+            .catch(() => {})
+        }, 5000)
+      })
+      .catch((e: unknown) => setSubError(e instanceof Error ? e.message : 'refresh failed'))
   }
 
   function removeSub(id: number) {
@@ -398,6 +454,7 @@ export function LiveGlobePage() {
           if (before !== undefined && ch.count > before) {
             pulse.set(ch.channel_id, now + PULSE_MS)
             increases.push({
+              channelId: ch.channel_id,
               country: assigned[ch.channel_id]?.name ?? '',
               name: nameOf(ch.channel_id, cfgNow, ch.name),
               delta: ch.count - before,
@@ -415,7 +472,8 @@ export function LiveGlobePage() {
         setError('')
         if (increases.length > 0) {
           increases.sort((a, b) => b.delta - a.delta)
-          setActivity((cur) => [...increases.slice(0, 5), ...cur].slice(0, 6))
+          const cutoff = now - ACTIVITY_WINDOW_MS
+          setActivity((cur) => [...increases, ...cur].filter((a) => a.at >= cutoff).slice(0, 8))
         }
       } catch (err: unknown) {
         if (!cancelled) setError(err instanceof Error ? err.message : 'Failed to load channels')
@@ -477,6 +535,15 @@ export function LiveGlobePage() {
     const id = window.setInterval(() => setTick((t) => t + 1), 1000)
     return () => window.clearInterval(id)
   }, [])
+
+  // Persist the recent-activity ticker so it survives a refresh (15-min window).
+  useEffect(() => {
+    try {
+      localStorage.setItem(ACTIVITY_KEY, JSON.stringify(activity))
+    } catch {
+      /* storage unavailable (private mode / quota) — ticker is non-essential */
+    }
+  }, [activity])
 
   // ── Click panel: load TOPIC summaries for the selected channel + window ──────
   // On open: capture the per-channel "last seen" baseline from localStorage (used
@@ -624,6 +691,10 @@ export function LiveGlobePage() {
     })
   }, [cfg, points])
 
+  // Recent-activity entries still inside the rolling 15-minute window (drops
+  // stale rows on each tick without waiting for the next channel increase).
+  const recentActivity = activity.filter((a) => now - a.at < ACTIVITY_WINDOW_MS)
+
   const visiblePts = points.filter((p) => !hidden.has(p.continentId))
   const maxCount = Math.max(1, ...visiblePts.map((p) => p.count))
   const totalChannels = visiblePts.length
@@ -757,7 +828,53 @@ export function LiveGlobePage() {
     setView({ k: 1, tx: 0, ty: 0 })
   }
 
+  // Center the globe on a channel's marker and open its panel (used by the
+  // recent-activity ticker). No-op if the channel isn't currently on the map.
+  function focusChannel(channelId: string) {
+    const p = points.find((pt) => pt.channelId === channelId)
+    if (!p) return
+    setSelected(p)
+    const FOCUS_K = 4
+    // translate(tx ty) scale(k): solve tx/ty so the marker lands at viewBox center.
+    setView({ k: FOCUS_K, tx: 180 - FOCUS_K * projX(p.lng), ty: 90 - FOCUS_K * projY(p.lat) })
+  }
+
   const k = view.k
+
+  // Label de-collision: in dense clusters two channel labels can overdraw each
+  // other (one name rendered on top of another). Greedily keep labels for the
+  // highest-priority markers — hovered/selected, then busiest — and suppress any
+  // label whose box would overlap one already placed. The dot always stays, and
+  // hovering a suppressed marker brings its label back (hover wins priority).
+  // All maths in viewBox units, mirroring the per-marker label layout below.
+  const labelVisible = (() => {
+    type Box = { x: number; y: number; w: number; h: number }
+    const hit = (a: Box, b: Box) =>
+      a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y
+    const fontPrimary = 2 / Math.pow(k, 0.6)
+    const prio = (p: (typeof visiblePts)[number]) =>
+      (p.channelId === hovered ? 2 : 0) + (selected?.channelId === p.channelId ? 1 : 0)
+    const ordered = [...visiblePts].sort((a, b) => prio(b) - prio(a) || b.count - a.count)
+    const placed: Box[] = []
+    const shown = new Set<string>()
+    for (const p of ordered) {
+      const cx = projX(p.lng)
+      const cy = projY(p.lat)
+      const r = radiusFor(p.count) / k
+      const hasName = p.name !== p.channelId
+      const maxChars = Math.max(p.name.length, hasName ? p.channelId.length : 0)
+      const box: Box = {
+        x: cx + r + 1 / k,
+        y: cy - fontPrimary * 0.9,
+        w: maxChars * fontPrimary * 0.62,
+        h: fontPrimary * (hasName ? 2.4 : 1.4),
+      }
+      if (placed.some((q) => hit(box, q))) continue
+      placed.push(box)
+      shown.add(p.channelId)
+    }
+    return shown
+  })()
 
   // ── Shared chrome styles ─────────────────────────────────────────────────────
   const panel: React.CSSProperties = {
@@ -898,20 +1015,24 @@ export function LiveGlobePage() {
                   strokeWidth={isSel ? 0.4 / k : 0}
                   filter="url(#marker-glow)"
                 />
-                {/* label: name on line 1, raw id on line 2 (id-only if unnamed) */}
-                <text
-                  x={labelX}
-                  y={cy + 0.7 / k}
-                  fontSize={fontPrimary}
-                  fontFamily={MONO}
-                  fill="#cbd5e1"
-                  style={{ paintOrder: 'stroke', pointerEvents: 'none' }}
-                  stroke="#0a0a0a"
-                  strokeWidth={labelStroke}
-                >
-                  {p.name}
-                </text>
-                {hasName && (
+                {/* label: name on line 1, raw id on line 2 (id-only if unnamed).
+                    Hidden when it would collide with a higher-priority label
+                    (see labelVisible); the dot stays and hover brings it back. */}
+                {labelVisible.has(p.channelId) && (
+                  <text
+                    x={labelX}
+                    y={cy + 0.7 / k}
+                    fontSize={fontPrimary}
+                    fontFamily={MONO}
+                    fill="#cbd5e1"
+                    style={{ paintOrder: 'stroke', pointerEvents: 'none' }}
+                    stroke="#0a0a0a"
+                    strokeWidth={labelStroke}
+                  >
+                    {p.name}
+                  </text>
+                )}
+                {labelVisible.has(p.channelId) && hasName && (
                   <text
                     x={labelX}
                     y={cy + 0.7 / k + fontPrimary}
@@ -1329,7 +1450,7 @@ export function LiveGlobePage() {
       </div>
 
       {/* ── Recent activity ticker (bottom-right, hidden when a panel is open) ── */}
-      {activity.length > 0 && !selected && (
+      {recentActivity.length > 0 && !selected && (
         <div
           style={{
             ...panel,
@@ -1354,32 +1475,52 @@ export function LiveGlobePage() {
             RECENT ACTIVITY
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-            {activity.map((a, i) => (
-              <div
-                key={`${a.name}-${a.at}-${i}`}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 6,
-                  fontSize: 10,
-                  fontFamily: MONO,
-                }}
-              >
-                <span style={{ color: C.green }}>▲</span>
-                <span
+            {recentActivity.map((a, i) => {
+              const onMap = points.some((p) => p.channelId === a.channelId)
+              return (
+                <button
+                  key={`${a.channelId}-${a.at}-${i}`}
+                  type="button"
+                  onClick={() => focusChannel(a.channelId)}
+                  disabled={!onMap}
+                  title={onMap ? `Open ${a.name}` : `${a.name} (not on map)`}
                   style={{
-                    flex: 1,
-                    color: C.text,
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    fontSize: 10,
+                    fontFamily: MONO,
+                    background: 'none',
+                    border: 'none',
+                    padding: '1px 2px',
+                    margin: 0,
+                    textAlign: 'left',
+                    cursor: onMap ? 'pointer' : 'default',
+                    borderRadius: 2,
+                  }}
+                  onMouseEnter={(e) => {
+                    if (onMap) e.currentTarget.style.background = C.border
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.background = 'none'
                   }}
                 >
-                  {a.name}
-                </span>
-                <span style={{ color: C.green }}>+{a.delta}</span>
-              </div>
-            ))}
+                  <span style={{ color: C.green }}>▲</span>
+                  <span
+                    style={{
+                      flex: 1,
+                      color: C.text,
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    {a.name}
+                  </span>
+                  <span style={{ color: C.green }}>+{a.delta}</span>
+                </button>
+              )
+            })}
           </div>
         </div>
       )}
@@ -1867,10 +2008,47 @@ export function LiveGlobePage() {
                   outline: 'none',
                 }}
               />
+              <input
+                value={subConfluence}
+                onChange={(e) => setSubConfluence(e.target.value)}
+                placeholder="Confluence page/tree URL (defines topic)"
+                style={{
+                  flex: '1 1 100%',
+                  background: C.panel,
+                  border: `1px solid ${C.border}`,
+                  color: C.text,
+                  fontFamily: MONO,
+                  fontSize: 11,
+                  padding: '6px 8px',
+                  borderRadius: 2,
+                  outline: 'none',
+                }}
+              />
+              <input
+                value={subRepo}
+                onChange={(e) => setSubRepo(e.target.value)}
+                placeholder="GitHub repo URL, e.g. https://github.com/wego/payments"
+                style={{
+                  flex: '1 1 100%',
+                  background: C.panel,
+                  border: `1px solid ${C.border}`,
+                  color: C.text,
+                  fontFamily: MONO,
+                  fontSize: 11,
+                  padding: '6px 8px',
+                  borderRadius: 2,
+                  outline: 'none',
+                }}
+              />
               <button type="submit" disabled={subBusy || !subTopic.trim()} style={segBtn(true)}>
                 {subBusy ? '…' : 'SUBSCRIBE'}
               </button>
             </form>
+            <div style={{ color: C.dim, fontSize: 9, marginTop: 6, lineHeight: 1.5 }}>
+              Add Confluence/GitHub sources to define the topic. After subscribing (or via Refresh),
+              enzobot reads + analyzes them and shows a scope summary below — so we agree on what the
+              topic means before alerting.
+            </div>
             {subError && (
               <div style={{ color: C.red, fontSize: 10, marginTop: 6 }}>{subError}</div>
             )}
@@ -1891,43 +2069,89 @@ export function LiveGlobePage() {
               {subs.length === 0 && (
                 <div style={{ color: C.dim, fontSize: 11 }}>no subscriptions yet</div>
               )}
-              {subs.map((s) => (
-                <div
-                  key={s.id}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 8,
-                    background: 'rgba(255,255,255,0.02)',
-                    border: `1px solid ${C.border}`,
-                    borderRadius: 3,
-                    padding: 8,
-                  }}
-                >
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ color: C.text, fontSize: 12 }}>{s.topic}</div>
-                    <div style={{ color: C.dim, fontSize: 9, marginTop: 2 }}>
-                      {s.channel_filter.length > 0 ? `#${s.channel_filter.join(', #')}` : 'all channels'}
-                      {' · '}≥{s.min_participants} ppl or org-depth ≤{s.max_author_depth}
-                    </div>
-                  </div>
-                  <button
-                    onClick={() => removeSub(s.id)}
+              {subs.map((s) => {
+                const refreshing = s.scope_status === 'refreshing'
+                return (
+                  <div
+                    key={s.id}
                     style={{
-                      background: 'transparent',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: 6,
+                      background: 'rgba(255,255,255,0.02)',
                       border: `1px solid ${C.border}`,
-                      color: C.dim,
-                      cursor: 'pointer',
-                      fontFamily: MONO,
-                      fontSize: 10,
-                      borderRadius: 2,
-                      padding: '2px 8px',
+                      borderRadius: 3,
+                      padding: 8,
                     }}
                   >
-                    delete
-                  </button>
-                </div>
-              ))}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ color: C.text, fontSize: 12 }}>
+                          {s.topic}
+                          {!s.active && <span style={{ color: C.dim, fontSize: 9 }}> · paused</span>}
+                        </div>
+                        <div style={{ color: C.dim, fontSize: 9, marginTop: 2 }}>
+                          {s.channel_filter.length > 0 ? `#${s.channel_filter.join(', #')}` : 'all channels'}
+                          {' · '}≥{s.min_participants} people discussing
+                          {s.sources && s.sources.length > 0 && ` · ${s.sources.length} source${s.sources.length === 1 ? '' : 's'}`}
+                        </div>
+                      </div>
+                      {(s.sources?.length ?? 0) > 0 && (
+                        <button
+                          onClick={() => refreshSubScope(s.id)}
+                          disabled={refreshing}
+                          title="Re-read + analyze the sources"
+                          style={{
+                            background: 'transparent',
+                            border: `1px solid ${refreshing ? C.green : C.border}`,
+                            color: refreshing ? C.green : C.dim,
+                            cursor: refreshing ? 'default' : 'pointer',
+                            fontFamily: MONO,
+                            fontSize: 10,
+                            borderRadius: 2,
+                            padding: '2px 8px',
+                          }}
+                        >
+                          {refreshing ? 'analyzing…' : '↻ refresh'}
+                        </button>
+                      )}
+                      <button
+                        onClick={() => removeSub(s.id)}
+                        style={{
+                          background: 'transparent',
+                          border: `1px solid ${C.border}`,
+                          color: C.dim,
+                          cursor: 'pointer',
+                          fontFamily: MONO,
+                          fontSize: 10,
+                          borderRadius: 2,
+                          padding: '2px 8px',
+                        }}
+                      >
+                        delete
+                      </button>
+                    </div>
+                    {s.scope_summary && (
+                      <div
+                        style={{
+                          color: C.dim,
+                          fontSize: 10,
+                          lineHeight: 1.5,
+                          padding: '6px 8px',
+                          background: 'rgba(68,255,136,0.04)',
+                          border: `1px solid ${C.border}`,
+                          borderRadius: 3,
+                        }}
+                      >
+                        <span style={{ color: C.green, fontSize: 8, letterSpacing: '0.1em', textTransform: 'uppercase' }}>
+                          Scope
+                        </span>
+                        <div style={{ marginTop: 3 }}>{s.scope_summary}</div>
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
             </div>
           </div>
         </div>

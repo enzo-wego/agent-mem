@@ -441,6 +441,11 @@ export async function fetchChannels(days = 0): Promise<ChannelCount[]> {
 
 // ── Topic subscriptions (hot-topic enzobot alerts) ───────────────────────────
 
+export interface TopicSource {
+  type: 'confluence' | 'github';
+  url: string;
+}
+
 export interface TopicSubscription {
   id: number;
   subscriber_slack_id: string;
@@ -450,6 +455,9 @@ export interface TopicSubscription {
   max_author_depth: number;
   active: boolean;
   created_at: string;
+  sources?: TopicSource[];
+  scope_summary?: string;
+  scope_status?: string;
 }
 
 export async function listSubscriptions(): Promise<TopicSubscription[]> {
@@ -463,6 +471,7 @@ export async function createSubscription(body: {
   min_participants?: number;
   max_author_depth?: number;
   subscriber_slack_id?: string;
+  sources?: TopicSource[];
 }): Promise<TopicSubscription> {
   const res = await authFetch(`${BASE}/api/graph/subscriptions`, {
     method: 'POST',
@@ -474,6 +483,19 @@ export async function createSubscription(body: {
     throw new Error(err || `HTTP ${res.status}`);
   }
   return res.json();
+}
+
+// refreshSubscription triggers a re-read/analyze of a subscription's knowledge
+// sources (Confluence tree + repo *.md). Poll listSubscriptions for scope_status.
+export async function refreshSubscription(id: number): Promise<void> {
+  const res = await authFetch(`${BASE}/api/graph/subscriptions/${id}/refresh`, {
+    method: 'POST',
+    headers: authHeaders(),
+  });
+  if (!res.ok) {
+    const err = await res.text().catch(() => '');
+    throw new Error(err || `HTTP ${res.status}`);
+  }
 }
 
 export async function deleteSubscription(id: number): Promise<void> {
