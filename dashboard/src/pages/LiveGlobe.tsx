@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   fetchChannels,
+  fetchRecentActivity,
   fetchContinents,
   fetchChannelMessages,
   fetchChannelTopics,
@@ -108,9 +109,10 @@ const WINDOW_OPTIONS = [
   { days: 0, label: 'ALL' },
 ] as const
 const PULSE_MS = 2000
-// Recent-activity ticker: persist across refresh, retain a rolling 15-minute window.
-const ACTIVITY_WINDOW_MS = 15 * 60 * 1000
-const ACTIVITY_KEY = 'liveActivity'
+// Recent-activity ticker: server-backed (top channels by new messages); the
+// client drops rows older than this window between polls so a stalled poll
+// doesn't leave stale entries on screen.
+const ACTIVITY_WINDOW_MS = 30 * 60 * 1000
 
 // Viewer's local IANA timezone, shown so message times are unambiguous.
 const localTz = Intl.DateTimeFormat().resolvedOptions().timeZone
@@ -236,16 +238,7 @@ export function LiveGlobePage() {
   const [lastUpdate, setLastUpdate] = useState<number>(0)
   const [tick, setTick] = useState(0)
   const [error, setError] = useState('')
-  const [activity, setActivity] = useState<ActivityEntry[]>(() => {
-    try {
-      const raw = localStorage.getItem(ACTIVITY_KEY)
-      if (!raw) return []
-      const cutoff = Date.now() - ACTIVITY_WINDOW_MS
-      return (JSON.parse(raw) as ActivityEntry[]).filter((a) => a.at >= cutoff)
-    } catch {
-      return []
-    }
-  })
+  const [activity, setActivity] = useState<ActivityEntry[]>([])
   const [hovered, setHovered] = useState<string | null>(null)
   const [selected, setSelected] = useState<LivePoint | null>(null)
   const [topics, setTopics] = useState<ChannelTopic[]>([])
@@ -447,19 +440,12 @@ export function LiveGlobePage() {
         const prev = prevCountsRef.current
         const now = Date.now()
         const pulse = new Map<string, number>()
-        const increases: ActivityEntry[] = []
         const assigned = assignCountries(channels || [], cfgNow)
+        // Diff poll-to-poll counts to pulse markers that just grew.
         for (const ch of channels || []) {
           const before = prev.get(ch.channel_id)
           if (before !== undefined && ch.count > before) {
             pulse.set(ch.channel_id, now + PULSE_MS)
-            increases.push({
-              channelId: ch.channel_id,
-              country: assigned[ch.channel_id]?.name ?? '',
-              name: nameOf(ch.channel_id, cfgNow, ch.name),
-              delta: ch.count - before,
-              at: now,
-            })
           }
         }
         // Record current counts for the next diff.
@@ -470,10 +456,20 @@ export function LiveGlobePage() {
         setPoints(buildPoints(channels || [], cfgNow, pulse))
         setLastUpdate(now)
         setError('')
-        if (increases.length > 0) {
-          increases.sort((a, b) => b.delta - a.delta)
-          const cutoff = now - ACTIVITY_WINDOW_MS
-          setActivity((cur) => [...increases, ...cur].filter((a) => a.at >= cutoff).slice(0, 8))
+
+        // Recent-activity ticker is server-backed: top channels by new messages
+        // in the window, shared across viewers and populated on first load.
+        const recent = await fetchRecentActivity()
+        if (!cancelled) {
+          setActivity(
+            recent.map((rc) => ({
+              channelId: rc.channel_id,
+              country: assigned[rc.channel_id]?.name ?? '',
+              name: nameOf(rc.channel_id, cfgNow, rc.name),
+              delta: rc.delta,
+              at: rc.at_ms,
+            })),
+          )
         }
       } catch (err: unknown) {
         if (!cancelled) setError(err instanceof Error ? err.message : 'Failed to load channels')
@@ -535,15 +531,6 @@ export function LiveGlobePage() {
     const id = window.setInterval(() => setTick((t) => t + 1), 1000)
     return () => window.clearInterval(id)
   }, [])
-
-  // Persist the recent-activity ticker so it survives a refresh (15-min window).
-  useEffect(() => {
-    try {
-      localStorage.setItem(ACTIVITY_KEY, JSON.stringify(activity))
-    } catch {
-      /* storage unavailable (private mode / quota) — ticker is non-essential */
-    }
-  }, [activity])
 
   // ── Click panel: load TOPIC summaries for the selected channel + window ──────
   // On open: capture the per-channel "last seen" baseline from localStorage (used

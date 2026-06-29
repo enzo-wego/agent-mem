@@ -439,6 +439,21 @@ export async function fetchChannels(days = 0): Promise<ChannelCount[]> {
   return res.json();
 }
 
+export interface RecentChannel {
+  channel_id: string;
+  name: string;
+  delta: number; // new messages in the window
+  at_ms: number; // most recent message, epoch millis (UTC)
+}
+
+// fetchRecentActivity returns the top channels by new-message volume in the last
+// `mins` minutes — server-backed so the globe's activity ticker is shared across
+// viewers and populated on first load.
+export async function fetchRecentActivity(mins = 30, limit = 5): Promise<RecentChannel[]> {
+  const res = await authFetch(`${BASE}/api/graph/channels/recent?mins=${mins}&limit=${limit}`);
+  return res.json();
+}
+
 // ── Topic subscriptions (hot-topic enzobot alerts) ───────────────────────────
 
 export interface TopicSource {

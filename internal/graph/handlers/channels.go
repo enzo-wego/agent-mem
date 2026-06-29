@@ -99,6 +99,64 @@ ORDER BY count DESC`, days)
 	json.NewEncoder(w).Encode(out)
 }
 
+type recentChannel struct {
+	ChannelID string `json:"channel_id"`
+	Name      string `json:"name"`
+	Delta     int    `json:"delta"` // new messages in the window
+	AtMs      int64  `json:"at_ms"` // most recent message, epoch millis (UTC)
+}
+
+// recent activity handles GET /api/graph/channels/recent?mins=N&limit=M — the
+// top channels by new message volume in the last N minutes (default 30, top 5).
+// Server-backed so the globe's activity ticker is identical for every viewer and
+// populated on first load, replacing the old per-browser localStorage diff.
+func (h *Channels) recentActivity(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	mins := 30
+	if v := r.URL.Query().Get("mins"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			mins = n
+		}
+	}
+	limit := 5
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	rows, err := h.db.Query(ctx, `
+SELECT REPLACE(n.scope,'slack:','') AS channel_id, COALESCE(sc.name,'') AS name,
+       COUNT(*) AS delta,
+       (EXTRACT(EPOCH FROM MAX(n.first_seen_at)) * 1000)::bigint AS at_ms
+FROM graph.nodes n
+LEFT JOIN graph.slack_channels sc ON sc.slack_channel_id = REPLACE(n.scope,'slack:','')
+WHERE n.scope LIKE 'slack:%' AND n.scope NOT LIKE 'slack:D%' AND n.deleted_at IS NULL
+  AND n.first_seen_at >= now() - make_interval(mins => $1)
+GROUP BY n.scope, sc.name
+ORDER BY delta DESC, at_ms DESC
+LIMIT $2`, mins, limit)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+	out := []recentChannel{}
+	for rows.Next() {
+		var c recentChannel
+		if err := rows.Scan(&c.ChannelID, &c.Name, &c.Delta, &c.AtMs); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		out = append(out, c)
+	}
+	if err := rows.Err(); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(out)
+}
+
 type msgRef struct {
 	Type string `json:"type"` // jira | gh_pr | cf | slack_file | ...
 	Key  string `json:"key"`  // natural key, e.g. PAY-2204
