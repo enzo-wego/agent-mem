@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -80,6 +81,30 @@ func TestFindHotThreads(t *testing.T) {
 	}
 	if c1 := got["C1"]; c1.Blob == "" {
 		t.Errorf("C1 blob should be populated for semantic matching")
+	}
+}
+
+// TestWhyFlagged checks the plain-language reason has no jargon and names the
+// senior speaker when known.
+func TestWhyFlagged(t *testing.T) {
+	s := subscription{MinParticipants: 4, MaxAuthorDepth: 2}
+	// Senior + volume, named.
+	got := whyFlagged(s, hotThread{TopDepth: 0, Participants: 6}, "Ross")
+	if want := "Ross (a senior leader) is involved and 6 people are discussing it"; got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+	// Senior only, name unknown ⇒ no "someone", no "org-depth".
+	got = whyFlagged(s, hotThread{TopDepth: 0, Participants: 1}, "")
+	if want := "a senior leader raised or joined it"; got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+	if strings.Contains(got, "org-depth") || strings.Contains(got, "someone") {
+		t.Errorf("reason still has jargon: %q", got)
+	}
+	// Volume only.
+	got = whyFlagged(s, hotThread{TopDepth: 9, Participants: 5}, "")
+	if want := "5 people are actively discussing it"; got != want {
+		t.Errorf("got %q, want %q", got, want)
 	}
 }
 

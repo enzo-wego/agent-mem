@@ -113,7 +113,7 @@ func NewDetectHotTopics(deps Deps) jobs.Handler {
 				if to == "" {
 					to = deps.SlackDMUserID
 				}
-				if err := slackDM(ctx, deps.SlackBotToken, to, formatAlert(s, h)); err != nil {
+				if err := slackDM(ctx, deps.SlackBotToken, to, buildAlert(ctx, deps, s, h)); err != nil {
 					log.Warn().Err(err).Str("to", to).Msg("detect_hot_topics: DM failed")
 					// Roll back the dedup claim so a retry can re-send.
 					_, _ = deps.DB.Exec(ctx,
@@ -261,35 +261,139 @@ func cosine(a, b []float32) float64 {
 	return dot / (math.Sqrt(na) * math.Sqrt(nb))
 }
 
-// formatAlert builds the DM body for a hot-topic match.
-func formatAlert(s subscription, h hotThread) string {
+// alertMsg is one transcript line (who said what), with the author's org-depth
+// so the senior speaker can be named in plain language.
+type alertMsg struct {
+	author string
+	text   string
+	depth  int
+}
+
+// buildAlert composes the DM for a hot-topic match: a plain-language briefing —
+// what it's about (deep summary), the key points, a "who said what" transcript,
+// and a jargon-free reason it was flagged. Falls back gracefully when the deep
+// summary or names are missing.
+func buildAlert(ctx context.Context, deps Deps, s subscription, h hotThread) string {
 	channel := h.ChannelName
 	if channel == "" {
 		channel = h.Channel
 	}
-	var reason string
-	switch {
-	case h.TopDepth <= s.MaxAuthorDepth && h.Participants >= s.MinParticipants:
-		reason = fmt.Sprintf("senior voice (org-depth %d) + %d people discussing", h.TopDepth, h.Participants)
-	case h.TopDepth <= s.MaxAuthorDepth:
-		reason = fmt.Sprintf("raised by a senior voice (org-depth %d)", h.TopDepth)
-	default:
-		reason = fmt.Sprintf("%d people discussing", h.Participants)
+	threadTS := ""
+	if parts := strings.SplitN(h.RootNodeID, ":", 3); len(parts) == 3 {
+		threadTS = parts[2]
 	}
+
+	// Transcript: every message in the thread, oldest first, with author + depth.
+	var msgs []alertMsg
+	if rows, err := deps.DB.Query(ctx, `
+SELECT COALESCE(n.metadata->'author'->>'display_name',''),
+       COALESCE(NULLIF(n.title,''), n.body, ''),
+       COALESCE(p.depth_from_root, 99)
+FROM graph.nodes n
+LEFT JOIN graph.people p ON p.id = n.author_person_id
+WHERE n.scope = 'slack:' || $1 AND n.deleted_at IS NULL
+  AND ( n.id = $2 OR COALESCE(n.metadata->>'thread_ts','') = $3 )
+ORDER BY COALESCE(to_timestamp(NULLIF(n.metadata->>'ts','')::float8), n.first_seen_at) ASC`,
+		h.Channel, h.RootNodeID, threadTS); err == nil {
+		for rows.Next() {
+			var m alertMsg
+			if rows.Scan(&m.author, &m.text, &m.depth) == nil {
+				msgs = append(msgs, m)
+			}
+		}
+		rows.Close()
+	}
+
+	// Deep summary: prefer the cached one; generate on the fly if it's not ready.
+	var overview string
+	var highlights []string
+	var hlRaw []byte
+	_ = deps.DB.QueryRow(ctx,
+		`SELECT COALESCE(overview,''), COALESCE(highlights,'[]'::jsonb)
+		 FROM graph.thread_summaries WHERE channel_id=$1 AND thread_ts=$2`,
+		h.Channel, threadTS).Scan(&overview, &hlRaw)
+	_ = json.Unmarshal(hlRaw, &highlights)
+	if overview == "" && deps.Gemini != nil && len(msgs) > 0 {
+		var tb strings.Builder
+		for _, m := range msgs {
+			a := m.author
+			if a == "" {
+				a = "someone"
+			}
+			tb.WriteString(a + ": " + firstLine(m.text, 280) + "\n")
+		}
+		_, overview, highlights = genThreadDeepSummary(ctx, deps.Gemini, tb.String())
+	}
+
+	// Senior speaker name (lowest org-depth, at/above the seniority gate).
+	seniorName := ""
+	seniorDepth := 100
+	for _, m := range msgs {
+		if m.depth <= s.MaxAuthorDepth && m.depth < seniorDepth && m.author != "" {
+			seniorName, seniorDepth = m.author, m.depth
+		}
+	}
+
 	var b strings.Builder
-	fmt.Fprintf(&b, "🔥 *%s* — #%s\n", s.Topic, channel)
-	if h.FirstLine != "" {
-		fmt.Fprintf(&b, "%s\n", firstLine(h.FirstLine, 220))
+	fmt.Fprintf(&b, "🔥 *%s* · #%s\n", s.Topic, channel)
+	if overview != "" {
+		fmt.Fprintf(&b, "\n%s\n", overview)
 	}
-	by := h.TopAuthor
-	if by == "" {
-		by = "someone"
+	if len(highlights) > 0 {
+		b.WriteString("\n")
+		for _, hl := range highlights {
+			fmt.Fprintf(&b, "• %s\n", hl)
+		}
 	}
-	fmt.Fprintf(&b, "_%s · %d msgs · led by %s_\n", reason, h.MsgCount, by)
+	if len(msgs) > 0 {
+		b.WriteString("\n💬 *Conversation*\n")
+		shown := 0
+		for _, m := range msgs {
+			t := firstLine(m.text, 160)
+			if t == "" {
+				continue
+			}
+			a := m.author
+			if a == "" {
+				a = "someone"
+			}
+			line := fmt.Sprintf("• *%s:* %s\n", a, t)
+			if b.Len()+len(line) > 2600 {
+				break
+			}
+			b.WriteString(line)
+			shown++
+			if shown >= 8 {
+				if rest := len(msgs) - shown; rest > 0 {
+					fmt.Fprintf(&b, "_…and %d more_\n", rest)
+				}
+				break
+			}
+		}
+	}
+	fmt.Fprintf(&b, "\n_Flagged because %s._\n", whyFlagged(s, h, seniorName))
 	if link := slackPermalink(h.RootNodeID); link != "" {
 		b.WriteString(link)
 	}
 	return b.String()
+}
+
+// whyFlagged explains in plain language why the thread was surfaced.
+func whyFlagged(s subscription, h hotThread, seniorName string) string {
+	senior := h.TopDepth <= s.MaxAuthorDepth
+	volume := h.Participants >= s.MinParticipants
+	who := "a senior leader"
+	if seniorName != "" {
+		who = seniorName + " (a senior leader)"
+	}
+	switch {
+	case senior && volume:
+		return fmt.Sprintf("%s is involved and %d people are discussing it", who, h.Participants)
+	case senior:
+		return fmt.Sprintf("%s raised or joined it", who)
+	default:
+		return fmt.Sprintf("%d people are actively discussing it", h.Participants)
+	}
 }
 
 // slackPermalink builds an archive link from a root node id slack:<chan>:<ts>.
