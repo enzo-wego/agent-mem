@@ -83,6 +83,14 @@ func (h *neighborsHandler) serve(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		// At the opened node, also surface semantically-related Slack threads that
+		// share no explicit edge (e.g. the same incident discussed in other channels).
+		// Root-only and unfiltered; these are leaves — we don't expand through them.
+		if next.hop == 0 && len(kindFilter) == 0 && strings.HasPrefix(next.id, "slack:") {
+			if sim, serr := h.exp.SimilarThreads(ctx, next.id); serr == nil {
+				nbrs = append(nbrs, sim...) // failure is non-fatal: just no related threads
+			}
+		}
 		for _, n := range nbrs {
 			if seen[n.NodeID] {
 				continue
@@ -108,7 +116,7 @@ SELECT n.id, n.type, COALESCE(n.url,''), COALESCE(n.title,''),
 FROM graph.nodes n
 LEFT JOIN graph.thread_summaries ts
   ON ts.channel_id = REPLACE(n.scope,'slack:','')
-  AND ts.thread_ts = COALESCE(n.metadata->>'thread_ts','')
+  AND ts.thread_ts = COALESCE(NULLIF(n.metadata->>'thread_ts',''), split_part(n.id,':',3))
 LEFT JOIN graph.slack_channels sc
   ON sc.slack_channel_id = REPLACE(n.scope,'slack:','')
 WHERE n.id=$1`, n.NodeID)
@@ -120,10 +128,14 @@ WHERE n.id=$1`, n.NodeID)
 			if !scopeVisible(scope, scopeSet, noFilter) {
 				continue
 			}
-			frontier = append(frontier, struct {
-				id  string
-				hop int
-			}{n.NodeID, next.hop + 1})
+			// Don't traverse through a SIMILAR link — surface related threads as leaves,
+			// not as a launch point for further semantic drift.
+			if n.EdgeKind != "SIMILAR" {
+				frontier = append(frontier, struct {
+					id  string
+					hop int
+				}{n.NodeID, next.hop + 1})
+			}
 			if item.Node.Type == "slack" || item.Node.Type == "slack_thread" {
 				switch {
 				case threadSummary != "":

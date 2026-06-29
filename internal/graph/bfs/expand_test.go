@@ -3,6 +3,7 @@ package bfs_test
 import (
 	"context"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -107,6 +108,72 @@ func TestExpand_ThreadSiblingsBridgeToReplyResources(t *testing.T) {
 	}
 	if !hasNeighbor(replyNbrs, "slack:C:100") || !hasNeighbor(replyNbrs, "jira:PAY-1") {
 		t.Errorf("reply missing root or jira: %v", replyNbrs)
+	}
+}
+
+// unitVec returns a 768-dim vector (matching artifact_index VECTOR(768)) that is 1
+// at index hot and 0 elsewhere — so two such vectors are identical (cosine 1) when
+// hot matches and orthogonal (cosine 0) when it differs.
+func unitVec(hot int) string {
+	var b strings.Builder
+	b.WriteByte('[')
+	for i := range 768 {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		if i == hot {
+			b.WriteByte('1')
+		} else {
+			b.WriteByte('0')
+		}
+	}
+	b.WriteByte(']')
+	return b.String()
+}
+
+func seedEmbedding(t *testing.T, pool *pgxpool.Pool, id, vec string) {
+	t.Helper()
+	_, err := pool.Exec(context.Background(), `
+INSERT INTO graph.artifact_index (node_id, embedding, machine_id)
+VALUES ($1, $2::vector, 'test')
+ON CONFLICT (node_id) DO UPDATE SET embedding = excluded.embedding`, id, vec)
+	if err != nil {
+		t.Fatalf("seedEmbedding %s: %v", id, err)
+	}
+}
+
+// Topically-close thread roots in different channels link via SIMILAR even with no
+// shared edge; orthogonal topics, replies, same thread, and DMs do not.
+func TestExpand_SimilarThreadsBridgesByTopic(t *testing.T) {
+	ctx := context.Background()
+	pool := testDB(t)
+	seedSlackMsg(t, pool, "slack:C:100", "slack:C", "")    // opened root, topic A
+	seedSlackMsg(t, pool, "slack:G:300", "slack:G", "")    // other-channel root, topic A
+	seedSlackMsg(t, pool, "slack:H:400", "slack:H", "")    // root, unrelated topic B
+	seedSlackMsg(t, pool, "slack:C:200", "slack:C", "100") // reply in opened thread, topic A
+	seedSlackMsg(t, pool, "slack:D9:500", "slack:D9", "")  // DM root, topic A
+	seedEmbedding(t, pool, "slack:C:100", unitVec(0))
+	seedEmbedding(t, pool, "slack:G:300", unitVec(0))
+	seedEmbedding(t, pool, "slack:H:400", unitVec(1))
+	seedEmbedding(t, pool, "slack:C:200", unitVec(0))
+	seedEmbedding(t, pool, "slack:D9:500", unitVec(0))
+
+	sim, err := bfs.NewExpander(pool).SimilarThreads(ctx, "slack:C:100")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasNeighbor(sim, "slack:G:300") {
+		t.Errorf("expected cross-channel topical root slack:G:300 in %v", sim)
+	}
+	for _, bad := range []string{"slack:C:100", "slack:C:200", "slack:H:400", "slack:D9:500"} {
+		if hasNeighbor(sim, bad) {
+			t.Errorf("did not expect %s (self/reply/unrelated/DM) in %v", bad, sim)
+		}
+	}
+	for _, n := range sim {
+		if n.EdgeKind != "SIMILAR" {
+			t.Errorf("edge kind = %q, want SIMILAR", n.EdgeKind)
+		}
 	}
 }
 

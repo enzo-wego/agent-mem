@@ -77,6 +77,59 @@ SELECT from_node_id AS nbr, kind FROM graph.edges
 	return out, nil
 }
 
+// similarThreadLimit / similarThreadMinCosine bound the semantic "related threads"
+// lookup. 0.45 mirrors the hot-topic detector's tuned cosine threshold.
+// ponytail: hard-coded; make configurable if the threshold needs per-deploy tuning.
+const (
+	similarThreadLimit     = 8
+	similarThreadMinCosine = 0.45
+)
+
+// SimilarThreads returns other Slack *thread roots* whose indexed embedding is
+// semantically close to nodeID's. The graph only has explicit reference/thread
+// edges, so two threads about the same subject in different channels (e.g. several
+// "blocked PK IP" incidents) never connect — this bridges them by topic. Edge kind
+// "SIMILAR". Returns nil when nodeID has no embedding yet.
+func (e *Expander) SimilarThreads(ctx context.Context, nodeID string) ([]Neighbor, error) {
+	const q = `
+WITH me AS (
+  SELECT ai.embedding AS emb,
+         REPLACE(n.scope,'slack:','') AS ch,
+         COALESCE(NULLIF(n.metadata->>'thread_ts',''), split_part(n.id,':',3)) AS tt
+  FROM graph.nodes n
+  JOIN graph.artifact_index ai ON ai.node_id = n.id
+  WHERE n.id = $1
+)
+SELECT n.id FROM graph.artifact_index ai
+JOIN graph.nodes n ON n.id = ai.node_id
+CROSS JOIN me
+WHERE n.type IN ('slack','slack_thread')
+  AND n.deleted_at IS NULL
+  AND n.scope NOT LIKE 'slack:D%'
+  -- thread roots only: thread_ts equals the message's own ts
+  AND COALESCE(NULLIF(n.metadata->>'thread_ts',''), split_part(n.id,':',3)) = split_part(n.id,':',3)
+  -- exclude the opened thread itself (same channel + thread key)
+  AND NOT (REPLACE(n.scope,'slack:','') = me.ch
+       AND COALESCE(NULLIF(n.metadata->>'thread_ts',''), split_part(n.id,':',3)) = me.tt)
+  AND (1.0 - (ai.embedding <=> me.emb)) >= $2
+ORDER BY ai.embedding <=> me.emb
+LIMIT $3`
+	rows, err := e.db.Query(ctx, q, nodeID, similarThreadMinCosine, similarThreadLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Neighbor
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, Neighbor{NodeID: id, EdgeKind: "SIMILAR"})
+	}
+	return out, rows.Err()
+}
+
 // threadSiblings returns the other Slack messages in the same thread as nodeID
 // (same channel and thread_ts; the root's thread key is its own ts).
 func (e *Expander) threadSiblings(ctx context.Context, nodeID string) ([]string, error) {
