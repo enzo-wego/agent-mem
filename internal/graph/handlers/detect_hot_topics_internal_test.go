@@ -94,6 +94,19 @@ func TestFindHotThreads(t *testing.T) {
 	}
 }
 
+// TestSourceParsers checks Confluence page-id and GitHub repo extraction.
+func TestSourceParsers(t *testing.T) {
+	if m := cfPageIDRe.FindStringSubmatch("https://wegomushi.atlassian.net/wiki/spaces/PA/pages/2122252293/Payment+PRDs"); m == nil || m[1] != "2122252293" {
+		t.Errorf("cfPageIDRe failed: %v", m)
+	}
+	if m := ghRepoRe.FindStringSubmatch("https://github.com/wego/payments"); m == nil || m[1] != "wego/payments" {
+		t.Errorf("ghRepoRe failed: %v", m)
+	}
+	if m := ghRepoRe.FindStringSubmatch("git@github.com:wego/payments.git"); m == nil || m[1] != "wego/payments.git" {
+		t.Errorf("ghRepoRe ssh failed: %v", m)
+	}
+}
+
 // TestWhyFlagged checks the plain-language reason is jargon-free.
 func TestWhyFlagged(t *testing.T) {
 	got := whyFlagged(hotThread{Participants: 6})

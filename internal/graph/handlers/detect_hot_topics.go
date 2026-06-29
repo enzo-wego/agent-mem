@@ -26,14 +26,27 @@ const (
 
 // subscription mirrors a graph.topic_subscriptions row.
 type subscription struct {
-	ID              int64    `json:"id"`
-	SubscriberSlack string   `json:"subscriber_slack_id"`
-	Topic           string   `json:"topic"`
-	ChannelFilter   []string `json:"channel_filter"`
-	MinParticipants int      `json:"min_participants"`
-	MaxAuthorDepth  int      `json:"max_author_depth"`
-	Active          bool     `json:"active"`
-	CreatedAt       time.Time `json:"created_at"`
+	ID              int64         `json:"id"`
+	SubscriberSlack string        `json:"subscriber_slack_id"`
+	Topic           string        `json:"topic"`
+	ChannelFilter   []string      `json:"channel_filter"`
+	MinParticipants int           `json:"min_participants"`
+	MaxAuthorDepth  int           `json:"max_author_depth"`
+	Active          bool          `json:"active"`
+	CreatedAt       time.Time     `json:"created_at"`
+	Sources         []topicSource `json:"sources"`
+	ScopeDefinition string        `json:"-"`             // judge guidance; not exposed
+	ScopeSummary    string        `json:"scope_summary"` // human-readable, shown in UI
+	ScopeStatus     string        `json:"scope_status"`
+}
+
+// judgeTopicText returns the text the LLM judge should match against: the
+// distilled scope definition when available, else the bare topic label.
+func (s subscription) judgeTopicText() string {
+	if strings.TrimSpace(s.ScopeDefinition) != "" {
+		return s.ScopeDefinition
+	}
+	return s.Topic
 }
 
 // hotThread is one candidate thread that crossed a hot trigger (seniority or
@@ -215,7 +228,7 @@ func loadNotified(ctx context.Context, db *pgxpool.Pool, subID int64) map[string
 // scored ~0.52). Falls back to a literal keyword match when no LLM is available.
 func topicMatches(ctx context.Context, deps Deps, s subscription, h hotThread) bool {
 	if deps.Gemini != nil {
-		if relevant, ok := judgeTopic(ctx, deps, s.Topic, h); ok {
+		if relevant, ok := judgeTopic(ctx, deps, s.judgeTopicText(), h); ok {
 			return relevant
 		}
 	}
@@ -384,17 +397,24 @@ type Subscriptions struct {
 	db          *pgxpool.Pool
 	defaultUser string
 	log         zerolog.Logger
+	runner      string
+	machineID   string
 }
 
 // NewSubscriptions builds the subscription HTTP handler.
 func NewSubscriptions(deps Deps) *Subscriptions {
-	return &Subscriptions{db: deps.DB, defaultUser: deps.SlackDMUserID, log: deps.Logger}
+	return &Subscriptions{
+		db: deps.DB, defaultUser: deps.SlackDMUserID, log: deps.Logger,
+		runner: deps.Runner, machineID: deps.MachineID,
+	}
 }
 
 // listSubscriptions loads subscriptions; activeOnly restricts to active rows.
 func listSubscriptions(ctx context.Context, db *pgxpool.Pool, activeOnly bool) ([]subscription, error) {
 	q := `SELECT id, subscriber_slack_id, topic, channel_filter,
-	             min_participants, max_author_depth, active, created_at
+	             min_participants, max_author_depth, active, created_at,
+	             COALESCE(sources,'[]'::jsonb), COALESCE(scope_definition,''),
+	             COALESCE(scope_summary,''), COALESCE(scope_status,'')
 	      FROM graph.topic_subscriptions`
 	if activeOnly {
 		q += ` WHERE active`
@@ -408,10 +428,13 @@ func listSubscriptions(ctx context.Context, db *pgxpool.Pool, activeOnly bool) (
 	var out []subscription
 	for rows.Next() {
 		var s subscription
+		var srcRaw []byte
 		if err := rows.Scan(&s.ID, &s.SubscriberSlack, &s.Topic, &s.ChannelFilter,
-			&s.MinParticipants, &s.MaxAuthorDepth, &s.Active, &s.CreatedAt); err != nil {
+			&s.MinParticipants, &s.MaxAuthorDepth, &s.Active, &s.CreatedAt,
+			&srcRaw, &s.ScopeDefinition, &s.ScopeSummary, &s.ScopeStatus); err != nil {
 			return nil, err
 		}
+		_ = json.Unmarshal(srcRaw, &s.Sources)
 		out = append(out, s)
 	}
 	return out, rows.Err()
@@ -431,11 +454,12 @@ func (h *Subscriptions) list(w http.ResponseWriter, r *http.Request) {
 
 func (h *Subscriptions) create(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Topic           string   `json:"topic"`
-		SubscriberSlack string   `json:"subscriber_slack_id"`
-		ChannelFilter   []string `json:"channel_filter"`
-		MinParticipants *int     `json:"min_participants"`
-		MaxAuthorDepth  *int     `json:"max_author_depth"`
+		Topic           string        `json:"topic"`
+		SubscriberSlack string        `json:"subscriber_slack_id"`
+		ChannelFilter   []string      `json:"channel_filter"`
+		MinParticipants *int          `json:"min_participants"`
+		MaxAuthorDepth  *int          `json:"max_author_depth"`
+		Sources         []topicSource `json:"sources"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "bad json", http.StatusBadRequest)
@@ -466,21 +490,55 @@ func (h *Subscriptions) create(w http.ResponseWriter, r *http.Request) {
 	if filter == nil {
 		filter = []string{}
 	}
+	sources := req.Sources
+	if sources == nil {
+		sources = []topicSource{}
+	}
+	srcJSON, _ := json.Marshal(sources)
 	var s subscription
 	err := h.db.QueryRow(r.Context(), `
 		INSERT INTO graph.topic_subscriptions
-		  (subscriber_slack_id, topic, channel_filter, min_participants, max_author_depth)
-		VALUES ($1,$2,$3,$4,$5)
+		  (subscriber_slack_id, topic, channel_filter, min_participants, max_author_depth, sources)
+		VALUES ($1,$2,$3,$4,$5,$6)
 		RETURNING id, subscriber_slack_id, topic, channel_filter,
-		          min_participants, max_author_depth, active, created_at`,
-		subscriber, req.Topic, filter, minP, maxD).
+		          min_participants, max_author_depth, active, created_at, COALESCE(scope_status,'')`,
+		subscriber, req.Topic, filter, minP, maxD, srcJSON).
 		Scan(&s.ID, &s.SubscriberSlack, &s.Topic, &s.ChannelFilter,
-			&s.MinParticipants, &s.MaxAuthorDepth, &s.Active, &s.CreatedAt)
+			&s.MinParticipants, &s.MaxAuthorDepth, &s.Active, &s.CreatedAt, &s.ScopeStatus)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	s.Sources = sources
 	writeJSON(w, http.StatusOK, s)
+}
+
+// refresh enqueues a refresh_topic_scope job for the subscription (reads its
+// sources, ingests them, distills the scope). The UI polls the subscription's
+// scope_status / scope_summary for the result.
+func (h *Subscriptions) refresh(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		http.Error(w, "bad id", http.StatusBadRequest)
+		return
+	}
+	ct, err := h.db.Exec(r.Context(),
+		`UPDATE graph.topic_subscriptions SET scope_status='refreshing' WHERE id=$1`, id)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if ct.RowsAffected() == 0 {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	if _, err := jobs.Enqueue(r.Context(), h.db, "refresh_topic_scope",
+		map[string]any{"subscription_id": id},
+		jobs.EnqueueOptions{Priority: 3, TargetRunner: h.runner, MachineID: h.machineID}); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]string{"status": "refreshing"})
 }
 
 func (h *Subscriptions) delete(w http.ResponseWriter, r *http.Request) {

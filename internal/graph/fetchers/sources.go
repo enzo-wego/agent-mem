@@ -17,6 +17,12 @@ type RepoDoc struct {
 	Content string
 }
 
+// CFPageRef is a Confluence page id + title (from descendant enumeration).
+type CFPageRef struct {
+	ID    string
+	Title string
+}
+
 // maxRepoMarkdown caps how many markdown files we read from a repo, so a huge
 // repo can't blow up the read / LLM-distill step.
 const maxRepoMarkdown = 300
@@ -39,29 +45,30 @@ func (r *Registry) cfAuth(req *http.Request) {
 	req.Header.Set("Accept", "application/json")
 }
 
-// ConfluenceDescendants returns the page IDs of all descendants of pageID
-// (the whole sub-tree, not including pageID itself), paginated via the v2 API.
-func (r *Registry) ConfluenceDescendants(ctx context.Context, pageID string) ([]string, error) {
+// ConfluenceDescendants returns id+title for all descendants of pageID (the
+// whole sub-tree, not including pageID itself), paginated via the v2 API.
+func (r *Registry) ConfluenceDescendants(ctx context.Context, pageID string) ([]CFPageRef, error) {
 	base := r.cfBase()
-	var ids []string
+	var refs []CFPageRef
 	cursor := ""
-	for len(ids) < 1000 {
+	for len(refs) < 1000 {
 		apiURL := fmt.Sprintf("%s/api/v2/pages/%s/descendants?limit=250", base, pageID)
 		if cursor != "" {
 			apiURL += "&cursor=" + url.QueryEscape(cursor)
 		}
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
 		if err != nil {
-			return ids, err
+			return refs, err
 		}
 		r.cfAuth(req)
 		resp, err := r.cfg.HTTPClient.Do(req)
 		if err != nil {
-			return ids, err
+			return refs, err
 		}
 		var page struct {
 			Results []struct {
-				ID string `json:"id"`
+				ID    string `json:"id"`
+				Title string `json:"title"`
 			} `json:"results"`
 			Links struct {
 				Next string `json:"next"`
@@ -70,22 +77,22 @@ func (r *Registry) ConfluenceDescendants(ctx context.Context, pageID string) ([]
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 			body, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
 			resp.Body.Close()
-			return ids, fmt.Errorf("confluence descendants status %d: %s", resp.StatusCode, string(body))
+			return refs, fmt.Errorf("confluence descendants status %d: %s", resp.StatusCode, string(body))
 		}
 		err = json.NewDecoder(resp.Body).Decode(&page)
 		resp.Body.Close()
 		if err != nil {
-			return ids, err
+			return refs, err
 		}
 		for _, p := range page.Results {
-			ids = append(ids, p.ID)
+			refs = append(refs, CFPageRef{ID: p.ID, Title: p.Title})
 		}
 		cursor = cursorFromNext(page.Links.Next)
 		if cursor == "" {
 			break
 		}
 	}
-	return ids, nil
+	return refs, nil
 }
 
 // cursorFromNext extracts the "cursor" query param from a v2 _links.next URL.
