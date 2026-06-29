@@ -678,8 +678,11 @@ export function LiveGlobePage() {
     })
   }, [cfg, points])
 
-  // Recent-activity entries still inside the rolling 15-minute window (drops
-  // stale rows on each tick without waiting for the next channel increase).
+  // Recent-activity entries still inside the rolling window (drops stale rows on
+  // each tick). `now` must be declared before this filter — it runs synchronously
+  // during render, so a later `const now` would hit the temporal dead zone and
+  // throw once `activity` is non-empty (white-paged the whole page).
+  const now = Date.now()
   const recentActivity = activity.filter((a) => now - a.at < ACTIVITY_WINDOW_MS)
 
   const visiblePts = points.filter((p) => !hidden.has(p.continentId))
@@ -688,7 +691,6 @@ export function LiveGlobePage() {
   const totalMsgs = visiblePts.reduce((s, p) => s + p.count, 0)
   const secsAgo = lastUpdate ? Math.max(0, Math.round((Date.now() - lastUpdate) / 1000)) : null
   const windowLabel = WINDOW_OPTIONS.find((w) => w.days === windowDays)?.label ?? 'ALL'
-  const now = Date.now()
   void tick // keeps secsAgo recomputing + pulses decaying every second
 
   // Continent label for the selected channel's panel.
