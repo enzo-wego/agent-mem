@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -81,21 +80,16 @@ func NewDetectHotTopics(deps Deps) jobs.Handler {
 				log.Warn().Err(err).Int64("sub", s.ID).Msg("detect_hot_topics: query failed")
 				continue
 			}
-			// Already-notified roots: skip re-evaluating (and re-embedding) them.
+			// Already-notified roots: skip re-evaluating them.
 			notified := loadNotified(ctx, deps.DB, s.ID)
-			// Embed the topic once for semantic matching. nil ⇒ keyword fallback.
-			var topicVec []float32
-			if deps.Gemini != nil {
-				if v, e := deps.Gemini.Embed(ctx, s.Topic); e == nil {
-					topicVec = v
-				}
-			}
 			for _, h := range hot {
 				if notified[h.RootNodeID] {
 					continue
 				}
-				// Semantic topic gate: is this hot thread actually about the topic?
-				if !topicMatches(ctx, deps, s, topicVec, h) {
+				// Topic gate: is this hot thread genuinely ABOUT the topic? Decided
+				// by an LLM judgment — cosine on a bare topic word couldn't tell a
+				// deployment thread (0.52) from a real payments incident (0.512).
+				if !topicMatches(ctx, deps, s, h) {
 					continue
 				}
 				// Dedup: claim the (sub, thread) pair; skip if already notified.
@@ -197,12 +191,6 @@ LIMIT 50`
 	return out, rows.Err()
 }
 
-// topicSimThreshold is the minimum cosine similarity between the subscription
-// topic and a thread for a semantic match. 0.50 cleanly separates real matches
-// (a Juspay/PK-403 payments thread scored 0.512) from weak ones (off-topic FPs
-// scored 0.47-0.48). Similarity is logged at Info so this can be re-tuned.
-const topicSimThreshold = 0.50
-
 // loadNotified returns the set of root_node_ids already notified for a sub.
 func loadNotified(ctx context.Context, db *pgxpool.Pool, subID int64) map[string]bool {
 	out := map[string]bool{}
@@ -221,22 +209,14 @@ func loadNotified(ctx context.Context, db *pgxpool.Pool, subID int64) map[string
 	return out
 }
 
-// topicMatches decides whether a hot thread is about the subscription's topic.
-// Primary path is semantic: cosine(topic, thread) ≥ threshold, so a thread that
-// never uses the topic word still matches by meaning. Falls back to a keyword
-// substring match when no embedder is available.
-func topicMatches(ctx context.Context, deps Deps, s subscription, topicVec []float32, h hotThread) bool {
-	if topicVec != nil && deps.Gemini != nil {
-		bv, err := deps.Gemini.Embed(ctx, h.Blob)
-		if err == nil && len(bv) > 0 {
-			sim := cosine(topicVec, bv)
-			// Logged at Info while the threshold is being tuned in prod; dial back to
-			// Debug once topicSimThreshold is settled.
-			deps.Logger.Info().Str("node", h.RootNodeID).Str("topic", s.Topic).
-				Int("participants", h.Participants).Int("top_depth", h.TopDepth).
-				Float64("sim", sim).Bool("match", sim >= topicSimThreshold).
-				Msg("detect_hot_topics: topic similarity")
-			return sim >= topicSimThreshold
+// topicMatches decides whether a hot thread is genuinely about the
+// subscription's topic, using an LLM yes/no judgment (cosine on a bare topic
+// word can't separate, e.g., a deployment thread from a payments incident — both
+// scored ~0.52). Falls back to a literal keyword match when no LLM is available.
+func topicMatches(ctx context.Context, deps Deps, s subscription, h hotThread) bool {
+	if deps.Gemini != nil {
+		if relevant, ok := judgeTopic(ctx, deps, s.Topic, h); ok {
+			return relevant
 		}
 	}
 	// Fallback: literal keyword over the thread text + channel name.
@@ -244,22 +224,30 @@ func topicMatches(ctx context.Context, deps Deps, s subscription, topicVec []flo
 	return strings.Contains(hay, strings.ToLower(s.Topic))
 }
 
-// cosine returns the cosine similarity of two equal-length vectors (0 if either
-// is empty or zero-norm).
-func cosine(a, b []float32) float64 {
-	if len(a) == 0 || len(a) != len(b) {
-		return 0
+// judgeTopic asks the LLM whether the thread is substantively about the topic.
+// Returns (relevant, ok); ok=false on LLM/parse error so the caller can fall back.
+func judgeTopic(ctx context.Context, deps Deps, topic string, h hotThread) (bool, bool) {
+	const sys = `You decide whether a Slack thread is substantively ABOUT a given topic.
+Respond with JSON only: {"relevant": true|false}.
+Be strict: the thread must be genuinely about the topic. If it is mainly about a
+different subject (deployments, infra, secrets, CI, unrelated ops) and only
+mentions a related word in passing, answer false. Judge the actual subject of
+the discussion, not isolated keywords.`
+	user := "TOPIC: " + topic + "\n\nTHREAD:\n" + h.Blob
+	out, err := deps.Gemini.Generate(ctx, sys, user)
+	if err != nil || out == "" {
+		return false, false
 	}
-	var dot, na, nb float64
-	for i := range a {
-		dot += float64(a[i]) * float64(b[i])
-		na += float64(a[i]) * float64(a[i])
-		nb += float64(b[i]) * float64(b[i])
+	var parsed struct {
+		Relevant bool `json:"relevant"`
 	}
-	if na == 0 || nb == 0 {
-		return 0
+	if json.Unmarshal([]byte(out), &parsed) != nil {
+		return false, false
 	}
-	return dot / (math.Sqrt(na) * math.Sqrt(nb))
+	deps.Logger.Info().Str("node", h.RootNodeID).Str("topic", topic).
+		Int("participants", h.Participants).Bool("relevant", parsed.Relevant).
+		Msg("detect_hot_topics: topic relevance")
+	return parsed.Relevant, true
 }
 
 // alertMsg is one transcript line (who said what), with the author's org-depth

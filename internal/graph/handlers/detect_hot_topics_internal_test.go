@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/rs/zerolog"
 )
 
 // TestFindHotThreads verifies the two triggers (seniority OR volume), the topic
@@ -104,32 +105,34 @@ func TestWhyFlagged(t *testing.T) {
 	}
 }
 
-// TestCosine checks the similarity helper: identical vectors ≈ 1, orthogonal ≈ 0.
-func TestCosine(t *testing.T) {
-	a := []float32{1, 0, 1}
-	if s := cosine(a, a); s < 0.999 {
-		t.Errorf("cosine(a,a) = %v, want ~1", s)
+// TestTopicMatches_LLMJudge verifies the LLM yes/no relevance gate is honored.
+func TestTopicMatches_LLMJudge(t *testing.T) {
+	gem := &mockGemini{}
+	deps := Deps{Gemini: gem, Logger: zerolog.Nop()}
+	s := subscription{Topic: "payments"}
+
+	gem.generateResult = func() (string, error) { return `{"relevant": true}`, nil }
+	if !topicMatches(context.Background(), deps, s, hotThread{Blob: "juspay blocked pk ip, 403 on card"}) {
+		t.Errorf("relevant=true should match")
 	}
-	if s := cosine([]float32{1, 0}, []float32{0, 1}); s != 0 {
-		t.Errorf("cosine(orthogonal) = %v, want 0", s)
-	}
-	if s := cosine([]float32{1, 2}, nil); s != 0 {
-		t.Errorf("cosine(mismatched) = %v, want 0", s)
+	gem.generateResult = func() (string, error) { return `{"relevant": false}`, nil }
+	if topicMatches(context.Background(), deps, s, hotThread{Blob: "aws secret missing, deployment failed"}) {
+		t.Errorf("relevant=false should NOT match")
 	}
 }
 
-// TestTopicMatches_KeywordFallback verifies that with no embedder, topicMatches
+// TestTopicMatches_KeywordFallback verifies that with no LLM, topicMatches
 // falls back to a literal keyword check over thread text + channel name.
 func TestTopicMatches_KeywordFallback(t *testing.T) {
 	deps := Deps{} // no Gemini ⇒ keyword fallback
 	s := subscription{Topic: "payments"}
-	if !topicMatches(context.Background(), deps, s, nil, hotThread{Blob: "the payments service is down"}) {
+	if !topicMatches(context.Background(), deps, s, hotThread{Blob: "the payments service is down"}) {
 		t.Errorf("expected keyword match on blob")
 	}
-	if !topicMatches(context.Background(), deps, s, nil, hotThread{ChannelName: "payments-ops"}) {
+	if !topicMatches(context.Background(), deps, s, hotThread{ChannelName: "payments-ops"}) {
 		t.Errorf("expected keyword match on channel name")
 	}
-	if topicMatches(context.Background(), deps, s, nil, hotThread{Blob: "lunch plans"}) {
+	if topicMatches(context.Background(), deps, s, hotThread{Blob: "lunch plans"}) {
 		t.Errorf("did not expect match for unrelated text")
 	}
 }
