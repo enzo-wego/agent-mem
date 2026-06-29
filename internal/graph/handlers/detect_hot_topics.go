@@ -128,12 +128,13 @@ func NewDetectHotTopics(deps Deps) jobs.Handler {
 	}
 }
 
-// findHotThreads returns threads active in the lookback window that crossed a
-// hot trigger: either a senior author (org-depth ≤ max_author_depth, 0=CEO)
-// posted, or the distinct participant count ≥ min_participants. Topic relevance
-// is NOT applied here — it is decided semantically in the handler, so a thread
-// that never uses the topic word (e.g. "Juspay blocked pk" for topic "payments")
-// can still match.
+// findHotThreads returns threads active in the lookback window with a real
+// discussion — distinct participant count ≥ min_participants (so a lone message
+// never alerts). The org-depth "seniority" trigger was dropped: depth_from_root
+// is unreliable (most people default to 0), so it matched everyone and produced
+// false positives. Topic relevance is NOT applied here — it is decided
+// semantically in the handler, so a thread that never uses the topic word (e.g.
+// "Juspay blocked pk" for topic "payments") can still match.
 func findHotThreads(ctx context.Context, db *pgxpool.Pool, s subscription) ([]hotThread, error) {
 	const q = `
 WITH recent AS (
@@ -172,14 +173,14 @@ SELECT g.root_node_id, g.channel, COALESCE(c.name,''),
        LEFT(COALESCE(g.blob,''), 2000)
 FROM grp g
 LEFT JOIN graph.slack_channels c ON c.slack_channel_id = g.channel
-WHERE ( g.participants >= $3 OR g.top_depth <= $4 )
+WHERE g.participants >= $3
 ORDER BY g.last_ts DESC
 LIMIT 50`
 	filter := s.ChannelFilter
 	if filter == nil {
 		filter = []string{}
 	}
-	rows, err := db.Query(ctx, q, detectLookback, filter, s.MinParticipants, s.MaxAuthorDepth)
+	rows, err := db.Query(ctx, q, detectLookback, filter, s.MinParticipants)
 	if err != nil {
 		return nil, err
 	}
@@ -197,10 +198,10 @@ LIMIT 50`
 }
 
 // topicSimThreshold is the minimum cosine similarity between the subscription
-// topic and a thread for a semantic match. Set to 0.45 for recall: a real
-// payments thread ("Juspay blocked pk / card 403") scored 0.512, so 0.50 left
-// little margin. Similarity scores are logged at Info so this can be re-tuned.
-const topicSimThreshold = 0.45
+// topic and a thread for a semantic match. 0.50 cleanly separates real matches
+// (a Juspay/PK-403 payments thread scored 0.512) from weak ones (off-topic FPs
+// scored 0.47-0.48). Similarity is logged at Info so this can be re-tuned.
+const topicSimThreshold = 0.50
 
 // loadNotified returns the set of root_node_ids already notified for a sub.
 func loadNotified(ctx context.Context, db *pgxpool.Pool, subID int64) map[string]bool {
@@ -325,15 +326,6 @@ ORDER BY COALESCE(to_timestamp(NULLIF(n.metadata->>'ts','')::float8), n.first_se
 		_, overview, highlights = genThreadDeepSummary(ctx, deps.Gemini, tb.String())
 	}
 
-	// Senior speaker name (lowest org-depth, at/above the seniority gate).
-	seniorName := ""
-	seniorDepth := 100
-	for _, m := range msgs {
-		if m.depth <= s.MaxAuthorDepth && m.depth < seniorDepth && m.author != "" {
-			seniorName, seniorDepth = m.author, m.depth
-		}
-	}
-
 	var b strings.Builder
 	fmt.Fprintf(&b, "🔥 *%s* · #%s\n", s.Topic, channel)
 	if overview != "" {
@@ -371,29 +363,17 @@ ORDER BY COALESCE(to_timestamp(NULLIF(n.metadata->>'ts','')::float8), n.first_se
 			}
 		}
 	}
-	fmt.Fprintf(&b, "\n_Flagged because %s._\n", whyFlagged(s, h, seniorName))
+	fmt.Fprintf(&b, "\n_Flagged because %s._\n", whyFlagged(h))
 	if link := slackPermalink(h.RootNodeID); link != "" {
 		b.WriteString(link)
 	}
 	return b.String()
 }
 
-// whyFlagged explains in plain language why the thread was surfaced.
-func whyFlagged(s subscription, h hotThread, seniorName string) string {
-	senior := h.TopDepth <= s.MaxAuthorDepth
-	volume := h.Participants >= s.MinParticipants
-	who := "a senior leader"
-	if seniorName != "" {
-		who = seniorName + " (a senior leader)"
-	}
-	switch {
-	case senior && volume:
-		return fmt.Sprintf("%s is involved and %d people are discussing it", who, h.Participants)
-	case senior:
-		return fmt.Sprintf("%s raised or joined it", who)
-	default:
-		return fmt.Sprintf("%d people are actively discussing it", h.Participants)
-	}
+// whyFlagged explains in plain language why the thread was surfaced. The thread
+// matched the topic semantically and crossed the discussion threshold.
+func whyFlagged(h hotThread) string {
+	return fmt.Sprintf("%d people are discussing it", h.Participants)
 }
 
 // slackPermalink builds an archive link from a root node id slack:<chan>:<ts>.
@@ -486,7 +466,7 @@ func (h *Subscriptions) create(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "no subscriber_slack_id and no default recipient configured", http.StatusBadRequest)
 		return
 	}
-	minP := 4
+	minP := 2 // a real exchange (≥2 people); a lone message never alerts
 	if req.MinParticipants != nil {
 		minP = *req.MinParticipants
 	}

@@ -50,12 +50,12 @@ func TestFindHotThreads(t *testing.T) {
 	qroot := ts(now, 30)
 	insSlack(t, pool, "C3", ts(now, 31), qroot, ic[0], "payments minor question")
 	insSlack(t, pool, "C3", ts(now, 32), qroot, ic[1], "payments reply")
-	// 4) Senior, different subject: Ross talks about lunch. findHotThreads is now
-	// topic-agnostic (semantic filtering happens in the handler), so this passes
-	// the HOT gate via seniority; topicMatches would later reject it.
+	// 4) Single message, different subject (Ross/lunch). With the seniority gate
+	// dropped, a lone message must NOT fire regardless of author.
 	insSlack(t, pool, "C4", ts(now, 40), "", ross, "anyone up for lunch")
 
-	sub := subscription{Topic: "payments", MinParticipants: 4, MaxAuthorDepth: 2}
+	// Volume-only gate: ≥ min_participants distinct people.
+	sub := subscription{Topic: "payments", MinParticipants: 4}
 	hot, err := findHotThreads(ctx, pool, sub)
 	if err != nil {
 		t.Fatalf("findHotThreads: %v", err)
@@ -64,47 +64,43 @@ func TestFindHotThreads(t *testing.T) {
 	for _, h := range hot {
 		got[h.Channel] = h
 	}
-	if _, ok := got["C1"]; !ok {
-		t.Errorf("expected C1 (seniority) to fire; got channels %v", keys(got))
-	}
 	if _, ok := got["C2"]; !ok {
-		t.Errorf("expected C2 (volume) to fire; got channels %v", keys(got))
+		t.Errorf("expected C2 (4 participants) to fire; got channels %v", keys(got))
 	}
-	if _, ok := got["C3"]; ok {
-		t.Errorf("C3 is quiet (2 ICs) and must NOT pass the hot gate")
-	}
-	if _, ok := got["C4"]; !ok {
-		t.Errorf("C4 should pass the hot gate via seniority (topic filtered later); got %v", keys(got))
+	for _, ch := range []string{"C1", "C3", "C4"} {
+		if _, ok := got[ch]; ok {
+			t.Errorf("%s has < 4 participants and must NOT fire (seniority dropped)", ch)
+		}
 	}
 	if c2 := got["C2"]; c2.Participants != 4 {
 		t.Errorf("C2 participants = %d, want 4", c2.Participants)
 	}
-	if c1 := got["C1"]; c1.Blob == "" {
-		t.Errorf("C1 blob should be populated for semantic matching")
+	if c2 := got["C2"]; c2.Blob == "" {
+		t.Errorf("C2 blob should be populated for semantic matching")
+	}
+
+	// With min_participants=2, a reporter+responder thread (C3) also fires.
+	hot2, _ := findHotThreads(ctx, pool, subscription{Topic: "payments", MinParticipants: 2})
+	got2 := map[string]bool{}
+	for _, h := range hot2 {
+		got2[h.Channel] = true
+	}
+	if !got2["C3"] {
+		t.Errorf("C3 (2 participants) should fire at min_participants=2")
+	}
+	if got2["C1"] || got2["C4"] {
+		t.Errorf("single-message threads must never fire")
 	}
 }
 
-// TestWhyFlagged checks the plain-language reason has no jargon and names the
-// senior speaker when known.
+// TestWhyFlagged checks the plain-language reason is jargon-free.
 func TestWhyFlagged(t *testing.T) {
-	s := subscription{MinParticipants: 4, MaxAuthorDepth: 2}
-	// Senior + volume, named.
-	got := whyFlagged(s, hotThread{TopDepth: 0, Participants: 6}, "Ross")
-	if want := "Ross (a senior leader) is involved and 6 people are discussing it"; got != want {
+	got := whyFlagged(hotThread{Participants: 6})
+	if want := "6 people are discussing it"; got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}
-	// Senior only, name unknown ⇒ no "someone", no "org-depth".
-	got = whyFlagged(s, hotThread{TopDepth: 0, Participants: 1}, "")
-	if want := "a senior leader raised or joined it"; got != want {
-		t.Errorf("got %q, want %q", got, want)
-	}
-	if strings.Contains(got, "org-depth") || strings.Contains(got, "someone") {
+	if strings.Contains(got, "org-depth") || strings.Contains(got, "someone") || strings.Contains(got, "senior") {
 		t.Errorf("reason still has jargon: %q", got)
-	}
-	// Volume only.
-	got = whyFlagged(s, hotThread{TopDepth: 9, Participants: 5}, "")
-	if want := "5 people are actively discussing it"; got != want {
-		t.Errorf("got %q, want %q", got, want)
 	}
 }
 
