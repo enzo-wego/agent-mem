@@ -152,10 +152,14 @@ Example CSV:
 	importBambooHRCmd := &cobra.Command{
 		Use:   "import-bamboohr",
 		Short: "Enqueue an import_bamboohr job from a BambooHR org-chart CSV",
-		Long: `Reads a BambooHR org-chart CSV (with columns EEID, Full Name, Reports To)
-and enqueues an import_bamboohr job in graph.jobs.
+		Long: `Reads a BambooHR org-chart CSV and enqueues an import_bamboohr job in graph.jobs.
 
-The job worker processes the CSV to upsert graph.people rows.
+Required columns: EEID, Full Name, Reports To.
+Optional columns: Work Email (merges org identity onto Slack/Jira people),
+                  Department (shown as the person's team label, e.g. "Hazwan (Flights)").
+
+The job worker processes the CSV to upsert graph.people rows. Re-running is safe:
+blank Name/Department cells never overwrite a value already stored.
 
 Example:
   agent-mem entities import-bamboohr --csv ~/Downloads/bamboohr_org_chart_for_visio.csv`,
