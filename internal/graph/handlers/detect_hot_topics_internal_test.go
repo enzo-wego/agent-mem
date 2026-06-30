@@ -57,7 +57,7 @@ func TestFindHotThreads(t *testing.T) {
 
 	// Volume-only gate: ≥ min_participants distinct people.
 	sub := subscription{Topic: "payments", MinParticipants: 4}
-	hot, err := findHotThreads(ctx, pool, sub)
+	hot, err := findHotThreads(ctx, pool, sub, nil)
 	if err != nil {
 		t.Fatalf("findHotThreads: %v", err)
 	}
@@ -81,7 +81,7 @@ func TestFindHotThreads(t *testing.T) {
 	}
 
 	// With min_participants=2, a reporter+responder thread (C3) also fires.
-	hot2, _ := findHotThreads(ctx, pool, subscription{Topic: "payments", MinParticipants: 2})
+	hot2, _ := findHotThreads(ctx, pool, subscription{Topic: "payments", MinParticipants: 2}, nil)
 	got2 := map[string]bool{}
 	for _, h := range hot2 {
 		got2[h.Channel] = true
@@ -107,7 +107,8 @@ func TestSourceParsers(t *testing.T) {
 	}
 }
 
-// TestWhyFlagged checks the plain-language reason is jargon-free.
+// TestWhyFlagged checks the plain-language reason is jargon-free and names an
+// important sender when present.
 func TestWhyFlagged(t *testing.T) {
 	got := whyFlagged(hotThread{Participants: 6})
 	if want := "6 people are discussing it"; got != want {
@@ -115,6 +116,66 @@ func TestWhyFlagged(t *testing.T) {
 	}
 	if strings.Contains(got, "org-depth") || strings.Contains(got, "someone") || strings.Contains(got, "senior") {
 		t.Errorf("reason still has jargon: %q", got)
+	}
+	// Important lone message.
+	got = whyFlagged(hotThread{Participants: 1, HasImportant: true, ImportantAuthor: "Lei Zheng"})
+	if want := "Lei Zheng (close to you in the org) raised it"; got != want {
+		t.Errorf("important lone: got %q, want %q", got, want)
+	}
+	// Important + discussion.
+	got = whyFlagged(hotThread{Participants: 3, HasImportant: true, ImportantAuthor: "Ross"})
+	if want := "Ross (close to you in the org) is involved and 3 people are discussing it"; got != want {
+		t.Errorf("important+discussion: got %q, want %q", got, want)
+	}
+}
+
+// TestFindHotThreads_ImportantLoneMessage: a single message from an important
+// person surfaces even when the participant gate fails.
+func TestFindHotThreads_ImportantLoneMessage(t *testing.T) {
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		t.Skip("DATABASE_URL not set; skipping integration test")
+	}
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatalf("pool: %v", err)
+	}
+	defer pool.Close()
+	for _, tbl := range []string{"graph.nodes", "graph.people"} {
+		_, _ = pool.Exec(ctx, "DELETE FROM "+tbl)
+	}
+	var boss int64
+	if err := pool.QueryRow(ctx,
+		`INSERT INTO graph.people (eeid, display_name, machine_id) VALUES (7,'Boss','test') RETURNING id`).Scan(&boss); err != nil {
+		t.Fatalf("seed boss: %v", err)
+	}
+	now := time.Now()
+	insSlack(t, pool, "CB", ts(now, 0), "", boss, "payments are down in PK")
+
+	// min_participants=4 (volume gate fails for a lone msg); important=[7] must surface it.
+	hot, err := findHotThreads(ctx, pool, subscription{Topic: "payments", MinParticipants: 4}, []int32{7})
+	if err != nil {
+		t.Fatalf("findHotThreads: %v", err)
+	}
+	var cb *hotThread
+	for i := range hot {
+		if hot[i].Channel == "CB" {
+			cb = &hot[i]
+		}
+	}
+	if cb == nil {
+		t.Fatal("important lone message should surface despite participants<min")
+	}
+	if !cb.HasImportant || cb.ImportantAuthor != "Boss" {
+		t.Errorf("HasImportant=%v ImportantAuthor=%q, want true/Boss", cb.HasImportant, cb.ImportantAuthor)
+	}
+	// Without the important set, the lone message must NOT surface.
+	hot0, _ := findHotThreads(ctx, pool, subscription{Topic: "payments", MinParticipants: 4}, nil)
+	for _, h := range hot0 {
+		if h.Channel == "CB" {
+			t.Errorf("lone message must not surface without importance")
+		}
 	}
 }
 

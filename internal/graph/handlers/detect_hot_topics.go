@@ -62,6 +62,9 @@ type hotThread struct {
 	FirstLine    string
 	LastTS       time.Time
 	Blob         string // concatenated message text, for semantic topic match
+
+	HasImportant    bool   // an author is in the subscriber's reporting line / near org circle
+	ImportantAuthor string // name of that important author (for the DM)
 }
 
 // NewDetectHotTopics returns the handler for the self-rescheduling
@@ -88,7 +91,10 @@ func NewDetectHotTopics(deps Deps) jobs.Handler {
 			return fmt.Errorf("list subscriptions: %w", err)
 		}
 		for _, s := range subs {
-			hot, err := findHotThreads(ctx, deps.DB, s)
+			// Resolve the subscriber's "important people" (their reporting line +
+			// within ~2 hops), so a message from one of them lowers the bar.
+			important := ownerImportantEeids(ctx, deps.DB, s.SubscriberSlack)
+			hot, err := findHotThreads(ctx, deps.DB, s, important)
 			if err != nil {
 				log.Warn().Err(err).Int64("sub", s.ID).Msg("detect_hot_topics: query failed")
 				continue
@@ -135,14 +141,17 @@ func NewDetectHotTopics(deps Deps) jobs.Handler {
 	}
 }
 
-// findHotThreads returns threads active in the lookback window with a real
-// discussion — distinct participant count ≥ min_participants (so a lone message
-// never alerts). The org-depth "seniority" trigger was dropped: depth_from_root
-// is unreliable (most people default to 0), so it matched everyone and produced
-// false positives. Topic relevance is NOT applied here — it is decided
-// semantically in the handler, so a thread that never uses the topic word (e.g.
-// "Juspay blocked pk" for topic "payments") can still match.
-func findHotThreads(ctx context.Context, db *pgxpool.Pool, s subscription) ([]hotThread, error) {
+// findHotThreads returns threads active in the lookback window that crossed a
+// bar: either a real discussion (distinct participants ≥ min_participants) OR an
+// "important" person is involved — important = the subscriber's reporting line
+// (ancestors via person_distance.lca) + anyone within ~2 org hops (the `important`
+// eeid list). So a lone message from your manager/CEO/teammate surfaces, while a
+// stranger's lone message does not. (The old org-DEPTH seniority trigger was
+// dropped — depth_from_root is unreliable; this uses anchored org-distance.)
+// Topic relevance is NOT applied here — it is decided semantically in the handler,
+// so a thread that never uses the topic word ("Juspay blocked pk" for "payments")
+// can still match.
+func findHotThreads(ctx context.Context, db *pgxpool.Pool, s subscription, important []int32) ([]hotThread, error) {
 	const q = `
 WITH recent AS (
   SELECT n.id,
@@ -152,7 +161,8 @@ WITH recent AS (
          COALESCE(NULLIF(n.title,''), n.body, '') AS text,
          COALESCE(to_timestamp(NULLIF(n.metadata->>'ts','')::float8), n.first_seen_at) AS ts,
          COALESCE(p.depth_from_root, 99) AS depth,
-         COALESCE(p.display_name, '') AS author
+         COALESCE(p.display_name, '') AS author,
+         (p.eeid = ANY($4::int[])) AS is_important
   FROM graph.nodes n
   LEFT JOIN graph.people p ON p.id = n.author_person_id
   WHERE n.type IN ('slack','slack_thread')
@@ -170,24 +180,30 @@ grp AS (
          (array_agg(author ORDER BY depth ASC, ts ASC))[1] AS top_author,
          (array_agg(text   ORDER BY ts ASC))[1]            AS first_text,
          max(ts)                                           AS last_ts,
-         string_agg(text, ' ')                             AS blob
+         string_agg(text, ' ')                             AS blob,
+         bool_or(COALESCE(is_important,false))             AS has_important,
+         (array_agg(author) FILTER (WHERE is_important))[1] AS important_author
   FROM recent
   GROUP BY 1, 2
 )
 SELECT g.root_node_id, g.channel, COALESCE(c.name,''),
        g.msg_count, g.participants, g.top_depth,
        COALESCE(g.top_author,''), COALESCE(g.first_text,''), g.last_ts,
-       LEFT(COALESCE(g.blob,''), 2000)
+       LEFT(COALESCE(g.blob,''), 2000),
+       COALESCE(g.has_important,false), COALESCE(g.important_author,'')
 FROM grp g
 LEFT JOIN graph.slack_channels c ON c.slack_channel_id = g.channel
-WHERE g.participants >= $3
+WHERE g.participants >= $3 OR g.has_important
 ORDER BY g.last_ts DESC
 LIMIT 50`
 	filter := s.ChannelFilter
 	if filter == nil {
 		filter = []string{}
 	}
-	rows, err := db.Query(ctx, q, detectLookback, filter, s.MinParticipants)
+	if important == nil {
+		important = []int32{}
+	}
+	rows, err := db.Query(ctx, q, detectLookback, filter, s.MinParticipants, important)
 	if err != nil {
 		return nil, err
 	}
@@ -196,12 +212,47 @@ LIMIT 50`
 	for rows.Next() {
 		var h hotThread
 		if err := rows.Scan(&h.RootNodeID, &h.Channel, &h.ChannelName,
-			&h.MsgCount, &h.Participants, &h.TopDepth, &h.TopAuthor, &h.FirstLine, &h.LastTS, &h.Blob); err != nil {
+			&h.MsgCount, &h.Participants, &h.TopDepth, &h.TopAuthor, &h.FirstLine, &h.LastTS, &h.Blob,
+			&h.HasImportant, &h.ImportantAuthor); err != nil {
 			return nil, err
 		}
 		out = append(out, h)
 	}
 	return out, rows.Err()
+}
+
+// ownerImportantEeids returns the eeids the subscriber treats as "important":
+// their reporting line (ancestors — where the LCA of (owner, other) IS the
+// other, i.e. their manager up to the CEO) plus anyone within ~2 org hops. Empty
+// when the subscriber isn't org-anchored (no eeid) or has no distances yet.
+func ownerImportantEeids(ctx context.Context, db *pgxpool.Pool, subscriberSlack string) []int32 {
+	if subscriberSlack == "" {
+		return nil
+	}
+	var owner int32
+	if err := db.QueryRow(ctx,
+		`SELECT COALESCE(eeid,0) FROM graph.people WHERE slack_user_id=$1 AND merged_into IS NULL`,
+		subscriberSlack).Scan(&owner); err != nil || owner == 0 {
+		return nil
+	}
+	rows, err := db.Query(ctx, `
+SELECT DISTINCT CASE WHEN a_eeid=$1 THEN b_eeid ELSE a_eeid END AS other
+FROM graph.person_distance
+WHERE $1 IN (a_eeid, b_eeid)
+  AND ( hops <= 2
+        OR lca_eeid = CASE WHEN a_eeid=$1 THEN b_eeid ELSE a_eeid END )`, owner)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var out []int32
+	for rows.Next() {
+		var e int32
+		if rows.Scan(&e) == nil {
+			out = append(out, e)
+		}
+	}
+	return out
 }
 
 // loadNotified returns the set of root_node_ids already notified for a sub.
@@ -371,9 +422,22 @@ ORDER BY COALESCE(to_timestamp(NULLIF(n.metadata->>'ts','')::float8), n.first_se
 	return b.String()
 }
 
-// whyFlagged explains in plain language why the thread was surfaced. The thread
-// matched the topic semantically and crossed the discussion threshold.
+// whyFlagged explains in plain language why the thread was surfaced. It always
+// matched the topic; here we say what crossed the bar — an important person
+// (your org circle) and/or a real discussion.
 func whyFlagged(h hotThread) string {
+	if h.HasImportant {
+		who := h.ImportantAuthor
+		if who == "" {
+			who = "someone in your org circle"
+		} else {
+			who += " (close to you in the org)"
+		}
+		if h.Participants >= 2 {
+			return fmt.Sprintf("%s is involved and %d people are discussing it", who, h.Participants)
+		}
+		return fmt.Sprintf("%s raised it", who)
+	}
 	return fmt.Sprintf("%d people are discussing it", h.Participants)
 }
 
