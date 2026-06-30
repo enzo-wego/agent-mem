@@ -1,0 +1,30 @@
+{
+  "_doc": "Importance config for enzobot alerts, relative to the owner. Single source of truth: the org map and (when wired) the live notifier both read this.",
+  "owner_eeid": 982,
+  "owner_name": "Enzo Nguyen",
+  "manager_eeid": 259,
+
+  "tiers": {
+    "you": 0.05,
+    "manager": 0.95,
+    "reporting_line": 0.85,
+    "team_peer": 0.65,
+    "exec_far": 0.55,
+    "senior_mgr": 0.45,
+    "team_lead": 0.30,
+    "near_ic": 0.25,
+    "other": 0.10
+  },
+
+  "seniority": {
+    "exec_min": 50,
+    "senior_mgr_min": 10,
+    "team_lead_min": 1
+  },
+
+  "overrides": [
+    { "name": "Ross Veitch",     "score": 1.00, "why": "CEO — top priority",                "pin": false },
+    { "name": "Alexandre Morin", "score": 0.85, "why": "owns payments business",            "pin": true  },
+    { "name": "Surbhi Babbar",   "score": 0.75, "why": "payments-geeks · you work together", "pin": true  }
+  ]
+}

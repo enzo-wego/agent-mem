@@ -253,6 +253,9 @@ WHERE $1 IN (a_eeid, b_eeid)
 			out = append(out, e)
 		}
 	}
+	// Merge config pins (people the org tree can't see — e.g. a business owner or a
+	// daily collaborator on a far branch). These count as important on their own.
+	out = append(out, overrideImportantEeids(ctx, db, owner)...)
 	return out
 }
 
@@ -320,6 +323,7 @@ the discussion, not isolated keywords.`
 type alertMsg struct {
 	author string
 	text   string
+	dept   string
 	depth  int
 }
 
@@ -342,6 +346,7 @@ func buildAlert(ctx context.Context, deps Deps, s subscription, h hotThread) str
 	if rows, err := deps.DB.Query(ctx, `
 SELECT COALESCE(n.metadata->'author'->>'display_name',''),
        COALESCE(NULLIF(n.title,''), n.body, ''),
+       COALESCE(p.department,''),
        COALESCE(p.depth_from_root, 99)
 FROM graph.nodes n
 LEFT JOIN graph.people p ON p.id = n.author_person_id
@@ -351,7 +356,7 @@ ORDER BY COALESCE(to_timestamp(NULLIF(n.metadata->>'ts','')::float8), n.first_se
 		h.Channel, h.RootNodeID, threadTS); err == nil {
 		for rows.Next() {
 			var m alertMsg
-			if rows.Scan(&m.author, &m.text, &m.depth) == nil {
+			if rows.Scan(&m.author, &m.text, &m.dept, &m.depth) == nil {
 				msgs = append(msgs, m)
 			}
 		}
@@ -374,7 +379,7 @@ ORDER BY COALESCE(to_timestamp(NULLIF(n.metadata->>'ts','')::float8), n.first_se
 			if a == "" {
 				a = "someone"
 			}
-			tb.WriteString(a + ": " + firstLine(m.text, 280) + "\n")
+			tb.WriteString(withDept(a, m.dept) + ": " + firstLine(m.text, 280) + "\n")
 		}
 		_, overview, highlights = genThreadDeepSummary(ctx, deps.Gemini, tb.String())
 	}
@@ -417,7 +422,7 @@ ORDER BY COALESCE(to_timestamp(NULLIF(n.metadata->>'ts','')::float8), n.first_se
 			if a == "" {
 				a = "someone"
 			}
-			line := fmt.Sprintf("• *%s:* %s\n", a, t)
+			line := fmt.Sprintf("• *%s:* %s\n", withDept(a, m.dept), t)
 			if b.Len()+len(line) > 2600 {
 				break
 			}
@@ -445,9 +450,9 @@ func whyFlagged(h hotThread) string {
 	if h.HasImportant {
 		who := h.ImportantAuthor
 		if who == "" {
-			who = "someone in your org circle"
+			who = "someone important to you"
 		} else {
-			who += " (close to you in the org)"
+			who += " (important to you)"
 		}
 		if h.Participants >= 2 {
 			return fmt.Sprintf("%s is involved and %d people are discussing it", who, h.Participants)

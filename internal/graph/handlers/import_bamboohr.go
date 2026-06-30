@@ -25,10 +25,11 @@ type importBambooHRPayload struct {
 
 // bambooRow holds one parsed row from the BambooHR CSV.
 type bambooRow struct {
-	EEID       string
-	FullName   string
-	Email      string
-	ReportsTo  string
+	EEID          string
+	FullName      string
+	Email         string
+	ReportsTo     string
+	Department    string
 	DepthFromRoot int
 }
 
@@ -95,6 +96,8 @@ func importBambooHRHandler(deps Deps) jobs.Handler {
 		if !hasEmail {
 			emailCol, hasEmail = colIdx["email"]
 		}
+		// Department is optional; surfaced as the person's team label in summaries/alerts.
+		deptCol, hasDept := colIdx["department"]
 
 		// Parse rows.
 		var rows []bambooRow
@@ -116,7 +119,11 @@ func importBambooHRHandler(deps Deps) jobs.Handler {
 			if hasEmail && len(rec) > emailCol {
 				email = strings.ToLower(strings.TrimSpace(rec[emailCol]))
 			}
-			rows = append(rows, bambooRow{EEID: eeid, FullName: name, Email: email, ReportsTo: reportsTo})
+			dept := ""
+			if hasDept && len(rec) > deptCol {
+				dept = strings.TrimSpace(rec[deptCol])
+			}
+			rows = append(rows, bambooRow{EEID: eeid, FullName: name, Email: email, ReportsTo: reportsTo, Department: dept})
 		}
 
 		if len(rows) == 0 {
@@ -134,15 +141,17 @@ func importBambooHRHandler(deps Deps) jobs.Handler {
 			// below, which first merges any pre-existing Slack/etc. person that already
 			// owns the email (email is UNIQUE, so a naive set would collide).
 			_, execErr := deps.DB.Exec(ctx, `
-				INSERT INTO graph.people (eeid, display_name, reports_to, machine_id)
-				VALUES ($1, $2, $3, $4)
+				INSERT INTO graph.people (eeid, display_name, reports_to, department, machine_id)
+				VALUES ($1, $2, $3, $4, $5)
 				ON CONFLICT (eeid) DO UPDATE SET
 					-- Never wipe a known name with a blank: BambooHR's FullName is
 					-- empty for some senior/cross-org people whose names we resolved
 					-- from Slack. Only overwrite when the incoming name is non-blank.
 					display_name = COALESCE(NULLIF(EXCLUDED.display_name, ''), graph.people.display_name),
-					reports_to   = EXCLUDED.reports_to`,
-				eeidInt, row.FullName, nullableStringVal(row.ReportsTo), deps.MachineID,
+					reports_to   = EXCLUDED.reports_to,
+					-- Same blank-guard for department: keep a prior value if this row's is empty.
+					department   = COALESCE(NULLIF(EXCLUDED.department, ''), graph.people.department)`,
+				eeidInt, row.FullName, nullableStringVal(row.ReportsTo), nullableStringVal(row.Department), deps.MachineID,
 			)
 			if execErr != nil {
 				deps.Logger.Warn().Err(execErr).Str("eeid", row.EEID).Msg("import_bamboohr: upsert person failed")

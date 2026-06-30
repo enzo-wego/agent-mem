@@ -293,6 +293,16 @@ func firstLine(s string, n int) string {
 	return s
 }
 
+// withDept appends a person's department in parentheses ("Hazwan (Flights)") when
+// known, so LLM transcripts and alert lines carry the team label. Returns the bare
+// name when there's no department.
+func withDept(author, dept string) string {
+	if d := strings.TrimSpace(dept); d != "" {
+		return author + " (" + d + ")"
+	}
+	return author
+}
+
 // topics handles GET /api/graph/channel/topics?id=&days=&limit= — thread-level
 // rollups (one row per thread / standalone message) with a one-line topic
 // summary. Multi-message threads get an LLM summary cached in
@@ -455,8 +465,8 @@ GROUP BY 1`, id, cacheKeys)
 				var cnt int
 				var last int64
 				if lrows.Scan(&tt, &cnt, &last) == nil {
-					// Must match summarize_thread's sig format ("v2:" prefix).
-					liveSig[tt] = fmt.Sprintf("v2:%d:%d", cnt, last)
+					// Must match summarize_thread's sig format ("v3:" prefix).
+					liveSig[tt] = fmt.Sprintf("v3:%d:%d", cnt, last)
 				}
 			}
 			lrows.Close()

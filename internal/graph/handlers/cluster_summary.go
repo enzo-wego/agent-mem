@@ -151,9 +151,9 @@ WHERE id = ANY($1) AND deleted_at IS NULL`, ordered)
 		return
 	}
 	type clusterNode struct {
-		id, typ, title, body, author string
-		ts                           time.Time
-		depth                        int // author org-depth (0=CEO); -1 unknown
+		id, typ, title, body, author, dept string
+		ts                                 time.Time
+		depth                              int // author org-depth (0=CEO); -1 unknown
 	}
 	counts := map[string]int{}
 	var slackMsgs []clusterNode
@@ -286,7 +286,7 @@ FROM graph.nodes WHERE id = ANY($1) AND scope LIKE 'slack:%'`, slackIDs); terr =
 	for tk := range threads {
 		trows, terr := h.db.Query(ctx, `
 SELECT n.id, COALESCE(n.body,''), COALESCE(n.metadata->'author'->>'display_name',''),
-       COALESCE(p.depth_from_root, -1),
+       COALESCE(p.depth_from_root, -1), COALESCE(p.department,''),
        COALESCE(to_timestamp(NULLIF(n.metadata->>'ts','')::float8), n.first_seen_at) AS ts
 FROM graph.nodes n
 LEFT JOIN graph.people p ON p.id = n.author_person_id
@@ -299,7 +299,7 @@ ORDER BY ts ASC`, tk.channel, tk.ts)
 			var m clusterNode
 			m.typ = "slack"
 			var depth int
-			if trows.Scan(&m.id, &m.body, &m.author, &depth, &m.ts) == nil && m.body != "" && !seenMsg[m.id] {
+			if trows.Scan(&m.id, &m.body, &m.author, &depth, &m.dept, &m.ts) == nil && m.body != "" && !seenMsg[m.id] {
 				m.depth = depth
 				slackMsgs = append(slackMsgs, m)
 				seenMsg[m.id] = true
@@ -315,7 +315,7 @@ ORDER BY ts ASC`, tk.channel, tk.ts)
 	if len(slackIDs) > 0 {
 		srows, serr := h.db.Query(ctx, `
 SELECT n.id, COALESCE(n.body,''), COALESCE(n.metadata->'author'->>'display_name',''),
-       COALESCE(p.depth_from_root, -1),
+       COALESCE(p.depth_from_root, -1), COALESCE(p.department,''),
        COALESCE(to_timestamp(NULLIF(n.metadata->>'ts','')::float8), n.first_seen_at) AS ts
 FROM graph.nodes n
 LEFT JOIN graph.people p ON p.id = n.author_person_id
@@ -325,7 +325,7 @@ WHERE n.id = ANY($1) AND n.deleted_at IS NULL AND COALESCE(n.body,'') <> ''`, sl
 				var m clusterNode
 				m.typ = "slack"
 				var depth int
-				if srows.Scan(&m.id, &m.body, &m.author, &depth, &m.ts) == nil && m.body != "" && !seenMsg[m.id] {
+				if srows.Scan(&m.id, &m.body, &m.author, &depth, &m.dept, &m.ts) == nil && m.body != "" && !seenMsg[m.id] {
 					m.depth = depth
 					slackMsgs = append(slackMsgs, m)
 					seenMsg[m.id] = true
@@ -353,7 +353,9 @@ WHERE n.id = ANY($1) AND n.deleted_at IS NULL AND COALESCE(n.body,'') <> ''`, sl
 	// delete (count), or update to any Slack/Jira/PR/doc node (updated_at bumps)
 	// invalidates the cache and the summary regenerates on the next open. lastMs is
 	// kept so a new Slack reply also triggers it even if updated_at lags.
-	sig := fmt.Sprintf("v5:%d:%d:%d:%d", total, maxUpdated, len(slackMsgs), lastMs)
+	// v6: author labels now carry the person's department ("Hazwan (Flights)"), so
+	// bump the version to regenerate summaries with the team label.
+	sig := fmt.Sprintf("v6:%d:%d:%d:%d", total, maxUpdated, len(slackMsgs), lastMs)
 
 	var cachedSig, cachedOverview string
 	var cachedHl []byte
@@ -395,6 +397,7 @@ WHERE n.id = ANY($1) AND n.deleted_at IS NULL AND COALESCE(n.body,'') <> ''`, sl
 			if author == "" {
 				author = "someone"
 			}
+			author = withDept(author, m.dept) // "Hazwan (Flights)"
 			// Tag seniority (lower org-depth = more senior) and the originating msg so
 			// the LLM can foreground who raised it and weight leadership input.
 			if m.depth >= 0 && m.depth <= 2 {

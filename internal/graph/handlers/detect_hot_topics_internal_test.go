@@ -119,12 +119,12 @@ func TestWhyFlagged(t *testing.T) {
 	}
 	// Important lone message.
 	got = whyFlagged(hotThread{Participants: 1, HasImportant: true, ImportantAuthor: "Lei Zheng"})
-	if want := "Lei Zheng (close to you in the org) raised it"; got != want {
+	if want := "Lei Zheng (important to you) raised it"; got != want {
 		t.Errorf("important lone: got %q, want %q", got, want)
 	}
 	// Important + discussion.
 	got = whyFlagged(hotThread{Participants: 3, HasImportant: true, ImportantAuthor: "Ross"})
-	if want := "Ross (close to you in the org) is involved and 3 people are discussing it"; got != want {
+	if want := "Ross (important to you) is involved and 3 people are discussing it"; got != want {
 		t.Errorf("important+discussion: got %q, want %q", got, want)
 	}
 }

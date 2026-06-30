@@ -45,11 +45,13 @@ func summarizeThreadHandler(deps Deps) jobs.Handler {
 
 		// Load the thread's messages (root + replies), oldest first.
 		rows, err := deps.DB.Query(ctx, `
-SELECT COALESCE(NULLIF(title,''), body), COALESCE(metadata->'author'->>'display_name',''),
-       (EXTRACT(EPOCH FROM updated_at) * 1000)::bigint AS upd_ms
-FROM graph.nodes
-WHERE scope = 'slack:' || $1 AND deleted_at IS NULL AND COALESCE(metadata->>'thread_ts','') = $2
-ORDER BY COALESCE(to_timestamp(NULLIF(metadata->>'ts','')::float8), first_seen_at) ASC`,
+SELECT COALESCE(NULLIF(n.title,''), n.body), COALESCE(n.metadata->'author'->>'display_name',''),
+       COALESCE(p.department,''),
+       (EXTRACT(EPOCH FROM n.updated_at) * 1000)::bigint AS upd_ms
+FROM graph.nodes n
+LEFT JOIN graph.people p ON p.id = n.author_person_id
+WHERE n.scope = 'slack:' || $1 AND n.deleted_at IS NULL AND COALESCE(n.metadata->>'thread_ts','') = $2
+ORDER BY COALESCE(to_timestamp(NULLIF(n.metadata->>'ts','')::float8), n.first_seen_at) ASC`,
 			p.ChannelID, p.ThreadTs)
 		if err != nil {
 			return err
@@ -58,9 +60,9 @@ ORDER BY COALESCE(to_timestamp(NULLIF(metadata->>'ts','')::float8), first_seen_a
 		var count int
 		var maxUpdated int64
 		for rows.Next() {
-			var body, author string
+			var body, author, dept string
 			var upd int64
-			if err := rows.Scan(&body, &author, &upd); err != nil {
+			if err := rows.Scan(&body, &author, &dept, &upd); err != nil {
 				rows.Close()
 				return err
 			}
@@ -71,7 +73,7 @@ ORDER BY COALESCE(to_timestamp(NULLIF(metadata->>'ts','')::float8), first_seen_a
 			if author == "" {
 				author = "someone"
 			}
-			line := author + ": " + firstLine(body, 280) + "\n"
+			line := withDept(author, dept) + ": " + firstLine(body, 280) + "\n"
 			if b.Len()+len(line) <= 7000 {
 				b.WriteString(line)
 			}
@@ -89,7 +91,7 @@ ORDER BY COALESCE(to_timestamp(NULLIF(metadata->>'ts','')::float8), first_seen_a
 		// so the cached summary regenerates instead of going stale. The "v2:" prefix
 		// invalidates rows cached under the old one-line-only logic so they regenerate
 		// with the deep overview+highlights. Keep this prefix in sync with channels.go.
-		sig := fmt.Sprintf("v2:%d:%d", count, maxUpdated)
+		sig := fmt.Sprintf("v3:%d:%d", count, maxUpdated)
 		// Skip if the cached summary already matches the current signature.
 		var existingSig string
 		_ = deps.DB.QueryRow(ctx,
