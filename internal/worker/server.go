@@ -172,6 +172,19 @@ func NewServer(cfg *config.Config, logBuf *LogBuffer) (*Server, error) {
 			graphLog.Warn().Err(err).Msg("startup: enqueue detect_hot_topics failed")
 		}
 	}
+
+	// Kick off the self-rescheduling watch-channels notifier (DMs every message in
+	// the Payment Partners group). Deduped: skip if one is already queued/running.
+	var watchPending bool
+	_ = pool.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM graph.jobs WHERE type='notify_watch_channels' AND status IN ('queued','running'))`).
+		Scan(&watchPending)
+	if !watchPending {
+		if _, err := jobs.Enqueue(ctx, pool, "notify_watch_channels", map[string]any{},
+			jobs.EnqueueOptions{TargetRunner: cfg.Graph.Runner, MachineID: cfg.MachineID}); err != nil {
+			graphLog.Warn().Err(err).Msg("startup: enqueue notify_watch_channels failed")
+		}
+	}
 	mgr := jobs.NewManager(jobs.ManagerConfig{
 		Registry:            reg,
 		DB:                  pool,
