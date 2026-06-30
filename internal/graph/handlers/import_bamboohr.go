@@ -137,7 +137,10 @@ func importBambooHRHandler(deps Deps) jobs.Handler {
 				INSERT INTO graph.people (eeid, display_name, reports_to, machine_id)
 				VALUES ($1, $2, $3, $4)
 				ON CONFLICT (eeid) DO UPDATE SET
-					display_name = EXCLUDED.display_name,
+					-- Never wipe a known name with a blank: BambooHR's FullName is
+					-- empty for some senior/cross-org people whose names we resolved
+					-- from Slack. Only overwrite when the incoming name is non-blank.
+					display_name = COALESCE(NULLIF(EXCLUDED.display_name, ''), graph.people.display_name),
 					reports_to   = EXCLUDED.reports_to`,
 				eeidInt, row.FullName, nullableStringVal(row.ReportsTo), deps.MachineID,
 			)
