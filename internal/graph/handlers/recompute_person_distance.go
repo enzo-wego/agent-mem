@@ -12,6 +12,12 @@ import (
 func RecomputePersonDistance(db *pgxpool.Pool, log zerolog.Logger) func(context.Context, []byte) error {
 	return func(ctx context.Context, payload []byte) error {
 		log.Info().Msg("recomputing person_distance")
+		// Two people share MANY common ancestors (root + every node up to their LCA),
+		// so the join below emits each (a,b) pair once per shared ancestor. We must
+		// collapse to the LOWEST common ancestor (min hops) per pair BEFORE inserting
+		// — otherwise INSERT … ON CONFLICT tries to update the same row twice in one
+		// statement (SQLSTATE 21000). DISTINCT ON (a,b) ORDER BY …, hops ASC picks the
+		// LCA row.
 		const q = `
 TRUNCATE graph.person_distance;
 INSERT INTO graph.person_distance (a_eeid, b_eeid, hops, lca_eeid)
@@ -26,20 +32,20 @@ WITH RECURSIVE chain AS (
 ),
 ancestors AS (
   SELECT start_eeid, current_eeid AS ancestor, depth FROM chain
+),
+pairs AS (
+  SELECT
+    LEAST(a.start_eeid, b.start_eeid)    AS a_eeid,
+    GREATEST(a.start_eeid, b.start_eeid) AS b_eeid,
+    a.depth + b.depth                    AS hops,
+    a.ancestor                           AS lca_eeid
+  FROM ancestors a
+  JOIN ancestors b
+    ON a.ancestor = b.ancestor AND a.start_eeid < b.start_eeid
 )
-SELECT
-  LEAST(a.start_eeid, b.start_eeid) AS a_eeid,
-  GREATEST(a.start_eeid, b.start_eeid) AS b_eeid,
-  a.depth + b.depth AS hops,
-  a.ancestor AS lca_eeid
-FROM ancestors a
-JOIN ancestors b
-  ON a.ancestor = b.ancestor AND a.start_eeid < b.start_eeid
-ON CONFLICT (a_eeid, b_eeid) DO UPDATE SET
-  hops     = LEAST(graph.person_distance.hops, EXCLUDED.hops),
-  lca_eeid = CASE WHEN EXCLUDED.hops < graph.person_distance.hops
-                  THEN EXCLUDED.lca_eeid
-                  ELSE graph.person_distance.lca_eeid END;
+SELECT DISTINCT ON (a_eeid, b_eeid) a_eeid, b_eeid, hops, lca_eeid
+FROM pairs
+ORDER BY a_eeid, b_eeid, hops ASC;
 `
 		_, err := db.Exec(ctx, q)
 		return err
