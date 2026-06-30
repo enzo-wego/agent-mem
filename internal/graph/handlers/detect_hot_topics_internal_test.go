@@ -129,6 +129,24 @@ func TestWhyFlagged(t *testing.T) {
 	}
 }
 
+// TestHumanizeSlack checks Slack mention/link codes resolve to readable text.
+func TestHumanizeSlack(t *testing.T) {
+	names := map[string]string{"U024HMWA6": "Ross Veitch"}
+	cases := map[string]string{
+		"hey <@U024HMWA6> can you check":           "hey @Ross Veitch can you check",
+		"unknown <@U999XYZ>":                       "unknown @U999XYZ",
+		"see <#C0B1BR522F5|payments-ops> please":   "see #payments-ops please",
+		"<!here> deploy is broken":                 "@here deploy is broken",
+		"docs <https://x.com/p|the PR> landed":     "docs the PR landed",
+		"raw <https://api.datadoghq.com> link":     "raw https://api.datadoghq.com link",
+	}
+	for in, want := range cases {
+		if got := humanizeSlack(in, names); got != want {
+			t.Errorf("humanizeSlack(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 // TestFindHotThreads_ImportantLoneMessage: a single message from an important
 // person surfaces even when the participant gate fails.
 func TestFindHotThreads_ImportantLoneMessage(t *testing.T) {

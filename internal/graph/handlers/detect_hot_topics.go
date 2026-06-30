@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -378,6 +379,21 @@ ORDER BY COALESCE(to_timestamp(NULLIF(n.metadata->>'ts','')::float8), n.first_se
 		_, overview, highlights = genThreadDeepSummary(ctx, deps.Gemini, tb.String())
 	}
 
+	// Resolve Slack mention codes (<@U…>, <#C…>, <url|text>) to readable names so
+	// the DM shows "@Lei Zheng", not a raw user id.
+	allTexts := append([]string{overview}, highlights...)
+	for _, m := range msgs {
+		allTexts = append(allTexts, m.text)
+	}
+	names := loadSlackNames(ctx, deps.DB, allTexts...)
+	overview = humanizeSlack(overview, names)
+	for i := range highlights {
+		highlights[i] = humanizeSlack(highlights[i], names)
+	}
+	for i := range msgs {
+		msgs[i].text = humanizeSlack(msgs[i].text, names)
+	}
+
 	var b strings.Builder
 	fmt.Fprintf(&b, "🔥 *%s* · #%s\n", s.Topic, channel)
 	if overview != "" {
@@ -452,6 +468,73 @@ func slackPermalink(rootNodeID string) string {
 		return ""
 	}
 	return fmt.Sprintf("https://wego.slack.com/archives/%s/p%s", parts[1], digits)
+}
+
+// Slack stores mentions/links in an encoded form (<@U…>, <#C…|name>, <!here>,
+// <url|text>). These regexes turn them back into readable text for the DM.
+var (
+	reSlackUser    = regexp.MustCompile(`<@(U[A-Z0-9]+)(?:\|[^>]*)?>`)
+	reSlackChan    = regexp.MustCompile(`<#C[A-Z0-9]+\|([^>]*)>`)
+	reSlackChanNo  = regexp.MustCompile(`<#C[A-Z0-9]+>`)
+	reSlackSubteam = regexp.MustCompile(`<!subteam\^[A-Z0-9]+\|(@?[^>]+)>`)
+	reSlackSpecial = regexp.MustCompile(`<!(here|channel|everyone)>`)
+	reSlackLinkT   = regexp.MustCompile(`<(https?://[^>|]+)\|([^>]+)>`)
+	reSlackLink    = regexp.MustCompile(`<(https?://[^>]+)>`)
+)
+
+// humanizeSlack replaces Slack mention/link codes with readable text. User ids
+// resolve to "@<name>" via the names map (falling back to "@<id>" if unknown).
+func humanizeSlack(text string, names map[string]string) string {
+	if text == "" {
+		return text
+	}
+	text = reSlackUser.ReplaceAllStringFunc(text, func(m string) string {
+		id := reSlackUser.FindStringSubmatch(m)[1]
+		if n := names[id]; n != "" {
+			return "@" + n
+		}
+		return "@" + id
+	})
+	text = reSlackChan.ReplaceAllString(text, "#$1")
+	text = reSlackChanNo.ReplaceAllString(text, "#channel")
+	text = reSlackSubteam.ReplaceAllString(text, "$1")
+	text = reSlackSpecial.ReplaceAllString(text, "@$1")
+	text = reSlackLinkT.ReplaceAllString(text, "$2")
+	text = reSlackLink.ReplaceAllString(text, "$1")
+	return text
+}
+
+// loadSlackNames returns slack_user_id → name for every <@U…> mention found in
+// the given texts (one query).
+func loadSlackNames(ctx context.Context, db *pgxpool.Pool, texts ...string) map[string]string {
+	idset := map[string]bool{}
+	for _, t := range texts {
+		for _, m := range reSlackUser.FindAllStringSubmatch(t, -1) {
+			idset[m[1]] = true
+		}
+	}
+	out := map[string]string{}
+	if len(idset) == 0 {
+		return out
+	}
+	ids := make([]string, 0, len(idset))
+	for id := range idset {
+		ids = append(ids, id)
+	}
+	rows, err := db.Query(ctx,
+		`SELECT slack_user_id, COALESCE(NULLIF(real_name,''), display_name)
+		 FROM graph.slack_users WHERE slack_user_id = ANY($1)`, ids)
+	if err != nil {
+		return out
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, name string
+		if rows.Scan(&id, &name) == nil {
+			out[id] = name
+		}
+	}
+	return out
 }
 
 // ── Subscription CRUD over HTTP ──────────────────────────────────────────────
