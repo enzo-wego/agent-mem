@@ -2186,6 +2186,41 @@ export function LiveGlobePage() {
                         delete
                       </button>
                     </div>
+                    {(s.sources?.length ?? 0) > 0 && (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                        {s.sources!.map((src, i) => {
+                          const label = SOURCE_TYPES.find((o) => o.value === src.type)?.label ?? src.type
+                          return (
+                            <a
+                              key={i}
+                              href={src.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              title={src.url}
+                              style={{
+                                display: 'flex',
+                                gap: 6,
+                                alignItems: 'baseline',
+                                textDecoration: 'none',
+                                fontSize: 9,
+                              }}
+                            >
+                              <span style={{ color: C.green, flexShrink: 0, minWidth: 92 }}>↗ {label}</span>
+                              <span
+                                style={{
+                                  color: C.dim,
+                                  overflow: 'hidden',
+                                  textOverflow: 'ellipsis',
+                                  whiteSpace: 'nowrap',
+                                }}
+                              >
+                                {src.url}
+                              </span>
+                            </a>
+                          )
+                        })}
+                      </div>
+                    )}
                     {s.scope_summary && (
                       <div
                         style={{
