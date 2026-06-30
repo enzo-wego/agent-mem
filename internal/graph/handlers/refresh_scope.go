@@ -94,6 +94,16 @@ func NewRefreshTopicScope(deps Deps) jobs.Handler {
 					ingested++
 					docs = append(docs, d.Path+": "+firstLine(d.Content, 600))
 				}
+			default:
+				// Any other supported source (slack, jira, gws, wegohub,
+				// claude_artifact, …): ingest the single URL via the standard
+				// pipeline so it's searchable and counts toward the scope.
+				if ingestURLSource(ctx, deps, s.URL) {
+					ingested++
+					docs = append(docs, s.Type+" source: "+s.URL)
+				} else {
+					log.Warn().Str("type", s.Type).Str("url", s.URL).Msg("refresh_topic_scope: unsupported source")
+				}
 			}
 		}
 
@@ -132,6 +142,33 @@ func ingestConfluencePage(ctx context.Context, deps Deps, pageID string) {
 	_, _ = jobs.Enqueue(ctx, deps.DB, "index_artifact",
 		map[string]any{"node_id": nodeID, "force": false},
 		jobs.EnqueueOptions{Priority: 7, MachineID: deps.MachineID})
+}
+
+// ingestURLSource ingests a single artifact URL (any source the fetchers
+// support) via the standard pipeline: upsert a placeholder node, then fetch_body
+// + index_artifact. Returns false if no fetcher claims the URL.
+func ingestURLSource(ctx context.Context, deps Deps, rawURL string) bool {
+	fetcher, ok := deps.Fetchers.For(rawURL)
+	if !ok {
+		return false
+	}
+	nodeID := nodeIDFromURL(rawURL, fetcher.Source())
+	if nodeID == "" {
+		return false
+	}
+	nodeType, _ := ids.ParseType(nodeID)
+	naturalKey, _ := ids.ParseNaturalKey(nodeID)
+	_, _ = deps.DB.Exec(ctx, `
+		INSERT INTO graph.nodes (id, type, natural_key, url, body_revision, updated_at, machine_id)
+		VALUES ($1, $2, $3, $4, 0, NOW(), $5) ON CONFLICT (id) DO NOTHING`,
+		nodeID, string(nodeType), naturalKey, rawURL, deps.MachineID)
+	_, _ = jobs.Enqueue(ctx, deps.DB, "fetch_body",
+		map[string]string{"node_id": nodeID, "url": rawURL, "source": fetcher.Source()},
+		jobs.EnqueueOptions{Priority: 6, MachineID: deps.MachineID})
+	_, _ = jobs.Enqueue(ctx, deps.DB, "index_artifact",
+		map[string]any{"node_id": nodeID, "force": false},
+		jobs.EnqueueOptions{Priority: 7, MachineID: deps.MachineID})
+	return true
 }
 
 // ingestRepoMarkdown stores a repo markdown file as a code_file node (body set

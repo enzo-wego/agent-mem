@@ -41,6 +41,17 @@ const C = {
 
 const MONO = 'ui-monospace, "SF Mono", Menlo, monospace'
 
+// Knowledge-source types a topic can be defined from (matches the graph fetchers).
+const SOURCE_TYPES: { value: string; label: string }[] = [
+  { value: 'confluence', label: 'Confluence' },
+  { value: 'github', label: 'GitHub repo' },
+  { value: 'slack', label: 'Slack' },
+  { value: 'gws', label: 'Google Docs' },
+  { value: 'wegohub', label: 'Wego Hub' },
+  { value: 'claude_artifact', label: 'Claude Artifact' },
+  { value: 'jira', label: 'Jira' },
+]
+
 // Friendly group heading + sort order for the "open in Graph" overlay. Lower
 // `order` sorts first; unknown types fall back to the raw type and sort last.
 const GRAPH_TYPE_GROUPS: Record<string, { label: string; order: number }> = {
@@ -291,8 +302,7 @@ export function LiveGlobePage() {
   const [subs, setSubs] = useState<TopicSubscription[]>([])
   const [subTopic, setSubTopic] = useState('')
   const [subChannel, setSubChannel] = useState('') // optional: limit to one channel
-  const [subConfluence, setSubConfluence] = useState('') // optional: Confluence page/tree URL
-  const [subRepo, setSubRepo] = useState('') // optional: GitHub repo URL
+  const [subSources, setSubSources] = useState<TopicSource[]>([]) // dynamic knowledge sources
   const [subBusy, setSubBusy] = useState(false)
   const [subError, setSubError] = useState('')
 
@@ -302,12 +312,21 @@ export function LiveGlobePage() {
       .catch(() => setSubs([]))
   }
 
-  // buildSources turns the optional Confluence/GitHub inputs into a sources list.
+  // ── Dynamic source rows (type dropdown + URL, add/remove) ────────────────────
+  function addSourceRow() {
+    setSubSources((cur) => [...cur, { type: 'confluence', url: '' }])
+  }
+  function updateSource(i: number, patch: Partial<TopicSource>) {
+    setSubSources((cur) => cur.map((s, idx) => (idx === i ? { ...s, ...patch } : s)))
+  }
+  function removeSource(i: number) {
+    setSubSources((cur) => cur.filter((_, idx) => idx !== i))
+  }
+  // buildSources returns the non-empty source rows for submission.
   function buildSources(): TopicSource[] {
-    const out: TopicSource[] = []
-    if (subConfluence.trim()) out.push({ type: 'confluence', url: subConfluence.trim() })
-    if (subRepo.trim()) out.push({ type: 'github', url: subRepo.trim() })
-    return out
+    return subSources
+      .filter((s) => s.url.trim())
+      .map((s) => ({ type: s.type, url: s.url.trim() }))
   }
 
   function addSub() {
@@ -324,8 +343,7 @@ export function LiveGlobePage() {
       .then((created) => {
         setSubTopic('')
         setSubChannel('')
-        setSubConfluence('')
-        setSubRepo('')
+        setSubSources([])
         // If sources were given, kick off the read/analyze so the scope summary fills in.
         if (sources.length && created?.id) {
           refreshSubScope(created.id)
@@ -1997,46 +2015,94 @@ export function LiveGlobePage() {
                   outline: 'none',
                 }}
               />
-              <input
-                value={subConfluence}
-                onChange={(e) => setSubConfluence(e.target.value)}
-                placeholder="Confluence page/tree URL (defines topic)"
-                style={{
-                  flex: '1 1 100%',
-                  background: C.panel,
-                  border: `1px solid ${C.border}`,
-                  color: C.text,
-                  fontFamily: MONO,
-                  fontSize: 11,
-                  padding: '6px 8px',
-                  borderRadius: 2,
-                  outline: 'none',
-                }}
-              />
-              <input
-                value={subRepo}
-                onChange={(e) => setSubRepo(e.target.value)}
-                placeholder="GitHub repo URL, e.g. https://github.com/wego/payments"
-                style={{
-                  flex: '1 1 100%',
-                  background: C.panel,
-                  border: `1px solid ${C.border}`,
-                  color: C.text,
-                  fontFamily: MONO,
-                  fontSize: 11,
-                  padding: '6px 8px',
-                  borderRadius: 2,
-                  outline: 'none',
-                }}
-              />
+              {/* Dynamic knowledge sources: type dropdown + URL + add/remove */}
+              <div style={{ flex: '1 1 100%', display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {subSources.map((src, i) => (
+                  <div key={i} style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                    <select
+                      value={src.type}
+                      onChange={(e) => updateSource(i, { type: e.target.value })}
+                      style={{
+                        background: C.panel,
+                        border: `1px solid ${C.border}`,
+                        color: C.text,
+                        fontFamily: MONO,
+                        fontSize: 11,
+                        padding: '6px 6px',
+                        borderRadius: 2,
+                        outline: 'none',
+                      }}
+                    >
+                      {SOURCE_TYPES.map((o) => (
+                        <option key={o.value} value={o.value} style={{ background: C.panel }}>
+                          {o.label}
+                        </option>
+                      ))}
+                    </select>
+                    <input
+                      value={src.url}
+                      onChange={(e) => updateSource(i, { url: e.target.value })}
+                      placeholder="URL (page / repo / message / doc …)"
+                      style={{
+                        flex: 1,
+                        minWidth: 0,
+                        background: C.panel,
+                        border: `1px solid ${C.border}`,
+                        color: C.text,
+                        fontFamily: MONO,
+                        fontSize: 11,
+                        padding: '6px 8px',
+                        borderRadius: 2,
+                        outline: 'none',
+                      }}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => removeSource(i)}
+                      title="Remove source"
+                      style={{
+                        background: 'transparent',
+                        border: `1px solid ${C.border}`,
+                        color: C.dim,
+                        cursor: 'pointer',
+                        fontFamily: MONO,
+                        fontSize: 12,
+                        lineHeight: '12px',
+                        borderRadius: 2,
+                        padding: '5px 8px',
+                      }}
+                    >
+                      ✕
+                    </button>
+                  </div>
+                ))}
+                <button
+                  type="button"
+                  onClick={addSourceRow}
+                  style={{
+                    alignSelf: 'flex-start',
+                    background: 'transparent',
+                    border: `1px dashed ${C.border}`,
+                    color: C.dim,
+                    cursor: 'pointer',
+                    fontFamily: MONO,
+                    fontSize: 10,
+                    letterSpacing: '0.06em',
+                    borderRadius: 2,
+                    padding: '4px 10px',
+                  }}
+                >
+                  + add source
+                </button>
+              </div>
               <button type="submit" disabled={subBusy || !subTopic.trim()} style={segBtn(true)}>
                 {subBusy ? '…' : 'SUBSCRIBE'}
               </button>
             </form>
             <div style={{ color: C.dim, fontSize: 9, marginTop: 6, lineHeight: 1.5 }}>
-              Add Confluence/GitHub sources to define the topic. After subscribing (or via Refresh),
-              enzobot reads + analyzes them and shows a scope summary below — so we agree on what the
-              topic means before alerting.
+              Add knowledge sources (Confluence, GitHub, Slack, Google Docs, Wego Hub, …) that define
+              the topic. After subscribing (or via ↻ refresh), enzobot reads + analyzes them and shows
+              a scope summary below — so we agree on what the topic means before alerting.
             </div>
             {subError && (
               <div style={{ color: C.red, fontSize: 10, marginTop: 6 }}>{subError}</div>

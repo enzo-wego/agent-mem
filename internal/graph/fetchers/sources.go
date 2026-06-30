@@ -107,10 +107,20 @@ func cursorFromNext(next string) string {
 	return ""
 }
 
-// isMarkdown reports whether a repo path is a markdown file.
+// isMarkdown reports whether a repo path is a domain markdown file worth
+// ingesting — excludes tooling/vendor noise (.claude agent configs, node_modules,
+// vendored deps, CI templates) that dilutes a topic's scope.
 func isMarkdown(path string) bool {
 	p := strings.ToLower(path)
-	return strings.HasSuffix(p, ".md") || strings.HasSuffix(p, ".markdown")
+	if !strings.HasSuffix(p, ".md") && !strings.HasSuffix(p, ".markdown") {
+		return false
+	}
+	for _, skip := range []string{".claude/", "node_modules/", "vendor/", ".github/", "testdata/", ".omc/"} {
+		if strings.HasPrefix(p, skip) || strings.Contains(p, "/"+skip) {
+			return false
+		}
+	}
+	return true
 }
 
 func (r *Registry) ghAuth(req *http.Request) {

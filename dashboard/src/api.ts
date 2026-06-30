@@ -456,8 +456,11 @@ export async function fetchRecentActivity(mins = 30, limit = 5): Promise<RecentC
 
 // ── Topic subscriptions (hot-topic enzobot alerts) ───────────────────────────
 
+// type is one of the fetcher-supported sources (confluence, github, slack,
+// gws, wegohub, claude_artifact, jira, …); kept as string so the UI dropdown can
+// offer the full set without churn here.
 export interface TopicSource {
-  type: 'confluence' | 'github';
+  type: string;
   url: string;
 }
 
