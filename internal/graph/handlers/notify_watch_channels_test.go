@@ -45,3 +45,26 @@ func TestContinentOf(t *testing.T) {
 		t.Errorf("config name should classify to partners, got %q", got)
 	}
 }
+
+// TestSplitSlackRoot verifies thread root ids parse into (channel, ts) and that
+// non-thread / malformed ids report ok=false so no topic lookup is attempted.
+func TestSplitSlackRoot(t *testing.T) {
+	cases := []struct {
+		in             string
+		wantCh, wantTS string
+		wantOK         bool
+	}{
+		{"slack:C0736FUE03W:1782376386.293389", "C0736FUE03W", "1782376386.293389", true},
+		{"slack:C123:", "", "", false},   // empty ts
+		{"slack:C123", "", "", false},    // only 2 parts
+		{"jira:PAY-2177", "", "", false}, // not slack
+		{"", "", "", false},              // empty
+	}
+	for _, c := range cases {
+		ch, ts, ok := splitSlackRoot(c.in)
+		if ch != c.wantCh || ts != c.wantTS || ok != c.wantOK {
+			t.Errorf("splitSlackRoot(%q) = (%q,%q,%v), want (%q,%q,%v)",
+				c.in, ch, ts, ok, c.wantCh, c.wantTS, c.wantOK)
+		}
+	}
+}

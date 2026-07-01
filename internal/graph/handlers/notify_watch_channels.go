@@ -213,9 +213,11 @@ LIMIT 50`
 }
 
 // buildChannelMsg composes the DM for a single watched-channel message: channel,
-// author (with department), the text (Slack codes humanized), and a permalink.
+// the thread topic (so a bare reply has context), author (with department), the
+// text (Slack codes humanized), and a permalink.
 func buildChannelMsg(ctx context.Context, deps Deps, m watchedMsg) string {
-	names := loadSlackNames(ctx, deps.DB, m.text)
+	topic := threadTopic(ctx, deps.DB, m.rootNodeID)
+	names := loadSlackNames(ctx, deps.DB, m.text, topic)
 	text := humanizeSlack(m.text, names)
 	author := m.author
 	if author == "" {
@@ -226,9 +228,41 @@ func buildChannelMsg(ctx context.Context, deps Deps, m watchedMsg) string {
 		channel = m.channel
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "🤝 *Payment partner* · #%s\n*%s:* %s\n", channel, withDept(author, m.dept), firstLine(text, 600))
+	fmt.Fprintf(&b, "🤝 *Payment partner* · #%s\n", channel)
+	if topic != "" {
+		fmt.Fprintf(&b, "_Thread: %s_\n", humanizeSlack(topic, names))
+	}
+	fmt.Fprintf(&b, "*%s:* %s\n", withDept(author, m.dept), firstLine(text, 600))
 	if link := slackPermalink(m.rootNodeID); link != "" {
 		b.WriteString(link)
 	}
 	return b.String()
+}
+
+// splitSlackRoot parses a slack root node id "slack:<channel>:<thread_ts>" into
+// its channel and thread ts. ok is false for any other shape (a non-thread
+// message whose id isn't a 3-part slack root).
+func splitSlackRoot(rootNodeID string) (channel, ts string, ok bool) {
+	parts := strings.SplitN(rootNodeID, ":", 3)
+	if len(parts) != 3 || parts[0] != "slack" || parts[2] == "" {
+		return "", "", false
+	}
+	return parts[1], parts[2], true
+}
+
+// threadTopic returns the cached short topic label for the message's thread, or
+// "" when the message isn't in a thread or no summary is cached yet.
+// ponytail: cached-only by design — the watch loop runs every 5 min over many
+// messages, so it must not block on an LLM call. summarize_thread (enqueued on
+// ingest) fills the cache; a brand-new thread just shows no topic line until then.
+func threadTopic(ctx context.Context, db *pgxpool.Pool, rootNodeID string) string {
+	channel, ts, ok := splitSlackRoot(rootNodeID)
+	if !ok {
+		return ""
+	}
+	var topic string
+	_ = db.QueryRow(ctx,
+		`SELECT COALESCE(summary,'') FROM graph.thread_summaries WHERE channel_id=$1 AND thread_ts=$2`,
+		channel, ts).Scan(&topic)
+	return topic
 }
