@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/rs/zerolog/log"
 
 	"github.com/agent-mem/agent-mem/internal/graph/bfs"
 )
@@ -372,6 +373,11 @@ WHERE n.id = ANY($1) AND n.deleted_at IS NULL AND COALESCE(n.body,'') <> ''`, sl
 	// on the root resource itself and do NOT crown an arbitrary thread's first message.
 	rootIsSlack := rootType == "slack" || rootType == "slack_thread"
 
+	if resp.Overview == "" && (h.gemini == nil || len(slackMsgs) == 0) {
+		log.Info().Str("node", id).Bool("llm_nil", h.gemini == nil).
+			Int("slack_msgs", len(slackMsgs)).Int("cluster_nodes", total).
+			Msg("cluster summary: skipping LLM synthesis (no generator or no slack messages)")
+	}
 	if resp.Overview == "" && h.gemini != nil && len(slackMsgs) > 0 {
 		var b strings.Builder
 		if !rootIsSlack && rootTitle != "" {
@@ -480,13 +486,15 @@ STRICT GROUNDING RULES — follow exactly:
 No markdown, no quotes around the whole thing.`
 	out, err := g.Generate(ctx, sys, transcript)
 	if err != nil || out == "" {
+		log.Warn().Err(err).Bool("empty", out == "").Msg("cluster summary: LLM generate failed")
 		return "", nil
 	}
 	var parsed struct {
 		Overview   string   `json:"overview"`
 		Highlights []string `json:"highlights"`
 	}
-	if json.Unmarshal([]byte(out), &parsed) != nil {
+	if uerr := json.Unmarshal([]byte(out), &parsed); uerr != nil {
+		log.Warn().Err(uerr).Str("raw", firstLine(out, 300)).Msg("cluster summary: LLM output not valid JSON")
 		return "", nil
 	}
 	return strings.TrimSpace(parsed.Overview), parsed.Highlights
