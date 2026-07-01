@@ -51,6 +51,7 @@ func Mount(r chi.Router, deps Deps) {
 	r.Get("/api/graph/subscriptions", subs.list)
 	r.Post("/api/graph/subscriptions", subs.create)
 	r.Post("/api/graph/subscriptions/{id}/refresh", subs.refresh)
+	r.Patch("/api/graph/subscriptions/{id}", subs.update)
 	r.Delete("/api/graph/subscriptions/{id}", subs.delete)
 
 	r.Mount("/api/graph", NewNeighbors(deps.DB))

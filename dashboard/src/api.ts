@@ -516,6 +516,23 @@ export async function refreshSubscription(id: number): Promise<void> {
   }
 }
 
+// updateSubscription replaces a subscription's knowledge sources. Follow with
+// refreshSubscription(id) to re-read + re-distill the scope.
+export async function updateSubscription(
+  id: number,
+  body: { sources: TopicSource[] },
+): Promise<void> {
+  const res = await authFetch(`${BASE}/api/graph/subscriptions/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const err = await res.text().catch(() => '');
+    throw new Error(err || `HTTP ${res.status}`);
+  }
+}
+
 export async function deleteSubscription(id: number): Promise<void> {
   await authFetch(`${BASE}/api/graph/subscriptions/${id}`, {
     method: 'DELETE',

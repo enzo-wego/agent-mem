@@ -12,6 +12,7 @@ import {
   createSubscription,
   deleteSubscription,
   refreshSubscription,
+  updateSubscription,
   type ChannelCount,
   type ContinentCfg,
   type ChannelMessage,
@@ -51,6 +52,102 @@ const SOURCE_TYPES: { value: string; label: string }[] = [
   { value: 'claude_artifact', label: 'Claude Artifact' },
   { value: 'jira', label: 'Jira' },
 ]
+
+// SourceRows renders the type-dropdown + URL editor rows plus a "+ add source"
+// button. Shared by the create form and the per-subscription edit editor.
+function SourceRows({
+  sources,
+  onUpdate,
+  onRemove,
+  onAdd,
+}: {
+  sources: TopicSource[]
+  onUpdate: (i: number, patch: Partial<TopicSource>) => void
+  onRemove: (i: number) => void
+  onAdd: () => void
+}) {
+  return (
+    <>
+      {sources.map((src, i) => (
+        <div key={i} style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+          <select
+            value={src.type}
+            onChange={(e) => onUpdate(i, { type: e.target.value })}
+            style={{
+              background: C.panel,
+              border: `1px solid ${C.border}`,
+              color: C.text,
+              fontFamily: MONO,
+              fontSize: 11,
+              padding: '6px 6px',
+              borderRadius: 2,
+              outline: 'none',
+            }}
+          >
+            {SOURCE_TYPES.map((o) => (
+              <option key={o.value} value={o.value} style={{ background: C.panel }}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+          <input
+            value={src.url}
+            onChange={(e) => onUpdate(i, { url: e.target.value })}
+            placeholder="URL (page / repo / message / doc …)"
+            style={{
+              flex: 1,
+              minWidth: 0,
+              background: C.panel,
+              border: `1px solid ${C.border}`,
+              color: C.text,
+              fontFamily: MONO,
+              fontSize: 11,
+              padding: '6px 8px',
+              borderRadius: 2,
+              outline: 'none',
+            }}
+          />
+          <button
+            type="button"
+            onClick={() => onRemove(i)}
+            title="Remove source"
+            style={{
+              background: 'transparent',
+              border: `1px solid ${C.border}`,
+              color: C.dim,
+              cursor: 'pointer',
+              fontFamily: MONO,
+              fontSize: 12,
+              lineHeight: '12px',
+              borderRadius: 2,
+              padding: '5px 8px',
+            }}
+          >
+            ✕
+          </button>
+        </div>
+      ))}
+      <button
+        type="button"
+        onClick={onAdd}
+        style={{
+          alignSelf: 'flex-start',
+          background: 'transparent',
+          border: `1px dashed ${C.border}`,
+          color: C.dim,
+          cursor: 'pointer',
+          fontFamily: MONO,
+          fontSize: 10,
+          letterSpacing: '0.06em',
+          borderRadius: 2,
+          padding: '4px 10px',
+        }}
+      >
+        + add source
+      </button>
+    </>
+  )
+}
 
 // Friendly group heading + sort order for the "open in Graph" overlay. Lower
 // `order` sorts first; unknown types fall back to the raw type and sort last.
@@ -305,6 +402,8 @@ export function LiveGlobePage() {
   const [subSources, setSubSources] = useState<TopicSource[]>([]) // dynamic knowledge sources
   const [subBusy, setSubBusy] = useState(false)
   const [subError, setSubError] = useState('')
+  const [editingSub, setEditingSub] = useState<number | null>(null) // card whose sources are being edited
+  const [editSources, setEditSources] = useState<TopicSource[]>([])
 
   function refreshSubs() {
     listSubscriptions()
@@ -327,6 +426,34 @@ export function LiveGlobePage() {
     return subSources
       .filter((s) => s.url.trim())
       .map((s) => ({ type: s.type, url: s.url.trim() }))
+  }
+
+  // ── Edit an existing subscription's sources ──────────────────────────────────
+  function startEdit(s: TopicSubscription) {
+    setEditingSub(s.id)
+    setEditSources((s.sources ?? []).map((x) => ({ ...x })))
+    setSubError('')
+  }
+  function editAddRow() {
+    setEditSources((cur) => [...cur, { type: 'confluence', url: '' }])
+  }
+  function editUpdate(i: number, patch: Partial<TopicSource>) {
+    setEditSources((cur) => cur.map((s, idx) => (idx === i ? { ...s, ...patch } : s)))
+  }
+  function editRemove(i: number) {
+    setEditSources((cur) => cur.filter((_, idx) => idx !== i))
+  }
+  function saveEdit(id: number) {
+    const sources = editSources.filter((s) => s.url.trim()).map((s) => ({ type: s.type, url: s.url.trim() }))
+    setSubBusy(true)
+    setSubError('')
+    updateSubscription(id, { sources })
+      .then(() => {
+        setEditingSub(null)
+        refreshSubScope(id) // re-read + re-distill the scope from the new source set
+      })
+      .catch((e: unknown) => setSubError(e instanceof Error ? e.message : 'update failed'))
+      .finally(() => setSubBusy(false))
   }
 
   function addSub() {
@@ -2017,83 +2144,12 @@ export function LiveGlobePage() {
               />
               {/* Dynamic knowledge sources: type dropdown + URL + add/remove */}
               <div style={{ flex: '1 1 100%', display: 'flex', flexDirection: 'column', gap: 6 }}>
-                {subSources.map((src, i) => (
-                  <div key={i} style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                    <select
-                      value={src.type}
-                      onChange={(e) => updateSource(i, { type: e.target.value })}
-                      style={{
-                        background: C.panel,
-                        border: `1px solid ${C.border}`,
-                        color: C.text,
-                        fontFamily: MONO,
-                        fontSize: 11,
-                        padding: '6px 6px',
-                        borderRadius: 2,
-                        outline: 'none',
-                      }}
-                    >
-                      {SOURCE_TYPES.map((o) => (
-                        <option key={o.value} value={o.value} style={{ background: C.panel }}>
-                          {o.label}
-                        </option>
-                      ))}
-                    </select>
-                    <input
-                      value={src.url}
-                      onChange={(e) => updateSource(i, { url: e.target.value })}
-                      placeholder="URL (page / repo / message / doc …)"
-                      style={{
-                        flex: 1,
-                        minWidth: 0,
-                        background: C.panel,
-                        border: `1px solid ${C.border}`,
-                        color: C.text,
-                        fontFamily: MONO,
-                        fontSize: 11,
-                        padding: '6px 8px',
-                        borderRadius: 2,
-                        outline: 'none',
-                      }}
-                    />
-                    <button
-                      type="button"
-                      onClick={() => removeSource(i)}
-                      title="Remove source"
-                      style={{
-                        background: 'transparent',
-                        border: `1px solid ${C.border}`,
-                        color: C.dim,
-                        cursor: 'pointer',
-                        fontFamily: MONO,
-                        fontSize: 12,
-                        lineHeight: '12px',
-                        borderRadius: 2,
-                        padding: '5px 8px',
-                      }}
-                    >
-                      ✕
-                    </button>
-                  </div>
-                ))}
-                <button
-                  type="button"
-                  onClick={addSourceRow}
-                  style={{
-                    alignSelf: 'flex-start',
-                    background: 'transparent',
-                    border: `1px dashed ${C.border}`,
-                    color: C.dim,
-                    cursor: 'pointer',
-                    fontFamily: MONO,
-                    fontSize: 10,
-                    letterSpacing: '0.06em',
-                    borderRadius: 2,
-                    padding: '4px 10px',
-                  }}
-                >
-                  + add source
-                </button>
+                <SourceRows
+                  sources={subSources}
+                  onUpdate={updateSource}
+                  onRemove={removeSource}
+                  onAdd={addSourceRow}
+                />
               </div>
               <button type="submit" disabled={subBusy || !subTopic.trim()} style={segBtn(true)}>
                 {subBusy ? '…' : 'SUBSCRIBE'}
@@ -2171,6 +2227,22 @@ export function LiveGlobePage() {
                         </button>
                       )}
                       <button
+                        onClick={() => (editingSub === s.id ? setEditingSub(null) : startEdit(s))}
+                        title="Add or edit knowledge sources"
+                        style={{
+                          background: 'transparent',
+                          border: `1px solid ${editingSub === s.id ? C.green : C.border}`,
+                          color: editingSub === s.id ? C.green : C.dim,
+                          cursor: 'pointer',
+                          fontFamily: MONO,
+                          fontSize: 10,
+                          borderRadius: 2,
+                          padding: '2px 8px',
+                        }}
+                      >
+                        {editingSub === s.id ? 'close' : '✎ sources'}
+                      </button>
+                      <button
                         onClick={() => removeSub(s.id)}
                         style={{
                           background: 'transparent',
@@ -2237,6 +2309,32 @@ export function LiveGlobePage() {
                           Scope
                         </span>
                         <div style={{ marginTop: 3 }}>{s.scope_summary}</div>
+                      </div>
+                    )}
+                    {editingSub === s.id && (
+                      <div
+                        style={{
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: 6,
+                          paddingTop: 8,
+                          borderTop: `1px solid ${C.border}`,
+                        }}
+                      >
+                        <SourceRows
+                          sources={editSources}
+                          onUpdate={editUpdate}
+                          onRemove={editRemove}
+                          onAdd={editAddRow}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => saveEdit(s.id)}
+                          disabled={subBusy}
+                          style={segBtn(true)}
+                        >
+                          {subBusy ? '…' : 'SAVE + ANALYZE'}
+                        </button>
                       </div>
                     )}
                   </div>

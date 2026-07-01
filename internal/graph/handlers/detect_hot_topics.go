@@ -693,6 +693,38 @@ func (h *Subscriptions) refresh(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, map[string]string{"status": "refreshing"})
 }
 
+// update replaces a subscription's knowledge sources. The caller then triggers
+// refresh (POST …/refresh) to re-read + re-distill the scope from the new set.
+func (h *Subscriptions) update(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		http.Error(w, "bad id", http.StatusBadRequest)
+		return
+	}
+	var req struct {
+		Sources []topicSource `json:"sources"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "bad json", http.StatusBadRequest)
+		return
+	}
+	if req.Sources == nil {
+		req.Sources = []topicSource{}
+	}
+	srcJSON, _ := json.Marshal(req.Sources)
+	ct, err := h.db.Exec(r.Context(),
+		`UPDATE graph.topic_subscriptions SET sources=$2 WHERE id=$1`, id, srcJSON)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if ct.RowsAffected() == 0 {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (h *Subscriptions) delete(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
 	if err != nil {
