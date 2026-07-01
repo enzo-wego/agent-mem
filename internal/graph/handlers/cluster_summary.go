@@ -429,6 +429,22 @@ WHERE n.id = ANY($1) AND n.deleted_at IS NULL AND COALESCE(n.body,'') <> ''`, sl
 		}
 	}
 
+	// Never emit nil slices: Go marshals them to JSON null, and the dashboard does
+	// s.highlights.length / .map on these — null.length throws, unmounting the whole
+	// page (the "click summary → white screen after the LLM returns" bug).
+	if resp.Highlights == nil {
+		resp.Highlights = []string{}
+	}
+	if resp.Resources == nil {
+		resp.Resources = []clusterResource{}
+	}
+	if resp.Nodes == nil {
+		resp.Nodes = []clusterGraphNode{}
+	}
+	if resp.Edges == nil {
+		resp.Edges = []clusterGraphEdge{}
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
 }
