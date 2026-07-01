@@ -180,7 +180,7 @@ func newWatchedMessages(ctx context.Context, db *pgxpool.Pool, channels []string
 SELECT n.id,
        replace(n.scope,'slack:','')                                 AS channel,
        COALESCE(c.name,'')                                          AS channel_name,
-       COALESCE(n.metadata->'author'->>'display_name','')           AS author,
+       COALESCE(NULLIF(n.metadata->'author'->>'display_name',''), p.display_name, '') AS author,
        COALESCE(p.department,'')                                    AS dept,
        COALESCE(NULLIF(n.title,''), n.body, '')                     AS text,
        CASE WHEN COALESCE(NULLIF(n.metadata->>'thread_ts',''),'') <> ''

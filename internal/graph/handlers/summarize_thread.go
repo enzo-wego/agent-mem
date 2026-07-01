@@ -45,7 +45,7 @@ func summarizeThreadHandler(deps Deps) jobs.Handler {
 
 		// Load the thread's messages (root + replies), oldest first.
 		rows, err := deps.DB.Query(ctx, `
-SELECT COALESCE(NULLIF(n.title,''), n.body), COALESCE(n.metadata->'author'->>'display_name',''),
+SELECT COALESCE(NULLIF(n.title,''), n.body), COALESCE(NULLIF(n.metadata->'author'->>'display_name',''), p.display_name, ''),
        COALESCE(p.department,''),
        (EXTRACT(EPOCH FROM n.updated_at) * 1000)::bigint AS upd_ms
 FROM graph.nodes n
@@ -91,7 +91,11 @@ ORDER BY COALESCE(to_timestamp(NULLIF(n.metadata->>'ts','')::float8), n.first_se
 		// so the cached summary regenerates instead of going stale. The "v2:" prefix
 		// invalidates rows cached under the old one-line-only logic so they regenerate
 		// with the deep overview+highlights. Keep this prefix in sync with channels.go.
-		sig := fmt.Sprintf("v3:%d:%d", count, maxUpdated)
+		// v4: author now falls back to the resolved person's display_name when the
+		// Slack author is empty (bot notifications), so summaries name the real actor
+		// instead of "someone". Bump to regenerate rows cached with anonymous authors.
+		// Keep this prefix in sync with channels.go.
+		sig := fmt.Sprintf("v4:%d:%d", count, maxUpdated)
 		// Skip if the cached summary already matches the current signature.
 		var existingSig string
 		_ = deps.DB.QueryRow(ctx,

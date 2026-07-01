@@ -344,7 +344,7 @@ func buildAlert(ctx context.Context, deps Deps, s subscription, h hotThread) str
 	// Transcript: every message in the thread, oldest first, with author + depth.
 	var msgs []alertMsg
 	if rows, err := deps.DB.Query(ctx, `
-SELECT COALESCE(n.metadata->'author'->>'display_name',''),
+SELECT COALESCE(NULLIF(n.metadata->'author'->>'display_name',''), p.display_name, ''),
        COALESCE(NULLIF(n.title,''), n.body, ''),
        COALESCE(p.department,''),
        COALESCE(p.depth_from_root, 99)
