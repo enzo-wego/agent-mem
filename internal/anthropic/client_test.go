@@ -37,3 +37,30 @@ func TestGenerateExtractsJSON(t *testing.T) {
 		t.Fatalf("overview = %q, want hi", parsed.Overview)
 	}
 }
+
+// TestGenerateSkipsThinkingBlock verifies that a thinking-only model's response
+// (thinking block first, text block second) is read from the text block, not
+// content[0] — the 4.6→5 regression that made summaries come back empty.
+func TestGenerateSkipsThinkingBlock(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"content":[{"type":"thinking","thinking":"pondering"},{"type":"text","text":"{\"overview\":\"real\"}"}]}`))
+	}))
+	defer srv.Close()
+
+	c := NewClient("k", "")
+	c.baseURL = srv.URL
+
+	out, err := c.Generate(context.Background(), "sys", "user")
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	var parsed struct {
+		Overview string `json:"overview"`
+	}
+	if err := json.Unmarshal([]byte(out), &parsed); err != nil {
+		t.Fatalf("output is not valid JSON: %q (%v)", out, err)
+	}
+	if parsed.Overview != "real" {
+		t.Fatalf("overview = %q, want real", parsed.Overview)
+	}
+}

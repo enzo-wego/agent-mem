@@ -65,8 +65,11 @@ type generateResponse struct {
 // surrounding prose).
 func (c *Client) Generate(ctx context.Context, systemPrompt, userMessage string) (string, error) {
 	req := generateRequest{
-		Model:     c.model,
-		MaxTokens: 2048,
+		Model: c.model,
+		// Thinking-only models (Sonnet 5) spend part of this budget on thinking, so
+		// keep enough headroom that the JSON answer isn't truncated. The output here
+		// is a small summary object regardless.
+		MaxTokens: 8192,
 		System:    systemPrompt,
 		Messages:  []message{{Role: "user", Content: userMessage}},
 	}
@@ -78,11 +81,19 @@ func (c *Client) Generate(ctx context.Context, systemPrompt, userMessage string)
 	if resp.Error != nil {
 		return "", fmt.Errorf("anthropic API error: %s: %s", resp.Error.Type, resp.Error.Message)
 	}
-	if len(resp.Content) == 0 || resp.Content[0].Text == "" {
+	// Sonnet 5 is thinking-only: content[0] is a "thinking" block with an empty
+	// Text field and the answer lives in a later "text" block. Concatenate all
+	// text blocks rather than reading content[0] (which broke on the 4.6→5 switch).
+	var out string
+	for _, b := range resp.Content {
+		if b.Type == "text" {
+			out += b.Text
+		}
+	}
+	if out == "" {
 		return "", fmt.Errorf("empty response from Claude")
 	}
 	// Extract the JSON object: first "{" to last "}", dropping any fences/prose.
-	out := resp.Content[0].Text
 	if start := strings.IndexByte(out, '{'); start >= 0 {
 		if end := strings.LastIndexByte(out, '}'); end > start {
 			out = out[start : end+1]
