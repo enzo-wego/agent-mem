@@ -466,7 +466,7 @@ GROUP BY 1`, id, cacheKeys)
 				var last int64
 				if lrows.Scan(&tt, &cnt, &last) == nil {
 					// Must match summarize_thread's sig format ("v4:" prefix).
-					liveSig[tt] = fmt.Sprintf("v4:%d:%d", cnt, last)
+					liveSig[tt] = fmt.Sprintf("v5:%d:%d", cnt, last)
 				}
 			}
 			lrows.Close()

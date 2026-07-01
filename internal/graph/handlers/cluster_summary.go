@@ -360,7 +360,7 @@ WHERE n.id = ANY($1) AND n.deleted_at IS NULL AND COALESCE(n.body,'') <> ''`, sl
 	// notifications attribute to the real actor instead of "someone"), and the
 	// [leadership] hint is only tagged on known authors. Bump to regenerate
 	// summaries that were cached with anonymous "Someone (leadership)" authors.
-	sig := fmt.Sprintf("v7:%d:%d:%d:%d", total, maxUpdated, len(slackMsgs), lastMs)
+	sig := fmt.Sprintf("v8:%d:%d:%d:%d", total, maxUpdated, len(slackMsgs), lastMs)
 
 	var cachedSig, cachedOverview string
 	var cachedHl []byte
@@ -479,6 +479,9 @@ EMPHASIS:
   the actual problem/request). This is the most important context; never omit it.
 - Give extra weight to messages tagged [leadership] (senior people); surface their
   asks and decisions explicitly and attribute them by name.
+- An author may be written as "Name (Department)". When you name that person, keep
+  their department on first mention (e.g. "Hazwan (Flights) reported…"). Never add a
+  department that isn't given.
 - Strip the [originator]/[leadership] tags from your output — they are hints, not text.
 
 STRICT GROUNDING RULES — follow exactly:

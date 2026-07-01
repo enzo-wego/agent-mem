@@ -99,7 +99,7 @@ ORDER BY COALESCE(to_timestamp(NULLIF(n.metadata->>'ts','')::float8), n.first_se
 		// Slack author is empty (bot notifications), so summaries name the real actor
 		// instead of "someone". Bump to regenerate rows cached with anonymous authors.
 		// Keep this prefix in sync with channels.go.
-		sig := fmt.Sprintf("v4:%d:%d", count, maxUpdated)
+		sig := fmt.Sprintf("v5:%d:%d", count, maxUpdated)
 		// Skip if the cached summary already matches the current signature.
 		var existingSig string
 		_ = deps.DB.QueryRow(ctx,
@@ -164,6 +164,9 @@ ORDER BY 1`, p.ChannelID, p.ThreadTs); rerr == nil {
 // can be understood quickly and deeply. Returns ("","",nil) on error.
 func genThreadDeepSummary(ctx context.Context, g GeminiClient, transcript string) (string, string, []string) {
 	const sys = `You are given one Slack thread (messages oldest first, as "author: text").
+An author may be written as "Name (Department)" — when you name that person, keep
+their department on first mention, e.g. "Hazwan (Flights) reported…". Do not add a
+department that isn't given.
 A "Linked resources" list may precede the thread — use those titles to identify
 what the thread is about (name the ticket/doc), but summarize the thread's
 discussion, not the resources themselves.
