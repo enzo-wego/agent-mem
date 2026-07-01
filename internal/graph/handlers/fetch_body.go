@@ -201,6 +201,13 @@ func fetchBodyHandler(deps Deps) jobs.Handler {
 			}
 		}
 
+		// A thread's summary names its linked resources, so refresh the Slack
+		// thread(s) whose resource links involve this node — this message gaining a
+		// reference, or (when this node is a resource) its title landing for threads
+		// that reference it. Force past the signature-skip: the messages didn't
+		// change, only the links.
+		refreshThreadsForResourceLink(ctx, deps, body.NodeID)
+
 		// Step 8: attachment edges + describe jobs.
 		for _, att := range body.Attachments {
 			attNK, _ := ids.ParseNaturalKey(att.NodeID)
@@ -257,6 +264,42 @@ func fetchBodyHandler(deps Deps) jobs.Handler {
 		_ = mentions
 
 		return nil
+	}
+}
+
+// refreshThreadsForResourceLink force-re-enqueues summarize_thread for every Slack
+// thread whose resource graph involves nodeID: the Slack messages that reference
+// this node (when it is a resource whose title just landed), and this node itself
+// when it is a Slack message that references a non-Slack resource. Best-effort;
+// errors are ignored. Force is required because the thread's messages are unchanged
+// — only its links are — so the signature check would otherwise skip it.
+func refreshThreadsForResourceLink(ctx context.Context, deps Deps, nodeID string) {
+	rows, err := deps.DB.Query(ctx, `
+SELECT DISTINCT replace(sn.scope,'slack:',''),
+       COALESCE(NULLIF(sn.metadata->>'thread_ts',''), split_part(sn.id,':',3))
+FROM graph.nodes sn
+WHERE sn.type IN ('slack','slack_thread') AND sn.scope LIKE 'slack:%' AND sn.deleted_at IS NULL
+  AND sn.id IN (
+      SELECT e.from_node_id FROM graph.edges e WHERE e.to_node_id=$1 AND e.kind='REFERENCES'
+      UNION
+      SELECT e.from_node_id FROM graph.edges e
+        JOIN graph.nodes r ON r.id=e.to_node_id
+       WHERE e.from_node_id=$1 AND e.kind='REFERENCES'
+         AND r.type NOT IN ('slack','slack_thread','slack_file'))`, nodeID)
+	if err != nil {
+		return
+	}
+	type ct struct{ channel, thread string }
+	var threads []ct
+	for rows.Next() {
+		var c, t string
+		if rows.Scan(&c, &t) == nil && c != "" && t != "" {
+			threads = append(threads, ct{c, t})
+		}
+	}
+	rows.Close()
+	for _, th := range threads {
+		enqueueSummarizeThread(ctx, deps.DB, th.channel, th.thread, true)
 	}
 }
 

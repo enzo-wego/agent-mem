@@ -89,7 +89,7 @@ func backfillSlackThreadHandler(deps Deps) jobs.Handler {
 				return fmt.Errorf("backfill_slack_thread: re-enqueue next page: %w", jErr)
 			}
 		} else {
-			enqueueSummarizeThread(ctx, deps.DB, p.ChannelID, p.ThreadTs)
+			enqueueSummarizeThread(ctx, deps.DB, p.ChannelID, p.ThreadTs, false)
 		}
 
 		return nil
