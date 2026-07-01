@@ -28,10 +28,10 @@ type Client struct {
 	httpClient *http.Client
 }
 
-// NewClient creates a Claude client. model defaults to claude-sonnet-4-6 when empty.
+// NewClient creates a Claude client. model defaults to claude-sonnet-5 when empty.
 func NewClient(apiKey, model string) *Client {
 	if model == "" {
-		model = "claude-sonnet-4-6"
+		model = "claude-sonnet-5"
 	}
 	return &Client{apiKey: apiKey, model: model, baseURL: apiURL, httpClient: &http.Client{Timeout: 90 * time.Second}}
 }

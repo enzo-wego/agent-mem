@@ -347,7 +347,7 @@ func defaults() *Config {
 		GeminiModel:          "gemini-2.5-flash",
 		GeminiEmbeddingModel: "gemini-embedding-001",
 		GeminiEmbeddingDims:  768,
-		AnthropicModel:       "claude-sonnet-4-6",
+		AnthropicModel:       "claude-sonnet-5",
 		ContextObservations:  50,
 		ContextFullCount:     5,
 		ContextSessionCount:  10,
