@@ -286,7 +286,7 @@ FROM graph.nodes WHERE id = ANY($1) AND scope LIKE 'slack:%'`, slackIDs); terr =
 	}
 	for tk := range threads {
 		trows, terr := h.db.Query(ctx, `
-SELECT n.id, COALESCE(n.body,''), COALESCE(n.metadata->'author'->>'display_name',''),
+SELECT n.id, COALESCE(n.body,''), COALESCE(NULLIF(n.metadata->'author'->>'display_name',''), p.display_name, ''),
        COALESCE(p.depth_from_root, -1), COALESCE(p.department,''),
        COALESCE(to_timestamp(NULLIF(n.metadata->>'ts','')::float8), n.first_seen_at) AS ts
 FROM graph.nodes n
@@ -315,7 +315,7 @@ ORDER BY ts ASC`, tk.channel, tk.ts)
 	// these still ground the summary instead of leaving it blank.
 	if len(slackIDs) > 0 {
 		srows, serr := h.db.Query(ctx, `
-SELECT n.id, COALESCE(n.body,''), COALESCE(n.metadata->'author'->>'display_name',''),
+SELECT n.id, COALESCE(n.body,''), COALESCE(NULLIF(n.metadata->'author'->>'display_name',''), p.display_name, ''),
        COALESCE(p.depth_from_root, -1), COALESCE(p.department,''),
        COALESCE(to_timestamp(NULLIF(n.metadata->>'ts','')::float8), n.first_seen_at) AS ts
 FROM graph.nodes n
@@ -356,7 +356,11 @@ WHERE n.id = ANY($1) AND n.deleted_at IS NULL AND COALESCE(n.body,'') <> ''`, sl
 	// kept so a new Slack reply also triggers it even if updated_at lags.
 	// v6: author labels now carry the person's department ("Hazwan (Flights)"), so
 	// bump the version to regenerate summaries with the team label.
-	sig := fmt.Sprintf("v6:%d:%d:%d:%d", total, maxUpdated, len(slackMsgs), lastMs)
+	// v7: author now falls back to the resolved person's display_name (so bot
+	// notifications attribute to the real actor instead of "someone"), and the
+	// [leadership] hint is only tagged on known authors. Bump to regenerate
+	// summaries that were cached with anonymous "Someone (leadership)" authors.
+	sig := fmt.Sprintf("v7:%d:%d:%d:%d", total, maxUpdated, len(slackMsgs), lastMs)
 
 	var cachedSig, cachedOverview string
 	var cachedHl []byte
@@ -399,14 +403,17 @@ WHERE n.id = ANY($1) AND n.deleted_at IS NULL AND COALESCE(n.body,'') <> ''`, sl
 			if text == "" {
 				continue
 			}
+			named := m.author != ""
 			author := m.author
 			if author == "" {
 				author = "someone"
 			}
 			author = withDept(author, m.dept) // "Hazwan (Flights)"
 			// Tag seniority (lower org-depth = more senior) and the originating msg so
-			// the LLM can foreground who raised it and weight leadership input.
-			if m.depth >= 0 && m.depth <= 2 {
+			// the LLM can foreground who raised it and weight leadership input. Only tag
+			// a known author — a "[leadership]" hint on an anonymous "someone" is useless
+			// and leaks into the output as "Someone (leadership)".
+			if named && m.depth >= 0 && m.depth <= 2 {
 				author += " [leadership]"
 			}
 			if i == 0 && rootIsSlack {
