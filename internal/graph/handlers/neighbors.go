@@ -156,6 +156,14 @@ WHERE n.id=$1`, n.NodeID)
 				title = firstLine(body, 120)
 			}
 			item.Node.Title = title
+			// Drop un-enriched reference stubs: a node we linked to but never fetched
+			// has no title and no url, so the panel would render a raw id like
+			// "jira:RFC-53" or "feature:card_scan" that can't be opened. These are
+			// noise, not resources. Slack nodes always get a synthesized label above,
+			// so this only trims the never-fetched stubs.
+			if strings.TrimSpace(item.Node.Title) == "" && item.Node.URL == "" {
+				continue
+			}
 			out = append(out, item)
 		}
 	}

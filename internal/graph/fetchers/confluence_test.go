@@ -40,6 +40,9 @@ func TestConfluenceFetcher_HappyPath(t *testing.T) {
 			AuthorID:  "acct-xyz",
 			CreatedAt: time.Now(),
 		},
+		Links: cfLinks{
+			WebUI: "/spaces/ENG/pages/987654321/Architecture+Overview",
+		},
 	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		u, p, ok := r.BasicAuth()
@@ -68,6 +71,12 @@ func TestConfluenceFetcher_HappyPath(t *testing.T) {
 	}
 	if body.Title != "Architecture Overview" {
 		t.Errorf("title = %q", body.Title)
+	}
+	// URL must come from _links.webui (canonical, viewable), not a hand-built
+	// "<base>/pages/<id>" which 404s in Confluence Cloud.
+	wantURL := srv.URL + "/spaces/ENG/pages/987654321/Architecture+Overview"
+	if body.URL != wantURL {
+		t.Errorf("url = %q, want %q", body.URL, wantURL)
 	}
 	if body.Author.ExternalID != "acct-xyz" {
 		t.Errorf("author = %q", body.Author.ExternalID)

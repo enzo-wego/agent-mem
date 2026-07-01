@@ -47,6 +47,16 @@ type cfPageResponse struct {
 	Body      cfBody    `json:"body"`
 	Version   cfVersion `json:"version"`
 	CreatedAt time.Time `json:"createdAt"` // page creation time (v2 API)
+	Links     cfLinks   `json:"_links"`
+}
+
+// cfLinks carries the API's own link back to the page. webui is the canonical
+// viewable path (/spaces/<KEY>/pages/<id>/<slug>) relative to the wiki base;
+// base is the absolute wiki root. We must use these — a hand-built
+// "<base>/pages/<id>" is NOT a valid Confluence Cloud route and 404s.
+type cfLinks struct {
+	WebUI string `json:"webui"`
+	Base  string `json:"base"`
 }
 
 type cfBody struct {
@@ -108,10 +118,19 @@ func (f *confluenceFetcher) Fetch(ctx context.Context, node string) (FetchedBody
 	id64, _ := strconv.ParseInt(pageID, 10, 64)
 	nodeID := ids.CFPage(id64)
 
+	// Canonical page URL from the API's own webui link (/spaces/<KEY>/pages/<id>/<slug>).
+	// The v2 pages API always returns _links.webui; a hand-built "<base>/pages/<id>"
+	// is not a real Confluence Cloud route and 404s.
+	base := strings.TrimRight(page.Links.Base, "/")
+	if base == "" {
+		base = baseURL
+	}
+	pageURL := base + page.Links.WebUI
+
 	return FetchedBody{
 		NodeID:      nodeID,
 		Type:        ids.TypeCFPage,
-		URL:         fmt.Sprintf("%s/pages/%s", baseURL, pageID),
+		URL:         pageURL,
 		Title:       page.Title,
 		Raw:         []byte(page.Body.Storage.Value),
 		ContentType: "application/xhtml+xml",
