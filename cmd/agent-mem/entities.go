@@ -202,6 +202,38 @@ Example:
 	}
 	importBambooHRCmd.Flags().StringVar(&bambooHRCSVPath, "csv", "", "Path to BambooHR org-chart CSV file")
 
-	entitiesCmd.AddCommand(seedPartnersCmd, loadCSVCmd, listCmd, importBambooHRCmd)
+	// entities refresh-slack-users
+	refreshSlackUsersCmd := &cobra.Command{
+		Use:   "refresh-slack-users",
+		Short: "Enqueue a refresh_slack_users job (pull Slack names + emails)",
+		Long: `Enqueues a refresh_slack_users job. The worker calls Slack users.list and
+updates graph.slack_users and graph.people (display_name when blank, and email
+when the bot has the users:read.email scope). Email is the key that merges Slack
+identities with BambooHR/Jira.
+
+Run this after people join/leave, or after granting the users:read.email scope.
+Employees change rarely, so this is on-demand rather than scheduled.
+
+Example:
+  agent-mem entities refresh-slack-users`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := context.Background()
+			cfg := getCfg()
+			pool, err := database.Connect(ctx, cfg.DatabaseURL)
+			if err != nil {
+				return fmt.Errorf("open db: %w", err)
+			}
+			defer pool.Close()
+			jobID, err := jobs.Enqueue(ctx, pool, "refresh_slack_users", map[string]any{},
+				jobs.EnqueueOptions{Priority: 5, MachineID: cfg.MachineID})
+			if err != nil {
+				return fmt.Errorf("enqueue refresh_slack_users job: %w", err)
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "enqueued refresh_slack_users job id=%d\n", jobID)
+			return nil
+		},
+	}
+
+	entitiesCmd.AddCommand(seedPartnersCmd, loadCSVCmd, listCmd, importBambooHRCmd, refreshSlackUsersCmd)
 	return entitiesCmd
 }
