@@ -69,6 +69,52 @@ make deploy   # buildx amd64 -> push GHCR -> ssh VPS pull-only
 Commit the regenerated `internal/worker/dashboard/` contents along with the
 source change (the hashed asset filenames change each build).
 
+## Operations runbook (common asks)
+
+Prod: worker `agent-mem-worker-1`, postgres `agent-mem-postgres-1` (db `agentmem`)
+on `enzo@enzogo.io.vn`. The `agent-mem` CLI is in the worker container with prod
+DB + Slack token in its env, so `docker exec agent-mem-worker-1 agent-mem …` runs
+against prod.
+
+**Refresh Slack names + emails** (after someone joins/leaves; fills
+`people.email`, which merges Slack↔BambooHR by email). On-demand, not scheduled —
+employees change rarely:
+```bash
+ssh enzo@enzogo.io.vn 'docker exec agent-mem-worker-1 agent-mem entities refresh-slack-users'
+```
+
+**Refresh departments / managers / org (BambooHR).** BambooHR (`wego.bamboohr.com`)
+won't export email/department for a normal employee, but the People Directory
+shows them. Rebuild the CSV by scraping the directory, then import. Full how-to is
+in `bd memories bamboohr` — the short version:
+1. `agent-browser --session bamboo --headed open https://wego.bamboohr.com` → user logs in (Google SSO).
+2. Open `/employees/directory.php`, scroll `div.GlobalScrollContainer` to load all cards, scrape each: name, email, department (text after last " in "), "Reports to <name>", and EEID from the `orgchart.php?...ee-id=<EEID>` link (== `graph.people.eeid`). Resolve manager names→EEIDs.
+3. Write CSV `EEID,Full Name,Reports To,Work Email,Department` and import:
+```bash
+scp people.csv enzo@enzogo.io.vn:/tmp/p.csv
+ssh enzo@enzogo.io.vn 'docker cp /tmp/p.csv agent-mem-worker-1:/tmp/p.csv && docker exec agent-mem-worker-1 agent-mem entities import-bamboohr --csv /tmp/p.csv'
+```
+Re-running is safe: blank Name/Department cells never overwrite stored values.
+
+**Force summaries to re-render** (e.g. after a department import — summary caches
+key on message content, not the people table, so they don't auto-refresh):
+```bash
+ssh enzo@enzogo.io.vn 'docker exec agent-mem-postgres-1 psql -U agentmem -d agentmem -c "DELETE FROM graph.cluster_summaries; DELETE FROM graph.thread_summaries;"'
+```
+Pure caches — they regenerate on next open. (Bumping the sig version in
+`summarize_thread.go`/`cluster_summary.go` also forces regeneration.)
+
+**Coverage check:**
+```bash
+ssh enzo@enzogo.io.vn 'docker exec agent-mem-postgres-1 psql -U agentmem -d agentmem -tAc "SELECT count(*) FILTER (WHERE email IS NOT NULL) AS email, count(*) FILTER (WHERE department IS NOT NULL) AS dept, count(*) FILTER (WHERE merged_into IS NULL) AS active FROM graph.people"'
+```
+
+**Notification / importance config** lives in `internal/graph/handlers/importance.json`
+(owner, manager, tier weights, and pinned people). **Payment-partner "every
+message" alerts** watch whatever channels are in the `partners` continent of the
+`graph_continents` setting — edit that group on the globe (`/live`) to add/remove
+channels; no code change needed.
+
 <!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:ca08a54f -->
 ## Beads Issue Tracker
 
