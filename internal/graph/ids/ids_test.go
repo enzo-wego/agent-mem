@@ -404,6 +404,7 @@ func TestParseType(t *testing.T) {
 		{"datadog:monitor:133274814", TypeDatadog, true},
 		{"sentry:WEGO-PAYMENTS-1PJD", TypeSentry, true},
 		{"gws_doc:1abcXYZ", TypeGWSDoc, true},
+		{"jira_attachment:122349", TypeJiraAttachment, true},
 		{"slack_file:F0B5T0WD39P", TypeSlackFile, true},
 		{"partner:triplea", TypePartner, true},
 		{"feature:auto_refund", TypeFeature, true},

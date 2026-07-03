@@ -125,7 +125,7 @@ func (f *jiraFetcher) Fetch(ctx context.Context, node string) (FetchedBody, erro
 	var attachments []Attachment
 	for _, a := range issue.Fields.Attachment {
 		attachments = append(attachments, Attachment{
-			NodeID:     fmt.Sprintf("jira_attachment:%s", a.ID),
+			NodeID:     fmt.Sprintf("%s:%s", ids.TypeJiraAttachment, a.ID),
 			MimeType:   a.MimeType,
 			Filename:   a.Filename,
 			SizeBytes:  a.Size,

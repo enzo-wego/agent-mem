@@ -22,6 +22,7 @@ const (
 	TypeGWSDoc         NodeType = "gws_doc"
 	TypeWegoHub        NodeType = "wegohub"
 	TypeClaudeArtifact NodeType = "claude_artifact"
+	TypeJiraAttachment NodeType = "jira_attachment"
 	TypeSlackFile   NodeType = "slack_file"
 	TypePartner     NodeType = "partner"
 	TypeFeature     NodeType = "feature"
@@ -182,7 +183,8 @@ func ParseType(nodeID string) (NodeType, bool) {
 	prefix := nodeID[:idx]
 	switch NodeType(prefix) {
 	case TypeSlackThread, TypeJira, TypeGHPR, TypeCFPage, TypePagerDuty,
-		TypeDatadog, TypeSentry, TypeGWSDoc, TypeWegoHub, TypeClaudeArtifact, TypeSlackFile, TypePartner,
+		TypeDatadog, TypeSentry, TypeGWSDoc, TypeWegoHub, TypeClaudeArtifact, TypeJiraAttachment,
+		TypeSlackFile, TypePartner,
 		TypeFeature, TypeStatus, TypeCurrency, TypeCodeFile, TypePerson,
 		TypeUserGroup:
 		return NodeType(prefix), true
