@@ -331,6 +331,40 @@ var rules = []rule{
 			}, true
 		},
 	},
+	// Wego Hub app: https://internal.wego.com/hub/apps/<slug>
+	{
+		re: regexp.MustCompile(`\binternal\.wego\.com/hub/apps/([a-z0-9][a-z0-9-]*)\b`),
+		build: func(m []string) (Finding, bool) {
+			nodeID, err := ids.WegoHub(m[1])
+			if err != nil {
+				return Finding{}, false
+			}
+			return Finding{
+				NodeID:   nodeID,
+				Type:     ids.TypeWegoHub,
+				Source:   m[0],
+				EdgeKind: "REFERENCES",
+				Match:    OriginURL,
+			}, true
+		},
+	},
+	// Shared Claude artifact: https://claude.ai/public/artifacts/<id> or /code/artifact/<id>
+	{
+		re: regexp.MustCompile(`\bclaude\.ai/(?:public/artifacts|code/artifact)/([A-Za-z0-9_-]{8,})\b`),
+		build: func(m []string) (Finding, bool) {
+			nodeID, err := ids.ClaudeArtifact(m[1])
+			if err != nil {
+				return Finding{}, false
+			}
+			return Finding{
+				NodeID:   nodeID,
+				Type:     ids.TypeClaudeArtifact,
+				Source:   m[0],
+				EdgeKind: "REFERENCES",
+				Match:    OriginURL,
+			}, true
+		},
+	},
 	// Wego order ref: WF-XXXXXXXX-XXXX[-XXXX...] — one mandatory 8-char segment
 	// followed by one or more dash-separated hex groups of 4+ chars each.
 	{

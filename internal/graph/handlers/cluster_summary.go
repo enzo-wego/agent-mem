@@ -51,6 +51,10 @@ func friendlySource(nodeType string) string {
 		return "People"
 	case "gws_doc", "gws":
 		return "Google Docs"
+	case "wegohub":
+		return "Wego Hub"
+	case "claude_artifact":
+		return "Claude Artifact"
 	default:
 		return nodeType
 	}

@@ -258,6 +258,32 @@ func TestExtract_GoogleDriveFileURL(t *testing.T) {
 	assertContains(t, result.Findings, ids.GWSDoc("1BxTY9mKPqrs3NuvMnLopXY7QZabcdefgh"))
 }
 
+func TestExtract_WegoHubURL(t *testing.T) {
+	e := newExtractorNoEntities(t)
+	body := "Check https://internal.wego.com/hub/apps/payment-dashboard for the report"
+	result, err := e.Extract(context.Background(), body)
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	want, _ := ids.WegoHub("payment-dashboard")
+	assertContains(t, result.Findings, want)
+}
+
+func TestExtract_ClaudeArtifactURL(t *testing.T) {
+	e := newExtractorNoEntities(t)
+	for _, body := range []string{
+		"See <https://claude.ai/public/artifacts/abc123XY-9_z>",
+		"See https://claude.ai/code/artifact/abc123XY-9_z here",
+	} {
+		result, err := e.Extract(context.Background(), body)
+		if err != nil {
+			t.Fatalf("Extract(%q): %v", body, err)
+		}
+		want, _ := ids.ClaudeArtifact("abc123XY-9_z")
+		assertContains(t, result.Findings, want)
+	}
+}
+
 func TestExtract_WegoOrderRef(t *testing.T) {
 	e := newExtractorNoEntities(t)
 	body := "Order ref: WF-A1B2C3D4-E5F6-7890 please investigate"
