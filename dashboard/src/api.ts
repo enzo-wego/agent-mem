@@ -620,7 +620,6 @@ export interface ClusterGraphEdge {
 export interface ClusterSummary {
   overview: string;
   highlights: string[];
-  resources: { source: string; count: number }[];
   nodes: ClusterGraphNode[];
   edges: ClusterGraphEdge[];
   node_count: number;

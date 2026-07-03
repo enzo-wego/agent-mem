@@ -783,7 +783,7 @@ export function LiveGlobePage() {
       .catch(() =>
         setSummaryCache((cur) => ({
           ...cur,
-          [nodeId]: { overview: '', highlights: [], resources: [], nodes: [], edges: [], node_count: 0 },
+          [nodeId]: { overview: '', highlights: [], nodes: [], edges: [], node_count: 0 },
         })),
       )
   }
@@ -2491,7 +2491,10 @@ export function LiveGlobePage() {
                 if (s === 'loading') {
                   return <div style={{ color: C.dim, fontSize: 11 }}>Summarizing…</div>
                 }
-                if (!s.overview && s.resources.length === 0) return null
+                if (!s.overview && s.highlights.length === 0) return null
+                // Chips tally the same neighbor groups shown in the sections below, so
+                // the counts always match (was a separate bounded-BFS count that disagreed).
+                const chipGroups = groupNeighbors(neighborCache[rootId] ?? [])
                 return (
                   <div
                     style={{
@@ -2526,11 +2529,11 @@ export function LiveGlobePage() {
                         ))}
                       </ul>
                     )}
-                    {s.resources.length > 0 && (
+                    {chipGroups.length > 0 && (
                       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 2 }}>
-                        {s.resources.map((r) => (
+                        {chipGroups.map((g) => (
                           <span
-                            key={r.source}
+                            key={g.label}
                             style={{
                               color: C.dim,
                               fontSize: 10,
@@ -2539,7 +2542,7 @@ export function LiveGlobePage() {
                               padding: '2px 6px',
                             }}
                           >
-                            {r.source} · {r.count}
+                            {g.label} · {g.items.length}
                           </span>
                         ))}
                       </div>

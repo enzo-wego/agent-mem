@@ -56,11 +56,6 @@ func friendlySource(nodeType string) string {
 	}
 }
 
-type clusterResource struct {
-	Source string `json:"source"`
-	Count  int    `json:"count"`
-}
-
 type clusterGraphNode struct {
 	ID    string `json:"id"`
 	Type  string `json:"type"`
@@ -78,10 +73,9 @@ type clusterGraphEdge struct {
 type clusterSummaryResponse struct {
 	Overview   string             `json:"overview"`
 	Highlights []string           `json:"highlights"`
-	Resources  []clusterResource  `json:"resources"`
 	Nodes      []clusterGraphNode `json:"nodes"`
 	Edges      []clusterGraphEdge `json:"edges"`
-	NodeCount  int               `json:"node_count"`
+	NodeCount  int                `json:"node_count"`
 }
 
 func (h *clusterSummaryHandler) serve(w http.ResponseWriter, r *http.Request) {
@@ -156,7 +150,6 @@ WHERE id = ANY($1) AND deleted_at IS NULL`, ordered)
 		ts                                 time.Time
 		depth                              int // author org-depth (0=CEO); -1 unknown
 	}
-	counts := map[string]int{}
 	var slackMsgs []clusterNode
 	var otherTitles []string
 	var gnodes []clusterGraphNode
@@ -191,13 +184,11 @@ WHERE id = ANY($1) AND deleted_at IS NULL`, ordered)
 		gnodes = append(gnodes, clusterGraphNode{
 			ID: idCol, Type: n.typ, Title: label, URL: urlCol, Root: idCol == id,
 		})
-		src := friendlySource(n.typ)
-		counts[src]++
 		// Slack messages are gathered later from full threads (with seniority); here
 		// we only collect non-slack resource titles.
 		if n.typ != "slack" && n.typ != "slack_thread" {
 			if t := strings.TrimSpace(n.title); t != "" {
-				otherTitles = append(otherTitles, src+": "+firstLine(t, 120))
+				otherTitles = append(otherTitles, friendlySource(n.typ)+": "+firstLine(t, 120))
 			}
 		}
 	}
@@ -234,15 +225,6 @@ WHERE id = ANY($1) AND deleted_at IS NULL`, ordered)
 	}
 
 	resp := clusterSummaryResponse{NodeCount: total, Nodes: gnodes, Edges: gedges}
-	for src, c := range counts {
-		resp.Resources = append(resp.Resources, clusterResource{Source: src, Count: c})
-	}
-	sort.Slice(resp.Resources, func(i, j int) bool {
-		if resp.Resources[i].Count != resp.Resources[j].Count {
-			return resp.Resources[i].Count > resp.Resources[j].Count
-		}
-		return resp.Resources[i].Source < resp.Resources[j].Source
-	})
 
 	// Ground the summary in the FULL Slack discussion. Graph edges don't connect a
 	// thread's replies to its root, and a cluster spans several threads (e.g. the
@@ -447,9 +429,6 @@ WHERE n.id = ANY($1) AND n.deleted_at IS NULL AND COALESCE(n.body,'') <> ''`, sl
 	// page (the "click summary → white screen after the LLM returns" bug).
 	if resp.Highlights == nil {
 		resp.Highlights = []string{}
-	}
-	if resp.Resources == nil {
-		resp.Resources = []clusterResource{}
 	}
 	if resp.Nodes == nil {
 		resp.Nodes = []clusterGraphNode{}
