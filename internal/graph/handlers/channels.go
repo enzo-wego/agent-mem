@@ -386,7 +386,10 @@ LIMIT 3000`, id, days)
 		// thread_ts, node id + canonical url. Standalone groups are keyed by node
 		// id; thread groups are keyed by thread_ts (root id = slack:<chan>:<ts>).
 		if strings.HasPrefix(g.key, "slack:") {
-			v.ThreadTS = ""
+			// Standalone message: its own ts is its effective thread id, so it
+			// shares the summary cache/enqueue path (and the UI's expand key +
+			// permalink fallback) with real threads.
+			v.ThreadTS = g.key[strings.LastIndex(g.key, ":")+1:]
 			v.NodeID = g.key
 		} else {
 			v.ThreadTS = g.key
@@ -401,20 +404,16 @@ LIMIT 3000`, id, days)
 		views = views[:limit]
 	}
 
-	// Summaries are READ-ONLY here so clicking a channel is instant. Single
-	// messages use their first line. Threads use the cached LLM summary if present;
-	// on a miss we show the first line as a placeholder and enqueue a background
-	// summarize_thread job (the cache is normally kept warm by ingest-triggered
-	// jobs, so misses are rare).
+	// Summaries are READ-ONLY here so clicking a channel is instant. Every row —
+	// threads AND standalone messages — uses the cached LLM topic if present; on
+	// a miss we show the first line as a placeholder and enqueue a background
+	// summarize_thread job. Standalone messages are only summarized on view (here),
+	// never on ingest, so quiet channels don't burn LLM calls nobody reads.
 	cacheKeys := []string{}
 	rootText := map[int]string{}
 	for i, v := range views {
 		g := groups[groupKeyFor(v, groups)]
 		if g == nil {
-			continue
-		}
-		if !v.IsThread {
-			views[i].Summary = firstLine(bodyOf(g.msgs[0]), 90)
 			continue
 		}
 		cacheKeys = append(cacheKeys, v.ThreadTS)
@@ -454,10 +453,11 @@ LIMIT 3000`, id, days)
 	liveSig := map[string]string{}
 	if len(cacheKeys) > 0 {
 		lrows, lerr := h.db.Query(ctx, `
-SELECT COALESCE(metadata->>'thread_ts',''), count(*),
+SELECT COALESCE(NULLIF(metadata->>'thread_ts',''), split_part(id,':',3)), count(*),
        max((EXTRACT(EPOCH FROM updated_at) * 1000)::bigint)
 FROM graph.nodes
-WHERE scope = 'slack:' || $1 AND deleted_at IS NULL AND COALESCE(metadata->>'thread_ts','') = ANY($2)
+WHERE scope = 'slack:' || $1 AND deleted_at IS NULL
+  AND COALESCE(NULLIF(metadata->>'thread_ts',''), split_part(id,':',3)) = ANY($2)
 GROUP BY 1`, id, cacheKeys)
 		if lerr == nil {
 			for lrows.Next() {
@@ -473,9 +473,6 @@ GROUP BY 1`, id, cacheKeys)
 		}
 	}
 	for i, v := range views {
-		if !v.IsThread {
-			continue
-		}
 		s, ok := cached[v.ThreadTS]
 		if ok && s != "" {
 			views[i].Summary = s // show the cached text (even if stale) rather than blank
@@ -511,16 +508,16 @@ type threadGroup struct {
 	seen map[string]bool
 }
 
-// groupKeyFor recovers the groups-map key for a view.
+// groupKeyFor recovers the groups-map key for a view: thread groups key by
+// thread_ts, standalone groups by node id.
 func groupKeyFor(v *topicView, groups map[string]*threadGroup) string {
 	if v.ThreadTS != "" {
-		return v.ThreadTS
-	}
-	// standalone: the only group whose single message url matches
-	for k, g := range groups {
-		if len(g.msgs) == 1 && g.msgs[0].URL == v.URL {
-			return k
+		if _, ok := groups[v.ThreadTS]; ok {
+			return v.ThreadTS
 		}
+	}
+	if _, ok := groups[v.NodeID]; ok {
+		return v.NodeID
 	}
 	return ""
 }

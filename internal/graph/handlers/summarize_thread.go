@@ -55,7 +55,8 @@ SELECT COALESCE(NULLIF(n.title,''), n.body), COALESCE(NULLIF(n.metadata->'author
        (EXTRACT(EPOCH FROM n.updated_at) * 1000)::bigint AS upd_ms
 FROM graph.nodes n
 LEFT JOIN graph.people p ON p.id = n.author_person_id
-WHERE n.scope = 'slack:' || $1 AND n.deleted_at IS NULL AND COALESCE(n.metadata->>'thread_ts','') = $2
+WHERE n.scope = 'slack:' || $1 AND n.deleted_at IS NULL
+  AND COALESCE(NULLIF(n.metadata->>'thread_ts',''), split_part(n.id,':',3)) = $2
 ORDER BY COALESCE(to_timestamp(NULLIF(n.metadata->>'ts','')::float8), n.first_seen_at) ASC`,
 			p.ChannelID, p.ThreadTs)
 		if err != nil {
@@ -91,8 +92,8 @@ ORDER BY COALESCE(to_timestamp(NULLIF(n.metadata->>'ts','')::float8), n.first_se
 		if err := rows.Err(); err != nil {
 			return err
 		}
-		if count <= 1 {
-			return nil // single message: /topics shows its first line, no LLM needed
+		if count == 0 {
+			return nil // nothing ingested yet; /topics re-enqueues on next view
 		}
 
 		// Signature reflects content state: message count + newest updated_at. A new

@@ -79,6 +79,58 @@ ON CONFLICT (id) DO NOTHING`, n.id, "msg "+n.author, meta)
 	}
 }
 
+// TestSummarizeThread_StandaloneMessage verifies a lone top-level message (no
+// thread_ts metadata, no replies) gets a cached topic summary keyed by its own
+// ts — previously skipped, leaving /topics showing raw first lines like
+// "Hi @Surbhi Babbar can you share…".
+func TestSummarizeThread_StandaloneMessage(t *testing.T) {
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		t.Skip("DATABASE_URL not set; skipping integration test")
+	}
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatalf("pool: %v", err)
+	}
+	defer pool.Close()
+	for _, tbl := range []string{"graph.thread_summaries", "graph.nodes"} {
+		if _, err := pool.Exec(ctx, "DELETE FROM "+tbl); err != nil {
+			t.Fatalf("clean %s: %v", tbl, err)
+		}
+	}
+
+	// No thread_ts in metadata — a standalone channel message.
+	if _, err := pool.Exec(ctx, `
+INSERT INTO graph.nodes (id, type, natural_key, body, scope, metadata, machine_id)
+VALUES ('slack:C:300.000001','slack','slack:C:300.000001',
+        'Hi @U123 can you share the status of integrating STCBank? sandbox access still pending',
+        'slack:C','{"ts":"300.000001","author":{"display_name":"Alex"}}'::jsonb,'test')`); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	gem := &mockGemini{}
+	gem.generateResult = func() (string, error) {
+		return `{"topic":"STCBank integration status check","overview":"Alex asked for the STCBank integration status.","highlights":[]}`, nil
+	}
+	deps := Deps{DB: pool, Gemini: gem, Logger: zerolog.Nop()}
+
+	payload, _ := json.Marshal(map[string]string{"channel_id": "C", "thread_ts": "300.000001"})
+	if err := NewSummarizeThreadHandler(deps).Handler(ctx, payload); err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	var summary string
+	if err := pool.QueryRow(ctx,
+		`SELECT summary FROM graph.thread_summaries WHERE channel_id='C' AND thread_ts='300.000001'`).
+		Scan(&summary); err != nil {
+		t.Fatalf("read summary: %v", err)
+	}
+	if summary != "STCBank integration status check" {
+		t.Errorf("summary = %q", summary)
+	}
+}
+
 func TestLinkOnly(t *testing.T) {
 	for _, tc := range []struct {
 		text string
