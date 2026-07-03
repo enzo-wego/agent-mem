@@ -2485,12 +2485,35 @@ export function LiveGlobePage() {
                   const s = summaryCache[rootId]
                   if (!s || s === 'loading')
                     return <div style={{ color: C.dim, fontSize: 11 }}>Loading graph…</div>
-                  if (!s.nodes || s.nodes.length <= 1 || !s.edges || s.edges.length === 0)
-                    return <div style={{ color: C.dim, fontSize: 11 }}>no graph for this node</div>
+                  let nodes = s.nodes
+                  let edges = s.edges
+                  if (!nodes || nodes.length <= 1 || !edges || edges.length === 0) {
+                    // No explicit edge topology (e.g. only SIMILAR semantic
+                    // neighbors). Fall back to a star of the same neighbors the
+                    // SUMMARY tab lists, so the two views never disagree.
+                    const nbrs = neighborCache[rootId]
+                    if (!nbrs && graphLoading)
+                      return <div style={{ color: C.dim, fontSize: 11 }}>Loading graph…</div>
+                    const flat = groupNeighbors(nbrs ?? []).flatMap((g) => g.items)
+                    if (flat.length === 0)
+                      return <div style={{ color: C.dim, fontSize: 11 }}>no graph for this node</div>
+                    const rootLabel =
+                      graphStack[graphStack.length - 1]?.label || graphTopic.summary || rootId
+                    nodes = [
+                      { id: rootId, type: 'slack', title: rootLabel, url: '', root: true },
+                      ...flat.map((n) => ({
+                        id: n.node.node_id,
+                        type: n.node.type,
+                        title: n.node.title || n.node.node_id.replace(/^[a-z_]+:/, ''),
+                        url: n.node.url,
+                      })),
+                    ]
+                    edges = flat.map((n) => ({ from: rootId, to: n.node.node_id, kind: n.edge.kind }))
+                  }
                   return (
                     <ClusterGraph
-                      nodes={s.nodes}
-                      edges={s.edges}
+                      nodes={nodes}
+                      edges={edges}
                       width={Math.min(512, window.innerWidth - 64)}
                       height={440}
                       onDrill={(id, label) => {
