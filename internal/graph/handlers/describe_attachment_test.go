@@ -23,6 +23,7 @@ type mockGemini struct {
 	describeResult  func() (string, string, []string, error)
 	embedResult     func() ([]float32, error)
 	generateResult  func() (string, error)
+	generateUser    string // last user prompt passed to Generate
 }
 
 func (m *mockGemini) Describe(_ context.Context, _ string, _ []byte, _ string) (string, string, []string, error) {
@@ -41,7 +42,8 @@ func (m *mockGemini) Embed(_ context.Context, _ string) ([]float32, error) {
 	return []float32{0.1, 0.2}, nil
 }
 
-func (m *mockGemini) Generate(_ context.Context, _, _ string) (string, error) {
+func (m *mockGemini) Generate(_ context.Context, _, user string) (string, error) {
+	m.generateUser = user
 	if m.generateResult != nil {
 		return m.generateResult()
 	}

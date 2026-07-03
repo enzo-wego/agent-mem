@@ -373,7 +373,17 @@ ORDER BY COALESCE(to_timestamp(NULLIF(n.metadata->>'ts','')::float8), n.first_se
 		h.Channel, threadTS).Scan(&overview, &hlRaw)
 	_ = json.Unmarshal(hlRaw, &highlights)
 	if overview == "" && deps.Gemini != nil && len(msgs) > 0 {
+		hasDiscussion := false
+		for _, m := range msgs {
+			if !linkOnly(m.text) {
+				hasDiscussion = true
+				break
+			}
+		}
 		var tb strings.Builder
+		// Same linked-resources block the cached summarizer uses — without it a
+		// bare shared link summarizes to "no context provided".
+		tb.WriteString(linkedResourceBlock(ctx, deps, h.Channel, threadTS, !hasDiscussion))
 		for _, m := range msgs {
 			a := m.author
 			if a == "" {

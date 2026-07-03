@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -75,5 +76,90 @@ ON CONFLICT (id) DO NOTHING`, n.id, "msg "+n.author, meta)
 	var hl []string
 	if err := json.Unmarshal(hlRaw, &hl); err != nil || len(hl) != 2 {
 		t.Errorf("highlights = %v (err %v), want 2 items", hl, err)
+	}
+}
+
+func TestLinkOnly(t *testing.T) {
+	for _, tc := range []struct {
+		text string
+		want bool
+	}{
+		{"https://github.com/wego/payments/pull/2113", true},
+		{"<https://github.com/wego/payments/pull/2113>", true},
+		{"<https://github.com/wego/payments/pull/2113|PR 2113> pls", true},
+		{"", true},
+		{"refunds are failing on TripleA since the deploy", false},
+		{"see https://go.dev — the scheduler change explains the latency regression", false},
+	} {
+		if got := linkOnly(tc.text); got != tc.want {
+			t.Errorf("linkOnly(%q) = %v, want %v", tc.text, got, tc.want)
+		}
+	}
+}
+
+// TestSummarizeThread_LinkOnlyIncludesResourceExcerpt verifies a thread that is
+// nothing but a shared link gets the linked resource's title AND body excerpt in
+// the LLM prompt, so the summary describes the resource instead of "no context".
+func TestSummarizeThread_LinkOnlyIncludesResourceExcerpt(t *testing.T) {
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		t.Skip("DATABASE_URL not set; skipping integration test")
+	}
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatalf("pool: %v", err)
+	}
+	defer pool.Close()
+	for _, tbl := range []string{"graph.thread_summaries", "graph.edges", "graph.nodes"} {
+		if _, err := pool.Exec(ctx, "DELETE FROM "+tbl); err != nil {
+			t.Fatalf("clean %s: %v", tbl, err)
+		}
+	}
+
+	// Link-only thread: a bare PR URL and a "pls review" reply.
+	for _, n := range []struct{ id, ts, body string }{
+		{"slack:C:200.000001", "200.000001", "<https://github.com/wego/payments/pull/2113>"},
+		{"slack:C:200.000002", "200.000002", "pls review"},
+	} {
+		meta := `{"ts":"` + n.ts + `","thread_ts":"200.000001","author":{"display_name":"Lei"}}`
+		if _, err := pool.Exec(ctx, `
+INSERT INTO graph.nodes (id, type, natural_key, body, scope, metadata, machine_id)
+VALUES ($1,'slack',$1,$2,'slack:C',$3::jsonb,'test')`, n.id, n.body, meta); err != nil {
+			t.Fatalf("seed %s: %v", n.id, err)
+		}
+	}
+	if _, err := pool.Exec(ctx, `
+INSERT INTO graph.nodes (id, type, natural_key, title, body, scope, metadata, machine_id)
+VALUES ('gh_pr:wego/payments#2113','gh_pr','wego/payments#2113',
+        'fix: repair red main','This PR fixes the auto-capture tests by expecting MaxPendingDuration.',
+        'github:wego/payments','{}'::jsonb,'test')`); err != nil {
+		t.Fatalf("seed pr: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+INSERT INTO graph.edges (from_node_id, to_node_id, kind, source_msg_id, machine_id)
+VALUES ('slack:C:200.000001','gh_pr:wego/payments#2113','REFERENCES','slack:C:200.000001','test')`); err != nil {
+		t.Fatalf("seed edge: %v", err)
+	}
+
+	gem := &mockGemini{}
+	gem.generateResult = func() (string, error) {
+		return `{"topic":"PR 2113 shared for review","overview":"Lei shared a PR fixing red main.","highlights":[]}`, nil
+	}
+	deps := Deps{DB: pool, Gemini: gem, Logger: zerolog.Nop()}
+
+	payload, _ := json.Marshal(map[string]string{"channel_id": "C", "thread_ts": "200.000001"})
+	if err := NewSummarizeThreadHandler(deps).Handler(ctx, payload); err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	for _, want := range []string{
+		"Linked resources:",
+		"fix: repair red main",
+		"This PR fixes the auto-capture tests", // excerpt only included because the thread is link-only
+	} {
+		if !strings.Contains(gem.generateUser, want) {
+			t.Errorf("prompt missing %q\nprompt:\n%s", want, gem.generateUser)
+		}
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -63,6 +64,7 @@ ORDER BY COALESCE(to_timestamp(NULLIF(n.metadata->>'ts','')::float8), n.first_se
 		var b strings.Builder
 		var count int
 		var maxUpdated int64
+		var hasDiscussion bool
 		for rows.Next() {
 			var body, author, dept string
 			var upd int64
@@ -73,6 +75,9 @@ ORDER BY COALESCE(to_timestamp(NULLIF(n.metadata->>'ts','')::float8), n.first_se
 			count++
 			if upd > maxUpdated {
 				maxUpdated = upd
+			}
+			if !linkOnly(body) {
+				hasDiscussion = true
 			}
 			if author == "" {
 				author = "someone"
@@ -110,37 +115,12 @@ ORDER BY COALESCE(to_timestamp(NULLIF(n.metadata->>'ts','')::float8), n.first_se
 		}
 
 		// Prepend the thread's linked-resource titles so the summary can name the
-		// ticket/doc it is about instead of ignoring it. Titles only — the deep
-		// content lives in search and the cluster view; full bodies would bloat the
-		// prompt and drift the summary toward the resource instead of the thread.
-		var resBlock strings.Builder
-		if rrows, rerr := deps.DB.Query(ctx, `
-SELECT DISTINCT r.type, COALESCE(NULLIF(r.title,''), left(COALESCE(r.body,''),120))
-FROM graph.nodes n
-JOIN graph.edges e ON e.from_node_id = n.id AND e.kind = 'REFERENCES'
-JOIN graph.nodes r ON r.id = e.to_node_id AND r.deleted_at IS NULL
-WHERE n.scope = 'slack:' || $1 AND n.deleted_at IS NULL
-  AND COALESCE(n.metadata->>'thread_ts','') = $2
-  AND r.type NOT IN ('slack','slack_thread','slack_file')
-ORDER BY 1`, p.ChannelID, p.ThreadTs); rerr == nil {
-			var lines []string
-			for rrows.Next() {
-				var typ, title string
-				if rrows.Scan(&typ, &title) == nil && strings.TrimSpace(title) != "" {
-					lines = append(lines, "- "+friendlySource(typ)+": "+firstLine(title, 120))
-				}
-			}
-			rrows.Close()
-			if len(lines) > 0 {
-				resBlock.WriteString("Linked resources:\n")
-				for _, l := range lines {
-					resBlock.WriteString(l + "\n")
-				}
-				resBlock.WriteString("\nThread (oldest first):\n")
-			}
-		}
+		// ticket/doc it is about instead of ignoring it. When the thread is only a
+		// shared link with no discussion, the resource IS the content — include a
+		// short body excerpt too so the summary can describe it.
+		resBlock := linkedResourceBlock(ctx, deps, p.ChannelID, p.ThreadTs, !hasDiscussion)
 
-		topic, overview, highlights := genThreadDeepSummary(ctx, deps.Gemini, resBlock.String()+b.String())
+		topic, overview, highlights := genThreadDeepSummary(ctx, deps.Gemini, resBlock+b.String())
 		if topic == "" && overview == "" {
 			return nil // transient LLM failure; leave prior summary, retry later
 		}
@@ -159,6 +139,55 @@ ORDER BY 1`, p.ChannelID, p.ThreadTs); rerr == nil {
 	}
 }
 
+// reURLToken matches bare and Slack-wrapped (<http…>, <http…|label>) URLs.
+var reURLToken = regexp.MustCompile(`<?https?://[^\s>]+(\|[^>]*)?>?`)
+
+// linkOnly reports whether text carries no substance beyond URLs — a bare
+// shared link, possibly with a word or two around it.
+func linkOnly(text string) bool {
+	return len(strings.TrimSpace(reURLToken.ReplaceAllString(text, ""))) < 20
+}
+
+// linkedResourceBlock builds the "Linked resources:" prompt block listing the
+// non-Slack resources referenced by the thread's messages. The root message is
+// matched by id too — a lone root has no thread_ts metadata. withExcerpt
+// additionally inlines a short body excerpt per resource, for link-only threads
+// where the resource is the only content. Returns "" when there are none.
+func linkedResourceBlock(ctx context.Context, deps Deps, channelID, threadTs string, withExcerpt bool) string {
+	rrows, err := deps.DB.Query(ctx, `
+SELECT DISTINCT r.type, COALESCE(NULLIF(r.title,''), left(COALESCE(r.body,''),120)), left(COALESCE(r.body,''),500)
+FROM graph.nodes n
+JOIN graph.edges e ON e.from_node_id = n.id AND e.kind = 'REFERENCES'
+JOIN graph.nodes r ON r.id = e.to_node_id AND r.deleted_at IS NULL
+WHERE n.scope = 'slack:' || $1 AND n.deleted_at IS NULL
+  AND (n.id = 'slack:' || $1 || ':' || $2 OR COALESCE(n.metadata->>'thread_ts','') = $2)
+  AND r.type NOT IN ('slack','slack_thread','slack_file')
+ORDER BY 1`, channelID, threadTs)
+	if err != nil {
+		return ""
+	}
+	defer rrows.Close()
+	var resBlock strings.Builder
+	for rrows.Next() {
+		var typ, title, excerpt string
+		if rrows.Scan(&typ, &title, &excerpt) != nil || strings.TrimSpace(title) == "" {
+			continue
+		}
+		if resBlock.Len() == 0 {
+			resBlock.WriteString("Linked resources:\n")
+		}
+		resBlock.WriteString("- " + friendlySource(typ) + ": " + firstLine(title, 120) + "\n")
+		if excerpt = strings.TrimSpace(excerpt); withExcerpt && excerpt != "" && excerpt != strings.TrimSpace(title) {
+			resBlock.WriteString("  " + strings.Join(strings.Fields(excerpt), " ") + "\n")
+		}
+	}
+	if resBlock.Len() == 0 {
+		return ""
+	}
+	resBlock.WriteString("\nThread (oldest first):\n")
+	return resBlock.String()
+}
+
 // genThreadDeepSummary asks the LLM for a one-line topic label PLUS a short
 // overview and chronological highlights for a single Slack thread, so a thread
 // can be understood quickly and deeply. Returns ("","",nil) on error.
@@ -169,7 +198,9 @@ their department on first mention, e.g. "Hazwan (Flights) reported…". Do not a
 department that isn't given.
 A "Linked resources" list may precede the thread — use those titles to identify
 what the thread is about (name the ticket/doc), but summarize the thread's
-discussion, not the resources themselves.
+discussion, not the resources themselves. EXCEPTION: if the thread is only a
+shared link with no discussion, describe the linked resource itself (from its
+title and excerpt) instead of saying no context was provided.
 Summarize it so a teammate understands it quickly and deeply. Respond as JSON:
 {"topic":"short factual label, max 10 words, no trailing period",
  "overview":"2-3 sentences: what was raised and the current state/outcome",
