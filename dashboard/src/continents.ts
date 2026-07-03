@@ -73,8 +73,13 @@ export const DEFAULT_CONTINENT_COUNTRIES: Record<string, string[]> = {
   core: ['CN','IN','KZ','SA','IR','MN','ID','PK','TR','MM','AF','YE','TH','TM','UZ','JP','VN','MY','PH','KR'],
   // payments-partner -> Europe
   partners: ['UA','FR','ES','SE','DE','FI','NO','PL','IT','GB','RO','BY','GR','BG','IS','PT','CZ','IE','AT','RS'],
-  // other -> Africa
-  other: ['DZ','CD','SD','LY','TD','NE','AO','ML','ZA','ET','NG','MR','EG','TZ','MZ','NA','ZM','MA','SO','KE'],
+  // other -> Africa (full list big -> small, so overflow stays in Africa instead of
+  // spilling to the global pool, whose first entry is Russia)
+  other: [
+    'DZ','CD','SD','LY','TD','NE','AO','ML','ZA','ET','NG','MR','EG','TZ','MZ','NA','ZM','MA','SO','KE',
+    'CF','SS','MG','BW','CM','ZW','CG','CI','BF','GA','GN','UG','GH','SN','TN','MW','ER','BJ','LR','SL',
+    'TG','LS','GW','GQ','BI','RW','DJ','SZ',
+  ],
 }
 
 // Global fallback pool ordered by area, for unknown continents or overflow when a
@@ -99,7 +104,9 @@ export function assignCountries(
 ): Record<string, CountryAssignment> {
   const byContinent: Record<string, { channel_id: string; count: number; name?: string }[]> = {}
   for (const ch of channels) {
-    const cid = continentOf(ch.channel_id, cfg, ch.name) || '__none'
+    // Unmatched channels are treated as "other" so they draw from the Africa pool
+    // instead of the global one (which would drop them on Russia/Canada/US).
+    const cid = continentOf(ch.channel_id, cfg, ch.name) || 'other'
     ;(byContinent[cid] ||= []).push(ch)
   }
   const used = new Set<string>()
