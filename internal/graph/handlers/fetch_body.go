@@ -212,11 +212,16 @@ func fetchBodyHandler(deps Deps) jobs.Handler {
 		for _, att := range body.Attachments {
 			attNK, _ := ids.ParseNaturalKey(att.NodeID)
 			attType, _ := ids.ParseType(att.NodeID)
+			// Title = filename so the dashboard shows "invoice.png", never a raw
+			// node id. Keep-if-present: describe_attachment owns body, not title,
+			// so an existing (possibly hand-fixed) title is never clobbered.
 			_, uErr := deps.DB.Exec(ctx, `
-				INSERT INTO graph.nodes (id, type, natural_key, url, updated_at, machine_id)
-				VALUES ($1, $2, $3, $4, NOW(), $5)
-				ON CONFLICT (id) DO NOTHING`,
-				att.NodeID, string(attType), attNK, att.URLPrivate, deps.MachineID,
+				INSERT INTO graph.nodes (id, type, natural_key, url, title, updated_at, machine_id)
+				VALUES ($1, $2, $3, $4, $5, NOW(), $6)
+				ON CONFLICT (id) DO UPDATE SET
+					title = COALESCE(NULLIF(graph.nodes.title,''), EXCLUDED.title),
+					url   = EXCLUDED.url`,
+				att.NodeID, string(attType), attNK, att.URLPrivate, att.Filename, deps.MachineID,
 			)
 			if uErr != nil {
 				deps.Logger.Warn().Err(uErr).Str("att_node_id", att.NodeID).Msg("fetch_body: upsert attachment node failed")

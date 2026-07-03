@@ -159,10 +159,27 @@ const GRAPH_TYPE_GROUPS: Record<string, { label: string; order: number }> = {
   slack_thread: { label: 'Slack threads', order: 3 },
   slack: { label: 'Slack threads', order: 3 },
   slack_file: { label: 'Files', order: 4 },
+  jira_attachment: { label: 'Attachments', order: 4 },
   person: { label: 'People', order: 5 },
   gws_doc: { label: 'Google Docs', order: 2 },
   gws: { label: 'Google Docs', order: 2 },
+  wegohub: { label: 'Wego Hub', order: 2 },
+  claude_artifact: { label: 'Claude Artifacts', order: 2 },
   feature: { label: 'Features', order: 6 },
+}
+
+// Short per-row identifier so same-titled rows stay distinguishable: the Jira
+// key, the Confluence space, or the GitHub repo#num. '' when there's nothing
+// more useful than the title itself.
+function neighborHint(n: GraphNeighbor): string {
+  const { type, node_id, url } = n.node
+  if (type === 'jira') return node_id.slice('jira:'.length)
+  if (type === 'gh_pr') return node_id.slice('gh_pr:'.length)
+  if (type === 'cf' || type === 'cf_page') {
+    const m = /\/spaces\/([^/]+)\//.exec(url || '')
+    return m ? m[1] : ''
+  }
+  return ''
 }
 
 interface NeighborGroup {
@@ -2580,7 +2597,10 @@ export function LiveGlobePage() {
                       <span style={{ color: C.dim, opacity: 0.7 }}>· {g.items.length}</span>
                     </div>
                     {g.items.map((n, i) => {
-                      const label = n.node.title || n.node.node_id
+                      // Untitled node: show the bare key ("122349"), not the raw
+                      // "jira_attachment:122349" — the group header names the type.
+                      const label = n.node.title || n.node.node_id.replace(/^[a-z_]+:/, '')
+                      const hint = neighborHint(n)
                       const itemStyle: React.CSSProperties = {
                         display: 'flex',
                         alignItems: 'baseline',
@@ -2618,6 +2638,18 @@ export function LiveGlobePage() {
                               }}
                             >
                               #{n.node.channel}
+                            </span>
+                          )}
+                          {hint && (
+                            <span
+                              style={{
+                                flexShrink: 0,
+                                color: C.dim,
+                                fontSize: 9,
+                                opacity: 0.85,
+                              }}
+                            >
+                              {hint}
                             </span>
                           )}
                           <span
