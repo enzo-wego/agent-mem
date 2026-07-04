@@ -68,6 +68,11 @@ func (h *neighborsHandler) serve(w http.ResponseWriter, r *http.Request) {
 	eeid, scopeSet := askerScopeSet(ctx, h.db, h.aclBld, r.Header.Get("X-Asker-User"))
 	noFilter := eeid == 0
 
+	// ponytail: flat per-request cap on lazy summarize enqueues; per-thread dedup
+	// lives in enqueueSummarizeThread.
+	const maxLazySummarize = 12
+	lazySummarized := 0
+
 	seen := map[string]bool{id: true}
 	frontier := []struct {
 		id  string
@@ -146,6 +151,21 @@ WHERE n.id=$1`, n.NodeID)
 					title = threadSummary
 				case strings.TrimSpace(title) == "":
 					title = firstLine(body, 120)
+				}
+				// Lazily summarize threads the panel surfaced raw: only hot threads
+				// get summarized proactively, so SIMILAR/THREAD rows often show the
+				// first message verbatim. Enqueue (deduped, best-effort) so the next
+				// open shows a summary. Bounded per request to protect LLM quota.
+				if threadSummary == "" && lazySummarized < maxLazySummarize &&
+					scope != nil && strings.HasPrefix(*scope, "slack:C") {
+					tt := item.Node.ThreadTS
+					if tt == "" {
+						if parts := strings.Split(item.Node.NodeID, ":"); len(parts) == 3 {
+							tt = parts[2]
+						}
+					}
+					enqueueSummarizeThread(ctx, h.db, strings.TrimPrefix(*scope, "slack:"), tt, false)
+					lazySummarized++
 				}
 				// Never surface a raw slack:CHANNEL:TS id: when there's no summary or
 				// body, fall back to a readable channel-scoped label.

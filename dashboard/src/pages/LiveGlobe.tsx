@@ -252,7 +252,7 @@ function groupNeighbors(neighbors: GraphNeighbor[]): NeighborGroup[] {
 function fmtDateHM(ms: number): string {
   const d = new Date(ms)
   return (
-    d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) +
+    d.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' }) +
     ' ' +
     d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })
   )
@@ -292,6 +292,19 @@ function NeighborTimeline({ neighbors }: { neighbors: GraphNeighbor[] }) {
   const min = pts[0].ts
   const max = pts[pts.length - 1].ts
   const span = Math.max(max - min, 1)
+  // Time labels sit under the dots themselves, not at arbitrary axis ticks:
+  // greedy-cluster dots within 14% of the axis so labels don't overlap; a
+  // cluster is labelled by its first item's time plus a count.
+  const clusters: { x: number; ts: number; count: number }[] = []
+  for (const p of pts) {
+    const x = ((p.ts - min) / span) * 100
+    const last = clusters[clusters.length - 1]
+    if (last && x - last.x < 14) {
+      last.count++
+      continue
+    }
+    clusters.push({ x, ts: p.ts, count: 1 })
+  }
   return (
     <div>
       <div
@@ -338,19 +351,24 @@ function NeighborTimeline({ neighbors }: { neighbors: GraphNeighbor[] }) {
           )
         })}
       </div>
-      <div
-        style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          color: C.dim,
-          fontSize: 8,
-          letterSpacing: '0.04em',
-          marginTop: 2,
-        }}
-      >
-        <span>{fmtDateHM(min)}</span>
-        <span style={{ opacity: 0.7 }}>{fmtDateHM(min + span / 2)}</span>
-        <span>{fmtDateHM(max)}</span>
+      <div style={{ position: 'relative', height: 12, margin: '2px 4px 0' }}>
+        {clusters.map((c) => (
+          <span
+            key={c.ts}
+            style={{
+              position: 'absolute',
+              left: `${c.x}%`,
+              transform: c.x < 8 ? 'none' : c.x > 92 ? 'translateX(-100%)' : 'translateX(-50%)',
+              color: C.dim,
+              fontSize: 8,
+              letterSpacing: '0.04em',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {fmtDateHM(c.ts)}
+            {c.count > 1 ? ` ·${c.count}` : ''}
+          </span>
+        ))}
       </div>
     </div>
   )
