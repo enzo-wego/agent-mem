@@ -240,7 +240,11 @@ function groupNeighbors(neighbors: GraphNeighbor[]): NeighborGroup[] {
     g.items.push(n)
   }
   for (const g of byLabel.values()) {
-    g.items.sort((a, b) => effTs(b) - effTs(a)) // newest first
+    // Highest similarity first (a 84% match outranks a 77% one); explicit edges
+    // have no score and fall back to newest-first among themselves.
+    g.items.sort(
+      (a, b) => (b.edge.score ?? 0) - (a.edge.score ?? 0) || effTs(b) - effTs(a),
+    )
   }
   return [...byLabel.values()].sort((a, b) => a.order - b.order || a.label.localeCompare(b.label))
 }
@@ -267,7 +271,13 @@ function typeDotColor(type: string): string {
   return C.text // slack threads + anything else
 }
 
-function NeighborTimeline({ neighbors }: { neighbors: GraphNeighbor[] }) {
+function NeighborTimeline({
+  neighbors,
+  numbers,
+}: {
+  neighbors: GraphNeighbor[]
+  numbers: Map<string, number>
+}) {
   // Mirror groupNeighbors' thread collapse: one point per Slack thread, dated
   // by its latest message.
   const threadMax = new Map<string, number>()
@@ -293,13 +303,15 @@ function NeighborTimeline({ neighbors }: { neighbors: GraphNeighbor[] }) {
   const max = pts[pts.length - 1].ts
   const span = Math.max(max - min, 1)
   // Time labels sit under the dots themselves, not at arbitrary axis ticks:
-  // greedy-cluster dots within 14% of the axis so labels don't overlap; a
-  // cluster is labelled by its first item's time plus a count.
+  // greedy-cluster dots within 18% of the axis so labels don't overlap; a
+  // cluster is labelled by its first item's time plus a count. The strip
+  // scrolls horizontally when clusters need more room than the popup gives
+  // (minWidth grows with cluster count).
   const clusters: { x: number; ts: number; count: number }[] = []
   for (const p of pts) {
     const x = ((p.ts - min) / span) * 100
     const last = clusters[clusters.length - 1]
-    if (last && x - last.x < 14) {
+    if (last && x - last.x < 18) {
       last.count++
       continue
     }
@@ -321,54 +333,68 @@ function NeighborTimeline({ neighbors }: { neighbors: GraphNeighbor[] }) {
         <span>Timeline</span>
         <span style={{ opacity: 0.7 }}>· {pts.length}</span>
       </div>
-      <div style={{ position: 'relative', height: 40, margin: '4px 4px 0' }}>
-        <div
-          style={{ position: 'absolute', left: 0, right: 0, top: '50%', height: 1, background: C.border }}
-        />
-        {pts.map(({ n, ts }, i) => {
-          const x = ((ts - min) / span) * 100
-          const label = n.node.title || n.node.node_id.replace(/^[a-z_]+:/, '')
-          return (
-            <a
-              key={n.node.node_id}
-              href={n.node.url || undefined}
-              target="_blank"
-              rel="noopener noreferrer"
-              title={`${fmtDateHM(ts)} — ${label}`}
-              style={{
-                position: 'absolute',
-                left: `${x}%`,
-                top: i % 2 ? 'calc(50% - 10px)' : 'calc(50% + 3px)',
-                width: 7,
-                height: 7,
-                marginLeft: -3.5,
-                borderRadius: '50%',
-                background: typeDotColor(n.node.type),
-                opacity: 0.9,
-                cursor: n.node.url ? 'pointer' : 'help',
-              }}
+      <div style={{ overflowX: 'auto', paddingBottom: 2 }}>
+        <div style={{ minWidth: clusters.length * 170, padding: '0 8px' }}>
+          <div style={{ position: 'relative', height: 44, marginTop: 4 }}>
+            <div
+              style={{ position: 'absolute', left: 0, right: 0, top: '50%', height: 1, background: C.border }}
             />
-          )
-        })}
-      </div>
-      <div style={{ position: 'relative', height: 12, margin: '2px 4px 0' }}>
-        {clusters.map((c) => (
-          <span
-            key={c.ts}
-            style={{
-              position: 'absolute',
-              left: `${c.x}%`,
-              transform: c.x < 8 ? 'none' : c.x > 92 ? 'translateX(-100%)' : 'translateX(-50%)',
-              color: C.dim,
-              fontSize: 8,
-              letterSpacing: '0.04em',
-              whiteSpace: 'nowrap',
-            }}
-          >
-            {fmtDateHM(c.ts)}
-            {c.count > 1 ? ` ·${c.count}` : ''}
-          </span>
-        ))}
+            {pts.map(({ n, ts }, i) => {
+              const x = ((ts - min) / span) * 100
+              const label = n.node.title || n.node.node_id.replace(/^[a-z_]+:/, '')
+              const no = numbers.get(n.node.node_id)
+              return (
+                <a
+                  key={n.node.node_id}
+                  href={n.node.url || undefined}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  title={`${fmtDateHM(ts)} — ${label}`}
+                  style={{
+                    position: 'absolute',
+                    left: `${x}%`,
+                    top: i % 2 ? 'calc(50% - 16px)' : 'calc(50% + 3px)',
+                    width: 13,
+                    height: 13,
+                    marginLeft: -6.5,
+                    borderRadius: '50%',
+                    background: typeDotColor(n.node.type),
+                    opacity: 0.9,
+                    cursor: n.node.url ? 'pointer' : 'help',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    fontSize: 8,
+                    fontWeight: 600,
+                    color: '#0a0a0a',
+                    textDecoration: 'none',
+                  }}
+                >
+                  {no ?? ''}
+                </a>
+              )
+            })}
+          </div>
+          <div style={{ position: 'relative', height: 12, marginTop: 2 }}>
+            {clusters.map((c) => (
+              <span
+                key={c.ts}
+                style={{
+                  position: 'absolute',
+                  left: `${c.x}%`,
+                  transform: c.x < 8 ? 'none' : c.x > 92 ? 'translateX(-100%)' : 'translateX(-50%)',
+                  color: C.dim,
+                  fontSize: 8,
+                  letterSpacing: '0.04em',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {fmtDateHM(c.ts)}
+                {c.count > 1 ? ` ·${c.count}` : ''}
+              </span>
+            ))}
+          </div>
+        </div>
       </div>
     </div>
   )
@@ -2750,10 +2776,16 @@ export function LiveGlobePage() {
                 if (neighbors.length === 0) {
                   return <div style={{ color: C.dim, fontSize: 11 }}>no linked resources yet</div>
                 }
+                const groups = groupNeighbors(neighbors)
+                // Row numbers follow display order (group by group) and repeat on
+                // the timeline dots, so a dot can be matched to its row.
+                const rowNo = new Map<string, number>()
+                let nextNo = 1
+                for (const g of groups) for (const n of g.items) rowNo.set(n.node.node_id, nextNo++)
                 return (
                   <>
-                    <NeighborTimeline neighbors={neighbors} />
-                    {groupNeighbors(neighbors).map((g) => (
+                    <NeighborTimeline neighbors={neighbors} numbers={rowNo} />
+                    {groups.map((g) => (
                   <div key={g.label} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                     <div
                       style={{
@@ -2787,6 +2819,17 @@ export function LiveGlobePage() {
                       }
                       const inner = (
                         <>
+                          <span
+                            style={{
+                              flexShrink: 0,
+                              minWidth: 16,
+                              textAlign: 'right',
+                              color: C.dim,
+                              fontSize: 9,
+                            }}
+                          >
+                            {rowNo.get(n.node.node_id)}
+                          </span>
                           <span
                             style={{
                               flex: 1,
