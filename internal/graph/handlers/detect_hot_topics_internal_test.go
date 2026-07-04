@@ -204,11 +204,15 @@ func TestTopicMatches_LLMJudge(t *testing.T) {
 	s := subscription{Topic: "payments"}
 
 	gem.generateResult = func() (string, error) { return `{"relevant": true}`, nil }
-	if !topicMatches(context.Background(), deps, s, hotThread{Blob: "juspay blocked pk ip, 403 on card"}) {
+	relevant, fromLLM := topicMatches(context.Background(), deps, s, hotThread{Blob: "juspay blocked pk ip, 403 on card"})
+	if !relevant {
 		t.Errorf("relevant=true should match")
 	}
+	if !fromLLM {
+		t.Errorf("LLM verdict must report fromLLM=true (cacheable)")
+	}
 	gem.generateResult = func() (string, error) { return `{"relevant": false}`, nil }
-	if topicMatches(context.Background(), deps, s, hotThread{Blob: "aws secret missing, deployment failed"}) {
+	if relevant, _ := topicMatches(context.Background(), deps, s, hotThread{Blob: "aws secret missing, deployment failed"}); relevant {
 		t.Errorf("relevant=false should NOT match")
 	}
 }
@@ -218,13 +222,17 @@ func TestTopicMatches_LLMJudge(t *testing.T) {
 func TestTopicMatches_KeywordFallback(t *testing.T) {
 	deps := Deps{} // no Gemini ⇒ keyword fallback
 	s := subscription{Topic: "payments"}
-	if !topicMatches(context.Background(), deps, s, hotThread{Blob: "the payments service is down"}) {
+	relevant, fromLLM := topicMatches(context.Background(), deps, s, hotThread{Blob: "the payments service is down"})
+	if !relevant {
 		t.Errorf("expected keyword match on blob")
 	}
-	if !topicMatches(context.Background(), deps, s, hotThread{ChannelName: "payments-ops"}) {
+	if fromLLM {
+		t.Errorf("keyword fallback must report fromLLM=false (not cacheable)")
+	}
+	if relevant, _ := topicMatches(context.Background(), deps, s, hotThread{ChannelName: "payments-ops"}); !relevant {
 		t.Errorf("expected keyword match on channel name")
 	}
-	if topicMatches(context.Background(), deps, s, hotThread{Blob: "lunch plans"}) {
+	if relevant, _ := topicMatches(context.Background(), deps, s, hotThread{Blob: "lunch plans"}); relevant {
 		t.Errorf("did not expect match for unrelated text")
 	}
 }

@@ -102,6 +102,10 @@ func NewDetectHotTopics(deps Deps) jobs.Handler {
 			}
 			// Already-notified roots: skip re-evaluating them.
 			notified := loadNotified(ctx, deps.DB, s.ID)
+			// Cached judge verdicts: judge a thread once per size, don't re-roll
+			// the nondeterministic LLM every tick — re-rolled ~288x/day it
+			// eventually flips a borderline "false" to "true" hours later.
+			judged := loadJudgments(ctx, deps.DB, s.ID)
 			for _, h := range hot {
 				if notified[h.RootNodeID] {
 					continue
@@ -109,8 +113,20 @@ func NewDetectHotTopics(deps Deps) jobs.Handler {
 				// Topic gate: is this hot thread genuinely ABOUT the topic? Decided
 				// by an LLM judgment — cosine on a bare topic word couldn't tell a
 				// deployment thread (0.52) from a real payments incident (0.512).
-				if !topicMatches(ctx, deps, s, h) {
-					continue
+				// A cached verdict is reused until the thread's message count
+				// changes; only LLM verdicts are cached (keyword fallback is free).
+				if j, ok := judged[h.RootNodeID]; ok && j.msgCount == h.MsgCount {
+					if !j.relevant {
+						continue
+					}
+				} else {
+					relevant, fromLLM := topicMatches(ctx, deps, s, h)
+					if fromLLM {
+						saveJudgment(ctx, deps.DB, s.ID, h.RootNodeID, h.MsgCount, relevant)
+					}
+					if !relevant {
+						continue
+					}
 				}
 				// Dedup: claim the (sub, thread) pair; skip if already notified.
 				ct, err := deps.DB.Exec(ctx,
@@ -281,15 +297,53 @@ func loadNotified(ctx context.Context, db *pgxpool.Pool, subID int64) map[string
 // subscription's topic, using an LLM yes/no judgment (cosine on a bare topic
 // word can't separate, e.g., a deployment thread from a payments incident — both
 // scored ~0.52). Falls back to a literal keyword match when no LLM is available.
-func topicMatches(ctx context.Context, deps Deps, s subscription, h hotThread) bool {
+// fromLLM is true when the verdict came from the LLM judge — only those are
+// worth caching; a keyword-fallback verdict leaves the judge another chance.
+func topicMatches(ctx context.Context, deps Deps, s subscription, h hotThread) (relevant, fromLLM bool) {
 	if deps.Gemini != nil {
 		if relevant, ok := judgeTopic(ctx, deps, s.judgeTopicText(), h); ok {
-			return relevant
+			return relevant, true
 		}
 	}
 	// Fallback: literal keyword over the thread text + channel name.
 	hay := strings.ToLower(h.Blob + " " + h.ChannelName)
-	return strings.Contains(hay, strings.ToLower(s.Topic))
+	return strings.Contains(hay, strings.ToLower(s.Topic)), false
+}
+
+// judgment is a cached LLM verdict for one (subscription, thread) pair, valid
+// while the thread still has msgCount messages in the lookback window.
+type judgment struct {
+	msgCount int
+	relevant bool
+}
+
+// loadJudgments returns the cached judge verdicts for a subscription.
+func loadJudgments(ctx context.Context, db *pgxpool.Pool, subID int64) map[string]judgment {
+	out := map[string]judgment{}
+	rows, err := db.Query(ctx,
+		`SELECT root_node_id, msg_count, relevant FROM graph.topic_judgments WHERE subscription_id=$1`, subID)
+	if err != nil {
+		return out
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		var j judgment
+		if rows.Scan(&id, &j.msgCount, &j.relevant) == nil {
+			out[id] = j
+		}
+	}
+	return out
+}
+
+// saveJudgment upserts a verdict so the thread isn't re-judged until it grows.
+func saveJudgment(ctx context.Context, db *pgxpool.Pool, subID int64, root string, msgCount int, relevant bool) {
+	_, _ = db.Exec(ctx, `
+		INSERT INTO graph.topic_judgments(subscription_id, root_node_id, msg_count, relevant)
+		VALUES ($1,$2,$3,$4)
+		ON CONFLICT (subscription_id, root_node_id)
+		DO UPDATE SET msg_count=EXCLUDED.msg_count, relevant=EXCLUDED.relevant, judged_at=NOW()`,
+		subID, root, msgCount, relevant)
 }
 
 // judgeTopic asks the LLM whether the thread is substantively about the topic.
