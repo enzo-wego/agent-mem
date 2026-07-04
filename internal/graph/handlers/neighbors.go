@@ -152,6 +152,20 @@ WHERE n.id=$1`, n.NodeID)
 				case strings.TrimSpace(title) == "":
 					title = firstLine(body, 120)
 				}
+				// Rows collapse to one-per-thread, so link the thread ROOT: stored
+				// urls are unreliable here (backfill wrote bare slack.com links, and
+				// a reply's permalink drops the reader mid-thread with no context).
+				if scope != nil && strings.HasPrefix(*scope, "slack:") {
+					rootTs := item.Node.ThreadTS
+					if rootTs == "" {
+						if parts := strings.Split(item.Node.NodeID, ":"); len(parts) == 3 {
+							rootTs = parts[2]
+						}
+					}
+					if u := slackPermalink("slack:" + strings.TrimPrefix(*scope, "slack:") + ":" + rootTs); u != "" {
+						item.Node.URL = u
+					}
+				}
 				// Lazily summarize threads the panel surfaced raw: only hot threads
 				// get summarized proactively, so SIMILAR/THREAD rows often show the
 				// first message verbatim. Enqueue (deduped, best-effort) so the next

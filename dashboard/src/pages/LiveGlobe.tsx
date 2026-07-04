@@ -302,21 +302,39 @@ function NeighborTimeline({
   const min = pts[0].ts
   const max = pts[pts.length - 1].ts
   const span = Math.max(max - min, 1)
-  // Time labels sit under the dots themselves, not at arbitrary axis ticks:
-  // greedy-cluster dots within 18% of the axis so labels don't overlap; a
-  // cluster is labelled by its first item's time plus a count. The strip
-  // scrolls horizontally when clusters need more room than the popup gives
-  // (minWidth grows with cluster count).
+
+  // Scatter layout: x = time, y = similarity. Pixel-space so the strip can
+  // scroll: the inner width grows with point count, and time labels cluster
+  // by pixel distance (< LABEL_W) — every dot group gets a label, including
+  // the right edge.
+  const PAD_X = 12
+  const LABEL_W = 160
+  const CHART_H = 72
+  const PAD_TOP = 10
+  const PAD_BOT = 12
+  const innerW = Math.max(560, pts.length * 170)
+  const xOf = (ts: number) => PAD_X + ((ts - min) / span) * (innerW - 2 * PAD_X)
+
+  const scores = pts.map((p) => p.n.edge.score ?? 0).filter((s) => s > 0)
+  const smin = scores.length ? Math.min(...scores) : 0
+  const smax = scores.length ? Math.max(...scores) : 0
+  const yOf = (score: number) => {
+    if (score <= 0) return CHART_H - PAD_BOT // unscored (explicit edges) sit on the baseline
+    if (smax === smin) return CHART_H / 2
+    return PAD_TOP + ((smax - score) / (smax - smin)) * (CHART_H - PAD_TOP - PAD_BOT)
+  }
+
   const clusters: { x: number; ts: number; count: number }[] = []
   for (const p of pts) {
-    const x = ((p.ts - min) / span) * 100
+    const x = xOf(p.ts)
     const last = clusters[clusters.length - 1]
-    if (last && x - last.x < 18) {
+    if (last && x - last.x < LABEL_W) {
       last.count++
       continue
     }
     clusters.push({ x, ts: p.ts, count: 1 })
   }
+
   return (
     <div>
       <div
@@ -333,66 +351,95 @@ function NeighborTimeline({
         <span>Timeline</span>
         <span style={{ opacity: 0.7 }}>· {pts.length}</span>
       </div>
-      <div style={{ overflowX: 'auto', paddingBottom: 2 }}>
-        <div style={{ minWidth: clusters.length * 170, padding: '0 8px' }}>
-          <div style={{ position: 'relative', height: 44, marginTop: 4 }}>
-            <div
-              style={{ position: 'absolute', left: 0, right: 0, top: '50%', height: 1, background: C.border }}
-            />
-            {pts.map(({ n, ts }, i) => {
-              const x = ((ts - min) / span) * 100
-              const label = n.node.title || n.node.node_id.replace(/^[a-z_]+:/, '')
-              const no = numbers.get(n.node.node_id)
-              return (
-                <a
-                  key={n.node.node_id}
-                  href={n.node.url || undefined}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  title={`${fmtDateHM(ts)} — ${label}`}
-                  style={{
-                    position: 'absolute',
-                    left: `${x}%`,
-                    top: i % 2 ? 'calc(50% - 16px)' : 'calc(50% + 3px)',
-                    width: 13,
-                    height: 13,
-                    marginLeft: -6.5,
-                    borderRadius: '50%',
-                    background: typeDotColor(n.node.type),
-                    opacity: 0.9,
-                    cursor: n.node.url ? 'pointer' : 'help',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    fontSize: 8,
-                    fontWeight: 600,
-                    color: '#0a0a0a',
-                    textDecoration: 'none',
-                  }}
-                >
-                  {no ?? ''}
-                </a>
-              )
-            })}
+      <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
+        {/* y-axis: similarity, outside the scroll so it stays visible */}
+        {smax > 0 && (
+          <div
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              justifyContent: 'space-between',
+              height: CHART_H,
+              flexShrink: 0,
+              color: C.dim,
+              fontSize: 8,
+              textAlign: 'right',
+              width: 26,
+            }}
+          >
+            <span>{Math.round(smax * 100)}%</span>
+            <span>{smax === smin ? '' : `${Math.round(smin * 100)}%`}</span>
           </div>
-          <div style={{ position: 'relative', height: 12, marginTop: 2 }}>
-            {clusters.map((c) => (
-              <span
-                key={c.ts}
+        )}
+        <div style={{ overflowX: 'auto', flex: 1, paddingBottom: 2 }}>
+          <div style={{ width: innerW }}>
+            <div style={{ position: 'relative', height: CHART_H }}>
+              <div
                 style={{
                   position: 'absolute',
-                  left: `${c.x}%`,
-                  transform: c.x < 8 ? 'none' : c.x > 92 ? 'translateX(-100%)' : 'translateX(-50%)',
-                  color: C.dim,
-                  fontSize: 8,
-                  letterSpacing: '0.04em',
-                  whiteSpace: 'nowrap',
+                  left: 0,
+                  right: 0,
+                  top: CHART_H - PAD_BOT,
+                  height: 1,
+                  background: C.border,
                 }}
-              >
-                {fmtDateHM(c.ts)}
-                {c.count > 1 ? ` ·${c.count}` : ''}
-              </span>
-            ))}
+              />
+              {pts.map(({ n, ts }) => {
+                const label = n.node.title || n.node.node_id.replace(/^[a-z_]+:/, '')
+                const score = n.edge.score ?? 0
+                const no = numbers.get(n.node.node_id)
+                const pct = score > 0 ? ` · ${Math.round(score * 100)}%` : ''
+                return (
+                  <a
+                    key={n.node.node_id}
+                    href={n.node.url || undefined}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    title={`${fmtDateHM(ts)}${pct} — ${label}`}
+                    style={{
+                      position: 'absolute',
+                      left: xOf(ts) - 6.5,
+                      top: yOf(score) - 6.5,
+                      width: 13,
+                      height: 13,
+                      borderRadius: '50%',
+                      background: typeDotColor(n.node.type),
+                      opacity: 0.9,
+                      cursor: n.node.url ? 'pointer' : 'help',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      fontSize: 8,
+                      fontWeight: 600,
+                      color: '#0a0a0a',
+                      textDecoration: 'none',
+                    }}
+                  >
+                    {no ?? ''}
+                  </a>
+                )
+              })}
+            </div>
+            <div style={{ position: 'relative', height: 12, marginTop: 2 }}>
+              {clusters.map((c) => (
+                <span
+                  key={c.ts}
+                  style={{
+                    position: 'absolute',
+                    left: c.x,
+                    transform:
+                      c.x < 70 ? 'none' : c.x > innerW - 70 ? 'translateX(-100%)' : 'translateX(-50%)',
+                    color: C.dim,
+                    fontSize: 8,
+                    letterSpacing: '0.04em',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {fmtDateHM(c.ts)}
+                  {c.count > 1 ? ` ·${c.count}` : ''}
+                </span>
+              ))}
+            </div>
           </div>
         </div>
       </div>
