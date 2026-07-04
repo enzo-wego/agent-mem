@@ -159,6 +159,13 @@ func (f *slackFetcher) Fetch(ctx context.Context, node string) (FetchedBody, err
 	bodyTS := parseSlackTS(parent.Ts)
 
 	nodeID := ids.SlackThread(channel, ts)
+	// thread_ts keys the node to its thread root; without it (and channel_id,
+	// which deriveScope needs) the node lands with the bare "slack" scope and
+	// never joins channel names, ACL scopes, or thread summaries.
+	rootTs := parent.ThreadTs
+	if rootTs == "" {
+		rootTs = parent.Ts
+	}
 	return FetchedBody{
 		NodeID:      nodeID,
 		Type:        ids.TypeSlackThread,
@@ -166,6 +173,11 @@ func (f *slackFetcher) Fetch(ctx context.Context, node string) (FetchedBody, err
 		Title:       title,
 		Raw:         []byte(bodyText),
 		ContentType: "text/plain",
+		Metadata: map[string]any{
+			"channel_id": channel,
+			"ts":         parent.Ts,
+			"thread_ts":  rootTs,
+		},
 		Author: AuthorRef{
 			Source:     "slack",
 			ExternalID: parent.User,
