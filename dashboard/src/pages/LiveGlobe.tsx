@@ -182,6 +182,24 @@ function neighborHint(n: GraphNeighbor): string {
   return ''
 }
 
+// edgeKindTooltip explains why a row is linked to the opened topic. SIMILAR rows
+// have no explicit edge — they matched by embedding cosine (threshold 0.45 in
+// bfs.SimilarThreads) — so show the match strength; other kinds are real edges.
+function edgeKindTooltip(edge: { kind: string; score?: number }): string {
+  switch (edge.kind.toUpperCase()) {
+    case 'SIMILAR':
+      return (
+        `No direct link — matched by meaning: this thread's summary is ` +
+        `${edge.score ? Math.round(edge.score * 100) + '%' : ''} semantically similar ` +
+        `to the opened topic (embedding cosine; 45% minimum to appear).`
+      )
+    case 'THREAD':
+      return 'A message in the same Slack thread as the opened topic.'
+    default:
+      return `Explicitly linked: a "${edge.kind.toLowerCase()}" reference was found between the two.`
+  }
+}
+
 interface NeighborGroup {
   label: string
   order: number
@@ -2380,8 +2398,8 @@ export function LiveGlobePage() {
             onClick={(e) => e.stopPropagation()}
             style={{
               ...panel,
-              width: 'min(560px, calc(100vw - 32px))',
-              maxHeight: 'calc(100vh - 64px)',
+              width: 'min(880px, calc(100vw - 32px))',
+              maxHeight: 'calc(100vh - 48px)',
               borderRadius: 4,
               padding: 16,
               display: 'flex',
@@ -2676,15 +2694,20 @@ export function LiveGlobePage() {
                             </span>
                           )}
                           <span
+                            title={edgeKindTooltip(n.edge)}
                             style={{
                               flexShrink: 0,
                               color: C.dim,
                               fontSize: 8,
                               letterSpacing: '0.06em',
                               textTransform: 'uppercase',
+                              cursor: 'help',
                             }}
                           >
                             {n.edge.kind}
+                            {n.edge.kind.toUpperCase() === 'SIMILAR' && n.edge.score
+                              ? ` ${Math.round(n.edge.score * 100)}%`
+                              : ''}
                           </span>
                         </>
                       )

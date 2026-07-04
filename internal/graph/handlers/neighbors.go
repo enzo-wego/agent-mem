@@ -41,6 +41,9 @@ type neighborItem struct {
 	} `json:"node"`
 	Edge struct {
 		Kind string `json:"kind"`
+		// Score is the embedding cosine for SIMILAR edges (omitted otherwise),
+		// so the UI can explain why a semantic match was surfaced.
+		Score float64 `json:"score,omitempty"`
 	} `json:"edge"`
 	Hop int `json:"hop"`
 }
@@ -100,6 +103,7 @@ func (h *neighborsHandler) serve(w http.ResponseWriter, r *http.Request) {
 			var item neighborItem
 			item.Hop = next.hop + 1
 			item.Edge.Kind = n.EdgeKind
+			item.Edge.Score = n.Score
 			// For Slack nodes, prefer the thread summary, then the first line of the
 			// body — so a row shows readable text (and a whole thread one label),
 			// never a raw slack:CHANNEL:TS id.

@@ -11,6 +11,9 @@ import (
 type Neighbor struct {
 	NodeID   string
 	EdgeKind string
+	// Score is the embedding cosine similarity for SIMILAR edges (0 otherwise);
+	// surfaced so the UI can explain *why* a semantically-matched row appears.
+	Score float64
 }
 
 // Expander runs the SQL that finds direct neighbours of a node.
@@ -100,7 +103,8 @@ WITH me AS (
   JOIN graph.artifact_index ai ON ai.node_id = n.id
   WHERE n.id = $1
 )
-SELECT n.id FROM graph.artifact_index ai
+SELECT n.id, (1.0 - (ai.embedding <=> me.emb)) AS cosine
+FROM graph.artifact_index ai
 JOIN graph.nodes n ON n.id = ai.node_id
 CROSS JOIN me
 WHERE n.type IN ('slack','slack_thread')
@@ -122,10 +126,11 @@ LIMIT $3`
 	var out []Neighbor
 	for rows.Next() {
 		var id string
-		if err := rows.Scan(&id); err != nil {
+		var cosine float64
+		if err := rows.Scan(&id, &cosine); err != nil {
 			return nil, err
 		}
-		out = append(out, Neighbor{NodeID: id, EdgeKind: "SIMILAR"})
+		out = append(out, Neighbor{NodeID: id, EdgeKind: "SIMILAR", Score: cosine})
 	}
 	return out, rows.Err()
 }
