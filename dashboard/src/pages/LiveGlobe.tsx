@@ -245,6 +245,117 @@ function groupNeighbors(neighbors: GraphNeighbor[]): NeighborGroup[] {
   return [...byLabel.values()].sort((a, b) => a.order - b.order || a.label.localeCompare(b.label))
 }
 
+// ── Horizontal neighbor timeline ────────────────────────────────────────────
+// One dot per row shown in the lists below (threads collapsed the same way),
+// placed on a left→right time axis. Labels and tooltips include HH:MM.
+
+function fmtDateHM(ms: number): string {
+  const d = new Date(ms)
+  return (
+    d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) +
+    ' ' +
+    d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })
+  )
+}
+
+function typeDotColor(type: string): string {
+  if (type === 'jira' || type === 'jira_attachment') return C.amber
+  if (type === 'gh_pr') return C.green
+  if (type.startsWith('cf') || type.startsWith('gws') || type === 'wegohub' || type === 'claude_artifact')
+    return '#66aaff'
+  if (type === 'person') return '#cc88ff'
+  return C.text // slack threads + anything else
+}
+
+function NeighborTimeline({ neighbors }: { neighbors: GraphNeighbor[] }) {
+  // Mirror groupNeighbors' thread collapse: one point per Slack thread, dated
+  // by its latest message.
+  const threadMax = new Map<string, number>()
+  for (const n of neighbors) {
+    const tt = n.node.thread_ts
+    if (tt) threadMax.set(tt, Math.max(threadMax.get(tt) ?? 0, n.node.ts_ms ?? 0))
+  }
+  const seen = new Set<string>()
+  const pts: { n: GraphNeighbor; ts: number }[] = []
+  for (const n of neighbors) {
+    const tt = n.node.thread_ts
+    if ((n.node.type === 'slack' || n.node.type === 'slack_thread') && tt) {
+      if (seen.has(tt)) continue
+      seen.add(tt)
+    }
+    if (n.node.type === 'person') continue // people aren't events in time
+    const ts = (tt && threadMax.get(tt)) || n.node.ts_ms || 0
+    if (ts > 0) pts.push({ n, ts })
+  }
+  if (pts.length < 2) return null
+  pts.sort((a, b) => a.ts - b.ts)
+  const min = pts[0].ts
+  const max = pts[pts.length - 1].ts
+  const span = Math.max(max - min, 1)
+  return (
+    <div>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'baseline',
+          gap: 6,
+          color: C.dim,
+          fontSize: 10,
+          letterSpacing: '0.1em',
+          textTransform: 'uppercase',
+        }}
+      >
+        <span>Timeline</span>
+        <span style={{ opacity: 0.7 }}>· {pts.length}</span>
+      </div>
+      <div style={{ position: 'relative', height: 40, margin: '4px 4px 0' }}>
+        <div
+          style={{ position: 'absolute', left: 0, right: 0, top: '50%', height: 1, background: C.border }}
+        />
+        {pts.map(({ n, ts }, i) => {
+          const x = ((ts - min) / span) * 100
+          const label = n.node.title || n.node.node_id.replace(/^[a-z_]+:/, '')
+          return (
+            <a
+              key={n.node.node_id}
+              href={n.node.url || undefined}
+              target="_blank"
+              rel="noopener noreferrer"
+              title={`${fmtDateHM(ts)} — ${label}`}
+              style={{
+                position: 'absolute',
+                left: `${x}%`,
+                top: i % 2 ? 'calc(50% - 10px)' : 'calc(50% + 3px)',
+                width: 7,
+                height: 7,
+                marginLeft: -3.5,
+                borderRadius: '50%',
+                background: typeDotColor(n.node.type),
+                opacity: 0.9,
+                cursor: n.node.url ? 'pointer' : 'help',
+              }}
+            />
+          )
+        })}
+      </div>
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          color: C.dim,
+          fontSize: 8,
+          letterSpacing: '0.04em',
+          marginTop: 2,
+        }}
+      >
+        <span>{fmtDateHM(min)}</span>
+        <span style={{ opacity: 0.7 }}>{fmtDateHM(min + span / 2)}</span>
+        <span>{fmtDateHM(max)}</span>
+      </div>
+    </div>
+  )
+}
+
 const REFRESH_OPTIONS = [5, 10, 30] as const
 const WINDOW_OPTIONS = [
   { days: 90, label: '3 MONTHS' },
@@ -2621,7 +2732,10 @@ export function LiveGlobePage() {
                 if (neighbors.length === 0) {
                   return <div style={{ color: C.dim, fontSize: 11 }}>no linked resources yet</div>
                 }
-                return groupNeighbors(neighbors).map((g) => (
+                return (
+                  <>
+                    <NeighborTimeline neighbors={neighbors} />
+                    {groupNeighbors(neighbors).map((g) => (
                   <div key={g.label} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                     <div
                       style={{
@@ -2754,7 +2868,9 @@ export function LiveGlobePage() {
                       )
                     })}
                   </div>
-                ))
+                ))}
+                  </>
+                )
               })()}
             </div>
           </div>
