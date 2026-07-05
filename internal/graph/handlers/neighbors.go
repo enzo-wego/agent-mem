@@ -38,6 +38,11 @@ type neighborItem struct {
 		Channel  string `json:"channel"`   // slack only: human channel name (e.g. payments-dev), for display
 		ThreadTS string `json:"thread_ts"` // slack only; lets the UI collapse a thread's messages into one row
 		TSMs     int64  `json:"ts_ms"`     // node time (slack message ts, else first_seen_at), epoch millis
+		// Slack threads only: first/last message time across the whole thread,
+		// computed server-side because SIMILAR rows are leaves (one node in the
+		// payload) so the client can't derive the span itself. 0 when unknown.
+		FirstTSMs int64 `json:"first_ts_ms,omitempty"`
+		LastTSMs  int64 `json:"last_ts_ms,omitempty"`
 	} `json:"node"`
 	Edge struct {
 		Kind string `json:"kind"`
@@ -121,16 +126,27 @@ SELECT n.id, n.type, COALESCE(n.url,''), COALESCE(n.title,''),
        COALESCE(ts.summary,''),
        COALESCE(sc.name,''),
        (EXTRACT(EPOCH FROM COALESCE(n.created_at, to_timestamp(NULLIF(n.metadata->>'ts','')::float8), n.first_seen_at)) * 1000)::bigint,
-       n.scope
+       n.scope,
+       COALESCE(tspan.first_ms, 0), COALESCE(tspan.last_ms, 0)
 FROM graph.nodes n
 LEFT JOIN graph.thread_summaries ts
   ON ts.channel_id = REPLACE(n.scope,'slack:','')
   AND ts.thread_ts = COALESCE(NULLIF(n.metadata->>'thread_ts',''), split_part(n.id,':',3))
 LEFT JOIN graph.slack_channels sc
   ON sc.slack_channel_id = REPLACE(n.scope,'slack:','')
+LEFT JOIN LATERAL (
+  SELECT (EXTRACT(EPOCH FROM MIN(COALESCE(to_timestamp(NULLIF(m.metadata->>'ts','')::float8), m.created_at, m.first_seen_at))) * 1000)::bigint AS first_ms,
+         (EXTRACT(EPOCH FROM MAX(COALESCE(to_timestamp(NULLIF(m.metadata->>'ts','')::float8), m.created_at, m.first_seen_at))) * 1000)::bigint AS last_ms
+  FROM graph.nodes m
+  WHERE n.type IN ('slack','slack_thread')
+    AND m.scope = n.scope AND m.deleted_at IS NULL
+    AND COALESCE(NULLIF(m.metadata->>'thread_ts',''), split_part(m.id,':',3))
+      = COALESCE(NULLIF(n.metadata->>'thread_ts',''), split_part(n.id,':',3))
+) tspan ON TRUE
 WHERE n.id=$1`, n.NodeID)
 			if err := row.Scan(&item.Node.NodeID, &item.Node.Type, &item.Node.URL,
-				&title, &body, &item.Node.ThreadTS, &threadSummary, &item.Node.Channel, &item.Node.TSMs, &scope); err != nil {
+				&title, &body, &item.Node.ThreadTS, &threadSummary, &item.Node.Channel, &item.Node.TSMs, &scope,
+				&item.Node.FirstTSMs, &item.Node.LastTSMs); err != nil {
 				continue
 			}
 			// Hidden from this asker: don't surface it and don't expand through it.

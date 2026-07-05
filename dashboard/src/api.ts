@@ -592,7 +592,17 @@ export interface ChannelTopic {
 export interface GraphNeighbor {
   hop: number;
   edge: { kind: string; score?: number };
-  node: { node_id: string; type: string; url: string; title: string; channel?: string; thread_ts?: string; ts_ms?: number };
+  node: {
+    node_id: string;
+    type: string;
+    url: string;
+    title: string;
+    channel?: string;
+    thread_ts?: string;
+    ts_ms?: number;
+    first_ts_ms?: number; // slack threads: first message time (thread created)
+    last_ts_ms?: number; // slack threads: last message time (thread updated)
+  };
 }
 
 // fetchNeighbors returns the related resources around a node (depth 1-3) — the

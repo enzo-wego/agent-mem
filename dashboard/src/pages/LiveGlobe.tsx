@@ -218,7 +218,7 @@ function groupNeighbors(neighbors: GraphNeighbor[]): NeighborGroup[] {
     if (tt) threadMax.set(tt, Math.max(threadMax.get(tt) ?? 0, n.node.ts_ms ?? 0))
   }
   const effTs = (n: GraphNeighbor): number =>
-    (n.node.thread_ts && threadMax.get(n.node.thread_ts)) || n.node.ts_ms || 0
+    n.node.last_ts_ms || (n.node.thread_ts && threadMax.get(n.node.thread_ts)) || n.node.ts_ms || 0
 
   const byLabel = new Map<string, NeighborGroup>()
   const seenThread = new Set<string>()
@@ -294,7 +294,7 @@ function NeighborTimeline({
       seen.add(tt)
     }
     if (n.node.type === 'person') continue // people aren't events in time
-    const ts = (tt && threadMax.get(tt)) || n.node.ts_ms || 0
+    const ts = n.node.last_ts_ms || (tt && threadMax.get(tt)) || n.node.ts_ms || 0
     if (ts > 0) pts.push({ n, ts })
   }
   if (pts.length < 2) return null
@@ -2891,6 +2891,27 @@ export function LiveGlobePage() {
                           >
                             {label}
                           </span>
+                          {(n.node.first_ts_ms ?? 0) > 0 && (
+                            <span
+                              title={`created ${fmtDateHM(n.node.first_ts_ms!)}${
+                                (n.node.last_ts_ms ?? 0) > n.node.first_ts_ms!
+                                  ? ` · last message ${fmtDateHM(n.node.last_ts_ms!)}`
+                                  : ''
+                              }`}
+                              style={{
+                                flexShrink: 0,
+                                color: C.dim,
+                                fontSize: 9,
+                                opacity: 0.85,
+                                whiteSpace: 'nowrap',
+                              }}
+                            >
+                              {fmtDateHM(n.node.first_ts_ms!)}
+                              {(n.node.last_ts_ms ?? 0) - n.node.first_ts_ms! > 60_000
+                                ? ` → ${fmtDateHM(n.node.last_ts_ms!)}`
+                                : ''}
+                            </span>
+                          )}
                           {n.node.channel && (
                             <span
                               style={{
