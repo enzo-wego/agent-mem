@@ -185,6 +185,17 @@ func NewServer(cfg *config.Config, logBuf *LogBuffer) (*Server, error) {
 			graphLog.Warn().Err(err).Msg("startup: enqueue notify_watch_channels failed")
 		}
 	}
+
+	// Backfill summaries for discussion threads (2+ messages) that never got one
+	// — the lazy popup path only summarizes what a user happens to open. LLM
+	// required; idempotent (summarized threads no longer match the query).
+	if graphDeps.Gemini != nil {
+		go func() {
+			if n := graphhandlers.BackfillMissingThreadSummaries(ctx, pool, 1000); n > 0 {
+				graphLog.Info().Int("enqueued", n).Msg("startup: thread-summary backfill")
+			}
+		}()
+	}
 	mgr := jobs.NewManager(jobs.ManagerConfig{
 		Registry:            reg,
 		DB:                  pool,

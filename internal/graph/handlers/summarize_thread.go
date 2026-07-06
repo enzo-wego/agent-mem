@@ -229,6 +229,48 @@ No markdown, no quotes around the whole thing.`
 	return firstLine(parsed.Topic, 90), strings.TrimSpace(parsed.Overview), parsed.Highlights
 }
 
+// BackfillMissingThreadSummaries enqueues summarize_thread for threads that
+// have real discussion (2+ ingested messages, or a whole-thread fetched node)
+// but no summary row yet. Called on worker startup when an LLM is configured;
+// idempotent — summarized threads no longer match, and enqueueSummarizeThread
+// dedups pending jobs. Returns how many were enqueued.
+func BackfillMissingThreadSummaries(ctx context.Context, db *pgxpool.Pool, limit int) int {
+	rows, err := db.Query(ctx, `
+SELECT REPLACE(t.scope,'slack:','') AS ch, t.tt
+FROM (
+  SELECT n.scope,
+         COALESCE(NULLIF(n.metadata->>'thread_ts',''), split_part(n.id,':',3)) AS tt,
+         count(*) AS c,
+         bool_or(n.type = 'slack_thread') AS has_thread_node
+  FROM graph.nodes n
+  WHERE n.type IN ('slack','slack_thread') AND n.deleted_at IS NULL
+    AND n.scope LIKE 'slack:C%'
+  GROUP BY 1, 2
+) t
+LEFT JOIN graph.thread_summaries ts
+  ON ts.channel_id = REPLACE(t.scope,'slack:','') AND ts.thread_ts = t.tt
+WHERE (t.c >= 2 OR t.has_thread_node) AND ts.channel_id IS NULL
+LIMIT $1`, limit)
+	if err != nil {
+		return 0
+	}
+	type th struct{ ch, tt string }
+	var todo []th
+	for rows.Next() {
+		var t th
+		if err := rows.Scan(&t.ch, &t.tt); err != nil {
+			rows.Close()
+			return 0
+		}
+		todo = append(todo, t)
+	}
+	rows.Close()
+	for _, t := range todo {
+		enqueueSummarizeThread(ctx, db, t.ch, t.tt, false)
+	}
+	return len(todo)
+}
+
 // enqueueSummarizeThread enqueues a summarize_thread job unless one is already
 // queued/running for the same (channel, thread) — cheap dedup so a backfill or a
 // burst of replies doesn't pile up duplicate LLM jobs. Errors are ignored
