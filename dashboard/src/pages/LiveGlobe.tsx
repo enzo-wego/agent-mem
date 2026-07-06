@@ -1001,14 +1001,25 @@ export function LiveGlobePage() {
 
   // ── Open the "related resources" graph overlay for a topic ───────────────────
   // loadNeighbors fetches a node's neighbors into the cache (depth 1 — drilling
-  // gives the user explicit control over how deep to go).
-  function loadNeighbors(nodeId: string, depth = 1) {
-    if (neighborCache[nodeId]) return
-    setGraphLoading(true)
+  // gives the user explicit control over how deep to go). Opening a topic also
+  // enqueues summarize jobs server-side for raw threads (pending_summary rows);
+  // re-poll a few times so summaries swap in without a manual reload.
+  function loadNeighbors(nodeId: string, depth = 1, attempt = 0) {
+    if (attempt === 0 && neighborCache[nodeId]) return
+    if (attempt === 0) setGraphLoading(true)
     fetchNeighbors(nodeId, depth)
-      .then((ns) => setNeighborCache((cur) => ({ ...cur, [nodeId]: ns || [] })))
-      .catch(() => setNeighborCache((cur) => ({ ...cur, [nodeId]: [] })))
-      .finally(() => setGraphLoading(false))
+      .then((ns) => {
+        setNeighborCache((cur) => ({ ...cur, [nodeId]: ns || [] }))
+        if (attempt < 3 && (ns || []).some((n) => n.node.pending_summary)) {
+          setTimeout(() => loadNeighbors(nodeId, depth, attempt + 1), 12_000)
+        }
+      })
+      .catch(() => {
+        if (attempt === 0) setNeighborCache((cur) => ({ ...cur, [nodeId]: [] }))
+      })
+      .finally(() => {
+        if (attempt === 0) setGraphLoading(false)
+      })
   }
 
   // loadSummary fetches the LLM cluster synthesis for a node (cached per session).
@@ -2893,11 +2904,9 @@ export function LiveGlobePage() {
                           </span>
                           {(n.node.first_ts_ms ?? 0) > 0 && (
                             <span
-                              title={`created ${fmtDateHM(n.node.first_ts_ms!)}${
-                                (n.node.last_ts_ms ?? 0) > n.node.first_ts_ms!
-                                  ? ` · last message ${fmtDateHM(n.node.last_ts_ms!)}`
-                                  : ''
-                              }`}
+                              title={`created ${fmtDateHM(n.node.first_ts_ms!)} · updated ${fmtDateHM(
+                                n.node.last_ts_ms || n.node.first_ts_ms!,
+                              )}`}
                               style={{
                                 flexShrink: 0,
                                 color: C.dim,
@@ -2907,9 +2916,8 @@ export function LiveGlobePage() {
                               }}
                             >
                               {fmtDateHM(n.node.first_ts_ms!)}
-                              {(n.node.last_ts_ms ?? 0) - n.node.first_ts_ms! > 60_000
-                                ? ` → ${fmtDateHM(n.node.last_ts_ms!)}`
-                                : ''}
+                              {' → '}
+                              {fmtDateHM(n.node.last_ts_ms || n.node.first_ts_ms!)}
                             </span>
                           )}
                           {n.node.channel && (

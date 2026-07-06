@@ -43,6 +43,9 @@ type neighborItem struct {
 		// payload) so the client can't derive the span itself. 0 when unknown.
 		FirstTSMs int64 `json:"first_ts_ms,omitempty"`
 		LastTSMs  int64 `json:"last_ts_ms,omitempty"`
+		// PendingSummary marks a row whose summarize job was just enqueued by
+		// this request — the client can re-poll shortly to swap in the summary.
+		PendingSummary bool `json:"pending_summary,omitempty"`
 	} `json:"node"`
 	Edge struct {
 		Kind string `json:"kind"`
@@ -196,6 +199,7 @@ WHERE n.id=$1`, n.NodeID)
 					}
 					enqueueSummarizeThread(ctx, h.db, strings.TrimPrefix(*scope, "slack:"), tt, false)
 					lazySummarized++
+					item.Node.PendingSummary = true
 				}
 				// Never surface a raw slack:CHANNEL:TS id: when there's no summary or
 				// body, fall back to a readable channel-scoped label.

@@ -602,6 +602,7 @@ export interface GraphNeighbor {
     ts_ms?: number;
     first_ts_ms?: number; // slack threads: first message time (thread created)
     last_ts_ms?: number; // slack threads: last message time (thread updated)
+    pending_summary?: boolean; // summarize job just enqueued; re-poll to get the summary
   };
 }
 
