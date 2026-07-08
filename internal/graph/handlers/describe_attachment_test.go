@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/agent-mem/agent-mem/internal/gemini"
 	"github.com/rs/zerolog"
 )
 
@@ -20,10 +21,10 @@ type mockGemini struct {
 	describeCalls atomic.Int32
 	embedCalls    atomic.Int32
 
-	describeResult  func() (string, string, []string, error)
-	embedResult     func() ([]float32, error)
-	generateResult  func() (string, error)
-	generateUser    string // last user prompt passed to Generate
+	describeResult func() (string, string, []string, error)
+	embedResult    func() ([]float32, error)
+	generateResult func() (string, error)
+	generateUser   string // last user prompt passed to Generate
 }
 
 func (m *mockGemini) Describe(_ context.Context, _ string, _ []byte, _ string) (string, string, []string, error) {
@@ -40,6 +41,10 @@ func (m *mockGemini) Embed(_ context.Context, _ string) ([]float32, error) {
 		return m.embedResult()
 	}
 	return []float32{0.1, 0.2}, nil
+}
+
+func (m *mockGemini) EmbedWithOptions(ctx context.Context, text string, _ gemini.EmbedOptions) ([]float32, error) {
+	return m.Embed(ctx, text)
 }
 
 func (m *mockGemini) Generate(_ context.Context, _, user string) (string, error) {

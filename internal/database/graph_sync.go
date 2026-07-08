@@ -37,16 +37,17 @@ type SyncableGraphNode struct {
 
 // SyncableGraphEdge is a graph.edges row for sync transport.
 type SyncableGraphEdge struct {
-	ID          int64     `json:"id"`
-	FromNodeID  string    `json:"from_node_id"`
-	ToNodeID    string    `json:"to_node_id"`
-	Kind        string    `json:"kind"`
-	SourceMsgID *string   `json:"source_msg_id,omitempty"`
-	BodyRevision int      `json:"body_revision"`
-	CreatedAt   time.Time `json:"created_at"`
-	SyncID      string    `json:"sync_id"`
-	SyncVersion int64     `json:"sync_version"`
-	MachineID   string    `json:"machine_id"`
+	ID           int64     `json:"id"`
+	FromNodeID   string    `json:"from_node_id"`
+	ToNodeID     string    `json:"to_node_id"`
+	Kind         string    `json:"kind"`
+	SourceMsgID  *string   `json:"source_msg_id,omitempty"`
+	BodyRevision int       `json:"body_revision"`
+	Metadata     []byte    `json:"metadata"`
+	CreatedAt    time.Time `json:"created_at"`
+	SyncID       string    `json:"sync_id"`
+	SyncVersion  int64     `json:"sync_version"`
+	MachineID    string    `json:"machine_id"`
 }
 
 // SyncableGraphPerson is a graph.people row for sync transport.
@@ -72,14 +73,14 @@ type SyncableGraphPerson struct {
 
 // SyncableGraphArtifactIndex is a graph.artifact_index row for sync transport.
 type SyncableGraphArtifactIndex struct {
-	NodeID      string     `json:"node_id"`
-	Summary     *string    `json:"summary,omitempty"`
-	SummaryKind string     `json:"summary_kind"`
-	Embedding   []float32  `json:"embedding,omitempty"`
-	RefreshedAt time.Time  `json:"refreshed_at"`
-	SyncID      string     `json:"sync_id"`
-	SyncVersion int64      `json:"sync_version"`
-	MachineID   string     `json:"machine_id"`
+	NodeID      string    `json:"node_id"`
+	Summary     *string   `json:"summary,omitempty"`
+	SummaryKind string    `json:"summary_kind"`
+	Embedding   []float32 `json:"embedding,omitempty"`
+	RefreshedAt time.Time `json:"refreshed_at"`
+	SyncID      string    `json:"sync_id"`
+	SyncVersion int64     `json:"sync_version"`
+	MachineID   string    `json:"machine_id"`
 }
 
 // SyncableGraphArtifactBody is a graph.artifact_bodies row for sync transport.
@@ -156,15 +157,15 @@ type SyncableGraphJob struct {
 
 // SyncableGraphUserAffinityConfig is a graph.user_affinity_config row for sync transport.
 type SyncableGraphUserAffinityConfig struct {
-	EEID                 int       `json:"eeid"`
-	TeamGroupIDs         []string  `json:"team_group_ids"`
-	DeptGroupIDs         []string  `json:"dept_group_ids"`
-	TeamSubtreeRootEEID  *int      `json:"team_subtree_root_eeid,omitempty"`
-	Autodetected         bool      `json:"autodetected"`
-	UpdatedAt            time.Time `json:"updated_at"`
-	SyncID               string    `json:"sync_id"`
-	SyncVersion          int64     `json:"sync_version"`
-	MachineID            string    `json:"machine_id"`
+	EEID                int       `json:"eeid"`
+	TeamGroupIDs        []string  `json:"team_group_ids"`
+	DeptGroupIDs        []string  `json:"dept_group_ids"`
+	TeamSubtreeRootEEID *int      `json:"team_subtree_root_eeid,omitempty"`
+	Autodetected        bool      `json:"autodetected"`
+	UpdatedAt           time.Time `json:"updated_at"`
+	SyncID              string    `json:"sync_id"`
+	SyncVersion         int64     `json:"sync_version"`
+	MachineID           string    `json:"machine_id"`
 }
 
 // ---------------------------------------------------------------------------
@@ -238,7 +239,7 @@ func (db *DB) GetUnsyncedGraphNodes(ctx context.Context, limit int) ([]SyncableG
 // GetUnsyncedGraphEdges returns graph.edges rows not yet synced.
 func (db *DB) GetUnsyncedGraphEdges(ctx context.Context, limit int) ([]SyncableGraphEdge, error) {
 	rows, err := db.Pool.Query(ctx, `
-		SELECT id, from_node_id, to_node_id, kind, source_msg_id, body_revision, created_at,
+		SELECT id, from_node_id, to_node_id, kind, source_msg_id, body_revision, metadata, created_at,
 		       sync_id::text, sync_version, machine_id
 		FROM graph.edges
 		WHERE sync_version = 0
@@ -253,7 +254,7 @@ func (db *DB) GetUnsyncedGraphEdges(ctx context.Context, limit int) ([]SyncableG
 	for rows.Next() {
 		var e SyncableGraphEdge
 		if err := rows.Scan(
-			&e.ID, &e.FromNodeID, &e.ToNodeID, &e.Kind, &e.SourceMsgID, &e.BodyRevision, &e.CreatedAt,
+			&e.ID, &e.FromNodeID, &e.ToNodeID, &e.Kind, &e.SourceMsgID, &e.BodyRevision, &e.Metadata, &e.CreatedAt,
 			&e.SyncID, &e.SyncVersion, &e.MachineID,
 		); err != nil {
 			return nil, fmt.Errorf("scan graph edge: %w", err)
@@ -497,13 +498,17 @@ func (db *DB) ImportGraphNode(ctx context.Context, n *SyncableGraphNode) error {
 // ImportGraphEdge imports a graph.edges row from sync.
 // Skips if referenced nodes don't exist locally (FK constraint).
 func (db *DB) ImportGraphEdge(ctx context.Context, e *SyncableGraphEdge) error {
+	metadata := string(e.Metadata)
+	if metadata == "" {
+		metadata = "{}"
+	}
 	_, err := db.Pool.Exec(ctx, `
 		INSERT INTO graph.edges
-			(from_node_id, to_node_id, kind, source_msg_id, body_revision, created_at,
+			(from_node_id, to_node_id, kind, source_msg_id, body_revision, metadata, created_at,
 			 sync_id, sync_version, machine_id)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+		VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10)
 		ON CONFLICT (sync_id) DO NOTHING`,
-		e.FromNodeID, e.ToNodeID, e.Kind, e.SourceMsgID, e.BodyRevision, e.CreatedAt,
+		e.FromNodeID, e.ToNodeID, e.Kind, e.SourceMsgID, e.BodyRevision, metadata, e.CreatedAt,
 		e.SyncID, e.SyncVersion, e.MachineID,
 	)
 	return err
@@ -709,7 +714,7 @@ func (db *DB) GetGraphNodesForPull(ctx context.Context, excludeSource string, af
 // GetGraphEdgesForPull returns graph.edges rows with id > afterID from other machines.
 func (db *DB) GetGraphEdgesForPull(ctx context.Context, excludeSource string, afterID, limit int) ([]SyncableGraphEdge, error) {
 	rows, err := db.Pool.Query(ctx, `
-		SELECT id, from_node_id, to_node_id, kind, source_msg_id, body_revision, created_at,
+		SELECT id, from_node_id, to_node_id, kind, source_msg_id, body_revision, metadata, created_at,
 		       sync_id::text, sync_version, machine_id
 		FROM graph.edges
 		WHERE machine_id IS DISTINCT FROM $1 AND id > $2
@@ -724,7 +729,7 @@ func (db *DB) GetGraphEdgesForPull(ctx context.Context, excludeSource string, af
 	for rows.Next() {
 		var e SyncableGraphEdge
 		if err := rows.Scan(
-			&e.ID, &e.FromNodeID, &e.ToNodeID, &e.Kind, &e.SourceMsgID, &e.BodyRevision, &e.CreatedAt,
+			&e.ID, &e.FromNodeID, &e.ToNodeID, &e.Kind, &e.SourceMsgID, &e.BodyRevision, &e.Metadata, &e.CreatedAt,
 			&e.SyncID, &e.SyncVersion, &e.MachineID,
 		); err != nil {
 			return nil, fmt.Errorf("scan graph edge for pull: %w", err)

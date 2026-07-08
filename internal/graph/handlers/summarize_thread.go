@@ -10,6 +10,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/agent-mem/agent-mem/internal/graph/ids"
 	"github.com/agent-mem/agent-mem/internal/graph/jobs"
 )
 
@@ -136,6 +137,15 @@ ORDER BY COALESCE(to_timestamp(NULLIF(n.metadata->>'ts','')::float8), n.first_se
 			   signature=excluded.signature, summary=excluded.summary,
 			   overview=excluded.overview, highlights=excluded.highlights, updated_at=NOW()`,
 			p.ChannelID, p.ThreadTs, sig, topic, overview, hlJSON)
+		if err == nil {
+			if _, jErr := jobs.Enqueue(ctx, deps.DB, "index_artifact", map[string]any{
+				"node_id": ids.SlackMessage(p.ChannelID, p.ThreadTs),
+				"force":   true,
+			}, jobs.EnqueueOptions{Priority: 5, MachineID: deps.MachineID}); jErr != nil {
+				deps.Logger.Warn().Err(jErr).Str("channel_id", p.ChannelID).Str("thread_ts", p.ThreadTs).
+					Msg("summarize_thread: enqueue index_artifact failed")
+			}
+		}
 		return err
 	}
 }

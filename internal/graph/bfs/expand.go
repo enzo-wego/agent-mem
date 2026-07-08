@@ -9,8 +9,11 @@ import (
 
 // Neighbor is one row returned from an expansion.
 type Neighbor struct {
-	NodeID   string
-	EdgeKind string
+	NodeID     string
+	EdgeKind   string
+	Topic      string
+	Why        string
+	Confidence float64
 	// Score is the embedding cosine similarity for SIMILAR edges (0 otherwise);
 	// surfaced so the UI can explain *why* a semantically-matched row appears.
 	Score float64
@@ -30,11 +33,17 @@ func NewExpander(db *pgxpool.Pool) *Expander {
 // optionally filtered by edge kinds.
 func (e *Expander) Expand(ctx context.Context, nodeID string, kinds []string) ([]Neighbor, error) {
 	const q = `
-SELECT to_node_id AS nbr, kind FROM graph.edges
-  WHERE from_node_id = $1 AND ($2::text[] IS NULL OR kind = ANY($2))
-UNION
-SELECT from_node_id AS nbr, kind FROM graph.edges
-  WHERE to_node_id = $1 AND ($2::text[] IS NULL OR kind = ANY($2))
+SELECT nbr, kind,
+       COALESCE(metadata->>'topic','') AS topic,
+       COALESCE(metadata->>'why','') AS why,
+       COALESCE(NULLIF(metadata->>'confidence','')::float8, 0) AS confidence
+FROM (
+  SELECT to_node_id AS nbr, kind, metadata FROM graph.edges
+    WHERE from_node_id = $1 AND ($2::text[] IS NULL OR kind = ANY($2))
+  UNION
+  SELECT from_node_id AS nbr, kind, metadata FROM graph.edges
+    WHERE to_node_id = $1 AND ($2::text[] IS NULL OR kind = ANY($2))
+) e
 `
 	var kindArg any
 	if len(kinds) > 0 {
@@ -48,7 +57,7 @@ SELECT from_node_id AS nbr, kind FROM graph.edges
 	seen := map[string]bool{}
 	for rows.Next() {
 		var n Neighbor
-		if err := rows.Scan(&n.NodeID, &n.EdgeKind); err != nil {
+		if err := rows.Scan(&n.NodeID, &n.EdgeKind, &n.Topic, &n.Why, &n.Confidence); err != nil {
 			rows.Close()
 			return nil, err
 		}

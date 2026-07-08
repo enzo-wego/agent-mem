@@ -56,10 +56,15 @@ func backfillSlackChannelHandler(deps Deps) jobs.Handler {
 		// Process each parent message.
 		for _, msg := range histResp.Messages {
 			// Skip messages with a subtype (joins, leaves, etc.) and bot self.
-			if msg.Subtype != "" {
+			automated := msg.BotID != "" || msg.Subtype == "bot_message"
+			alertDecision := decideAlertBot(ctx, deps, p.ChannelID, msg.Text, automated)
+			if alertDecision.Skip {
 				continue
 			}
-			if msg.BotID != "" && msg.User == "" {
+			if msg.Subtype != "" && !alertDecision.Escalate {
+				continue
+			}
+			if msg.BotID != "" && msg.User == "" && !alertDecision.Escalate {
 				continue
 			}
 
@@ -111,15 +116,15 @@ func backfillSlackChannelHandler(deps Deps) jobs.Handler {
 
 // slackMessage represents a single Slack message from conversations.history / conversations.replies.
 type slackMessage struct {
-	Ts         string       `json:"ts"`
-	ThreadTs   string       `json:"thread_ts"`
-	User       string       `json:"user"`
-	BotID      string       `json:"bot_id"`
-	Subtype    string       `json:"subtype"`
-	Text       string       `json:"text"`
-	ReplyCount int          `json:"reply_count"`
-	Files      []slackFile  `json:"files"`
-	Edited     *struct{}    `json:"edited"`
+	Ts         string      `json:"ts"`
+	ThreadTs   string      `json:"thread_ts"`
+	User       string      `json:"user"`
+	BotID      string      `json:"bot_id"`
+	Subtype    string      `json:"subtype"`
+	Text       string      `json:"text"`
+	ReplyCount int         `json:"reply_count"`
+	Files      []slackFile `json:"files"`
+	Edited     *struct{}   `json:"edited"`
 }
 
 // slackFile is a file attachment in a Slack message.

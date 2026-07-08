@@ -57,10 +57,15 @@ func backfillSlackThreadHandler(deps Deps) jobs.Handler {
 		// backfill window and isn't ingested yet (old thread, fresh reply).
 		for _, msg := range repliesResp.Messages {
 			// Skip bot self and subtype messages.
-			if msg.Subtype != "" {
+			automated := msg.BotID != "" || msg.Subtype == "bot_message"
+			alertDecision := decideAlertBot(ctx, deps, p.ChannelID, msg.Text, automated)
+			if alertDecision.Skip {
 				continue
 			}
-			if msg.BotID != "" && msg.User == "" {
+			if msg.Subtype != "" && !alertDecision.Escalate {
+				continue
+			}
+			if msg.BotID != "" && msg.User == "" && !alertDecision.Escalate {
 				continue
 			}
 

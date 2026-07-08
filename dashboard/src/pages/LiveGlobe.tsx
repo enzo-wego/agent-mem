@@ -182,16 +182,21 @@ function neighborHint(n: GraphNeighbor): string {
   return ''
 }
 
-// edgeKindTooltip explains why a row is linked to the opened topic. SIMILAR rows
-// have no explicit edge — they matched by embedding cosine (threshold 0.45 in
-// bfs.SimilarThreads) — so show the match strength; other kinds are real edges.
-function edgeKindTooltip(edge: { kind: string; score?: number }): string {
+// edgeKindTooltip explains why a row is linked to the opened topic. SAME_TOPIC
+// rows are LLM-confirmed links; SIMILAR rows are unconfirmed fallback candidates.
+function edgeKindTooltip(edge: { kind: string; score?: number; confidence?: number; topic?: string; why?: string }): string {
   switch (edge.kind.toUpperCase()) {
+    case 'SAME_TOPIC':
+      return [
+        `Confirmed same topic${edge.confidence ? ` (${Math.round(edge.confidence * 100)}% confidence)` : ''}.`,
+        edge.topic ? `Topic: ${edge.topic}.` : '',
+        edge.why || '',
+      ]
+        .filter(Boolean)
+        .join(' ')
     case 'SIMILAR':
       return (
-        `No direct link — matched by meaning: this thread's summary is ` +
-        `${edge.score ? Math.round(edge.score * 100) + '%' : ''} semantically similar ` +
-        `to the opened topic (embedding cosine; 45% minimum to appear).`
+        `Candidate match by meaning from embedding cosine. This is not LLM-confirmed yet.`
       )
     case 'THREAD':
       return 'A message in the same Slack thread as the opened topic.'
@@ -388,14 +393,17 @@ function NeighborTimeline({
                 const label = n.node.title || n.node.node_id.replace(/^[a-z_]+:/, '')
                 const score = n.edge.score ?? 0
                 const no = numbers.get(n.node.node_id)
-                const pct = score > 0 ? ` · ${Math.round(score * 100)}%` : ''
+                const confidence =
+                  n.edge.kind.toUpperCase() === 'SAME_TOPIC' && n.edge.confidence
+                    ? ` · ${Math.round(n.edge.confidence * 100)}% confidence`
+                    : ''
                 return (
                   <a
                     key={n.node.node_id}
                     href={n.node.url || undefined}
                     target="_blank"
                     rel="noopener noreferrer"
-                    title={`${fmtDateHM(ts)}${pct} — ${label}`}
+                    title={`${fmtDateHM(ts)}${confidence} — ${label}`}
                     style={{
                       position: 'absolute',
                       left: xOf(ts) - 6.5,
@@ -2956,8 +2964,8 @@ export function LiveGlobePage() {
                             }}
                           >
                             {n.edge.kind}
-                            {n.edge.kind.toUpperCase() === 'SIMILAR' && n.edge.score
-                              ? ` ${Math.round(n.edge.score * 100)}%`
+                            {n.edge.kind.toUpperCase() === 'SAME_TOPIC' && n.edge.confidence
+                              ? ` ${Math.round(n.edge.confidence * 100)}% conf`
                               : ''}
                           </span>
                         </>

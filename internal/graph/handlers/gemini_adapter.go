@@ -39,6 +39,11 @@ func (a *geminiAdapter) Embed(ctx context.Context, text string) ([]float32, erro
 	return a.c.Embed(ctx, text)
 }
 
+// EmbedWithOptions proxies directly to the underlying Gemini client.
+func (a *geminiAdapter) EmbedWithOptions(ctx context.Context, text string, opts gemini.EmbedOptions) ([]float32, error) {
+	return a.c.EmbedWithOptions(ctx, text, opts)
+}
+
 // Generate proxies to the configured text generator (Claude or Gemini).
 func (a *geminiAdapter) Generate(ctx context.Context, systemPrompt, userMessage string) (string, error) {
 	return a.gen.Generate(ctx, systemPrompt, userMessage)

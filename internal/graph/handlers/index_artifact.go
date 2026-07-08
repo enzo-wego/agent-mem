@@ -23,7 +23,7 @@ func NewIndexArtifactHandler(deps Deps) jobs.Entry {
 		Handler:  indexArtifactHandler(deps),
 		Systems:  []string{"gemini"},
 		PoolSize: 4,
-		Lease:  60 * time.Second,
+		Lease:    60 * time.Second,
 	}
 }
 
@@ -37,34 +37,42 @@ func indexArtifactHandler(deps Deps) jobs.Handler {
 			return fmt.Errorf("%w: index_artifact: node_id is required", jobs.ErrFatal)
 		}
 
-		// Step 1: skip if refreshed_at is < 24h old and not forced.
+		// Step 1: skip if refreshed_at is < 24h old and, for Slack thread
+		// roots, not older than the cached thread summary it should embed.
 		if !p.Force {
 			var refreshedAt *time.Time
+			var summaryUpdatedAt *time.Time
 			err := deps.DB.QueryRow(ctx,
-				`SELECT refreshed_at FROM graph.artifact_index WHERE node_id = $1`, p.NodeID,
-			).Scan(&refreshedAt)
-			if err == nil && refreshedAt != nil && time.Since(*refreshedAt) < 24*time.Hour {
+				`SELECT ai.refreshed_at, ts.updated_at
+FROM graph.artifact_index ai
+JOIN graph.nodes n ON n.id = ai.node_id
+LEFT JOIN graph.thread_summaries ts
+  ON n.type IN ('slack','slack_thread')
+  AND ts.channel_id = REPLACE(n.scope,'slack:','')
+  AND ts.thread_ts = COALESCE(NULLIF(n.metadata->>'thread_ts',''), split_part(n.id,':',3))
+  AND COALESCE(NULLIF(n.metadata->>'thread_ts',''), split_part(n.id,':',3)) = split_part(n.id,':',3)
+WHERE ai.node_id = $1`, p.NodeID,
+			).Scan(&refreshedAt, &summaryUpdatedAt)
+			if err == nil && refreshedAt != nil && time.Since(*refreshedAt) < 24*time.Hour &&
+				(summaryUpdatedAt == nil || !summaryUpdatedAt.After(*refreshedAt)) {
 				return nil // fresh enough
 			}
 		}
 
-		// Step 2: read body_full from artifact_bodies, fall back to nodes.body.
-		var bodyFull string
+		// Step 2: read node metadata and body_full, falling back to nodes.body.
+		var nodeType, scope, threadTs, ownTs, bodyFull string
 		err := deps.DB.QueryRow(ctx,
-			`SELECT body_full FROM graph.artifact_bodies WHERE node_id = $1`, p.NodeID,
-		).Scan(&bodyFull)
+			`SELECT n.type,
+       COALESCE(n.scope,''),
+       COALESCE(NULLIF(n.metadata->>'thread_ts',''), split_part(n.id,':',3)),
+       split_part(n.id,':',3),
+       COALESCE(ab.body_full, n.body, '')
+FROM graph.nodes n
+LEFT JOIN graph.artifact_bodies ab ON ab.node_id = n.id
+WHERE n.id = $1`, p.NodeID,
+		).Scan(&nodeType, &scope, &threadTs, &ownTs, &bodyFull)
 		if err != nil {
-			// Fall back to graph.nodes.body.
-			var nodeBody *string
-			err2 := deps.DB.QueryRow(ctx,
-				`SELECT body FROM graph.nodes WHERE id = $1`, p.NodeID,
-			).Scan(&nodeBody)
-			if err2 != nil {
-				return fmt.Errorf("%w: index_artifact: node not found: %v", jobs.ErrFatal, err2)
-			}
-			if nodeBody != nil {
-				bodyFull = *nodeBody
-			}
+			return fmt.Errorf("%w: index_artifact: node not found: %v", jobs.ErrFatal, err)
 		}
 
 		if bodyFull == "" {
@@ -72,11 +80,26 @@ func indexArtifactHandler(deps Deps) jobs.Handler {
 			return nil
 		}
 
-		// Step 3: compute heuristic summary based on node type prefix.
+		// Step 3: compute summary text. Slack thread roots prefer the cached
+		// resource-aware thread summary built by summarize_thread.
 		summary := heuristicSummary(p.NodeID, bodyFull)
+		summaryKind := "heuristic"
+		if (nodeType == "slack" || nodeType == "slack_thread") && threadTs == ownTs && strings.HasPrefix(scope, "slack:") {
+			var topic, overview string
+			_ = deps.DB.QueryRow(ctx,
+				`SELECT COALESCE(summary,''), COALESCE(overview,'')
+FROM graph.thread_summaries
+WHERE channel_id=$1 AND thread_ts=$2`,
+				strings.TrimPrefix(scope, "slack:"), threadTs,
+			).Scan(&topic, &overview)
+			if threadSummary, kind := indexSummaryForSlackRoot(topic, overview); threadSummary != "" {
+				summary = threadSummary
+				summaryKind = kind
+			}
+		}
 
 		// Step 4: embed.
-		embedding, err := deps.Gemini.Embed(ctx, summary)
+		embedding, err := deps.Gemini.EmbedWithOptions(ctx, summary, graphEmbeddingOptions())
 		if err != nil {
 			return fmt.Errorf("%w: index_artifact embed: %v", jobs.ErrTransient, err)
 		}
@@ -84,19 +107,35 @@ func indexArtifactHandler(deps Deps) jobs.Handler {
 		// Step 5: UPSERT graph.artifact_index.
 		_, err = deps.DB.Exec(ctx, `
 			INSERT INTO graph.artifact_index (node_id, summary, summary_kind, embedding, refreshed_at, machine_id)
-			VALUES ($1, $2, 'heuristic', $3, NOW(), $4)
+			VALUES ($1, $2, $3, $4, NOW(), $5)
 			ON CONFLICT (node_id) DO UPDATE SET
 				summary      = EXCLUDED.summary,
 				summary_kind = EXCLUDED.summary_kind,
 				embedding    = EXCLUDED.embedding,
 				refreshed_at = NOW()`,
-			p.NodeID, summary, pgvector.NewVector(embedding), deps.MachineID,
+			p.NodeID, summary, summaryKind, pgvector.NewVector(embedding), deps.MachineID,
 		)
 		if err != nil {
 			return fmt.Errorf("index_artifact: upsert artifact_index: %w", err)
 		}
 
+		enqueueLinkTopics(ctx, deps, p.NodeID, p.Force)
 		return nil
+	}
+}
+
+func indexSummaryForSlackRoot(topic, overview string) (summary, kind string) {
+	topic = strings.TrimSpace(topic)
+	overview = strings.TrimSpace(overview)
+	switch {
+	case topic != "" && overview != "":
+		return topic + "\n\n" + overview, "thread_summary"
+	case topic != "":
+		return topic, "thread_summary"
+	case overview != "":
+		return overview, "thread_summary"
+	default:
+		return "", ""
 	}
 }
 

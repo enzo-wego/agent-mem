@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/pgvector/pgvector-go"
 
+	"github.com/agent-mem/agent-mem/internal/gemini"
 	"github.com/agent-mem/agent-mem/internal/graph/acl"
 	"github.com/agent-mem/agent-mem/internal/graph/scoring"
 )
@@ -20,6 +21,7 @@ import (
 // *gemini.Client satisfies it via its Embed method.
 type Embedder interface {
 	Embed(ctx context.Context, text string) ([]float32, error)
+	EmbedWithOptions(ctx context.Context, text string, opts gemini.EmbedOptions) ([]float32, error)
 }
 
 // Search handles GET /api/graph/search.
@@ -38,9 +40,9 @@ func NewSearch(db *pgxpool.Pool) (*Search, error) {
 		return nil, err
 	}
 	return &Search{
-		db:     db,
-		embed:  nil, // wired at server level via NewSearchWithEmbedder
-		aclBld: acl.NewBuilder(db, 5*time.Minute),
+		db:      db,
+		embed:   nil, // wired at server level via NewSearchWithEmbedder
+		aclBld:  acl.NewBuilder(db, 5*time.Minute),
 		weights: w,
 	}, nil
 }
@@ -96,7 +98,7 @@ func (s *Search) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Embed the query if an embedder is available.
 	var queryVec []float32
 	if s.embed != nil {
-		v, err := s.embed.Embed(ctx, q)
+		v, err := s.embed.EmbedWithOptions(ctx, q, graphEmbeddingOptions())
 		if err != nil {
 			http.Error(w, "embed failed: "+err.Error(), http.StatusInternalServerError)
 			return
@@ -104,7 +106,12 @@ func (s *Search) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		queryVec = v
 	}
 
-	var rows interface{ Next() bool; Scan(...any) error; Close(); Err() error }
+	var rows interface {
+		Next() bool
+		Scan(...any) error
+		Close()
+		Err() error
+	}
 	var err error
 
 	if queryVec != nil {
@@ -174,12 +181,12 @@ LIMIT $4
 	for rows.Next() {
 		var (
 			id, typ, title, url, summary, authorName string
-			cosine                                    float64
-			updatedAt                                 time.Time
-			createdAt                                 time.Time
-			depth                                     int16
-			isBot                                     bool
-			authorEEID                                int
+			cosine                                   float64
+			updatedAt                                time.Time
+			createdAt                                time.Time
+			depth                                    int16
+			isBot                                    bool
+			authorEEID                               int
 		)
 		if err := rows.Scan(&id, &typ, &title, &url, &summary, &authorName,
 			&cosine, &updatedAt, &createdAt, &depth, &isBot, &authorEEID); err != nil {

@@ -591,7 +591,7 @@ export interface ChannelTopic {
 // GraphNeighbor is one related node reachable from a given node (for "open in Graph").
 export interface GraphNeighbor {
   hop: number;
-  edge: { kind: string; score?: number };
+  edge: { kind: string; score?: number; confidence?: number; topic?: string; why?: string };
   node: {
     node_id: string;
     type: string;

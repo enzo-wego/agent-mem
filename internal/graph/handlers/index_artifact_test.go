@@ -87,3 +87,23 @@ func TestHeuristicSummary_TruncatesOnRuneBoundary(t *testing.T) {
 		}
 	}
 }
+
+func TestIndexSummaryForSlackRootPrefersThreadSummary(t *testing.T) {
+	got, kind := indexSummaryForSlackRoot("Email blacklist", "Checkout payment links are blocking specific emails.")
+	if got != "Email blacklist\n\nCheckout payment links are blocking specific emails." {
+		t.Fatalf("summary = %q", got)
+	}
+	if kind != "thread_summary" {
+		t.Fatalf("summary kind = %q, want thread_summary", kind)
+	}
+}
+
+func TestIndexSummaryForSlackRootFallsBackWhenSummaryMissing(t *testing.T) {
+	got, kind := indexSummaryForSlackRoot("", "")
+	if got != "" {
+		t.Fatalf("summary = %q, want empty", got)
+	}
+	if kind != "" {
+		t.Fatalf("summary kind = %q, want empty", kind)
+	}
+}

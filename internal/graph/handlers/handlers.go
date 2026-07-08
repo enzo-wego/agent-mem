@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/zerolog"
 
+	"github.com/agent-mem/agent-mem/internal/gemini"
 	"github.com/agent-mem/agent-mem/internal/graph/extractor"
 	"github.com/agent-mem/agent-mem/internal/graph/fetchers"
 	"github.com/agent-mem/agent-mem/internal/graph/identity"
@@ -22,6 +23,7 @@ import (
 // Describe.
 type GeminiClient interface {
 	Embed(ctx context.Context, text string) ([]float32, error)
+	EmbedWithOptions(ctx context.Context, text string, opts gemini.EmbedOptions) ([]float32, error)
 	Describe(ctx context.Context, mime string, data []byte, prompt string) (description string, ocr string, entities []string, err error)
 	Generate(ctx context.Context, systemPrompt, userMessage string) (string, error)
 }
@@ -66,6 +68,7 @@ func RegisterAll(reg *jobs.Registry, deps Deps) {
 	})
 	reg.Register("backfill_slack_channel", NewBackfillSlackChannelHandler(deps))
 	reg.Register("summarize_thread", NewSummarizeThreadHandler(deps))
+	reg.Register("link_topics", NewLinkTopicsHandler(deps))
 	reg.Register("backfill_slack_thread", NewBackfillSlackThreadHandler(deps))
 	reg.Register("derive_feature_entity", NewDeriveFeatureEntityHandler(deps))
 	reg.Register("detect_hot_topics", jobs.Entry{

@@ -38,9 +38,9 @@ func NewClient(apiKey, model, embeddingModel string, embeddingDims int) *Client 
 // --- Generation ---
 
 type generateRequest struct {
-	Contents         []content        `json:"contents"`
-	SystemInstruction *content        `json:"systemInstruction,omitempty"`
-	GenerationConfig generationConfig `json:"generationConfig"`
+	Contents          []content        `json:"contents"`
+	SystemInstruction *content         `json:"systemInstruction,omitempty"`
+	GenerationConfig  generationConfig `json:"generationConfig"`
 }
 
 type content struct {
@@ -116,9 +116,22 @@ func (c *Client) Generate(ctx context.Context, systemPrompt, userMessage string)
 // --- Embedding ---
 
 type embedRequest struct {
-	Model               string  `json:"model"`
-	Content             content `json:"content"`
+	Model              string              `json:"model"`
+	Content            content             `json:"content"`
+	EmbedContentConfig *embedContentConfig `json:"embedContentConfig,omitempty"`
+}
+
+type embedContentConfig struct {
+	Title                string `json:"title,omitempty"`
+	TaskType             string `json:"taskType,omitempty"`
 	OutputDimensionality int    `json:"outputDimensionality,omitempty"`
+}
+
+// EmbedOptions configures a single Gemini embedContent request.
+type EmbedOptions struct {
+	Title                string
+	TaskType             string
+	OutputDimensionality int
 }
 
 type embedResponse struct {
@@ -141,11 +154,24 @@ type batchEmbedResponse struct {
 
 // Embed generates a single embedding vector for the given text.
 func (c *Client) Embed(ctx context.Context, text string) ([]float32, error) {
+	return c.EmbedWithOptions(ctx, text, EmbedOptions{OutputDimensionality: c.embeddingDims})
+}
+
+// EmbedWithOptions generates a single embedding vector for the given text using
+// per-call options. It lets graph indexing use 3072-dimensional semantic
+// similarity embeddings while core memory tables keep the client's default dims.
+func (c *Client) EmbedWithOptions(ctx context.Context, text string, opts EmbedOptions) ([]float32, error) {
 	modelPath := fmt.Sprintf("models/%s", c.embeddingModel)
 	req := embedRequest{
-		Model:               modelPath,
-		Content:             content{Parts: []part{{Text: text}}},
-		OutputDimensionality: c.embeddingDims,
+		Model:   modelPath,
+		Content: content{Parts: []part{{Text: text}}},
+	}
+	if opts.Title != "" || opts.TaskType != "" || opts.OutputDimensionality > 0 {
+		req.EmbedContentConfig = &embedContentConfig{
+			Title:                opts.Title,
+			TaskType:             opts.TaskType,
+			OutputDimensionality: opts.OutputDimensionality,
+		}
 	}
 
 	url := fmt.Sprintf("%s/%s:embedContent?key=%s", baseURL, c.embeddingModel, c.apiKey)
@@ -172,9 +198,11 @@ func (c *Client) EmbedBatch(ctx context.Context, texts []string) ([][]float32, e
 	requests := make([]embedRequest, len(texts))
 	for i, text := range texts {
 		requests[i] = embedRequest{
-			Model:               modelPath,
-			Content:             content{Parts: []part{{Text: text}}},
-			OutputDimensionality: c.embeddingDims,
+			Model:   modelPath,
+			Content: content{Parts: []part{{Text: text}}},
+			EmbedContentConfig: &embedContentConfig{
+				OutputDimensionality: c.embeddingDims,
+			},
 		}
 	}
 

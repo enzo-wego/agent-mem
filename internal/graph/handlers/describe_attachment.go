@@ -150,7 +150,7 @@ func describeAttachmentHandler(deps Deps) jobs.Handler {
 		}
 
 		// Step 6: UPSERT graph.artifact_index with embedding.
-		embedding, err := deps.Gemini.Embed(ctx, description)
+		embedding, err := deps.Gemini.EmbedWithOptions(ctx, description, graphEmbeddingOptions())
 		if err != nil {
 			return fmt.Errorf("%w: describe_attachment embed: %v", jobs.ErrTransient, err)
 		}

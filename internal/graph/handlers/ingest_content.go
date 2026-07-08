@@ -180,6 +180,18 @@ func NewIngestContentHandler(deps Deps) http.Handler {
 			return
 		}
 
+		if req.Source == "slack" {
+			subtype := ""
+			if req.Metadata.Subtype != nil {
+				subtype = *req.Metadata.Subtype
+			}
+			automated := req.Metadata.Author.IsBot || subtype == "bot_message"
+			if decision := decideAlertBot(ctx, deps, req.Metadata.ChannelID, req.Body, automated); decision.Skip {
+				writeJSON(w, http.StatusOK, ingestResponse{NodeID: nodeID, Outcome: "alert_fingerprinted"})
+				return
+			}
+		}
+
 		// Derive natural key and type prefix.
 		naturalKey, _ := ids.ParseNaturalKey(nodeID)
 		nodeType, _ := ids.ParseType(nodeID)

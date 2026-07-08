@@ -37,7 +37,7 @@ func testDB(t *testing.T) *pgxpool.Pool {
 func cleanupBFSTables(t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
 	ctx := context.Background()
-	for _, tbl := range []string{"graph.edges", "graph.nodes"} {
+	for _, tbl := range []string{"graph.artifact_index", "graph.edges", "graph.nodes"} {
 		if _, err := pool.Exec(ctx, "DELETE FROM "+tbl); err != nil {
 			t.Logf("cleanup %s: %v", tbl, err)
 		}
@@ -111,13 +111,13 @@ func TestExpand_ThreadSiblingsBridgeToReplyResources(t *testing.T) {
 	}
 }
 
-// unitVec returns a 768-dim vector (matching artifact_index VECTOR(768)) that is 1
+// unitVec returns a 3072-dim halfvec (matching artifact_index HALFVEC(3072)) that is 1
 // at index hot and 0 elsewhere — so two such vectors are identical (cosine 1) when
 // hot matches and orthogonal (cosine 0) when it differs.
 func unitVec(hot int) string {
 	var b strings.Builder
 	b.WriteByte('[')
-	for i := range 768 {
+	for i := range 3072 {
 		if i > 0 {
 			b.WriteByte(',')
 		}
@@ -135,7 +135,7 @@ func seedEmbedding(t *testing.T, pool *pgxpool.Pool, id, vec string) {
 	t.Helper()
 	_, err := pool.Exec(context.Background(), `
 INSERT INTO graph.artifact_index (node_id, embedding, machine_id)
-VALUES ($1, $2::vector, 'test')
+VALUES ($1, $2::halfvec, 'test')
 ON CONFLICT (node_id) DO UPDATE SET embedding = excluded.embedding`, id, vec)
 	if err != nil {
 		t.Fatalf("seedEmbedding %s: %v", id, err)
