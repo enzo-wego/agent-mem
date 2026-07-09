@@ -179,7 +179,8 @@ WITH recent AS (
          COALESCE(to_timestamp(NULLIF(n.metadata->>'ts','')::float8), n.first_seen_at) AS ts,
          COALESCE(p.depth_from_root, 99) AS depth,
          COALESCE(p.display_name, '') AS author,
-         (p.eeid = ANY($4::int[])) AS is_important
+         (p.eeid = ANY($4::int[])) AS is_important,
+         COALESCE(p.is_bot, false) AS is_bot
   FROM graph.nodes n
   LEFT JOIN graph.people p ON p.id = n.author_person_id
   WHERE n.type IN ('slack','slack_thread')
@@ -192,7 +193,7 @@ grp AS (
   SELECT channel,
          CASE WHEN thread_ts <> '' THEN 'slack:'||channel||':'||thread_ts ELSE id END AS root_node_id,
          count(*)                                          AS msg_count,
-         count(DISTINCT author_person_id)                  AS participants,
+         count(DISTINCT author_person_id) FILTER (WHERE NOT is_bot) AS participants,
          min(depth)                                        AS top_depth,
          (array_agg(author ORDER BY depth ASC, ts ASC))[1] AS top_author,
          (array_agg(text   ORDER BY ts ASC))[1]            AS first_text,
