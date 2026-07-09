@@ -40,16 +40,21 @@ func alertFingerprint(text string) string {
 	return strings.TrimSpace(s)
 }
 
-func decideAlertBot(ctx context.Context, deps Deps, channelID, text string, automated bool) alertBotDecision {
-	if deps.DB == nil || !automated || channelID == "" {
-		return alertBotDecision{}
+// channelIsAlert reports whether channelID is an alert channel (by its name).
+func channelIsAlert(ctx context.Context, deps Deps, channelID string) bool {
+	if deps.DB == nil || channelID == "" {
+		return false
 	}
 	var name string
 	_ = deps.DB.QueryRow(ctx,
 		`SELECT COALESCE(name,'') FROM graph.slack_channels WHERE slack_channel_id=$1`,
 		channelID,
 	).Scan(&name)
-	if !isAlertChannelName(name) {
+	return isAlertChannelName(name)
+}
+
+func decideAlertBot(ctx context.Context, deps Deps, channelID, text string, automated bool) alertBotDecision {
+	if !automated || !channelIsAlert(ctx, deps, channelID) {
 		return alertBotDecision{}
 	}
 	fp := alertFingerprint(text)
@@ -135,4 +140,40 @@ func shouldSkipSlackMessageForAlertPolicy(msg slackMessage, decision alertBotDec
 
 func forceAlertThreadBackfill(msg slackMessage, decision alertBotDecision) bool {
 	return decision.Skip && msg.ReplyCount > 0 && slackMessageAutomated(msg)
+}
+
+// alertThreadHasNonBotReply reports whether a skipped alert thread's repliers
+// include anyone who isn't a known bot — the signal that a human is engaging and
+// the thread deserves full treatment. It errs toward "yes": unknown repliers
+// (not yet resolved in graph.people) and DB errors both count as human, so a real
+// incident is never dropped just because a replier isn't matched yet. Only a
+// thread whose every replier is a known bot returns false — the bot talking to
+// itself, which stays noise. Gate it behind forceAlertThreadBackfill so the query
+// runs only for skipped bot roots that actually have replies.
+func alertThreadHasNonBotReply(ctx context.Context, deps Deps, replyUsers []string) bool {
+	if deps.DB == nil {
+		return false
+	}
+	present := make([]string, 0, len(replyUsers))
+	for _, u := range replyUsers {
+		if strings.TrimSpace(u) != "" {
+			present = append(present, u)
+		}
+	}
+	if len(present) == 0 {
+		return false
+	}
+	var hasNonBot bool
+	err := deps.DB.QueryRow(ctx, `
+SELECT EXISTS (
+  SELECT 1 FROM unnest($1::text[]) AS ru
+  WHERE ru NOT IN (
+    SELECT slack_user_id FROM graph.people
+    WHERE is_bot = true AND slack_user_id IS NOT NULL
+  )
+)`, present).Scan(&hasNonBot)
+	if err != nil {
+		return true // err toward caring: don't drop a possible incident
+	}
+	return hasNonBot
 }

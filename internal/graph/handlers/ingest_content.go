@@ -376,7 +376,9 @@ func NewIngestContentHandler(deps Deps) http.Handler {
 				btID, btErr := jobs.Enqueue(ctx, deps.DB, "backfill_slack_thread", backfillSlackThreadPayload{
 					ChannelID:        req.Metadata.ChannelID,
 					ThreadTs:         req.Metadata.ThreadTs,
-					ForceAlertThread: true,
+					// Only force full bot-message ingestion when recovering an alert
+					// thread; a recovered normal thread keeps the default skip policy.
+					ForceAlertThread: channelIsAlert(ctx, deps, req.Metadata.ChannelID),
 				}, jobs.EnqueueOptions{Priority: 5, TargetRunner: "vps"})
 				if btErr != nil {
 					deps.Logger.Warn().Err(btErr).Msg("ingest_content: enqueue backfill_slack_thread failed")

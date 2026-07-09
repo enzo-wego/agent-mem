@@ -58,7 +58,7 @@ func backfillSlackChannelHandler(deps Deps) jobs.Handler {
 			// Skip messages with a subtype (joins, leaves, etc.) and bot self.
 			automated := slackMessageAutomated(msg)
 			alertDecision := decideAlertBot(ctx, deps, p.ChannelID, msg.Text, automated)
-			if forceAlertThreadBackfill(msg, alertDecision) {
+			if forceAlertThreadBackfill(msg, alertDecision) && alertThreadHasNonBotReply(ctx, deps, msg.ReplyUsers) {
 				threadPayload := backfillSlackThreadPayload{
 					ChannelID:        p.ChannelID,
 					ThreadTs:         msg.ThreadTs,
@@ -137,6 +137,7 @@ type slackMessage struct {
 	Subtype    string      `json:"subtype"`
 	Text       string      `json:"text"`
 	ReplyCount int         `json:"reply_count"`
+	ReplyUsers []string    `json:"reply_users"`
 	Files      []slackFile `json:"files"`
 	Edited     *struct{}   `json:"edited"`
 }

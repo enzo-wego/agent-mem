@@ -1,6 +1,9 @@
 package handlers
 
-import "testing"
+import (
+	"context"
+	"testing"
+)
 
 func TestIsAlertChannelName(t *testing.T) {
 	for _, name := range []string{"payments-alerts", "payment-alert", "alerts-payments"} {
@@ -45,5 +48,18 @@ func TestAlertThreadBackfillEscalatesSkippedBotWithReplies(t *testing.T) {
 	msg := slackMessage{Ts: "100.000001", ThreadTs: "100.000001", BotID: "B1", Subtype: "bot_message", ReplyCount: 2}
 	if !forceAlertThreadBackfill(msg, alertBotDecision{Skip: true}) {
 		t.Fatal("skipped bot alert with replies should trigger forced thread backfill")
+	}
+}
+
+func TestAlertThreadHasNonBotReplyDegenerate(t *testing.T) {
+	// No DB, or no real repliers, must not report a human reply (and must not panic).
+	if alertThreadHasNonBotReply(context.Background(), Deps{}, []string{"U123"}) {
+		t.Fatal("nil DB should not report a human reply")
+	}
+	if alertThreadHasNonBotReply(context.Background(), Deps{}, nil) {
+		t.Fatal("no repliers should not report a human reply")
+	}
+	if alertThreadHasNonBotReply(context.Background(), Deps{}, []string{"", "  "}) {
+		t.Fatal("blank repliers should not report a human reply")
 	}
 }

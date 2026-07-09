@@ -2,10 +2,8 @@ package handlers
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/agent-mem/agent-mem/internal/gemini"
-	"github.com/agent-mem/agent-mem/internal/graph/jobs"
 )
 
 // TextGenerator is the minimal text-generation surface (Claude or Gemini).
@@ -56,10 +54,7 @@ func (a *geminiAdapter) GenerateCheap(ctx context.Context, systemPrompt, userMes
 	return a.c.Generate(ctx, systemPrompt, userMessage)
 }
 
-// Describe is not yet implemented in the underlying REST client.
-// Returns ErrFatal so the dispatcher marks the job failed cleanly instead of
-// retrying indefinitely. Once multimodal support lands in gemini.Client,
-// replace this stub with a real implementation.
-func (a *geminiAdapter) Describe(_ context.Context, _ string, _ []byte, _ string) (string, string, []string, error) {
-	return "", "", nil, fmt.Errorf("%w: Describe not yet implemented (multimodal support pending)", jobs.ErrFatal)
+// Describe proxies multimodal attachment description to the Gemini client.
+func (a *geminiAdapter) Describe(ctx context.Context, mimeType string, data []byte, prompt string) (string, string, []string, error) {
+	return a.c.Describe(ctx, mimeType, data, prompt)
 }

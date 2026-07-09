@@ -3,6 +3,7 @@ package gemini
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -49,7 +50,15 @@ type content struct {
 }
 
 type part struct {
-	Text string `json:"text"`
+	Text       string      `json:"text,omitempty"`
+	InlineData *inlineData `json:"inline_data,omitempty"`
+}
+
+// inlineData carries a base64-encoded attachment (image/PDF page) for multimodal
+// generateContent requests.
+type inlineData struct {
+	MimeType string `json:"mime_type"`
+	Data     string `json:"data"`
 }
 
 type generationConfig struct {
@@ -111,6 +120,49 @@ func (c *Client) Generate(ctx context.Context, systemPrompt, userMessage string)
 	}
 
 	return resp.Candidates[0].Content.Parts[0].Text, nil
+}
+
+// Describe sends an attachment (image or rendered PDF page) to Gemini and
+// returns a prose description, extracted OCR text, and key entities. The prompt
+// is augmented to force a JSON object so the three fields come back separately.
+func (c *Client) Describe(ctx context.Context, mimeType string, data []byte, prompt string) (string, string, []string, error) {
+	req := generateRequest{
+		Contents: []content{{
+			Role: "user",
+			Parts: []part{
+				{Text: prompt + `\nRespond as JSON only: {"description":"...","ocr":"verbatim visible text","entities":["..."]}`},
+				{InlineData: &inlineData{MimeType: mimeType, Data: base64.StdEncoding.EncodeToString(data)}},
+			},
+		}},
+		GenerationConfig: generationConfig{
+			Temperature:      0.2,
+			MaxOutputTokens:  2048,
+			ResponseMimeType: "application/json",
+		},
+	}
+
+	url := fmt.Sprintf("%s/%s:generateContent?key=%s", baseURL, c.model, c.apiKey)
+
+	var resp generateResponse
+	if err := c.doWithRetry(ctx, url, req, &resp); err != nil {
+		return "", "", nil, fmt.Errorf("describe: %w", err)
+	}
+	if resp.Error != nil {
+		return "", "", nil, fmt.Errorf("gemini describe API error: %s (code %d)", resp.Error.Message, resp.Error.Code)
+	}
+	if len(resp.Candidates) == 0 || len(resp.Candidates[0].Content.Parts) == 0 {
+		return "", "", nil, fmt.Errorf("empty describe response from Gemini")
+	}
+
+	var parsed struct {
+		Description string   `json:"description"`
+		OCR         string   `json:"ocr"`
+		Entities    []string `json:"entities"`
+	}
+	if err := json.Unmarshal([]byte(resp.Candidates[0].Content.Parts[0].Text), &parsed); err != nil {
+		return "", "", nil, fmt.Errorf("describe: parse JSON: %w", err)
+	}
+	return parsed.Description, parsed.OCR, parsed.Entities, nil
 }
 
 // --- Embedding ---
