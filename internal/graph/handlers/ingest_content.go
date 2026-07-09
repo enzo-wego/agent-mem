@@ -41,11 +41,11 @@ type ingestContentMetadata struct {
 	BodyTS   string             `json:"body_ts"`
 
 	// Slack-specific
-	ChannelID string  `json:"channel_id"`
-	ThreadTs  string  `json:"thread_ts"`
-	Subtype   *string `json:"subtype"`
-	Edited    bool    `json:"edited"`
-	Deleted   bool    `json:"deleted"`
+	ChannelID string          `json:"channel_id"`
+	ThreadTs  string          `json:"thread_ts"`
+	Subtype   *string         `json:"subtype"`
+	Edited    bool            `json:"edited"`
+	Deleted   bool            `json:"deleted"`
 	Files     []ingestFileRef `json:"files"`
 	Scope     string          `json:"scope"`
 
@@ -373,9 +373,10 @@ func NewIngestContentHandler(deps Deps) http.Handler {
 			var rootExists bool
 			_ = deps.DB.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM graph.nodes WHERE id=$1)`, rootID).Scan(&rootExists)
 			if !rootExists {
-				btID, btErr := jobs.Enqueue(ctx, deps.DB, "backfill_slack_thread", map[string]string{
-					"channel_id": req.Metadata.ChannelID,
-					"thread_ts":  req.Metadata.ThreadTs,
+				btID, btErr := jobs.Enqueue(ctx, deps.DB, "backfill_slack_thread", backfillSlackThreadPayload{
+					ChannelID:        req.Metadata.ChannelID,
+					ThreadTs:         req.Metadata.ThreadTs,
+					ForceAlertThread: true,
 				}, jobs.EnqueueOptions{Priority: 5, TargetRunner: "vps"})
 				if btErr != nil {
 					deps.Logger.Warn().Err(btErr).Msg("ingest_content: enqueue backfill_slack_thread failed")

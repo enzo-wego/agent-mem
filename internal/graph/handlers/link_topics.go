@@ -26,6 +26,7 @@ type linkTopicsPayload struct {
 type topicLinkNode struct {
 	NodeID     string
 	Type       string
+	Scope      string
 	Summary    string
 	Department string
 }
@@ -69,6 +70,9 @@ func linkTopicsHandler(deps Deps) jobs.Handler {
 		if err != nil || strings.TrimSpace(source.Summary) == "" {
 			return err
 		}
+		if skipTopicLinkSource(source) {
+			return nil
+		}
 		cands, err := shortlistTopicLinks(ctx, deps, p.NodeID)
 		if err != nil {
 			return err
@@ -84,7 +88,10 @@ func linkTopicsHandler(deps Deps) jobs.Handler {
 				return err
 			}
 			if !cached || p.Force {
-				judgment = confirmTopicLink(ctx, deps, source, cand)
+				judgment, err = confirmTopicLink(ctx, deps, source, cand)
+				if err != nil {
+					return err
+				}
 				if err := saveTopicLinkJudgment(ctx, deps, from, to, contentHash, judgment); err != nil {
 					return err
 				}
@@ -104,14 +111,18 @@ func linkTopicsHandler(deps Deps) jobs.Handler {
 func loadTopicLinkSource(ctx context.Context, deps Deps, nodeID string) (topicLinkNode, error) {
 	var n topicLinkNode
 	err := deps.DB.QueryRow(ctx, `
-SELECT n.id, n.type, COALESCE(ai.summary,''), COALESCE(p.department,'')
+SELECT n.id, n.type, COALESCE(n.scope,''), COALESCE(ai.summary,''), COALESCE(p.department,'')
 FROM graph.nodes n
 JOIN graph.artifact_index ai ON ai.node_id = n.id
 LEFT JOIN graph.people p ON p.id = n.author_person_id
 WHERE n.id=$1 AND n.deleted_at IS NULL`,
 		nodeID,
-	).Scan(&n.NodeID, &n.Type, &n.Summary, &n.Department)
+	).Scan(&n.NodeID, &n.Type, &n.Scope, &n.Summary, &n.Department)
 	return n, err
+}
+
+func skipTopicLinkSource(source topicLinkNode) bool {
+	return (source.Type == "slack" || source.Type == "slack_thread") && strings.HasPrefix(source.Scope, "slack:D")
 }
 
 func shortlistTopicLinks(ctx context.Context, deps Deps, nodeID string) ([]topicLinkCandidate, error) {
@@ -211,7 +222,7 @@ ON CONFLICT (source_node_id, target_node_id) DO UPDATE SET
 	return err
 }
 
-func confirmTopicLink(ctx context.Context, deps Deps, source topicLinkNode, cand topicLinkCandidate) topicLinkJudgment {
+func confirmTopicLink(ctx context.Context, deps Deps, source topicLinkNode, cand topicLinkCandidate) (topicLinkJudgment, error) {
 	const sys = `You decide whether two graph artifacts are substantively about the same exact topic.
 Return JSON only: {"same_topic":true|false,"confidence":0.0-1.0,"topic":"short shared topic label","why":"one short factual reason"}.
 Be strict: same words are not enough. Prefer false when teams or artifacts mention similar vocabulary for different work.`
@@ -220,9 +231,12 @@ Be strict: same words are not enough. Prefer false when teams or artifacts menti
 		source.Type, blankAsUnknown(source.Department), source.Summary,
 		cand.Type, blankAsUnknown(cand.Department), cand.Cosine, cand.Summary,
 	)
-	out, err := deps.Gemini.Generate(ctx, sys, user)
-	if err != nil || strings.TrimSpace(out) == "" {
-		return topicLinkJudgment{SameTopic: false}
+	out, err := deps.Gemini.GenerateCheap(ctx, sys, user)
+	if err != nil {
+		return topicLinkJudgment{}, fmt.Errorf("%w: link_topics confirm: %v", jobs.ErrTransient, err)
+	}
+	if strings.TrimSpace(out) == "" {
+		return topicLinkJudgment{}, fmt.Errorf("%w: link_topics confirm: empty response", jobs.ErrTransient)
 	}
 	var parsed struct {
 		SameTopic  bool    `json:"same_topic"`
@@ -231,14 +245,14 @@ Be strict: same words are not enough. Prefer false when teams or artifacts menti
 		Why        string  `json:"why"`
 	}
 	if json.Unmarshal([]byte(out), &parsed) != nil {
-		return topicLinkJudgment{SameTopic: false}
+		return topicLinkJudgment{}, fmt.Errorf("%w: link_topics confirm: invalid JSON", jobs.ErrTransient)
 	}
 	return topicLinkJudgment{
 		SameTopic:  parsed.SameTopic,
 		Confidence: clamp01(parsed.Confidence),
 		Topic:      firstLine(parsed.Topic, 120),
 		Why:        firstLine(parsed.Why, 240),
-	}
+	}, nil
 }
 
 func upsertSameTopicEdge(ctx context.Context, deps Deps, from, to string, j topicLinkJudgment, cosine float64) error {
@@ -295,4 +309,8 @@ func enqueueLinkTopics(ctx context.Context, deps Deps, nodeID string, force bool
 	}, jobs.EnqueueOptions{Priority: 7, MachineID: deps.MachineID}); err != nil {
 		deps.Logger.Warn().Err(err).Str("node_id", nodeID).Msg("enqueue link_topics failed")
 	}
+}
+
+func linkTopicsForceFromIndexArtifact(_ bool) bool {
+	return false
 }

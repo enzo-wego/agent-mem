@@ -25,3 +25,25 @@ func TestAlertFingerprintStripsVolatileValues(t *testing.T) {
 		t.Fatalf("fingerprints differ for same template:\n%s\n%s", a, b)
 	}
 }
+
+func TestShouldSkipSlackMessageForAlertPolicy(t *testing.T) {
+	botRoot := slackMessage{BotID: "B1", Subtype: "bot_message", Text: "PaymentFailed 123", ReplyCount: 1}
+	if !shouldSkipSlackMessageForAlertPolicy(botRoot, alertBotDecision{Skip: true}, false) {
+		t.Fatal("normal alert backfill should skip known bot fingerprints")
+	}
+	if shouldSkipSlackMessageForAlertPolicy(botRoot, alertBotDecision{Skip: true}, true) {
+		t.Fatal("forced alert-thread backfill should ingest the bot root")
+	}
+
+	join := slackMessage{Subtype: "channel_join"}
+	if !shouldSkipSlackMessageForAlertPolicy(join, alertBotDecision{}, true) {
+		t.Fatal("forced alert-thread backfill should still skip non-message subtypes")
+	}
+}
+
+func TestAlertThreadBackfillEscalatesSkippedBotWithReplies(t *testing.T) {
+	msg := slackMessage{Ts: "100.000001", ThreadTs: "100.000001", BotID: "B1", Subtype: "bot_message", ReplyCount: 2}
+	if !forceAlertThreadBackfill(msg, alertBotDecision{Skip: true}) {
+		t.Fatal("skipped bot alert with replies should trigger forced thread backfill")
+	}
+}

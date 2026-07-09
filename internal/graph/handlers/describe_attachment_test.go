@@ -21,10 +21,12 @@ type mockGemini struct {
 	describeCalls atomic.Int32
 	embedCalls    atomic.Int32
 
-	describeResult func() (string, string, []string, error)
-	embedResult    func() ([]float32, error)
-	generateResult func() (string, error)
-	generateUser   string // last user prompt passed to Generate
+	describeResult      func() (string, string, []string, error)
+	embedResult         func() ([]float32, error)
+	generateResult      func() (string, error)
+	cheapGenerateResult func() (string, error)
+	cheapGenerateCalls  atomic.Int32
+	generateUser        string // last user prompt passed to Generate
 }
 
 func (m *mockGemini) Describe(_ context.Context, _ string, _ []byte, _ string) (string, string, []string, error) {
@@ -53,6 +55,14 @@ func (m *mockGemini) Generate(_ context.Context, _, user string) (string, error)
 		return m.generateResult()
 	}
 	return "", nil
+}
+
+func (m *mockGemini) GenerateCheap(_ context.Context, _, user string) (string, error) {
+	m.cheapGenerateCalls.Add(1)
+	if m.cheapGenerateResult != nil {
+		return m.cheapGenerateResult()
+	}
+	return m.Generate(context.Background(), "", user)
 }
 
 func TestDescribeAttachmentHandler_BadPayload(t *testing.T) {

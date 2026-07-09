@@ -49,6 +49,13 @@ func (a *geminiAdapter) Generate(ctx context.Context, systemPrompt, userMessage 
 	return a.gen.Generate(ctx, systemPrompt, userMessage)
 }
 
+// GenerateCheap always uses Gemini Flash instead of the optional Claude summary
+// generator. The topic-link confirm gate is high-volume and already receives a
+// cosine shortlist, so it should stay on the cheap model.
+func (a *geminiAdapter) GenerateCheap(ctx context.Context, systemPrompt, userMessage string) (string, error) {
+	return a.c.Generate(ctx, systemPrompt, userMessage)
+}
+
 // Describe is not yet implemented in the underlying REST client.
 // Returns ErrFatal so the dispatcher marks the job failed cleanly instead of
 // retrying indefinitely. Once multimodal support lands in gemini.Client,

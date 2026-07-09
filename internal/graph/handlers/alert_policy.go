@@ -113,3 +113,26 @@ WHERE channel_id=$1 AND fingerprint=$2`,
 	}
 	return false
 }
+
+func slackMessageAutomated(msg slackMessage) bool {
+	return msg.BotID != "" || msg.Subtype == "bot_message"
+}
+
+func shouldSkipSlackMessageForAlertPolicy(msg slackMessage, decision alertBotDecision, forceAlertThread bool) bool {
+	automated := slackMessageAutomated(msg)
+	forcedBotRoot := forceAlertThread && automated
+	if decision.Skip && !forcedBotRoot {
+		return true
+	}
+	if msg.Subtype != "" && !decision.Escalate && !forcedBotRoot {
+		return true
+	}
+	if msg.BotID != "" && msg.User == "" && !decision.Escalate && !forcedBotRoot {
+		return true
+	}
+	return false
+}
+
+func forceAlertThreadBackfill(msg slackMessage, decision alertBotDecision) bool {
+	return decision.Skip && msg.ReplyCount > 0 && slackMessageAutomated(msg)
+}

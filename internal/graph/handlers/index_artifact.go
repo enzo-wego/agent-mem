@@ -119,7 +119,7 @@ WHERE channel_id=$1 AND thread_ts=$2`,
 			return fmt.Errorf("index_artifact: upsert artifact_index: %w", err)
 		}
 
-		enqueueLinkTopics(ctx, deps, p.NodeID, p.Force)
+		enqueueLinkTopics(ctx, deps, p.NodeID, linkTopicsForceFromIndexArtifact(p.Force))
 		return nil
 	}
 }

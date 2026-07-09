@@ -15,9 +15,10 @@ import (
 
 // backfillSlackThreadPayload is the JSON payload for the backfill_slack_thread job type.
 type backfillSlackThreadPayload struct {
-	ChannelID string `json:"channel_id"`
-	ThreadTs  string `json:"thread_ts"`
-	Cursor    string `json:"cursor"`
+	ChannelID        string `json:"channel_id"`
+	ThreadTs         string `json:"thread_ts"`
+	Cursor           string `json:"cursor"`
+	ForceAlertThread bool   `json:"force_alert_thread,omitempty"`
 }
 
 // NewBackfillSlackThreadHandler returns a HandlerInfo for the "backfill_slack_thread" job type.
@@ -57,15 +58,9 @@ func backfillSlackThreadHandler(deps Deps) jobs.Handler {
 		// backfill window and isn't ingested yet (old thread, fresh reply).
 		for _, msg := range repliesResp.Messages {
 			// Skip bot self and subtype messages.
-			automated := msg.BotID != "" || msg.Subtype == "bot_message"
+			automated := slackMessageAutomated(msg)
 			alertDecision := decideAlertBot(ctx, deps, p.ChannelID, msg.Text, automated)
-			if alertDecision.Skip {
-				continue
-			}
-			if msg.Subtype != "" && !alertDecision.Escalate {
-				continue
-			}
-			if msg.BotID != "" && msg.User == "" && !alertDecision.Escalate {
+			if shouldSkipSlackMessageForAlertPolicy(msg, alertDecision, p.ForceAlertThread) {
 				continue
 			}
 
@@ -82,9 +77,10 @@ func backfillSlackThreadHandler(deps Deps) jobs.Handler {
 		// the thread is complete — (re)generate its topic summary in the background.
 		if repliesResp.ResponseMetadata.NextCursor != "" {
 			nextPayload := backfillSlackThreadPayload{
-				ChannelID: p.ChannelID,
-				ThreadTs:  p.ThreadTs,
-				Cursor:    repliesResp.ResponseMetadata.NextCursor,
+				ChannelID:        p.ChannelID,
+				ThreadTs:         p.ThreadTs,
+				Cursor:           repliesResp.ResponseMetadata.NextCursor,
+				ForceAlertThread: p.ForceAlertThread,
 			}
 			if _, jErr := jobs.Enqueue(ctx, deps.DB, "backfill_slack_thread", nextPayload, jobs.EnqueueOptions{
 				Priority:     5,

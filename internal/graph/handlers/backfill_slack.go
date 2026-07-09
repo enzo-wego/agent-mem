@@ -56,15 +56,29 @@ func backfillSlackChannelHandler(deps Deps) jobs.Handler {
 		// Process each parent message.
 		for _, msg := range histResp.Messages {
 			// Skip messages with a subtype (joins, leaves, etc.) and bot self.
-			automated := msg.BotID != "" || msg.Subtype == "bot_message"
+			automated := slackMessageAutomated(msg)
 			alertDecision := decideAlertBot(ctx, deps, p.ChannelID, msg.Text, automated)
-			if alertDecision.Skip {
-				continue
+			if forceAlertThreadBackfill(msg, alertDecision) {
+				threadPayload := backfillSlackThreadPayload{
+					ChannelID:        p.ChannelID,
+					ThreadTs:         msg.ThreadTs,
+					Cursor:           "",
+					ForceAlertThread: true,
+				}
+				if threadPayload.ThreadTs == "" {
+					threadPayload.ThreadTs = msg.Ts
+				}
+				if _, jErr := jobs.Enqueue(ctx, deps.DB, "backfill_slack_thread", threadPayload, jobs.EnqueueOptions{
+					Priority:     5,
+					TargetRunner: "vps",
+					MachineID:    deps.MachineID,
+				}); jErr != nil {
+					deps.Logger.Warn().Err(jErr).
+						Str("thread_ts", threadPayload.ThreadTs).
+						Msg("backfill_slack_channel: enqueue forced alert thread backfill failed")
+				}
 			}
-			if msg.Subtype != "" && !alertDecision.Escalate {
-				continue
-			}
-			if msg.BotID != "" && msg.User == "" && !alertDecision.Escalate {
+			if shouldSkipSlackMessageForAlertPolicy(msg, alertDecision, false) {
 				continue
 			}
 
