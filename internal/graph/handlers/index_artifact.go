@@ -119,7 +119,11 @@ WHERE channel_id=$1 AND thread_ts=$2`,
 			return fmt.Errorf("index_artifact: upsert artifact_index: %w", err)
 		}
 
-		enqueueLinkTopics(ctx, deps, p.NodeID, linkTopicsForceFromIndexArtifact(p.Force))
+		// Only thread roots (embedding their resource-aware summary) and
+		// non-Slack resources link out — never raw-text Slack messages.
+		if (nodeType != "slack" && nodeType != "slack_thread") || summaryKind == "thread_summary" {
+			enqueueLinkTopics(ctx, deps, p.NodeID, linkTopicsForceFromIndexArtifact(p.Force))
+		}
 		return nil
 	}
 }

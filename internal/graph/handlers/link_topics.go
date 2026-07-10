@@ -24,11 +24,12 @@ type linkTopicsPayload struct {
 }
 
 type topicLinkNode struct {
-	NodeID     string
-	Type       string
-	Scope      string
-	Summary    string
-	Department string
+	NodeID      string
+	Type        string
+	Scope       string
+	Summary     string
+	SummaryKind string
+	Department  string
 }
 
 type topicLinkCandidate struct {
@@ -111,18 +112,25 @@ func linkTopicsHandler(deps Deps) jobs.Handler {
 func loadTopicLinkSource(ctx context.Context, deps Deps, nodeID string) (topicLinkNode, error) {
 	var n topicLinkNode
 	err := deps.DB.QueryRow(ctx, `
-SELECT n.id, n.type, COALESCE(n.scope,''), COALESCE(ai.summary,''), COALESCE(p.department,'')
+SELECT n.id, n.type, COALESCE(n.scope,''), COALESCE(ai.summary,''), COALESCE(ai.summary_kind,''), COALESCE(p.department,'')
 FROM graph.nodes n
 JOIN graph.artifact_index ai ON ai.node_id = n.id
 LEFT JOIN graph.people p ON p.id = n.author_person_id
 WHERE n.id=$1 AND n.deleted_at IS NULL`,
 		nodeID,
-	).Scan(&n.NodeID, &n.Type, &n.Scope, &n.Summary, &n.Department)
+	).Scan(&n.NodeID, &n.Type, &n.Scope, &n.Summary, &n.SummaryKind, &n.Department)
 	return n, err
 }
 
+// skipTopicLinkSource keeps the Slack thread as the linking unit: individual
+// Slack messages carry only a heuristic (raw-text) summary, and linking on raw
+// text is exactly the noise this feature replaces. Only thread roots embedding
+// their resource-aware summary link out; non-Slack resources always may.
 func skipTopicLinkSource(source topicLinkNode) bool {
-	return (source.Type == "slack" || source.Type == "slack_thread") && strings.HasPrefix(source.Scope, "slack:D")
+	if source.Type != "slack" && source.Type != "slack_thread" {
+		return false
+	}
+	return strings.HasPrefix(source.Scope, "slack:D") || source.SummaryKind != "thread_summary"
 }
 
 func shortlistTopicLinks(ctx context.Context, deps Deps, nodeID string) ([]topicLinkCandidate, error) {
@@ -147,6 +155,7 @@ sims AS (
   WHERE ai.node_id <> $1
     AND ai.embedding IS NOT NULL
     AND n.deleted_at IS NULL
+    AND NOT (n.type IN ('slack','slack_thread') AND ai.summary_kind <> 'thread_summary')
     AND NOT (n.type IN ('slack','slack_thread') AND n.scope LIKE 'slack:D%')
     AND NOT (n.type IN ('slack','slack_thread')
       AND REPLACE(n.scope,'slack:','') = src.ch

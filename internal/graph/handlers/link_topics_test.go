@@ -77,10 +77,21 @@ func TestIndexArtifactNeverForcesTopicRelink(t *testing.T) {
 }
 
 func TestTopicLinkSourceIsSkippedForSlackDM(t *testing.T) {
-	if !skipTopicLinkSource(topicLinkNode{Type: "slack", Scope: "slack:D123", Summary: "private thread"}) {
+	if !skipTopicLinkSource(topicLinkNode{Type: "slack", Scope: "slack:D123", SummaryKind: "thread_summary", Summary: "private thread"}) {
 		t.Fatal("Slack DM source should be skipped")
 	}
-	if skipTopicLinkSource(topicLinkNode{Type: "slack", Scope: "slack:C123", Summary: "public channel thread"}) {
-		t.Fatal("public Slack channel source should not be skipped")
+	if skipTopicLinkSource(topicLinkNode{Type: "slack", Scope: "slack:C123", SummaryKind: "thread_summary", Summary: "public channel thread"}) {
+		t.Fatal("public Slack thread root should not be skipped")
+	}
+}
+
+func TestTopicLinkSourceIsSkippedForRawTextSlackMessages(t *testing.T) {
+	// The Slack thread is the linking unit: heuristic (raw-text) message
+	// summaries must never link out — that is the noise this feature replaces.
+	if !skipTopicLinkSource(topicLinkNode{Type: "slack", Scope: "slack:C123", SummaryKind: "heuristic"}) {
+		t.Fatal("heuristic Slack message source should be skipped")
+	}
+	if skipTopicLinkSource(topicLinkNode{Type: "jira", SummaryKind: "heuristic"}) {
+		t.Fatal("non-Slack resource should link regardless of summary kind")
 	}
 }
