@@ -8,6 +8,8 @@ import {
   fetchNeighbors,
   fetchClusterSummary,
   graphSearch,
+  graphResolve,
+  parseSlackLink,
   listSubscriptions,
   createSubscription,
   deleteSubscription,
@@ -633,6 +635,31 @@ export function LiveGlobePage() {
       return
     }
     setSearchLoading(true)
+    // Slack thread link → resolve the thread node + its linked graph memory,
+    // mapped into GraphNode shape so the result cards render unchanged (thread
+    // first at hop 0, then linked items by score).
+    const slack = parseSlackLink(term)
+    if (slack) {
+      graphResolve([slack.nodeId], undefined, 2)
+        .then((r) => {
+          const arts = (r.artifacts || [])
+            .slice()
+            .sort((a, b) => a.hop - b.hop || (b.score ?? 0) - (a.score ?? 0))
+          setSearchResults(
+            arts.map((a) => ({
+              id: a.node_id,
+              type: a.type,
+              title: a.title,
+              url: a.url,
+              author: a.author,
+              score: a.score,
+            })),
+          )
+        })
+        .catch(() => setSearchResults([]))
+        .finally(() => setSearchLoading(false))
+      return
+    }
     graphSearch(term, undefined, 20)
       .then((r) => setSearchResults(r.results || []))
       .catch(() => setSearchResults([]))
