@@ -1,5 +1,11 @@
 import { useState } from 'react'
-import { search, type SearchResult } from '../api'
+import {
+  search,
+  graphResolve,
+  parseSlackLink,
+  type SearchResult,
+  type ResolveArtifact,
+} from '../api'
 
 export function SearchPage({ project }: { project: string }) {
   const [query, setQuery] = useState('')
@@ -7,12 +13,37 @@ export function SearchPage({ project }: { project: string }) {
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(false)
   const [searched, setSearched] = useState(false)
+  // Slack-thread-link mode: the graph-memory linked to a pasted Slack thread.
+  const [thread, setThread] = useState<ResolveArtifact | null>(null)
+  const [linked, setLinked] = useState<ResolveArtifact[]>([])
+  const [threadErr, setThreadErr] = useState('')
 
   const doSearch = async () => {
     if (!query.trim()) return
     setLoading(true)
     setSearched(true)
+    // Reset both modes.
+    setThread(null)
+    setLinked([])
+    setThreadErr('')
+    setResults([])
+
+    const slack = parseSlackLink(query.trim())
     try {
+      if (slack) {
+        // Graph-memory view: resolve the thread node + its linked neighbors.
+        const res = await graphResolve([slack.nodeId], undefined, 2)
+        const arts = res.artifacts || []
+        const root = arts.find((a) => a.hop === 0 && a.node_id === slack.nodeId) ?? null
+        const rest = arts.filter((a) => a !== root).sort((a, b) => (b.score ?? 0) - (a.score ?? 0))
+        setThread(root)
+        setLinked(rest)
+        if (!root && rest.length === 0) {
+          setThreadErr(`Thread not found in the graph (${slack.nodeId}). It may not be ingested yet, or the link points to a reply rather than the thread root.`)
+        }
+        setTotal(arts.length)
+        return
+      }
       const res = await search(query, project || undefined)
       setResults(res.results || [])
       setTotal(res.total)
@@ -21,12 +52,14 @@ export function SearchPage({ project }: { project: string }) {
     }
   }
 
+  const isSlack = !!parseSlackLink(query.trim())
+
   return (
     <div>
-      <div className="flex gap-2 mb-6">
+      <div className="flex gap-2 mb-2">
         <input
           type="text"
-          placeholder="Search observations and summaries..."
+          placeholder="Search observations and summaries — or paste a Slack thread link…"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && doSearch()}
@@ -40,11 +73,67 @@ export function SearchPage({ project }: { project: string }) {
           {loading ? '...' : 'Search'}
         </button>
       </div>
-
-      {searched && (
-        <p className="text-sm text-gray-500 mb-4">{total} results</p>
+      {isSlack && (
+        <p className="text-xs text-blue-500 mb-4">
+          Slack thread link detected — showing graph memory linked to this thread.
+        </p>
       )}
 
+      {searched && !isSlack && (
+        <p className="text-sm text-gray-500 mb-4 mt-4">{total} results</p>
+      )}
+
+      {/* ── Slack thread mode ── */}
+      {threadErr && (
+        <div className="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg p-4 text-sm text-yellow-800 dark:text-yellow-300">
+          {threadErr}
+        </div>
+      )}
+      {thread && (
+        <div className="mb-4 bg-white dark:bg-gray-800 rounded-lg border border-blue-300 dark:border-blue-700 p-4">
+          <div className="flex items-center gap-2 mb-1">
+            <span className="text-xs px-2 py-0.5 rounded-full bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300">
+              thread
+            </span>
+            {thread.author && <span className="text-xs text-gray-400">{thread.author}</span>}
+          </div>
+          <h4 className="font-medium text-sm">{thread.title || thread.node_id}</h4>
+          {thread.url && (
+            <a href={thread.url} target="_blank" rel="noreferrer" className="text-xs text-blue-500 hover:underline">
+              open in Slack ↗
+            </a>
+          )}
+        </div>
+      )}
+      {(thread || linked.length > 0) && (
+        <p className="text-sm text-gray-500 mb-2">
+          {linked.length} linked {linked.length === 1 ? 'item' : 'items'} in graph memory
+        </p>
+      )}
+      <div className="space-y-3">
+        {linked.map((a) => (
+          <div key={a.node_id} className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
+            <div className="flex items-center gap-2 mb-1">
+              <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400">
+                {a.type}
+              </span>
+              <span className="text-xs text-gray-400">hop {a.hop}</span>
+              {a.score !== undefined && (
+                <span className="text-xs text-gray-400">score: {a.score.toFixed(2)}</span>
+              )}
+              {a.author && <span className="text-xs text-gray-400">{a.author}</span>}
+            </div>
+            <h4 className="font-medium text-sm">{a.title || a.node_id}</h4>
+            {a.url && (
+              <a href={a.url} target="_blank" rel="noreferrer" className="text-xs text-blue-500 hover:underline">
+                {a.url}
+              </a>
+            )}
+          </div>
+        ))}
+      </div>
+
+      {/* ── Keyword search mode ── */}
       <div className="space-y-3">
         {results.map((r) => (
           <div key={`${r.type}-${r.id}`} className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4">

@@ -369,6 +369,22 @@ export interface GraphResolveResponse {
   trace: ResolveTrace;
 }
 
+// parseSlackLink turns a Slack permalink (wego.slack.com/archives/C.../p<ts>)
+// into the graph node id "slack:<channel>:<ts>". The link strips the dot from
+// the ts; Slack ts is always <seconds>.<6-digit micros>, so we re-insert the
+// dot 6 digits from the end. Returns null if s is not a Slack archive link.
+// ponytail: matches thread ROOTS (node id is keyed by thread_ts); a link to a
+// reply resolves only if that reply is itself the thread root.
+export function parseSlackLink(s: string): { nodeId: string; channel: string; ts: string } | null {
+  const m = s.match(/slack\.com\/archives\/(C\w+)\/p(\d+)/);
+  if (!m) return null;
+  const channel = m[1];
+  const digits = m[2];
+  if (digits.length <= 6) return null;
+  const ts = `${digits.slice(0, -6)}.${digits.slice(-6)}`;
+  return { nodeId: `slack:${channel}:${ts}`, channel, ts };
+}
+
 export async function graphResolve(
   seeds: string[],
   query?: string,
