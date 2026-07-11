@@ -40,6 +40,7 @@ type topicLinkCandidate struct {
 type topicLinkJudgment struct {
 	SameTopic  bool
 	Confidence float64
+	Tag        string
 	Topic      string
 	Why        string
 }
@@ -202,11 +203,11 @@ func cachedTopicLinkJudgment(ctx context.Context, deps Deps, from, to, contentHa
 	var j topicLinkJudgment
 	var cachedHash string
 	err := deps.DB.QueryRow(ctx, `
-SELECT content_hash, same_topic, confidence, topic, why
+SELECT content_hash, same_topic, confidence, tag, topic, why
 FROM graph.topic_link_judgments
 WHERE source_node_id=$1 AND target_node_id=$2`,
 		from, to,
-	).Scan(&cachedHash, &j.SameTopic, &j.Confidence, &j.Topic, &j.Why)
+	).Scan(&cachedHash, &j.SameTopic, &j.Confidence, &j.Tag, &j.Topic, &j.Why)
 	if err != nil {
 		return topicLinkJudgment{}, false, nil
 	}
@@ -216,25 +217,28 @@ WHERE source_node_id=$1 AND target_node_id=$2`,
 func saveTopicLinkJudgment(ctx context.Context, deps Deps, from, to, contentHash string, j topicLinkJudgment) error {
 	_, err := deps.DB.Exec(ctx, `
 INSERT INTO graph.topic_link_judgments
-  (source_node_id, target_node_id, content_hash, same_topic, confidence, topic, why, judged_at, machine_id)
-VALUES ($1,$2,$3,$4,$5,$6,$7,NOW(),$8)
+  (source_node_id, target_node_id, content_hash, same_topic, confidence, tag, topic, why, judged_at, machine_id)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW(),$9)
 ON CONFLICT (source_node_id, target_node_id) DO UPDATE SET
   content_hash=EXCLUDED.content_hash,
   same_topic=EXCLUDED.same_topic,
   confidence=EXCLUDED.confidence,
+  tag=EXCLUDED.tag,
   topic=EXCLUDED.topic,
   why=EXCLUDED.why,
   judged_at=NOW(),
   machine_id=EXCLUDED.machine_id`,
-		from, to, contentHash, j.SameTopic, j.Confidence, j.Topic, j.Why, deps.MachineID,
+		from, to, contentHash, j.SameTopic, j.Confidence, j.Tag, j.Topic, j.Why, deps.MachineID,
 	)
 	return err
 }
 
 func confirmTopicLink(ctx context.Context, deps Deps, source topicLinkNode, cand topicLinkCandidate) (topicLinkJudgment, error) {
-	const sys = `You decide whether two graph artifacts are substantively about the same exact topic.
-Return JSON only: {"same_topic":true|false,"confidence":0.0-1.0,"topic":"short shared topic label","why":"one short factual reason"}.
-Be strict: same words are not enough. Prefer false when teams or artifacts mention similar vocabulary for different work.`
+	sys := `You decide whether two graph artifacts are substantively about the same exact topic,
+by applying the tag rules below (the same rules humans see at /live/rules).
+Return JSON only: {"tag":"one tag from the list","same_topic":true|false,"confidence":0.0-1.0,"topic":"short shared topic label","why":"one short factual reason citing the rule applied"}.
+
+` + topicRulesPromptDigest()
 	user := fmt.Sprintf(
 		"Artifact A (%s, department %s):\n%s\n\nArtifact B (%s, department %s, cosine %.3f):\n%s",
 		source.Type, blankAsUnknown(source.Department), source.Summary,
@@ -248,6 +252,7 @@ Be strict: same words are not enough. Prefer false when teams or artifacts menti
 		return topicLinkJudgment{}, fmt.Errorf("%w: link_topics confirm: empty response", jobs.ErrTransient)
 	}
 	var parsed struct {
+		Tag        string  `json:"tag"`
 		SameTopic  bool    `json:"same_topic"`
 		Confidence float64 `json:"confidence"`
 		Topic      string  `json:"topic"`
@@ -259,6 +264,7 @@ Be strict: same words are not enough. Prefer false when teams or artifacts menti
 	return topicLinkJudgment{
 		SameTopic:  parsed.SameTopic,
 		Confidence: clamp01(parsed.Confidence),
+		Tag:        firstLine(parsed.Tag, 40),
 		Topic:      firstLine(parsed.Topic, 120),
 		Why:        firstLine(parsed.Why, 240),
 	}, nil
@@ -267,6 +273,7 @@ Be strict: same words are not enough. Prefer false when teams or artifacts menti
 func upsertSameTopicEdge(ctx context.Context, deps Deps, from, to string, j topicLinkJudgment, cosine float64) error {
 	meta, _ := json.Marshal(map[string]any{
 		"confidence": j.Confidence,
+		"tag":        j.Tag,
 		"topic":      j.Topic,
 		"why":        j.Why,
 		"method":     "cosine-shortlist + llm-confirm",

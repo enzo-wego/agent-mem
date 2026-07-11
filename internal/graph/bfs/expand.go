@@ -11,6 +11,7 @@ import (
 type Neighbor struct {
 	NodeID     string
 	EdgeKind   string
+	Tag        string
 	Topic      string
 	Why        string
 	Confidence float64
@@ -34,6 +35,7 @@ func NewExpander(db *pgxpool.Pool) *Expander {
 func (e *Expander) Expand(ctx context.Context, nodeID string, kinds []string) ([]Neighbor, error) {
 	const q = `
 SELECT nbr, kind,
+       COALESCE(metadata->>'tag','') AS tag,
        COALESCE(metadata->>'topic','') AS topic,
        COALESCE(metadata->>'why','') AS why,
        COALESCE(NULLIF(metadata->>'confidence','')::float8, 0) AS confidence
@@ -57,7 +59,7 @@ FROM (
 	seen := map[string]bool{}
 	for rows.Next() {
 		var n Neighbor
-		if err := rows.Scan(&n.NodeID, &n.EdgeKind, &n.Topic, &n.Why, &n.Confidence); err != nil {
+		if err := rows.Scan(&n.NodeID, &n.EdgeKind, &n.Tag, &n.Topic, &n.Why, &n.Confidence); err != nil {
 			rows.Close()
 			return nil, err
 		}

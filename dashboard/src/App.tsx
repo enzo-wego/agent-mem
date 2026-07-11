@@ -10,6 +10,7 @@ import { JobsPage } from './pages/Jobs'
 import { BackfillPage } from './pages/Backfill'
 import { GlobePage } from './pages/Globe'
 import { LiveGlobePage } from './pages/LiveGlobe'
+import { RulesPage } from './pages/RulesPage'
 import { ContinentsPage } from './pages/Continents'
 import { fetchProjects, getApiKey, setApiKey, clearApiKey, type ProjectInfo } from './api'
 import './index.css'
@@ -121,6 +122,8 @@ function App() {
   if (needsAuth) return <LoginForm onLogin={handleLogin} />
 
   // Full-screen live globe lives at /live, bypassing the tabbed chrome.
+  // /live/rules renders the topic-linking rules (single source of truth).
+  if (window.location.pathname.startsWith('/live/rules')) return <RulesPage />
   const isLive = window.location.pathname.startsWith('/live')
   if (isLive) return <LiveGlobePage />
 

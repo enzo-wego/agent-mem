@@ -186,11 +186,11 @@ function neighborHint(n: GraphNeighbor): string {
 
 // edgeKindTooltip explains why a row is linked to the opened topic. SAME_TOPIC
 // rows are LLM-confirmed links; SIMILAR rows are unconfirmed fallback candidates.
-function edgeKindTooltip(edge: { kind: string; score?: number; confidence?: number; topic?: string; why?: string }): string {
+function edgeKindTooltip(edge: { kind: string; score?: number; confidence?: number; tag?: string; topic?: string; why?: string }): string {
   switch (edge.kind.toUpperCase()) {
     case 'SAME_TOPIC':
       return [
-        `Confirmed same topic${edge.confidence ? ` (${Math.round(edge.confidence * 100)}% confidence)` : ''}.`,
+        `Confirmed same topic${edge.confidence ? ` (${Math.round(edge.confidence * 100)}% confidence)` : ''}${edge.tag ? ` under the ${edge.tag} rule (see /live/rules)` : ''}.`,
         edge.topic ? `Topic: ${edge.topic}.` : '',
         edge.why || '',
       ]

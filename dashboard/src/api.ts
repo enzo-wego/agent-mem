@@ -604,10 +604,36 @@ export interface ChannelTopic {
   url: string;
 }
 
+// TopicRules is the single source of truth for how the linker decides two
+// artifacts share a topic (internal/graph/handlers/topic_rules.json). The LLM
+// judge applies it at runtime; /live/rules renders it for humans.
+export interface TopicRules {
+  version: number;
+  updated: string;
+  purpose: string;
+  how_it_works: string[];
+  tags: {
+    tag: string;
+    classify_when: string;
+    same_when: string;
+    different_when: string;
+    example_same: string;
+    example_different: string;
+  }[];
+  tie_breakers: string[];
+  domains: Record<string, unknown>;
+}
+
+export async function fetchTopicRules(): Promise<TopicRules> {
+  const res = await authFetch(`${BASE}/api/graph/topic-rules`);
+  if (!res.ok) throw new Error(`topic rules: ${res.status}`);
+  return res.json();
+}
+
 // GraphNeighbor is one related node reachable from a given node (for "open in Graph").
 export interface GraphNeighbor {
   hop: number;
-  edge: { kind: string; score?: number; confidence?: number; topic?: string; why?: string };
+  edge: { kind: string; score?: number; confidence?: number; tag?: string; topic?: string; why?: string };
   node: {
     node_id: string;
     type: string;

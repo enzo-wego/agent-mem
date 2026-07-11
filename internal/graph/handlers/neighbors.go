@@ -50,6 +50,7 @@ type neighborItem struct {
 	} `json:"node"`
 	Edge struct {
 		Kind       string  `json:"kind"`
+		Tag        string  `json:"tag,omitempty"` // topic-rules tag (see /live/rules)
 		Topic      string  `json:"topic,omitempty"`
 		Why        string  `json:"why,omitempty"`
 		Confidence float64 `json:"confidence,omitempty"`
@@ -120,6 +121,7 @@ func (h *neighborsHandler) serve(w http.ResponseWriter, r *http.Request) {
 			var item neighborItem
 			item.Hop = next.hop + 1
 			item.Edge.Kind = n.EdgeKind
+			item.Edge.Tag = n.Tag
 			item.Edge.Topic = n.Topic
 			item.Edge.Why = n.Why
 			item.Edge.Confidence = n.Confidence
