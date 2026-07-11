@@ -90,11 +90,13 @@ FROM (
 }
 
 // similarThreadLimit / similarThreadMinCosine bound the semantic "related threads"
-// lookup. 0.45 mirrors the hot-topic detector's tuned cosine threshold.
-// ponytail: hard-coded; make configurable if the threshold needs per-deploy tuning.
+// lookup. The floor matches the topic linker's; the effective cutoff is adaptive
+// (mean+2σ over the candidate corpus, computed in-query) because absolute cosine
+// is meaningless inside the corpus band — a fixed 0.45 admitted ~everything.
+// ponytail: stats CTE full-scans the corpus per call; fine at ~1k thread summaries.
 const (
 	similarThreadLimit     = 8
-	similarThreadMinCosine = 0.45
+	similarThreadMinCosine = 0.65
 )
 
 // SimilarThreads returns other Slack *thread roots* whose indexed embedding is
@@ -111,21 +113,30 @@ WITH me AS (
   FROM graph.nodes n
   JOIN graph.artifact_index ai ON ai.node_id = n.id
   WHERE n.id = $1
+),
+sims AS (
+  SELECT n.id, (1.0 - (ai.embedding <=> me.emb)) AS cosine
+  FROM graph.artifact_index ai
+  JOIN graph.nodes n ON n.id = ai.node_id
+  CROSS JOIN me
+  WHERE n.type IN ('slack','slack_thread')
+    AND ai.summary_kind = 'thread_summary'
+    AND n.deleted_at IS NULL
+    AND n.scope NOT LIKE 'slack:D%'
+    -- thread roots only: thread_ts equals the message's own ts
+    AND COALESCE(NULLIF(n.metadata->>'thread_ts',''), split_part(n.id,':',3)) = split_part(n.id,':',3)
+    -- exclude the opened thread itself (same channel + thread key)
+    AND NOT (REPLACE(n.scope,'slack:','') = me.ch
+         AND COALESCE(NULLIF(n.metadata->>'thread_ts',''), split_part(n.id,':',3)) = me.tt)
+),
+stats AS (
+  SELECT avg(cosine) AS mean, stddev_pop(cosine) AS sigma FROM sims
 )
-SELECT n.id, (1.0 - (ai.embedding <=> me.emb)) AS cosine
-FROM graph.artifact_index ai
-JOIN graph.nodes n ON n.id = ai.node_id
-CROSS JOIN me
-WHERE n.type IN ('slack','slack_thread')
-  AND n.deleted_at IS NULL
-  AND n.scope NOT LIKE 'slack:D%'
-  -- thread roots only: thread_ts equals the message's own ts
-  AND COALESCE(NULLIF(n.metadata->>'thread_ts',''), split_part(n.id,':',3)) = split_part(n.id,':',3)
-  -- exclude the opened thread itself (same channel + thread key)
-  AND NOT (REPLACE(n.scope,'slack:','') = me.ch
-       AND COALESCE(NULLIF(n.metadata->>'thread_ts',''), split_part(n.id,':',3)) = me.tt)
-  AND (1.0 - (ai.embedding <=> me.emb)) >= $2
-ORDER BY ai.embedding <=> me.emb
+SELECT id, cosine FROM sims, stats
+-- LEAST(…, 0.9): on tiny or bimodal corpora mean+2σ can exceed 1.0 and exclude
+-- exact matches; ≥0.9 is always close enough to show.
+WHERE cosine >= GREATEST(LEAST(COALESCE(mean + 2 * sigma, $2), 0.9), $2)
+ORDER BY cosine DESC
 LIMIT $3`
 	rows, err := e.db.Query(ctx, q, nodeID, similarThreadMinCosine, similarThreadLimit)
 	if err != nil {

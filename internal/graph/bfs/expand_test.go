@@ -134,9 +134,9 @@ func unitVec(hot int) string {
 func seedEmbedding(t *testing.T, pool *pgxpool.Pool, id, vec string) {
 	t.Helper()
 	_, err := pool.Exec(context.Background(), `
-INSERT INTO graph.artifact_index (node_id, embedding, machine_id)
-VALUES ($1, $2::halfvec, 'test')
-ON CONFLICT (node_id) DO UPDATE SET embedding = excluded.embedding`, id, vec)
+INSERT INTO graph.artifact_index (node_id, embedding, summary_kind, machine_id)
+VALUES ($1, $2::halfvec, 'thread_summary', 'test')
+ON CONFLICT (node_id) DO UPDATE SET embedding = excluded.embedding, summary_kind = excluded.summary_kind`, id, vec)
 	if err != nil {
 		t.Fatalf("seedEmbedding %s: %v", id, err)
 	}
