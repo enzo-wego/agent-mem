@@ -234,7 +234,10 @@ No markdown, no quotes around the whole thing.`
 		Highlights []string `json:"highlights"`
 	}
 	if json.Unmarshal([]byte(out), &parsed) != nil {
-		return "", "", nil
+		// Non-JSON prose reply (see prose() in cluster_summary.go): keep it as the
+		// overview so the thread still summarizes and caches instead of retrying
+		// forever. Topic label stays empty; callers fall back to the thread's title.
+		return "", prose(out), nil
 	}
 	return firstLine(parsed.Topic, 90), strings.TrimSpace(parsed.Overview), parsed.Highlights
 }

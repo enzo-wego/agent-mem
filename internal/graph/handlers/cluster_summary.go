@@ -487,8 +487,28 @@ No markdown, no quotes around the whole thing.`
 		Highlights []string `json:"highlights"`
 	}
 	if uerr := json.Unmarshal([]byte(out), &parsed); uerr != nil {
+		// Claude (unlike Gemini's responseMimeType) sometimes ignores "respond as
+		// JSON" and answers in plain prose — a valid summary the old code threw
+		// away, leaving the popup blank and re-calling the LLM on every open. When
+		// the output isn't JSON-shaped, use the prose itself as the overview so it
+		// renders and caches. See prose() for why we don't salvage broken JSON.
+		if prose := prose(out); prose != "" {
+			return prose, nil
+		}
 		log.Warn().Err(uerr).Str("raw", firstLine(out, 300)).Msg("cluster summary: LLM output not valid JSON")
 		return "", nil
 	}
 	return strings.TrimSpace(parsed.Overview), parsed.Highlights
+}
+
+// prose salvages a non-JSON LLM reply as an overview. It returns the trimmed text
+// only when it doesn't look like JSON — a reply starting with "{" is malformed
+// JSON (e.g. truncated), not prose, and showing its raw braces to the user is
+// worse than falling back to blank. Returns "" for JSON-shaped or empty input.
+func prose(out string) string {
+	out = strings.TrimSpace(out)
+	if out == "" || strings.HasPrefix(out, "{") {
+		return ""
+	}
+	return out
 }
