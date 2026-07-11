@@ -10,12 +10,19 @@ import (
 	"strings"
 	"time"
 
+	"golang.org/x/sync/errgroup"
+
 	"github.com/agent-mem/agent-mem/internal/graph/jobs"
 )
 
 const (
 	topicLinkShortlistLimit = 12
 	topicLinkMinFloor       = 0.65
+	// topicLinkConfirmConcurrency bounds parallel judge calls per job. With the
+	// job pool (see NewLinkTopicsHandler) this caps total in-flight Gemini
+	// requests at pool×concurrency — sized well under the API's rate limit;
+	// 429s degrade to client-side backoff, never data loss.
+	topicLinkConfirmConcurrency = 3
 )
 
 type linkTopicsPayload struct {
@@ -50,7 +57,7 @@ func NewLinkTopicsHandler(deps Deps) jobs.Entry {
 	return jobs.Entry{
 		Handler:  linkTopicsHandler(deps),
 		Systems:  []string{"gemini"},
-		PoolSize: 2,
+		PoolSize: 4,
 		Lease:    120 * time.Second,
 	}
 }
@@ -79,34 +86,36 @@ func linkTopicsHandler(deps Deps) jobs.Handler {
 		if err != nil {
 			return err
 		}
+		g, gctx := errgroup.WithContext(ctx)
+		g.SetLimit(topicLinkConfirmConcurrency)
 		for _, cand := range cands {
+			cand := cand
 			if strings.TrimSpace(cand.Summary) == "" {
 				continue
 			}
-			from, to, sourceSummary, targetSummary := canonicalTopicPair(source.NodeID, cand.NodeID, source.Summary, cand.Summary)
-			contentHash := topicLinkContentHash(from, to, sourceSummary, targetSummary)
-			judgment, cached, err := cachedTopicLinkJudgment(ctx, deps, from, to, contentHash)
-			if err != nil {
-				return err
-			}
-			if !cached || p.Force {
-				judgment, err = confirmTopicLink(ctx, deps, source, cand)
+			g.Go(func() error {
+				from, to, sourceSummary, targetSummary := canonicalTopicPair(source.NodeID, cand.NodeID, source.Summary, cand.Summary)
+				contentHash := topicLinkContentHash(from, to, sourceSummary, targetSummary)
+				judgment, cached, err := cachedTopicLinkJudgment(gctx, deps, from, to, contentHash)
 				if err != nil {
 					return err
 				}
-				if err := saveTopicLinkJudgment(ctx, deps, from, to, contentHash, judgment); err != nil {
-					return err
+				if !cached || p.Force {
+					judgment, err = confirmTopicLink(gctx, deps, source, cand)
+					if err != nil {
+						return err
+					}
+					if err := saveTopicLinkJudgment(gctx, deps, from, to, contentHash, judgment); err != nil {
+						return err
+					}
 				}
-			}
-			if judgment.SameTopic {
-				if err := upsertSameTopicEdge(ctx, deps, from, to, judgment, cand.Cosine); err != nil {
-					return err
+				if judgment.SameTopic {
+					return upsertSameTopicEdge(gctx, deps, from, to, judgment, cand.Cosine)
 				}
-			} else if err := deleteSameTopicEdge(ctx, deps, from, to); err != nil {
-				return err
-			}
+				return deleteSameTopicEdge(gctx, deps, from, to)
+			})
 		}
-		return nil
+		return g.Wait()
 	}
 }
 

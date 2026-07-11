@@ -73,6 +73,7 @@ type Config struct {
 
 	GeminiAPIKey         string `json:"gemini_api_key"`
 	GeminiModel          string `json:"gemini_model"`
+	GraphGeminiModel     string `json:"graph_gemini_model"` // graph judge/describe model; empty = use GeminiModel (flat memory keeps its tuned model)
 	GeminiEmbeddingModel string `json:"gemini_embedding_model"`
 	GeminiEmbeddingDims  int    `json:"gemini_embedding_dims"`
 
@@ -118,6 +119,7 @@ func (c *Config) RuntimeSettings() map[string]string {
 	return map[string]string{
 		"gemini_api_key":         c.GeminiAPIKey,
 		"gemini_model":           c.GeminiModel,
+		"graph_gemini_model":     c.GraphGeminiModel,
 		"gemini_embedding_model": c.GeminiEmbeddingModel,
 		"gemini_embedding_dims":  strconv.Itoa(c.GeminiEmbeddingDims),
 		"context_observations":   strconv.Itoa(c.ContextObservations),
@@ -147,6 +149,8 @@ func (c *Config) ApplyDBSettings(dbSettings map[string]string) {
 			c.GeminiAPIKey = v
 		case "gemini_model":
 			c.GeminiModel = v
+		case "graph_gemini_model":
+			c.GraphGeminiModel = v
 		case "gemini_embedding_model":
 			c.GeminiEmbeddingModel = v
 		case "gemini_embedding_dims":
@@ -196,6 +200,7 @@ func (c *Config) snapshot() ConfigSnapshot {
 		DatabaseURL:          c.DatabaseURL,
 		GeminiAPIKey:         c.GeminiAPIKey,
 		GeminiModel:          c.GeminiModel,
+		GraphGeminiModel:     c.GraphGeminiModel,
 		GeminiEmbeddingModel: c.GeminiEmbeddingModel,
 		GeminiEmbeddingDims:  c.GeminiEmbeddingDims,
 		ContextObservations:  c.ContextObservations,
@@ -221,6 +226,7 @@ type ConfigSnapshot struct {
 	DatabaseURL          string `json:"database_url"`
 	GeminiAPIKey         string `json:"gemini_api_key"`
 	GeminiModel          string `json:"gemini_model"`
+	GraphGeminiModel     string `json:"graph_gemini_model"` // graph judge/describe model; empty = use GeminiModel (flat memory keeps its tuned model)
 	GeminiEmbeddingModel string `json:"gemini_embedding_model"`
 	GeminiEmbeddingDims  int    `json:"gemini_embedding_dims"`
 	ContextObservations  int    `json:"context_observations"`
@@ -246,6 +252,7 @@ func (c *Config) Update(partial map[string]any) (geminiChanged bool) {
 
 	oldKey := c.GeminiAPIKey
 	oldModel := c.GeminiModel
+	oldGraphModel := c.GraphGeminiModel
 	oldEmbModel := c.GeminiEmbeddingModel
 	oldEmbDims := c.GeminiEmbeddingDims
 
@@ -258,6 +265,10 @@ func (c *Config) Update(partial map[string]any) (geminiChanged bool) {
 		case "gemini_model":
 			if s, ok := v.(string); ok {
 				c.GeminiModel = s
+			}
+		case "graph_gemini_model":
+			if s, ok := v.(string); ok {
+				c.GraphGeminiModel = s
 			}
 		case "gemini_embedding_model":
 			if s, ok := v.(string); ok {
@@ -320,6 +331,7 @@ func (c *Config) Update(partial map[string]any) (geminiChanged bool) {
 
 	return c.GeminiAPIKey != oldKey ||
 		c.GeminiModel != oldModel ||
+		c.GraphGeminiModel != oldGraphModel ||
 		c.GeminiEmbeddingModel != oldEmbModel ||
 		c.GeminiEmbeddingDims != oldEmbDims
 }

@@ -94,6 +94,15 @@ func NewServer(cfg *config.Config, logBuf *LogBuffer) (*Server, error) {
 		log.Warn().Msg("No Gemini API key configured, observation extraction disabled")
 	}
 
+	// Graph judge/describe can run a different Gemini model than flat memory —
+	// flat memory's prompts (observation extraction, session summaries) are
+	// tuned against gemini_model and must not silently change with it.
+	graphGeminiClient := geminiClient
+	if geminiClient != nil && cfg.GraphGeminiModel != "" && cfg.GraphGeminiModel != cfg.GeminiModel {
+		graphGeminiClient = gemini.NewClient(cfg.GeminiAPIKey, cfg.GraphGeminiModel, cfg.GeminiEmbeddingModel, cfg.GeminiEmbeddingDims)
+		log.Info().Str("model", cfg.GraphGeminiModel).Msg("Graph Gemini client initialized (separate from flat memory)")
+	}
+
 	// When an Anthropic key is set, graph summaries (cluster/thread/feature) run
 	// on Claude instead of Gemini Flash to cut hallucination. Embeddings stay on Gemini.
 	var summaryLLM graphhandlers.TextGenerator
@@ -123,7 +132,7 @@ func NewServer(cfg *config.Config, logBuf *LogBuffer) (*Server, error) {
 		Normalizers: normalizer.NewDefault(newDBNameCache(pool)),
 		Extractor:   extractor.New(pool, graphLog),
 		Identity:    identity.NewService(pool, graphLog),
-		Gemini:      graphhandlers.NewGeminiAdapter(geminiClient, summaryLLM),
+		Gemini:      graphhandlers.NewGeminiAdapter(graphGeminiClient, summaryLLM),
 		LiteParse:   liteparseConfigFromEnv(),
 
 		SlackBotToken: cfg.Graph.SlackBotToken,
