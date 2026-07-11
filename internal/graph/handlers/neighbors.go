@@ -35,6 +35,7 @@ type neighborItem struct {
 		Type     string `json:"type"`
 		URL      string `json:"url"`
 		Title    string `json:"title"`
+		Overview string `json:"overview,omitempty"` // slack threads: 2-3 sentence summary, for the expanded row
 		Channel  string `json:"channel"`   // slack only: human channel name (e.g. payments-dev), for display
 		ThreadTS string `json:"thread_ts"` // slack only; lets the UI collapse a thread's messages into one row
 		TSMs     int64  `json:"ts_ms"`     // node time (slack message ts, else first_seen_at), epoch millis
@@ -133,6 +134,7 @@ SELECT n.id, n.type, COALESCE(n.url,''), COALESCE(n.title,''),
        LEFT(COALESCE(n.body,''),200),
        COALESCE(n.metadata->>'thread_ts',''),
        COALESCE(ts.summary,''),
+       COALESCE(ts.overview,''),
        COALESCE(sc.name,''),
        (EXTRACT(EPOCH FROM COALESCE(n.created_at, to_timestamp(NULLIF(n.metadata->>'ts','')::float8), n.first_seen_at)) * 1000)::bigint,
        n.scope,
@@ -154,7 +156,7 @@ LEFT JOIN LATERAL (
 ) tspan ON TRUE
 WHERE n.id=$1`, n.NodeID)
 			if err := row.Scan(&item.Node.NodeID, &item.Node.Type, &item.Node.URL,
-				&title, &body, &item.Node.ThreadTS, &threadSummary, &item.Node.Channel, &item.Node.TSMs, &scope,
+				&title, &body, &item.Node.ThreadTS, &threadSummary, &item.Node.Overview, &item.Node.Channel, &item.Node.TSMs, &scope,
 				&item.Node.FirstTSMs, &item.Node.LastTSMs); err != nil {
 				continue
 			}

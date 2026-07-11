@@ -198,7 +198,7 @@ function edgeKindTooltip(edge: { kind: string; score?: number; confidence?: numb
         .join(' ')
     case 'SIMILAR':
       return (
-        `Candidate match by meaning from embedding cosine. This is not LLM-confirmed yet.`
+        `Candidate match by meaning${edge.score ? ` — summary embedding cosine ${Math.round(edge.score * 100)}%, above this query's adaptive cutoff` : ''}. This is not LLM-confirmed yet.`
       )
     case 'THREAD':
       return 'A message in the same Slack thread as the opened topic.'
@@ -281,9 +281,11 @@ function typeDotColor(type: string): string {
 function NeighborTimeline({
   neighbors,
   numbers,
+  onPick,
 }: {
   neighbors: GraphNeighbor[]
   numbers: Map<string, number>
+  onPick: (nodeId: string) => void
 }) {
   // Mirror groupNeighbors' thread collapse: one point per Slack thread, dated
   // by its latest message.
@@ -400,11 +402,9 @@ function NeighborTimeline({
                     ? ` · ${Math.round(n.edge.confidence * 100)}% confidence`
                     : ''
                 return (
-                  <a
+                  <button
                     key={n.node.node_id}
-                    href={n.node.url || undefined}
-                    target="_blank"
-                    rel="noopener noreferrer"
+                    onClick={() => onPick(n.node.node_id)}
                     title={`${fmtDateHM(ts)}${confidence} — ${label}`}
                     style={{
                       position: 'absolute',
@@ -412,21 +412,22 @@ function NeighborTimeline({
                       top: yOf(score) - 6.5,
                       width: 13,
                       height: 13,
+                      padding: 0,
                       borderRadius: '50%',
+                      border: 'none',
                       background: typeDotColor(n.node.type),
                       opacity: 0.9,
-                      cursor: n.node.url ? 'pointer' : 'help',
+                      cursor: 'pointer',
                       display: 'flex',
                       alignItems: 'center',
                       justifyContent: 'center',
                       fontSize: 8,
                       fontWeight: 600,
                       color: '#0a0a0a',
-                      textDecoration: 'none',
                     }}
                   >
                     {no ?? ''}
-                  </a>
+                  </button>
                 )
               })}
             </div>
@@ -621,7 +622,23 @@ export function LiveGlobePage() {
   // LLM cluster synthesis per node_id (what this is + what happened on Slack).
   const [summaryCache, setSummaryCache] = useState<Record<string, ClusterSummary | 'loading'>>({})
   // Overlay view: the readable synthesis, or the visual node-link diagram.
-  const [graphView, setGraphView] = useState<'summary' | 'diagram'>('summary')
+  const [graphView, setGraphView] = useState<'summary' | 'timeline' | 'diagram'>('summary')
+  // Expanded neighbor row (single-open accordion): summary + why-related + source link.
+  const [expandedNbr, setExpandedNbr] = useState<string | null>(null)
+  // node_id → its row element in the Timeline tab, so a timeline dot can scroll
+  // to its matching row.
+  const rowRefs = useRef<Map<string, HTMLDivElement>>(new Map())
+  const scrollToNeighbor = (id: string) => {
+    const el = rowRefs.current.get(id)
+    if (!el) return
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    el.style.outline = `1px solid ${C.green}`
+    el.style.outlineOffset = '2px'
+    setTimeout(() => {
+      el.style.outline = ''
+      el.style.outlineOffset = ''
+    }, 1200)
+  }
 
   // ── Graph search (ordered by score, then created_at desc — server-side) ───────
   const [searchQ, setSearchQ] = useState('')
@@ -2691,7 +2708,7 @@ export function LiveGlobePage() {
                     (cfg ? applyGroupNames(graphTopic.summary, cfg) : graphTopic.summary)}
                 </div>
                 <div style={{ display: 'flex', gap: 4, marginTop: 8 }}>
-                  {(['summary', 'diagram'] as const).map((v) => (
+                  {(['summary', 'timeline', 'diagram'] as const).map((v) => (
                     <button
                       key={v}
                       onClick={() => setGraphView(v)}
@@ -2708,7 +2725,7 @@ export function LiveGlobePage() {
                         padding: '3px 8px',
                       }}
                     >
-                      {v === 'summary' ? 'Summary' : 'Graph'}
+                      {v === 'summary' ? 'Summary' : v === 'timeline' ? 'Timeline' : 'Graph'}
                     </button>
                   ))}
                 </div>
@@ -2856,12 +2873,12 @@ export function LiveGlobePage() {
                   </div>
                 )
               })()}
-              {graphView === 'summary' &&
+              {graphView === 'timeline' &&
                 graphLoading &&
                 !neighborCache[graphStack[graphStack.length - 1]?.id ?? graphTopic.node_id] && (
                   <div style={{ color: C.dim, fontSize: 11 }}>Loading…</div>
                 )}
-              {graphView === 'summary' &&
+              {graphView === 'timeline' &&
                 (() => {
                 const rootId = graphStack[graphStack.length - 1]?.id ?? graphTopic.node_id
                 const neighbors = neighborCache[rootId]
@@ -2870,57 +2887,65 @@ export function LiveGlobePage() {
                   return <div style={{ color: C.dim, fontSize: 11 }}>no linked resources yet</div>
                 }
                 const groups = groupNeighbors(neighbors)
+                // Pin the opened thread itself as row 0 — it is the subject, not a
+                // ranked match, so it must not compete with (or sort under) real matches.
+                const rootTs = rootId.startsWith('slack:') ? rootId.split(':')[2] : ''
+                const isOpened = (n: GraphNeighbor) =>
+                  n.node.node_id === rootId || (!!rootTs && n.node.thread_ts === rootTs)
+                let pinned: GraphNeighbor | null = null
+                for (const g of groups) {
+                  const idx = g.items.findIndex(isOpened)
+                  if (idx >= 0) {
+                    pinned = g.items[idx]
+                    g.items.splice(idx, 1)
+                    break
+                  }
+                }
+                const shownGroups = groups.filter((g) => g.items.length > 0)
                 // Row numbers follow display order (group by group) and repeat on
                 // the timeline dots, so a dot can be matched to its row.
                 const rowNo = new Map<string, number>()
+                if (pinned) rowNo.set(pinned.node.node_id, 0)
                 let nextNo = 1
-                for (const g of groups) for (const n of g.items) rowNo.set(n.node.node_id, nextNo++)
-                return (
-                  <>
-                    <NeighborTimeline neighbors={neighbors} numbers={rowNo} />
-                    {groups.map((g) => (
-                  <div key={g.label} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                for (const g of shownGroups) for (const n of g.items) rowNo.set(n.node.node_id, nextNo++)
+                // One row for the pinned thread and every ranked match. Click
+                // expands in place (summary + why-related + source link);
+                // navigation moved into the expanded panel's explicit link.
+                const renderRow = (n: GraphNeighbor, pinnedRow = false) => {
+                  const label = n.node.title || n.node.node_id.replace(/^[a-z_]+:/, '')
+                  const hint = neighborHint(n)
+                  const expanded = expandedNbr === n.node.node_id
+                  const isSlack = n.node.type === 'slack' || n.node.type === 'slack_thread'
+                  return (
                     <div
-                      style={{
-                        display: 'flex',
-                        alignItems: 'baseline',
-                        gap: 6,
-                        color: C.dim,
-                        fontSize: 10,
-                        letterSpacing: '0.1em',
-                        textTransform: 'uppercase',
+                      key={n.node.node_id}
+                      ref={(el) => {
+                        const m = rowRefs.current
+                        if (el) m.set(n.node.node_id, el)
+                        else m.delete(n.node.node_id)
                       }}
+                      style={{ display: 'flex', flexDirection: 'column', gap: 0, borderRadius: 3 }}
                     >
-                      <span>{g.label}</span>
-                      <span style={{ color: C.dim, opacity: 0.7 }}>· {g.items.length}</span>
-                    </div>
-                    {g.items.map((n, i) => {
-                      // Untitled node: show the bare key ("122349"), not the raw
-                      // "jira_attachment:122349" — the group header names the type.
-                      const label = n.node.title || n.node.node_id.replace(/^[a-z_]+:/, '')
-                      const hint = neighborHint(n)
-                      const itemStyle: React.CSSProperties = {
-                        display: 'flex',
-                        alignItems: 'baseline',
-                        gap: 8,
-                        background: 'rgba(255,255,255,0.02)',
-                        border: `1px solid ${C.border}`,
-                        borderRadius: 3,
-                        padding: '6px 8px',
-                        textDecoration: 'none',
-                        color: C.text,
-                      }
-                      const inner = (
-                        <>
-                          <span
-                            style={{
-                              flexShrink: 0,
-                              minWidth: 16,
-                              textAlign: 'right',
-                              color: C.dim,
-                              fontSize: 9,
-                            }}
-                          >
+                      <div style={{ display: 'flex', gap: 6 }}>
+                        <div
+                          role="button"
+                          onClick={() => setExpandedNbr(expanded ? null : n.node.node_id)}
+                          title={expanded ? 'Collapse' : 'Expand: summary + why related'}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'baseline',
+                            gap: 8,
+                            flex: 1,
+                            minWidth: 0,
+                            background: pinnedRow ? 'rgba(255,255,255,0.05)' : 'rgba(255,255,255,0.02)',
+                            border: `1px solid ${C.border}`,
+                            borderRadius: expanded ? '3px 3px 0 0' : 3,
+                            padding: '6px 8px',
+                            color: C.text,
+                            cursor: 'pointer',
+                          }}
+                        >
+                          <span style={{ flexShrink: 0, minWidth: 16, textAlign: 'right', color: C.dim, fontSize: 9 }}>
                             {rowNo.get(n.node.node_id)}
                           </span>
                           <span
@@ -2933,6 +2958,7 @@ export function LiveGlobePage() {
                               overflow: 'hidden',
                               textOverflow: 'ellipsis',
                               whiteSpace: 'nowrap',
+                              fontWeight: pinnedRow ? 600 : 400,
                             }}
                           >
                             {label}
@@ -2942,13 +2968,7 @@ export function LiveGlobePage() {
                               title={`created ${fmtDateHM(n.node.first_ts_ms!)} · updated ${fmtDateHM(
                                 n.node.last_ts_ms || n.node.first_ts_ms!,
                               )}`}
-                              style={{
-                                flexShrink: 0,
-                                color: C.dim,
-                                fontSize: 9,
-                                opacity: 0.85,
-                                whiteSpace: 'nowrap',
-                              }}
+                              style={{ flexShrink: 0, color: C.dim, fontSize: 9, opacity: 0.85, whiteSpace: 'nowrap' }}
                             >
                               {fmtDateHM(n.node.first_ts_ms!)}
                               {' → '}
@@ -2956,48 +2976,35 @@ export function LiveGlobePage() {
                             </span>
                           )}
                           {n.node.channel && (
-                            <span
-                              style={{
-                                flexShrink: 0,
-                                color: C.dim,
-                                fontSize: 9,
-                                opacity: 0.85,
-                              }}
-                            >
+                            <span style={{ flexShrink: 0, color: C.dim, fontSize: 9, opacity: 0.85 }}>
                               #{n.node.channel}
                             </span>
                           )}
-                          {hint && (
-                            <span
-                              style={{
-                                flexShrink: 0,
-                                color: C.dim,
-                                fontSize: 9,
-                                opacity: 0.85,
-                              }}
-                            >
-                              {hint}
-                            </span>
+                          {hint && !pinnedRow && (
+                            <span style={{ flexShrink: 0, color: C.dim, fontSize: 9, opacity: 0.85 }}>{hint}</span>
                           )}
                           <span
-                            title={edgeKindTooltip(n.edge)}
+                            title={pinnedRow ? 'The thread you opened.' : edgeKindTooltip(n.edge)}
                             style={{
                               flexShrink: 0,
-                              color: C.dim,
+                              color: pinnedRow ? C.text : C.dim,
                               fontSize: 8,
                               letterSpacing: '0.06em',
                               textTransform: 'uppercase',
                               cursor: 'help',
                             }}
                           >
-                            {n.edge.kind}
-                            {n.edge.kind.toUpperCase() === 'SAME_TOPIC' && n.edge.confidence
-                              ? ` ${Math.round(n.edge.confidence * 100)}% conf`
-                              : ''}
+                            {pinnedRow
+                              ? 'THIS THREAD'
+                              : `${n.edge.kind}${
+                                  n.edge.kind.toUpperCase() === 'SAME_TOPIC' && n.edge.confidence
+                                    ? ` ${Math.round(n.edge.confidence * 100)}% conf`
+                                    : n.edge.kind.toUpperCase() === 'SIMILAR' && n.edge.score
+                                      ? ` ·${Math.round(n.edge.score * 100)}`
+                                      : ''
+                                }`}
                           </span>
-                        </>
-                      )
-                      const drillBtn = (
+                        </div>
                         <button
                           onClick={(e) => {
                             e.preventDefault()
@@ -3020,25 +3027,65 @@ export function LiveGlobePage() {
                         >
                           ⤵
                         </button>
-                      )
-                      return (
-                        <div key={`${n.node.node_id}-${i}`} style={{ display: 'flex', gap: 6 }}>
-                          {n.node.url ? (
+                      </div>
+                      {expanded && (
+                        <div
+                          style={{
+                            border: `1px solid ${C.border}`,
+                            borderTop: 'none',
+                            borderRadius: '0 0 3px 3px',
+                            background: 'rgba(255,255,255,0.03)',
+                            padding: '8px 10px 9px 32px',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: 6,
+                            fontSize: 11,
+                            lineHeight: 1.5,
+                          }}
+                        >
+                          <div style={{ color: C.text, whiteSpace: 'pre-wrap' }}>
+                            {n.node.overview || n.node.title || 'No summary yet — it may still be generating.'}
+                          </div>
+                          <div style={{ color: C.dim, fontSize: 10 }}>
+                            {pinnedRow ? 'This is the thread you opened.' : edgeKindTooltip(n.edge)}
+                          </div>
+                          {n.node.url && (
                             <a
                               href={n.node.url}
                               target="_blank"
                               rel="noopener noreferrer"
-                              style={{ ...itemStyle, flex: 1, minWidth: 0 }}
+                              onClick={(e) => e.stopPropagation()}
+                              style={{ color: C.text, fontSize: 10, textDecoration: 'underline', width: 'fit-content' }}
                             >
-                              {inner}
+                              {isSlack ? 'Open in Slack ↗' : 'Open source ↗'}
                             </a>
-                          ) : (
-                            <span style={{ ...itemStyle, flex: 1, minWidth: 0 }}>{inner}</span>
                           )}
-                          {drillBtn}
                         </div>
-                      )
-                    })}
+                      )}
+                    </div>
+                  )
+                }
+                return (
+                  <>
+                    <NeighborTimeline neighbors={neighbors} numbers={rowNo} onPick={scrollToNeighbor} />
+                    {pinned && renderRow(pinned, true)}
+                    {shownGroups.map((g) => (
+                  <div key={g.label} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    <div
+                      style={{
+                        display: 'flex',
+                        alignItems: 'baseline',
+                        gap: 6,
+                        color: C.dim,
+                        fontSize: 10,
+                        letterSpacing: '0.1em',
+                        textTransform: 'uppercase',
+                      }}
+                    >
+                      <span>{g.label}</span>
+                      <span style={{ color: C.dim, opacity: 0.7 }}>· {g.items.length}</span>
+                    </div>
+                    {g.items.map((n) => renderRow(n))}
                   </div>
                 ))}
                   </>

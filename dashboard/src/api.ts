@@ -613,6 +613,7 @@ export interface GraphNeighbor {
     type: string;
     url: string;
     title: string;
+    overview?: string; // slack threads: 2-3 sentence summary, for the expanded row
     channel?: string;
     thread_ts?: string;
     ts_ms?: number;

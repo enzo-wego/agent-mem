@@ -1,0 +1,271 @@
+<title>The linking-unit fix — threads link, messages don't</title>
+<style>
+  :root {
+    --bg:#eef0f3; --surface:#ffffff; --surface-2:#f6f7f9; --ink:#191c22; --muted:#5b626d; --faint:#8b93a0; --hairline:#dde1e7;
+    --accent:#b06400; --junk:#b0271f; --junk-soft:#b0271f14; --real:#067f9c; --real-soft:#067f9c16;
+    --build:#1c774a; --build-soft:#1c774a16;
+    --mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace;
+    --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  }
+  @media (prefers-color-scheme: dark){ :root{ --bg:#0b0d11; --surface:#14171d; --surface-2:#1a1e25; --ink:#e7e9ee; --muted:#99a1ae;
+    --faint:#6b7280; --hairline:#262b34; --accent:#e2a355; --junk:#e2564a; --junk-soft:#e2564a18; --real:#1c9fb0; --real-soft:#1c9fb018;
+    --build:#4ec18a; --build-soft:#4ec18a16; } }
+  :root[data-theme="light"]{ --bg:#eef0f3; --surface:#ffffff; --surface-2:#f6f7f9; --ink:#191c22; --muted:#5b626d; --faint:#8b93a0;
+    --hairline:#dde1e7; --accent:#b06400; --junk:#b0271f; --junk-soft:#b0271f14; --real:#067f9c; --real-soft:#067f9c16;
+    --build:#1c774a; --build-soft:#1c774a16; }
+  :root[data-theme="dark"]{ --bg:#0b0d11; --surface:#14171d; --surface-2:#1a1e25; --ink:#e7e9ee; --muted:#99a1ae; --faint:#6b7280;
+    --hairline:#262b34; --accent:#e2a355; --junk:#e2564a; --junk-soft:#e2564a18; --real:#1c9fb0; --real-soft:#1c9fb018;
+    --build:#4ec18a; --build-soft:#4ec18a16; }
+
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font-family:var(--sans); line-height:1.6; -webkit-font-smoothing:antialiased; }
+  .wrap { max-width:900px; margin:0 auto; padding:0 24px 100px; }
+  header { padding:56px 0 34px; border-bottom:1px solid var(--hairline); margin-bottom:36px; }
+  .eyebrow { font-family:var(--mono); font-size:12px; letter-spacing:.16em; text-transform:uppercase; color:var(--accent); margin:0 0 18px; display:flex; align-items:center; gap:10px; }
+  .eyebrow::before { content:""; width:26px; height:1px; background:var(--accent); }
+  h1 { font-family:var(--mono); font-weight:600; font-size:clamp(26px,4.4vw,38px); line-height:1.12; letter-spacing:-.01em; margin:0 0 16px; text-wrap:balance; }
+  h1 .fade { color:var(--muted); }
+  .sub { font-size:17.5px; color:var(--muted); margin:0; max-width:64ch; }
+  section { margin-bottom:48px; }
+  h2 { font-family:var(--mono); font-size:13px; letter-spacing:.12em; text-transform:uppercase; color:var(--accent); margin:36px 0 6px; }
+  .h2title { font-size:22px; font-weight:650; letter-spacing:-.01em; margin:0 0 14px; text-wrap:balance; }
+  p { margin:0 0 14px; max-width:70ch; }
+  code { font-family:var(--mono); font-size:.86em; background:var(--surface-2); border:1px solid var(--hairline); border-radius:4px; padding:1px 5px; }
+  .muted { color:var(--muted); }
+
+  .cards3 { display:grid; grid-template-columns:repeat(3,1fr); gap:12px; }
+  @media (max-width:680px){ .cards3 { grid-template-columns:1fr; } }
+  .card { background:var(--surface); border:1px solid var(--hairline); border-radius:10px; padding:20px 18px; }
+  .card .stat { font-family:var(--mono); font-size:34px; font-weight:600; line-height:1; font-variant-numeric:tabular-nums; letter-spacing:-.02em; }
+  .card .stat.j { color:var(--junk); } .card .stat.r { color:var(--real); }
+  .card .cap { margin-top:11px; font-size:13px; color:var(--muted); }
+  .card .cap b { color:var(--ink); font-weight:600; }
+
+  /* thread diagram */
+  .diagram { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+  @media (max-width:680px){ .diagram { grid-template-columns:1fr; } }
+  .dbox { background:var(--surface); border:1px solid var(--hairline); border-radius:12px; padding:18px 20px; }
+  .dbox h3 { margin:0 0 4px; font-size:14px; font-family:var(--mono); font-weight:600; }
+  .dbox h3.bad { color:var(--junk); } .dbox h3.good { color:var(--real); }
+  .dbox .dcap { font-size:12.5px; color:var(--muted); margin:0 0 14px; }
+  .thread { font-family:var(--mono); font-size:12.5px; line-height:2.05; white-space:pre; overflow-x:auto; }
+  .thread .root { color:var(--ink); font-weight:600; }
+  .thread .msg { color:var(--faint); }
+  .thread .lj { color:var(--junk); font-weight:600; }
+  .thread .lr { color:var(--real); font-weight:600; }
+  .thread .lx { color:var(--faint); }
+
+  .chartbox { background:var(--surface); border:1px solid var(--hairline); border-radius:12px; padding:24px 22px 16px; }
+  .chart-title { font-size:14.5px; font-weight:650; margin:0 0 2px; }
+  .chart-sub { font-family:var(--mono); font-size:11.5px; color:var(--faint); margin:0 0 18px; }
+  .chart { position:relative; display:flex; align-items:flex-end; gap:2px; height:210px; border-bottom:1.5px solid var(--hairline); }
+  .col { flex:1; display:flex; flex-direction:column; justify-content:flex-end; height:100%; min-width:0; }
+  .seg { width:100%; min-height:0; }
+  .seg.j { background:var(--junk); border-radius:3px 3px 0 0; }
+  .seg.r { background:var(--real); border-radius:3px 3px 0 0; margin-bottom:2px; }
+  .deploy-line { position:absolute; top:-6px; bottom:-1px; width:0; border-left:2px dashed var(--build); }
+  .deploy-tag { position:absolute; top:-8px; transform:translateX(6px); font-family:var(--mono); font-size:10.5px; color:var(--build); background:var(--build-soft); border-radius:4px; padding:2px 7px; white-space:nowrap; }
+  .xrow { display:flex; gap:2px; margin-top:8px; }
+  .xlab { flex:1; text-align:center; font-family:var(--mono); font-size:9.5px; color:var(--faint); min-width:0; overflow:visible; white-space:nowrap; }
+  .chart-legend { display:flex; flex-wrap:wrap; gap:6px 20px; margin-top:16px; font-family:var(--mono); font-size:11.5px; color:var(--muted); }
+  .chart-legend span { display:inline-flex; align-items:center; gap:7px; }
+  .sw { width:11px; height:11px; border-radius:2px; display:inline-block; }
+
+  /* composition bars */
+  .compo { margin-top:10px; }
+  .compo .row { margin-bottom:22px; }
+  .compo .rlabel { font-family:var(--mono); font-size:12px; color:var(--muted); margin-bottom:7px; display:flex; justify-content:space-between; }
+  .compo .rlabel b { color:var(--ink); }
+  .bar { display:flex; height:34px; border-radius:6px; overflow:hidden; gap:2px; background:var(--bg); }
+  .bar .seg2 { height:100%; position:relative; min-width:3px; }
+  .bar .seg2.j { background:var(--junk); }
+  .bar .seg2.r { background:var(--real); }
+  .bar .seg2.r2 { background:var(--real); opacity:.72; }
+  .bar .seg2.r3 { background:var(--real); opacity:.45; }
+  .seg-label { font-family:var(--mono); font-size:11px; color:var(--muted); margin-top:6px; display:flex; gap:18px; flex-wrap:wrap; }
+  .seg-label i { font-style:normal; display:inline-flex; align-items:center; gap:6px; }
+
+  table { border-collapse:collapse; width:100%; font-size:14px; }
+  .scroll { overflow-x:auto; border:1px solid var(--hairline); border-radius:10px; }
+  th,td { text-align:left; padding:10px 15px; border-bottom:1px solid var(--hairline); vertical-align:top; }
+  th { font-family:var(--mono); font-size:11px; letter-spacing:.06em; text-transform:uppercase; color:var(--faint); font-weight:600; background:var(--surface-2); }
+  tr:last-child td { border-bottom:none; }
+  td { color:var(--muted); } td.mono { font-family:var(--mono); font-size:12.5px; color:var(--ink); white-space:nowrap; }
+  tbody tr { background:var(--surface); }
+
+  .finding { background:var(--surface); border:1px solid var(--hairline); border-left:3px solid var(--accent); border-radius:8px; padding:15px 20px; margin:16px 0; font-size:14.5px; }
+  .finding.good { border-left-color:var(--real); }
+  .finding.warn { border-left-color:var(--junk); }
+  .finding .k { font-family:var(--mono); font-size:11px; letter-spacing:.08em; text-transform:uppercase; color:var(--accent); margin-bottom:6px; }
+  .finding.good .k { color:var(--real); } .finding.warn .k { color:var(--junk); }
+  footer { margin-top:40px; padding-top:22px; border-top:1px solid var(--hairline); font-family:var(--mono); font-size:12px; color:var(--faint); }
+</style>
+
+<div class="wrap">
+  <header>
+    <p class="eyebrow">graph-memory · topic linking · post-deploy fix</p>
+    <h1>Threads link. Messages don't. <span class="fade">Why 96% of the first topic links were noise, and how the fix stops it.</span></h1>
+    <p class="sub">The first backfill produced 37,203 junk links out of 38,807. One missing gate let every individual Slack message enter the linker. Three gates later, junk creation is zero — measured, not assumed.</p>
+  </header>
+
+  <!-- ============ THE NUMBERS ============ -->
+  <section>
+    <div class="cards3">
+      <div class="card"><div class="stat j">95.9<small style="font-size:18px">%</small></div><div class="cap"><b>37,203 of 38,807</b> SAME_TOPIC edges connect raw-text Slack <b>messages</b>, not topics.</div></div>
+      <div class="card"><div class="stat r">1,604</div><div class="cap">real links survive: <b>thread ↔ thread</b>, <b>thread ↔ resource</b>, <b>resource ↔ resource</b>.</div></div>
+      <div class="card"><div class="stat" style="color:var(--build)">0<small style="font-size:18px">/hr</small></div><div class="cap">junk edges created since the fix deployed — down from <b>~2,000/hr</b> at peak.</div></div>
+    </div>
+  </section>
+
+  <!-- ============ WHAT WENT WRONG ============ -->
+  <section>
+    <h2>What went wrong</h2>
+    <p class="h2title">The linker ran for every message, but only thread roots carry a real summary</p>
+    <p>Everything ingested gets an embedding so search can find it. A <b>thread root</b> embeds its LLM-written,
+    resource-aware summary — the thing topic linking was designed around. But every <b>other Slack message</b>
+    embeds a heuristic stand-in: its first 200 characters of raw text.</p>
+    <p>The bug: after indexing <em>any</em> node, the pipeline enqueued the topic linker for it. So thousands of
+    individual messages went hunting for "same topic" partners using raw text. Two bot posts or two similarly-phrased
+    replies are nearly identical strings → cosine ≈ 1.0 → the LLM judge is shown two matching texts and answers
+    "same topic, confidence 1.0". Technically correct for the words — worthless for the topic. That is precisely the
+    shared-vocabulary noise this feature was built to eliminate, reborn one layer deeper.</p>
+
+    <div class="diagram">
+      <div class="dbox">
+        <h3 class="bad">Before — every message links</h3>
+        <p class="dcap">Raw-text messages match other raw-text messages on wording.</p>
+        <div class="thread"><span class="root">◉ thread root</span> <span class="lr">──→ linked (summary)</span>
+<span class="msg">├ message</span>      <span class="lj">──→ linked (raw text!)</span>
+<span class="msg">├ message</span>      <span class="lj">──→ linked (raw text!)</span>
+<span class="msg">├ bot reply</span>    <span class="lj">──→ linked (raw text!)</span>
+<span class="msg">└ message</span>      <span class="lj">──→ linked (raw text!)</span></div>
+      </div>
+      <div class="dbox">
+        <h3 class="good">After — the thread is the unit</h3>
+        <p class="dcap">Messages feed the root's summary; only the root links out.</p>
+        <div class="thread"><span class="root">◉ thread root</span> <span class="lr">──→ linked (summary)</span>
+<span class="msg">├ message</span>      <span class="lx">─┐</span>
+<span class="msg">├ message</span>      <span class="lx"> ├─ folded into the</span>
+<span class="msg">├ bot reply</span>    <span class="lx"> │  root's summary</span>
+<span class="msg">└ message</span>      <span class="lx">─┘</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ THE FIX ============ -->
+  <section>
+    <h2>The fix — commit 9ce09ab</h2>
+    <p class="h2title">One rule, enforced at three layers</p>
+    <p>Only two kinds of node may participate in topic linking: a <b>Slack thread root</b> embedding its
+    resource-aware summary, and a <b>non-Slack resource</b> (Jira, PR, Confluence, doc, file). Raw-text Slack
+    messages are excluded on every path in and out:</p>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>gate</th><th>where</th><th>what it blocks</th></tr></thead>
+        <tbody>
+          <tr><td class="mono">enqueue</td><td class="mono">index_artifact.go</td><td>A freshly indexed message never queues a linking job in the first place.</td></tr>
+          <tr><td class="mono">source</td><td class="mono">link_topics.go · skipTopicLinkSource</td><td>Jobs already queued for messages (or created by older code) exit as no-ops.</td></tr>
+          <tr><td class="mono">candidate</td><td class="mono">link_topics.go · shortlist SQL</td><td>Messages can't be matched <em>against</em> either — and the adaptive cutoff (mean+2σ) is now computed over real summaries instead of a corpus dominated by message vectors.</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="finding">
+      <div class="k">why three gates, not one</div>
+      Any single gate fixes the future; three make it unrepresentable. Old queued jobs, resynced jobs from
+      other machines, and future callers of the linker all hit a wall regardless of which door they came through.
+    </div>
+  </section>
+
+  <!-- ============ EVIDENCE ============ -->
+  <section>
+    <h2>Evidence</h2>
+    <p class="h2title">Junk creation went to zero the hour the fix deployed</p>
+    <div class="chartbox">
+      <p class="chart-title">SAME_TOPIC edges created per hour</p>
+      <p class="chart-sub">2026-07-09 08:00 → 2026-07-11 07:00 (UTC+7) · live production data</p>
+      <div class="chart" id="chart"></div>
+      <div class="xrow" id="xrow"></div>
+      <div class="chart-legend">
+        <span><i class="sw" style="background:var(--junk)"></i>junk — raw-text message links</span>
+        <span><i class="sw" style="background:var(--real)"></i>real — thread &amp; resource links</span>
+        <span><i class="sw" style="background:var(--build);width:2px;height:13px"></i>fix deployed</span>
+      </div>
+    </div>
+    <div class="finding good">
+      <div class="k">proof in practice</div>
+      The Juspay investigation thread now links to the payments-dev <em>root-cause</em> thread at 0.98 confidence
+      ("Juspay 12-month order age limit for refunds") plus four payments-x-flights-devs threads — while the judge
+      correctly refuses vocabulary-only pairs, e.g. a specific order investigation vs. the general refund-limit
+      discussion (cosine 0.679, below cutoff).
+    </div>
+  </section>
+
+  <!-- ============ BEFORE / AFTER TABLE STATE ============ -->
+  <section>
+    <h2>What's in the table</h2>
+    <p class="h2title">Today vs. after the pending cleanup</p>
+    <div class="chartbox compo">
+      <div class="row">
+        <div class="rlabel"><span>today — <b>38,807</b> edges</span><span>junk still stored (creation stopped, rows remain)</span></div>
+        <div class="bar">
+          <div class="seg2 j" style="flex:37203" title="junk: 37,203 raw-text message links"></div>
+          <div class="seg2 r" style="flex:1604" title="real: 1,604 topic links"></div>
+        </div>
+        <div class="seg-label"><i><span class="sw" style="background:var(--junk)"></span>junk 37,203 (95.9%)</i><i><span class="sw" style="background:var(--real)"></span>real 1,604 (4.1%)</i></div>
+      </div>
+      <div class="row" style="margin-bottom:6px">
+        <div class="rlabel"><span>after cleanup — <b>1,604</b> edges</span><span>breakdown of what remains</span></div>
+        <div class="bar" style="max-width:38%">
+          <div class="seg2 r" style="flex:1120" title="resource ↔ resource: 1,120 (jira, PRs, docs, files)"></div>
+          <div class="seg2 r2" style="flex:271" title="thread ↔ thread: 271"></div>
+          <div class="seg2 r3" style="flex:213" title="thread ↔ resource: 213"></div>
+        </div>
+        <div class="seg-label"><i><span class="sw" style="background:var(--real)"></span>resource ↔ resource 1,120</i><i><span class="sw" style="background:var(--real);opacity:.72"></span>thread ↔ thread 271</i><i><span class="sw" style="background:var(--real);opacity:.45"></span>thread ↔ resource 213</i></div>
+      </div>
+    </div>
+    <div class="finding warn">
+      <div class="k">pending — needs your go-ahead</div>
+      The 37,203 junk rows (and their cached judgments) still sit in the database and still render on the dashboard.
+      The cleanup is a single guarded <code>DELETE</code> matching exactly the "either endpoint is a raw-text Slack
+      message" rule above — say <b>run the cleanup</b> and the top bar becomes the bottom bar.
+    </div>
+  </section>
+
+  <footer>graph-memory · linking-unit fix · commit 9ce09ab · deployed 2026-07-10 20:00 +07 · data queried live 2026-07-11</footer>
+</div>
+
+<script>
+  // per-hour edge creation, UTC+7 labels (source: graph.edges grouped by hour, junk = either endpoint is a raw-text slack message)
+  var hours = [
+    ["09·08",6,15],["09·09",180,77],["09·10",227,113],["09·11",346,73],["09·12",397,10],["09·13",386,9],
+    ["09·14",356,11],["09·15",297,1],["09·16",219,36],["09·17",308,2],["09·18",286,0],["09·19",245,1],
+    ["09·20",181,541],["09·21",1840,3],["09·22",1427,24],["09·23",1132,93],["10·00",1831,6],["10·01",2449,0],
+    ["10·02",2120,0],["10·03",2027,1],["10·04",44,6],["10·05",120,7],["10·06",263,74],["10·07",1613,209],
+    ["10·08",1927,43],["10·09",2296,0],["10·10",2594,0],["10·11",1543,0],["10·12",83,29],["10·13",1634,44],
+    ["10·14",1906,21],["10·15",1893,0],["10·16",1813,4],["10·17",230,47],["10·18",1774,6],["10·19",1210,56],
+    ["10·20",0,31],["10·21",0,1],["10·22",0,2],["10·23",0,0],["11·00",0,0],["11·01",0,0],["11·02",0,2],
+    ["11·03",0,0],["11·04",0,1],["11·05",0,1],["11·06",0,4]
+  ];
+  var peak = 2594;
+  var chart = document.getElementById("chart"), xrow = document.getElementById("xrow");
+  hours.forEach(function(h, i){
+    var col = document.createElement("div"); col.className = "col";
+    var real = document.createElement("div"); real.className = "seg r";
+    real.style.height = (h[2] / peak * 100) + "%";
+    if (h[2] > 0) real.style.minHeight = "2px";
+    var junk = document.createElement("div"); junk.className = "seg j";
+    junk.style.height = (h[1] / peak * 100) + "%";
+    if (h[1] > 0) junk.style.minHeight = "2px";
+    col.title = "Jul " + h[0].replace("·", " ") + ":00 +07 — junk " + h[1].toLocaleString() + " · real " + h[2].toLocaleString();
+    col.appendChild(real); col.appendChild(junk); chart.appendChild(col);
+    var lab = document.createElement("div"); lab.className = "xlab";
+    lab.textContent = (i % 6 === 0) ? h[0] : ""; xrow.appendChild(lab);
+  });
+  // deploy marker: after 10·19 (index 35), i.e. at the left edge of 10·20 (index 36)
+  var line = document.createElement("div"); line.className = "deploy-line";
+  var pct = (36 / hours.length * 100);
+  line.style.left = pct + "%";
+  var tag = document.createElement("div"); tag.className = "deploy-tag"; tag.style.left = pct + "%";
+  tag.textContent = "fix deployed → junk stops";
+  chart.appendChild(line); chart.appendChild(tag);
+</script>
