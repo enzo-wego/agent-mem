@@ -225,6 +225,61 @@ function edgeKindTooltip(edge: {
   }
 }
 
+// SourcedText renders summary text whose sentences end with [T1]/[R1] source
+// markers: each marker becomes a small chip linking to the thread/resource it
+// came from, so every sentence's provenance is one click away.
+function SourcedText({
+  text,
+  sources,
+}: {
+  text: string
+  sources?: Record<string, { node_id: string; label: string; url?: string }>
+}) {
+  if (!sources) return <>{text.replace(/\s*\[[TR]\d+\]/g, '')}</>
+  const parts = text.split(/(\[[TR]\d+\])/g)
+  return (
+    <>
+      {parts.map((p, i) => {
+        const m = /^\[([TR]\d+)\]$/.exec(p)
+        const src = m ? sources[m[1]] : undefined
+        if (!m) return <span key={i}>{p}</span>
+        if (!src) return null // cited marker we can't resolve: drop silently
+        const short = src.label.split(' — ')[0]
+        const style: React.CSSProperties = {
+          display: 'inline-block',
+          margin: '0 3px',
+          padding: '0 5px',
+          border: `1px solid ${C.border}`,
+          borderRadius: 3,
+          color: C.dim,
+          fontSize: 9,
+          lineHeight: '14px',
+          verticalAlign: 'middle',
+          whiteSpace: 'nowrap',
+          textDecoration: 'none',
+        }
+        return src.url ? (
+          <a
+            key={i}
+            href={src.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            title={src.label}
+            onClick={(e) => e.stopPropagation()}
+            style={style}
+          >
+            {short} ↗
+          </a>
+        ) : (
+          <span key={i} title={src.label} style={style}>
+            {short}
+          </span>
+        )
+      })}
+    </>
+  )
+}
+
 interface NeighborGroup {
   label: string
   order: number
@@ -2917,13 +2972,15 @@ export function LiveGlobePage() {
                       Summary
                     </div>
                     {s.overview && (
-                      <div style={{ color: C.text, fontSize: 12, lineHeight: 1.5 }}>{s.overview}</div>
+                      <div style={{ color: C.text, fontSize: 12, lineHeight: 1.6 }}>
+                        <SourcedText text={s.overview} sources={s.sources} />
+                      </div>
                     )}
                     {s.highlights.length > 0 && (
                       <ul style={{ margin: 0, paddingLeft: 16, display: 'flex', flexDirection: 'column', gap: 4 }}>
                         {s.highlights.map((h, i) => (
-                          <li key={i} style={{ color: C.dim, fontSize: 11, lineHeight: 1.45 }}>
-                            {cfg ? applyGroupNames(h, cfg) : h}
+                          <li key={i} style={{ color: C.dim, fontSize: 11, lineHeight: 1.5 }}>
+                            <SourcedText text={cfg ? applyGroupNames(h, cfg) : h} sources={s.sources} />
                           </li>
                         ))}
                       </ul>

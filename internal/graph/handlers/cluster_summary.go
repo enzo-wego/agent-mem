@@ -80,6 +80,42 @@ type clusterSummaryResponse struct {
 	Nodes      []clusterGraphNode `json:"nodes"`
 	Edges      []clusterGraphEdge `json:"edges"`
 	NodeCount  int                `json:"node_count"`
+	// Sources maps the [T1]/[R1] markers cited inside Overview/Highlights to
+	// the thread/resource each sentence came from, so the UI renders per-
+	// sentence provenance as links.
+	Sources map[string]clusterSource `json:"sources,omitempty"`
+}
+
+// clusterSource identifies where a cited transcript marker came from.
+type clusterSource struct {
+	NodeID string `json:"node_id"`
+	Label  string `json:"label"`
+	URL    string `json:"url,omitempty"`
+}
+
+// slackSourceRef labels a thread source as "#channel — topic" with a permalink.
+func (h *clusterSummaryHandler) slackSourceRef(ctx context.Context, nodeID string) clusterSource {
+	ref := clusterSource{NodeID: nodeID, Label: "Slack thread", URL: slackPermalink(nodeID)}
+	parts := strings.SplitN(nodeID, ":", 3)
+	if len(parts) != 3 {
+		return ref
+	}
+	var chName, topic string
+	_ = h.db.QueryRow(ctx, `
+SELECT COALESCE(sc.name,''), COALESCE(ts.summary,'')
+FROM (SELECT $1::text AS ch, $2::text AS tt) q
+LEFT JOIN graph.slack_channels sc ON sc.slack_channel_id = q.ch
+LEFT JOIN graph.thread_summaries ts ON ts.channel_id = q.ch AND ts.thread_ts = q.tt`,
+		parts[1], parts[2]).Scan(&chName, &topic)
+	switch {
+	case chName != "" && topic != "":
+		ref.Label = "#" + chName + " — " + firstLine(topic, 80)
+	case chName != "":
+		ref.Label = "#" + chName
+	case topic != "":
+		ref.Label = firstLine(topic, 80)
+	}
+	return ref
 }
 
 func (h *clusterSummaryHandler) serve(w http.ResponseWriter, r *http.Request) {
@@ -151,11 +187,13 @@ WHERE id = ANY($1) AND deleted_at IS NULL`, ordered)
 	}
 	type clusterNode struct {
 		id, typ, title, body, author, dept string
+		src                                string // thread-root node id this message belongs to (provenance)
 		ts                                 time.Time
 		depth                              int // author org-depth (0=CEO); -1 unknown
 	}
+	type resRef struct{ label, id, url string }
 	var slackMsgs []clusterNode
-	var otherTitles []string
+	var resRefs []resRef
 	var gnodes []clusterGraphNode
 	present := map[string]bool{}
 	total := 0
@@ -192,7 +230,7 @@ WHERE id = ANY($1) AND deleted_at IS NULL`, ordered)
 		// we only collect non-slack resource titles.
 		if n.typ != "slack" && n.typ != "slack_thread" {
 			if t := strings.TrimSpace(n.title); t != "" {
-				otherTitles = append(otherTitles, friendlySource(n.typ)+": "+firstLine(t, 120))
+				resRefs = append(resRefs, resRef{friendlySource(n.typ) + ": " + firstLine(t, 120), idCol, urlCol})
 			}
 		}
 	}
@@ -285,6 +323,7 @@ ORDER BY ts ASC`, tk.channel, tk.ts)
 		for trows.Next() {
 			var m clusterNode
 			m.typ = "slack"
+			m.src = "slack:" + tk.channel + ":" + tk.ts
 			var depth int
 			if trows.Scan(&m.id, &m.body, &m.author, &depth, &m.dept, &m.ts) == nil && m.body != "" && !seenMsg[m.id] {
 				m.depth = depth
@@ -314,6 +353,7 @@ WHERE n.id = ANY($1) AND n.deleted_at IS NULL AND COALESCE(n.body,'') <> ''`, sl
 				var depth int
 				if srows.Scan(&m.id, &m.body, &m.author, &depth, &m.dept, &m.ts) == nil && m.body != "" && !seenMsg[m.id] {
 					m.depth = depth
+					m.src = m.id // standalone message: it is its own source
 					slackMsgs = append(slackMsgs, m)
 					seenMsg[m.id] = true
 				}
@@ -323,6 +363,27 @@ WHERE n.id = ANY($1) AND n.deleted_at IS NULL AND COALESCE(n.body,'') <> ''`, sl
 	}
 
 	sort.Slice(slackMsgs, func(i, j int) bool { return slackMsgs[i].ts.Before(slackMsgs[j].ts) })
+
+	// Source markers: one [T#] per thread (chronological first appearance) and
+	// one [R#] per linked resource. Transcript lines carry them, the LLM cites
+	// them per sentence, and the sources map below lets the UI render each
+	// citation as a link. Built even on cache hits — cached text keeps markers.
+	srcMarker := map[string]string{}
+	sources := map[string]clusterSource{}
+	for _, m := range slackMsgs {
+		if m.src == "" || srcMarker[m.src] != "" {
+			continue
+		}
+		marker := fmt.Sprintf("T%d", len(srcMarker)+1)
+		srcMarker[m.src] = marker
+		sources[marker] = h.slackSourceRef(ctx, m.src)
+	}
+	for i, rr := range resRefs {
+		sources[fmt.Sprintf("R%d", i+1)] = clusterSource{NodeID: rr.id, Label: rr.label, URL: rr.url}
+	}
+	if len(sources) > 0 {
+		resp.Sources = sources
+	}
 
 	// Cache key: the summary text is reused verbatim until the cluster's content
 	// changes (so it stays consistent across clicks/sessions instead of being
@@ -346,7 +407,9 @@ WHERE n.id = ANY($1) AND n.deleted_at IS NULL AND COALESCE(n.body,'') <> ''`, sl
 	// notifications attribute to the real actor instead of "someone"), and the
 	// [leadership] hint is only tagged on known authors. Bump to regenerate
 	// summaries that were cached with anonymous "Someone (leadership)" authors.
-	sig := fmt.Sprintf("v8:%d:%d:%d:%d", total, maxUpdated, len(slackMsgs), lastMs)
+	// v9: transcript lines now carry [T#]/[R#] source markers and the LLM must
+	// cite them per sentence. Bump so cached un-cited summaries regenerate.
+	sig := fmt.Sprintf("v9:%d:%d:%d:%d", total, maxUpdated, len(slackMsgs), lastMs)
 
 	var cachedSig, cachedOverview string
 	var cachedHl []byte
@@ -374,10 +437,10 @@ WHERE n.id = ANY($1) AND n.deleted_at IS NULL AND COALESCE(n.body,'') <> ''`, sl
 			b.WriteString("PRIMARY RESOURCE (the summary is about this): " +
 				friendlySource(rootType) + " — " + rootTitle + "\n\n")
 		}
-		if len(otherTitles) > 0 {
+		if len(resRefs) > 0 {
 			b.WriteString("Linked resources:\n")
-			for _, t := range otherTitles {
-				b.WriteString("- " + t + "\n")
+			for i, rr := range resRefs {
+				fmt.Fprintf(&b, "- [R%d] %s\n", i+1, rr.label)
 			}
 			b.WriteString("\nSlack discussion (oldest first):\n")
 		}
@@ -405,7 +468,11 @@ WHERE n.id = ANY($1) AND n.deleted_at IS NULL AND COALESCE(n.body,'') <> ''`, sl
 			if i == 0 && rootIsSlack {
 				author += " [originator]"
 			}
-			line := author + ": " + text + "\n"
+			prefix := ""
+			if mk := srcMarker[m.src]; mk != "" {
+				prefix = "[" + mk + "] "
+			}
+			line := prefix + author + ": " + text + "\n"
 			if b.Len()+len(line) > 7000 {
 				break
 			}
@@ -466,6 +533,13 @@ EMPHASIS:
   their department on first mention (e.g. "Hazwan (Flights) reported…"). Never add a
   department that isn't given.
 - Strip the [originator]/[leadership] tags from your output — they are hints, not text.
+
+SOURCE CITATIONS — required:
+- Every Slack line starts with a source marker like [T1]; linked resources are listed as [R1].
+- End EVERY overview sentence and EVERY highlight with the marker(s) it is based on,
+  e.g. "…was proposed. [T2]" or "…confirmed the fix. [T1][R2]".
+- Cite only markers that appear in the input; never invent markers. Do NOT strip these —
+  they are rendered as links to the source thread.
 
 STRICT GROUNDING RULES — follow exactly:
 - Use ONLY facts, names, and ticket ids that literally appear in the provided text.

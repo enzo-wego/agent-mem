@@ -681,12 +681,21 @@ export interface ClusterGraphEdge {
   to: string;
   kind: string;
 }
+// ClusterSource maps a [T1]/[R1] citation marker inside overview/highlights to
+// the thread or resource that sentence came from.
+export interface ClusterSource {
+  node_id: string;
+  label: string; // "#payments-dev — Reference search fails…" or "Jira: PAY-2128 …"
+  url?: string;
+}
+
 export interface ClusterSummary {
   overview: string;
   highlights: string[];
   nodes: ClusterGraphNode[];
   edges: ClusterGraphEdge[];
   node_count: number;
+  sources?: Record<string, ClusterSource>; // [T1]/[R1] citation markers → provenance
 }
 
 // fetchClusterSummary asks the server to summarize what a node's cluster is about
