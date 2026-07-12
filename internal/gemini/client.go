@@ -168,9 +168,17 @@ func (c *Client) Describe(ctx context.Context, mimeType string, data []byte, pro
 // --- Embedding ---
 
 type embedRequest struct {
-	Model              string              `json:"model"`
-	Content            content             `json:"content"`
-	EmbedContentConfig *embedContentConfig `json:"embedContentConfig,omitempty"`
+	Model   string  `json:"model"`
+	Content content `json:"content"`
+	// v1beta REST honors ONLY these top-level fields. Verified empirically
+	// 2026-07-12: a nested embedContentConfig is silently ignored — the model
+	// returned its 3072 default and broke observation storage (vector(768)).
+	// The nested copy is still sent for forward compatibility with the newer
+	// surface that deprecates top-level; the values always agree.
+	Title                string              `json:"title,omitempty"`
+	TaskType             string              `json:"taskType,omitempty"`
+	OutputDimensionality int                 `json:"outputDimensionality,omitempty"`
+	EmbedContentConfig   *embedContentConfig `json:"embedContentConfig,omitempty"`
 }
 
 type embedContentConfig struct {
@@ -219,6 +227,9 @@ func (c *Client) EmbedWithOptions(ctx context.Context, text string, opts EmbedOp
 		Content: content{Parts: []part{{Text: text}}},
 	}
 	if opts.Title != "" || opts.TaskType != "" || opts.OutputDimensionality > 0 {
+		req.Title = opts.Title
+		req.TaskType = opts.TaskType
+		req.OutputDimensionality = opts.OutputDimensionality
 		req.EmbedContentConfig = &embedContentConfig{
 			Title:                opts.Title,
 			TaskType:             opts.TaskType,
@@ -250,8 +261,9 @@ func (c *Client) EmbedBatch(ctx context.Context, texts []string) ([][]float32, e
 	requests := make([]embedRequest, len(texts))
 	for i, text := range texts {
 		requests[i] = embedRequest{
-			Model:   modelPath,
-			Content: content{Parts: []part{{Text: text}}},
+			Model:                modelPath,
+			Content:              content{Parts: []part{{Text: text}}},
+			OutputDimensionality: c.embeddingDims,
 			EmbedContentConfig: &embedContentConfig{
 				OutputDimensionality: c.embeddingDims,
 			},
