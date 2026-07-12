@@ -673,41 +673,12 @@ func (db *DB) GetGraphNodesForPull(ctx context.Context, excludeSource string, af
 		       author_person_id, scope, metadata, first_seen_at, updated_at, deleted_at,
 		       sync_id::text, sync_version, machine_id
 		FROM graph.nodes
-		WHERE machine_id IS DISTINCT FROM $1 AND ctid > (SELECT ctid FROM graph.nodes WHERE id = (
-			SELECT id FROM graph.nodes ORDER BY updated_at ASC OFFSET $2 LIMIT 1
-		))
-		ORDER BY updated_at ASC LIMIT $3
-	`, excludeSource, afterID, limit)
+		WHERE machine_id IS DISTINCT FROM $1
+		ORDER BY updated_at ASC
+		LIMIT $2 OFFSET $3
+	`, excludeSource, limit, afterID)
 	if err != nil {
-		// Fallback: simpler offset-based query
-		rows2, err2 := db.Pool.Query(ctx, `
-			SELECT id, type, natural_key, url, title, body, body_revision, body_ts,
-			       mime_type, size_bytes, external_url, thumb_url,
-			       author_person_id, scope, metadata, first_seen_at, updated_at, deleted_at,
-			       sync_id::text, sync_version, machine_id
-			FROM graph.nodes
-			WHERE machine_id IS DISTINCT FROM $1
-			ORDER BY updated_at ASC
-			LIMIT $2 OFFSET $3
-		`, excludeSource, limit, afterID)
-		if err2 != nil {
-			return nil, fmt.Errorf("get graph nodes for pull: %w", err2)
-		}
-		defer rows2.Close()
-		var out []SyncableGraphNode
-		for rows2.Next() {
-			var n SyncableGraphNode
-			if err := rows2.Scan(
-				&n.ID, &n.Type, &n.NaturalKey, &n.URL, &n.Title, &n.Body, &n.BodyRevision, &n.BodyTS,
-				&n.MimeType, &n.SizeBytes, &n.ExternalURL, &n.ThumbURL,
-				&n.AuthorPersonID, &n.Scope, &n.Metadata, &n.FirstSeenAt, &n.UpdatedAt, &n.DeletedAt,
-				&n.SyncID, &n.SyncVersion, &n.MachineID,
-			); err != nil {
-				return nil, fmt.Errorf("scan graph node for pull: %w", err)
-			}
-			out = append(out, n)
-		}
-		return out, rows2.Err()
+		return nil, fmt.Errorf("get graph nodes for pull: %w", err)
 	}
 	defer rows.Close()
 
