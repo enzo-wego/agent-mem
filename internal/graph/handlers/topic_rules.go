@@ -22,6 +22,7 @@ type topicRuleTag struct {
 	DifferentWhen    string `json:"different_when"`
 	ExampleSame      string `json:"example_same"`
 	ExampleDifferent string `json:"example_different"`
+	TimeAffinity     string `json:"time_affinity"`
 }
 
 type topicRules struct {
@@ -46,6 +47,9 @@ func topicRulesPromptDigest() string {
 	b.WriteString("TAGS — classify each artifact into exactly one, then apply that tag's criteria:\n")
 	for _, t := range loadedTopicRules.Tags {
 		fmt.Fprintf(&b, "- %s (%s)\n  SAME when: %s\n  DIFFERENT when: %s\n", t.Tag, t.ClassifyWhen, t.SameWhen, t.DifferentWhen)
+		if t.TimeAffinity != "" {
+			fmt.Fprintf(&b, "  TIME: %s\n", t.TimeAffinity)
+		}
 	}
 	b.WriteString("TIE-BREAKERS:\n")
 	for _, tb := range loadedTopicRules.TieBreakers {

@@ -18,6 +18,7 @@ func TestConfirmTopicLinkReturnsTransientOnGenerateError(t *testing.T) {
 	if _, err := confirmTopicLink(context.Background(), deps,
 		topicLinkNode{NodeID: "slack:C:1", Type: "slack", Summary: "Checkout email blacklist"},
 		topicLinkCandidate{topicLinkNode: topicLinkNode{NodeID: "jira:PAY-1", Type: "jira", Summary: "Checkout email blacklist"}, Cosine: 0.92},
+		topicLinkContext{SourceWindow: "2026-07-08", CandWindow: "2026-07-09", TimeDesc: "activity windows overlap"},
 	); err == nil {
 		t.Fatal("expected transient error")
 	} else if !errors.Is(err, jobs.ErrTransient) {
@@ -35,6 +36,7 @@ func TestConfirmTopicLinkReturnsTransientOnUnparseableJSON(t *testing.T) {
 	if _, err := confirmTopicLink(context.Background(), deps,
 		topicLinkNode{NodeID: "slack:C:1", Type: "slack", Summary: "Checkout email blacklist"},
 		topicLinkCandidate{topicLinkNode: topicLinkNode{NodeID: "jira:PAY-1", Type: "jira", Summary: "Checkout email blacklist"}, Cosine: 0.92},
+		topicLinkContext{SourceWindow: "2026-07-08", CandWindow: "2026-07-09", TimeDesc: "activity windows overlap"},
 	); err == nil {
 		t.Fatal("expected transient error")
 	} else if !errors.Is(err, jobs.ErrTransient) {
@@ -52,6 +54,7 @@ func TestConfirmTopicLinkUsesCheapGeneratePath(t *testing.T) {
 	j, err := confirmTopicLink(context.Background(), deps,
 		topicLinkNode{NodeID: "slack:C:1", Type: "slack", Summary: "Checkout email blacklist"},
 		topicLinkCandidate{topicLinkNode: topicLinkNode{NodeID: "jira:PAY-1", Type: "jira", Summary: "Checkout email blacklist"}, Cosine: 0.92},
+		topicLinkContext{SourceWindow: "2026-07-08", CandWindow: "2026-07-09", TimeDesc: "activity windows overlap"},
 	)
 	if err != nil {
 		t.Fatalf("confirmTopicLink: %v", err)

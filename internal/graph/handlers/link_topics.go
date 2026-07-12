@@ -18,6 +18,10 @@ import (
 const (
 	topicLinkShortlistLimit = 12
 	topicLinkMinFloor       = 0.65
+	// topicLinkIdentifierRarityCap: an identifier appearing in more indexed
+	// artifacts than this is generic (a widely-quoted error code, a hot Jira
+	// ticket) and nominates no candidates — the judge would drown in noise.
+	topicLinkIdentifierRarityCap = 6
 	// topicLinkConfirmConcurrency bounds parallel judge calls per job. With the
 	// job pool (see NewLinkTopicsHandler) this caps total in-flight Gemini
 	// requests at pool×concurrency — sized well under the API's rate limit;
@@ -42,6 +46,16 @@ type topicLinkNode struct {
 type topicLinkCandidate struct {
 	topicLinkNode
 	Cosine float64
+	// SharedIDs is non-empty for identifier-nominated candidates: the rare
+	// identifiers found in BOTH artifacts' raw text.
+	SharedIDs []string
+}
+
+// topicLinkContext carries the per-pair time context shown to the judge.
+type topicLinkContext struct {
+	SourceWindow string
+	CandWindow   string
+	TimeDesc     string
 }
 
 type topicLinkJudgment struct {
@@ -82,10 +96,25 @@ func linkTopicsHandler(deps Deps) jobs.Handler {
 		if skipTopicLinkSource(source) {
 			return nil
 		}
-		cands, err := shortlistTopicLinks(ctx, deps, p.NodeID)
+		// Deterministic first: pasted Slack permalinks become root→root
+		// REFERS_TO edges before any LLM judging.
+		if source.Type == "slack" || source.Type == "slack_thread" {
+			if err := materializeThreadReferences(ctx, deps, source.NodeID); err != nil {
+				deps.Logger.Warn().Err(err).Str("node_id", p.NodeID).Msg("link_topics: materialize REFERS_TO failed")
+			}
+		}
+
+		embCands, err := shortlistTopicLinks(ctx, deps, p.NodeID)
 		if err != nil {
 			return err
 		}
+		idCands, err := identifierCandidates(ctx, deps, p.NodeID)
+		if err != nil {
+			return err
+		}
+		cands := mergeTopicCandidates(idCands, embCands)
+		srcStart, srcEnd, srcOK := nodeActivityWindow(ctx, deps, p.NodeID)
+
 		g, gctx := errgroup.WithContext(ctx)
 		g.SetLimit(topicLinkConfirmConcurrency)
 		for _, cand := range cands {
@@ -94,14 +123,20 @@ func linkTopicsHandler(deps Deps) jobs.Handler {
 				continue
 			}
 			g.Go(func() error {
+				candStart, candEnd, candOK := nodeActivityWindow(gctx, deps, cand.NodeID)
+				timeDesc, timeBucket := timeRelation(srcStart, srcEnd, srcOK, candStart, candEnd, candOK)
 				from, to, sourceSummary, targetSummary := canonicalTopicPair(source.NodeID, cand.NodeID, source.Summary, cand.Summary)
-				contentHash := topicLinkContentHash(from, to, sourceSummary, targetSummary)
+				contentHash := topicLinkContentHash(from, to, sourceSummary, targetSummary, cand.SharedIDs, timeBucket)
 				judgment, cached, err := cachedTopicLinkJudgment(gctx, deps, from, to, contentHash)
 				if err != nil {
 					return err
 				}
 				if !cached || p.Force {
-					judgment, err = confirmTopicLink(gctx, deps, source, cand)
+					judgment, err = confirmTopicLink(gctx, deps, source, cand, topicLinkContext{
+						SourceWindow: formatWindow(srcStart, srcEnd, srcOK),
+						CandWindow:   formatWindow(candStart, candEnd, candOK),
+						TimeDesc:     timeDesc,
+					})
 					if err != nil {
 						return err
 					}
@@ -110,7 +145,7 @@ func linkTopicsHandler(deps Deps) jobs.Handler {
 					}
 				}
 				if judgment.SameTopic {
-					return upsertSameTopicEdge(gctx, deps, from, to, judgment, cand.Cosine)
+					return upsertSameTopicEdge(gctx, deps, from, to, judgment, cand, timeDesc)
 				}
 				return deleteSameTopicEdge(gctx, deps, from, to)
 			})
@@ -203,9 +238,172 @@ func canonicalTopicPair(a, b, aSummary, bSummary string) (from, to, fromSummary,
 	return b, a, bSummary, aSummary
 }
 
-func topicLinkContentHash(from, to, fromSummary, toSummary string) string {
-	h := sha256.Sum256([]byte(from + "\x00" + to + "\x00" + fromSummary + "\x00" + toSummary))
+// topicLinkContentHash keys the judgment cache on everything the judge saw:
+// summaries, shared identifiers, and the COARSE time bucket (exact timestamps
+// would invalidate the cache on every new reply).
+func topicLinkContentHash(from, to, fromSummary, toSummary string, sharedIDs []string, timeBucket string) string {
+	h := sha256.Sum256([]byte(from + "\x00" + to + "\x00" + fromSummary + "\x00" + toSummary +
+		"\x00" + strings.Join(sharedIDs, ",") + "\x00" + timeBucket))
 	return hex.EncodeToString(h[:])
+}
+
+// identifierCandidates nominates artifacts sharing at least one RARE
+// identifier with the source — regardless of embedding distance and age. This
+// is the recall path embeddings structurally miss: an investigation and its
+// partner-raise are worded differently even when about the same payment.
+func identifierCandidates(ctx context.Context, deps Deps, nodeID string) ([]topicLinkCandidate, error) {
+	rows, err := deps.DB.Query(ctx, `
+WITH src AS (
+  SELECT ai.embedding AS emb, ai.identifiers AS ids,
+         REPLACE(n.scope,'slack:','') AS ch,
+         COALESCE(NULLIF(n.metadata->>'thread_ts',''), split_part(n.id,':',3)) AS tt
+  FROM graph.nodes n
+  JOIN graph.artifact_index ai ON ai.node_id = n.id
+  WHERE n.id = $1
+),
+rare AS (
+  SELECT ident
+  FROM src, unnest(src.ids) AS ident
+  WHERE (SELECT count(*) FROM graph.artifact_index ai2 WHERE ai2.identifiers @> ARRAY[ident]) <= $2
+)
+SELECT n.id, n.type, COALESCE(ai.summary,''), COALESCE(p.department,''),
+       COALESCE(1.0 - (ai.embedding <=> src.emb), 0) AS cosine,
+       ARRAY(SELECT r.ident FROM rare r WHERE ai.identifiers @> ARRAY[r.ident] ORDER BY r.ident) AS shared
+FROM graph.artifact_index ai
+JOIN graph.nodes n ON n.id = ai.node_id
+LEFT JOIN graph.people p ON p.id = n.author_person_id
+CROSS JOIN src
+WHERE ai.node_id <> $1
+  AND ai.identifiers && (SELECT COALESCE(array_agg(ident), '{}') FROM rare)
+  AND n.deleted_at IS NULL
+  AND NOT (n.type IN ('slack','slack_thread') AND ai.summary_kind <> 'thread_summary')
+  AND NOT (n.type IN ('slack','slack_thread') AND n.scope LIKE 'slack:D%')
+  AND NOT (n.type IN ('slack','slack_thread')
+    AND REPLACE(n.scope,'slack:','') = src.ch
+    AND COALESCE(NULLIF(n.metadata->>'thread_ts',''), split_part(n.id,':',3)) = src.tt)
+ORDER BY cosine DESC
+LIMIT $3`,
+		nodeID, topicLinkIdentifierRarityCap, topicLinkShortlistLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []topicLinkCandidate
+	for rows.Next() {
+		var c topicLinkCandidate
+		if err := rows.Scan(&c.NodeID, &c.Type, &c.Summary, &c.Department, &c.Cosine, &c.SharedIDs); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+// mergeTopicCandidates puts identifier-nominated candidates first and dedups
+// the embedding shortlist against them.
+func mergeTopicCandidates(idCands, embCands []topicLinkCandidate) []topicLinkCandidate {
+	out := make([]topicLinkCandidate, 0, len(idCands)+len(embCands))
+	seen := make(map[string]struct{}, len(idCands))
+	for _, c := range idCands {
+		seen[c.NodeID] = struct{}{}
+		out = append(out, c)
+	}
+	for _, c := range embCands {
+		if _, ok := seen[c.NodeID]; !ok {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// nodeActivityWindow returns when a node was actually active: for Slack
+// threads the first→last message time; for other artifacts first_seen→updated
+// (ingest-time approximation).
+func nodeActivityWindow(ctx context.Context, deps Deps, nodeID string) (start, end time.Time, ok bool) {
+	err := deps.DB.QueryRow(ctx, `
+WITH nd AS (
+  SELECT n.type, COALESCE(n.scope,'') AS scope,
+         COALESCE(NULLIF(n.metadata->>'thread_ts',''), split_part(n.id,':',3)) AS tt,
+         n.first_seen_at, n.updated_at
+  FROM graph.nodes n WHERE n.id = $1
+)
+SELECT
+  CASE WHEN nd.type IN ('slack','slack_thread') THEN
+    COALESCE((SELECT min(COALESCE(to_timestamp(NULLIF(m.metadata->>'ts','')::float8), m.first_seen_at))
+              FROM graph.nodes m
+              WHERE m.scope = nd.scope AND m.deleted_at IS NULL
+                AND COALESCE(NULLIF(m.metadata->>'thread_ts',''), split_part(m.id,':',3)) = nd.tt), nd.first_seen_at)
+  ELSE nd.first_seen_at END,
+  CASE WHEN nd.type IN ('slack','slack_thread') THEN
+    COALESCE((SELECT max(COALESCE(to_timestamp(NULLIF(m.metadata->>'ts','')::float8), m.first_seen_at))
+              FROM graph.nodes m
+              WHERE m.scope = nd.scope AND m.deleted_at IS NULL
+                AND COALESCE(NULLIF(m.metadata->>'thread_ts',''), split_part(m.id,':',3)) = nd.tt), nd.updated_at)
+  ELSE nd.updated_at END
+FROM nd`, nodeID).Scan(&start, &end)
+	ok = err == nil && !start.IsZero() && !end.IsZero()
+	return start, end, ok
+}
+
+// timeRelation describes how two activity windows relate, plus a coarse
+// bucket for the judgment cache key. The buckets mirror the thresholds in
+// topic_rules.json time_affinity (7/30 days).
+func timeRelation(aStart, aEnd time.Time, aOK bool, bStart, bEnd time.Time, bOK bool) (desc, bucket string) {
+	if !aOK || !bOK {
+		return "unknown (missing activity window)", "na"
+	}
+	if !aStart.After(bEnd) && !bStart.After(aEnd) {
+		return "activity windows overlap", "overlap"
+	}
+	var gap time.Duration
+	if aEnd.Before(bStart) {
+		gap = bStart.Sub(aEnd)
+	} else {
+		gap = aStart.Sub(bEnd)
+	}
+	days := int(gap.Hours() / 24)
+	switch {
+	case days < 7:
+		return fmt.Sprintf("gap of %d day(s) between activity windows", days), "lt7d"
+	case days < 30:
+		return fmt.Sprintf("gap of %d days between activity windows", days), "lt30d"
+	default:
+		return fmt.Sprintf("gap of %d days between activity windows", days), "gt30d"
+	}
+}
+
+func formatWindow(start, end time.Time, ok bool) string {
+	if !ok {
+		return "unknown"
+	}
+	const day = "2006-01-02"
+	if start.Format(day) == end.Format(day) {
+		return start.Format(day)
+	}
+	return start.Format(day) + " → " + end.Format(day)
+}
+
+// materializeThreadReferences turns message-level REFERENCES edges (created
+// at ingest from pasted wego.slack.com permalinks) into root→root REFERS_TO
+// edges — the deterministic "raised elsewhere, citing this thread" signal.
+// 100% precision, no LLM.
+func materializeThreadReferences(ctx context.Context, deps Deps, rootID string) error {
+	_, err := deps.DB.Exec(ctx, `
+INSERT INTO graph.edges (from_node_id, to_node_id, kind, metadata, machine_id)
+SELECT DISTINCT $1, root.id, 'REFERS_TO', jsonb_build_object('method','slack-permalink'), $2
+FROM graph.nodes m
+JOIN graph.edges e ON e.from_node_id = m.id AND e.kind = 'REFERENCES'
+JOIN graph.nodes t ON t.id = e.to_node_id
+  AND t.type IN ('slack','slack_thread') AND t.deleted_at IS NULL
+JOIN graph.nodes root ON root.id =
+  'slack:' || REPLACE(t.scope,'slack:','') || ':' ||
+  COALESCE(NULLIF(t.metadata->>'thread_ts',''), split_part(t.id,':',3))
+WHERE m.deleted_at IS NULL
+  AND m.scope = (SELECT scope FROM graph.nodes WHERE id = $1)
+  AND COALESCE(NULLIF(m.metadata->>'thread_ts',''), split_part(m.id,':',3)) = split_part($1,':',3)
+  AND root.id <> $1
+ON CONFLICT (from_node_id, to_node_id, kind) DO NOTHING`, rootID, deps.MachineID)
+	return err
 }
 
 func cachedTopicLinkJudgment(ctx context.Context, deps Deps, from, to, contentHash string) (topicLinkJudgment, bool, error) {
@@ -242,16 +440,22 @@ ON CONFLICT (source_node_id, target_node_id) DO UPDATE SET
 	return err
 }
 
-func confirmTopicLink(ctx context.Context, deps Deps, source topicLinkNode, cand topicLinkCandidate) (topicLinkJudgment, error) {
+func confirmTopicLink(ctx context.Context, deps Deps, source topicLinkNode, cand topicLinkCandidate, tc topicLinkContext) (topicLinkJudgment, error) {
 	sys := `You decide whether two graph artifacts are substantively about the same exact topic,
 by applying the tag rules below (the same rules humans see at /live/rules).
 Return JSON only: {"tag":"one tag from the list","same_topic":true|false,"confidence":0.0-1.0,"topic":"short shared topic label","why":"one short factual reason citing the rule applied"}.
 
 ` + topicRulesPromptDigest()
+	var extra strings.Builder
+	fmt.Fprintf(&extra, "\n\nTime relation: %s", tc.TimeDesc)
+	if len(cand.SharedIDs) > 0 {
+		fmt.Fprintf(&extra, "\nShared identifiers (found in BOTH artifacts' raw text): %s", strings.Join(cand.SharedIDs, ", "))
+	}
 	user := fmt.Sprintf(
-		"Artifact A (%s, department %s):\n%s\n\nArtifact B (%s, department %s, cosine %.3f):\n%s",
-		source.Type, blankAsUnknown(source.Department), source.Summary,
-		cand.Type, blankAsUnknown(cand.Department), cand.Cosine, cand.Summary,
+		"Artifact A (%s, department %s, active %s):\n%s\n\nArtifact B (%s, department %s, active %s, cosine %.3f):\n%s%s",
+		source.Type, blankAsUnknown(source.Department), tc.SourceWindow, source.Summary,
+		cand.Type, blankAsUnknown(cand.Department), tc.CandWindow, cand.Cosine, cand.Summary,
+		extra.String(),
 	)
 	out, err := deps.Gemini.GenerateCheap(ctx, sys, user)
 	if err != nil {
@@ -279,15 +483,24 @@ Return JSON only: {"tag":"one tag from the list","same_topic":true|false,"confid
 	}, nil
 }
 
-func upsertSameTopicEdge(ctx context.Context, deps Deps, from, to string, j topicLinkJudgment, cosine float64) error {
-	meta, _ := json.Marshal(map[string]any{
+func upsertSameTopicEdge(ctx context.Context, deps Deps, from, to string, j topicLinkJudgment, cand topicLinkCandidate, timeDesc string) error {
+	method := "cosine-shortlist + llm-confirm"
+	if len(cand.SharedIDs) > 0 {
+		method = "shared-identifier + llm-confirm"
+	}
+	fields := map[string]any{
 		"confidence": j.Confidence,
 		"tag":        j.Tag,
 		"topic":      j.Topic,
 		"why":        j.Why,
-		"method":     "cosine-shortlist + llm-confirm",
-		"cosine":     cosine,
-	})
+		"method":     method,
+		"cosine":     cand.Cosine,
+		"time":       timeDesc,
+	}
+	if len(cand.SharedIDs) > 0 {
+		fields["shared_ids"] = cand.SharedIDs
+	}
+	meta, _ := json.Marshal(fields)
 	_, err := deps.DB.Exec(ctx, `
 INSERT INTO graph.edges (from_node_id, to_node_id, kind, metadata, machine_id)
 VALUES ($1,$2,'SAME_TOPIC',$3::jsonb,$4)

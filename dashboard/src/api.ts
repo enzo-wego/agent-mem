@@ -619,6 +619,7 @@ export interface TopicRules {
     different_when: string;
     example_same: string;
     example_different: string;
+    time_affinity?: string; // v2: how activity-window distance affects SAME
   }[];
   tie_breakers: string[];
   domains: Record<string, unknown>;
@@ -633,7 +634,16 @@ export async function fetchTopicRules(): Promise<TopicRules> {
 // GraphNeighbor is one related node reachable from a given node (for "open in Graph").
 export interface GraphNeighbor {
   hop: number;
-  edge: { kind: string; score?: number; confidence?: number; tag?: string; topic?: string; why?: string };
+  edge: {
+    kind: string;
+    score?: number;
+    confidence?: number;
+    tag?: string;
+    topic?: string;
+    why?: string;
+    verdict?: string; // SIMILAR rows: "refused" (judge said different) | "unchecked" | "confirmed" (stale edge)
+    verdict_why?: string; // judge's reason when refused
+  };
   node: {
     node_id: string;
     type: string;

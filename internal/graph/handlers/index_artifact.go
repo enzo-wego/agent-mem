@@ -104,16 +104,28 @@ WHERE channel_id=$1 AND thread_ts=$2`,
 			return fmt.Errorf("%w: index_artifact embed: %v", jobs.ErrTransient, err)
 		}
 
+		// Step 4b: extract identifiers from RAW text (thread roots read the
+		// whole thread) — summaries drop the IDs that shared-identifier
+		// candidates depend on.
+		identifiers, err := identifiersForNode(ctx, deps, nodeType, scope, threadTs, ownTs, bodyFull)
+		if err != nil {
+			return fmt.Errorf("index_artifact: extract identifiers: %w", err)
+		}
+		if identifiers == nil {
+			identifiers = []string{}
+		}
+
 		// Step 5: UPSERT graph.artifact_index.
 		_, err = deps.DB.Exec(ctx, `
-			INSERT INTO graph.artifact_index (node_id, summary, summary_kind, embedding, refreshed_at, machine_id)
-			VALUES ($1, $2, $3, $4, NOW(), $5)
+			INSERT INTO graph.artifact_index (node_id, summary, summary_kind, embedding, identifiers, refreshed_at, machine_id)
+			VALUES ($1, $2, $3, $4, $5, NOW(), $6)
 			ON CONFLICT (node_id) DO UPDATE SET
 				summary      = EXCLUDED.summary,
 				summary_kind = EXCLUDED.summary_kind,
 				embedding    = EXCLUDED.embedding,
+				identifiers  = EXCLUDED.identifiers,
 				refreshed_at = NOW()`,
-			p.NodeID, summary, summaryKind, pgvector.NewVector(embedding), deps.MachineID,
+			p.NodeID, summary, summaryKind, pgvector.NewVector(embedding), identifiers, deps.MachineID,
 		)
 		if err != nil {
 			return fmt.Errorf("index_artifact: upsert artifact_index: %w", err)

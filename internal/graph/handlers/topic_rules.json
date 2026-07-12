@@ -1,12 +1,12 @@
 {
-  "version": 1,
-  "updated": "2026-07-11",
-  "purpose": "Single source of truth for how the topic linker decides two artifacts are the SAME topic. The LLM judge applies these rules at runtime, /live/rules renders them for humans, and agents read this same file in the repo. Cosine similarity only nominates candidates; these rules decide.",
+  "version": 2,
+  "updated": "2026-07-12",
+  "purpose": "Single source of truth for how the topic linker decides two artifacts are the SAME topic. The LLM judge applies these rules at runtime, /live/rules renders them for humans, and agents read this same file in the repo. Candidates are only nominations; these rules decide.",
   "how_it_works": [
-    "1. Embedding cosine over thread/resource summaries nominates a shortlist (adaptive cutoff: mean+2σ over the corpus, floor 0.65).",
-    "2. The judge classifies each artifact into ONE tag below, then applies that tag's criteria.",
+    "1. Candidates come from three generators: (a) embedding cosine over thread/resource summaries (adaptive cutoff: mean+2σ over the corpus, floor 0.65), (b) shared RARE identifiers extracted from raw thread text — payment refs, Jira keys, PR refs, request ids — regardless of cosine and regardless of age, (c) explicit references: a pasted Slack permalink becomes a deterministic REFERS_TO edge, no LLM.",
+    "2. The judge classifies each artifact into ONE tag below, then applies that tag's criteria — including its time affinity: the judge sees both activity windows and the gap between them.",
     "3. If the two artifacts have different tags, the tie-breakers decide (a bug and the investigation of that bug CAN be the same topic).",
-    "4. Verdicts are cached per pair + content hash; a changed summary re-judges. Confirmed pairs become SAME_TOPIC edges carrying tag, confidence, topic and why."
+    "4. Verdicts are cached per pair + content hash (summaries + shared identifiers + time bucket); a change re-judges. Confirmed pairs become SAME_TOPIC edges carrying tag, confidence, topic and why."
   ],
   "tags": [
     {
@@ -15,7 +15,8 @@
       "same_when": "Same ROOT CAUSE — the same failing mechanism or code path — even if the symptoms, affected payments, or channels differ. A specific broken payment and the macro incident caused by the same mechanism are the SAME topic.",
       "different_when": "Same symptom class but a different cause (two payments both stuck for unrelated reasons); same partner but unrelated defects.",
       "example_same": "'Payment pxx6xgkdtl wrongly flipped to Abandoned (status-sync misreads Juspay 400)' ↔ 'Investigation: abandonment spike caused by status-sync mis-tagging' — one mechanism, two views.",
-      "example_different": "'Payment stuck: Juspay refund API age limit' ↔ 'Payment stuck: Tabby capture timeout' — both stuck payments, different causes."
+      "example_different": "'Payment stuck: Juspay refund API age limit' ↔ 'Payment stuck: Tabby capture timeout' — both stuck payments, different causes.",
+      "time_affinity": "Overlapping or nearby activity windows (≤7 days) support SAME. A gap >30 days with no shared identifier and no explicit reference leans DIFFERENT — similar wording months apart is almost always a different case."
     },
     {
       "tag": "ops_investigation",
@@ -23,7 +24,8 @@
       "same_when": "Concerns the same payment/order/booking id, OR both traces land on one shared underlying defect.",
       "different_when": "Merely both being log investigations. Same activity ('EnzoBot, check logs for X') is NEVER the same topic by itself — the subject decides.",
       "example_same": "Two threads tracing order wg_123 through different systems.",
-      "example_different": "'check logs for pxx6xgkdtl' ↔ 'check logs for p9696jn5v7' — identical activity, different subjects (unless both hit the same defect)."
+      "example_different": "'check logs for pxx6xgkdtl' ↔ 'check logs for p9696jn5v7' — identical activity, different subjects (unless both hit the same defect).",
+      "time_affinity": "Overlapping or nearby activity windows (≤7 days) support SAME. A gap >30 days with no shared identifier and no explicit reference leans DIFFERENT."
     },
     {
       "tag": "feature_business",
@@ -31,7 +33,8 @@
       "same_when": "Same user-facing capability or outcome in the same domain. Within payments: same FLOW (checkout, refund, 3DS, payment-link, …) AND — when the work is partner-specific — the same partner or method. Login/logout belongs to user management; pay/card/refund belongs to payments.",
       "different_when": "Same flow on different partners is related work but a DIFFERENT topic unless it is one rollout ('Apple Pay via Checkout' ≠ 'Apple Pay via Tap'). Same partner alone is never enough.",
       "example_same": "'Enable STC Pay on hosted checkout' across design + eng threads.",
-      "example_different": "'Add Tabby 4-installments' ↔ 'Tabby settlement report format' — same partner, different capabilities."
+      "example_different": "'Add Tabby 4-installments' ↔ 'Tabby settlement report format' — same partner, different capabilities.",
+      "time_affinity": "Time-agnostic — the same capability stays the same topic across months."
     },
     {
       "tag": "release_change",
@@ -39,7 +42,8 @@
       "same_when": "The same change or rollout (same PR/ticket/flag), including its follow-ups and incidents it caused.",
       "different_when": "Routine deploys of different services or unrelated config changes.",
       "example_same": "'payments v2.31 deploy' ↔ 'rollback of v2.31 after refund errors'.",
-      "example_different": "Two unrelated weekly deploys."
+      "example_different": "Two unrelated weekly deploys.",
+      "time_affinity": "SAME requires activity windows around the same rollout (≤14 days apart); its follow-up incidents may trail slightly longer."
     },
     {
       "tag": "question_howto",
@@ -47,7 +51,8 @@
       "same_when": "The same question subject (same system, same process), even phrased differently.",
       "different_when": "Different subjects that merely share vocabulary.",
       "example_same": "'How do refunds reach the ledger?' asked twice, months apart.",
-      "example_different": "'How do refunds work?' ↔ 'How do refund REPORTS work?'"
+      "example_different": "'How do refunds work?' ↔ 'How do refund REPORTS work?'",
+      "time_affinity": "Time-agnostic — the same question re-asked months later is still the same topic."
     },
     {
       "tag": "partner_comm",
@@ -55,11 +60,13 @@
       "same_when": "The same case/ticket/incident with that partner — a partner-channel escalation and the internal thread about the same case are the SAME topic.",
       "different_when": "Same partner, different cases. The partner name alone is NEVER sufficient.",
       "example_same": "'ext-wego-juspay: refund age limit for old orders' ↔ internal 'Juspay 12-month refund limit' thread.",
-      "example_different": "Two unrelated Juspay escalations."
+      "example_different": "Two unrelated Juspay escalations.",
+      "time_affinity": "Follow-ups within ~60 days support SAME; longer gaps need a shared identifier or explicit reference."
     }
   ],
   "tie_breakers": [
     "A shared concrete identifier (payment id, order ref, Jira key, PR number, error signature) ⇒ SAME topic, regardless of tags.",
+    "Shared identifiers and explicit references are NEVER time-gated — a payment created 13 months ago legitimately resurfaces in a refund case (verified: pxx6xgkdtl).",
     "Cross-tag pairs are allowed: a bug_incident and the ops_investigation or partner_comm about the same mechanism/case are the SAME topic.",
     "Same partner or same vocabulary is NEVER sufficient on its own.",
     "When genuinely uncertain after applying the rules, answer DIFFERENT (precision over recall — a missed link is cheaper than a wrong one)."
@@ -67,10 +74,52 @@
   "domains": {
     "payments": {
       "note": "Grounded in the payments repo (pkg/constant, pkg/payment). Partner-specific work should match on partner+flow, not partner alone.",
-      "partners": ["checkout (CKO)", "juspay (India orchestration; Worldpay + TripleA crypto route through it)", "razorpay", "tabby (BNPL)", "tap", "payfast", "myfatoorah", "conferma", "doppio", "forter (fraud)", "sift (fraud)", "taxilla (tax)"],
-      "flows": ["authorize", "capture", "refund", "void", "status-sync", "3DS", "payment-link", "dispute/chargeback", "fraud-check", "fees", "cashback/loyalty", "virtual-card", "tax-invoice", "method/card availability", "routing", "currency/FX", "settlement/reports"],
-      "method_families": ["cards (visa, mastercard, amex, mada, knet, rupay, unionpay, …)", "wallets (applepay, googlepay, stc_pay, phonepe, …)", "BNPL/installments (tabby, valu, emi, card_installments)", "bank (upi, netbanking, bank_transfer, raast)", "crypto (via TripleA)"]
+      "partners": [
+        "checkout (CKO)",
+        "juspay (India orchestration; Worldpay + TripleA crypto route through it)",
+        "razorpay",
+        "tabby (BNPL)",
+        "tap",
+        "payfast",
+        "myfatoorah",
+        "conferma",
+        "doppio",
+        "forter (fraud)",
+        "sift (fraud)",
+        "taxilla (tax)"
+      ],
+      "flows": [
+        "authorize",
+        "capture",
+        "refund",
+        "void",
+        "status-sync",
+        "3DS",
+        "payment-link",
+        "dispute/chargeback",
+        "fraud-check",
+        "fees",
+        "cashback/loyalty",
+        "virtual-card",
+        "tax-invoice",
+        "method/card availability",
+        "routing",
+        "currency/FX",
+        "settlement/reports"
+      ],
+      "method_families": [
+        "cards (visa, mastercard, amex, mada, knet, rupay, unionpay, …)",
+        "wallets (applepay, googlepay, stc_pay, phonepe, …)",
+        "BNPL/installments (tabby, valu, emi, card_installments)",
+        "bank (upi, netbanking, bank_transfer, raast)",
+        "crypto (via TripleA)"
+      ]
     },
-    "other": ["user_management (login, logout, accounts, auth)", "product (flights, hotels, search, booking funnel)", "data/analytics (Looker, BigQuery, Athena)", "infra/devops (deploys, CI, docker, VPS)"]
+    "other": [
+      "user_management (login, logout, accounts, auth)",
+      "product (flights, hotels, search, booking funnel)",
+      "data/analytics (Looker, BigQuery, Athena)",
+      "infra/devops (deploys, CI, docker, VPS)"
+    ]
   }
 }

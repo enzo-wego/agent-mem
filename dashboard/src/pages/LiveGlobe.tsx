@@ -185,8 +185,19 @@ function neighborHint(n: GraphNeighbor): string {
 }
 
 // edgeKindTooltip explains why a row is linked to the opened topic. SAME_TOPIC
-// rows are LLM-confirmed links; SIMILAR rows are unconfirmed fallback candidates.
-function edgeKindTooltip(edge: { kind: string; score?: number; confidence?: number; tag?: string; topic?: string; why?: string }): string {
+// rows are rule-confirmed links; REFERS_TO is a deterministic pasted-link
+// reference; SIMILAR rows are wording-similarity nominations annotated with
+// the rules judge's verdict when one exists.
+function edgeKindTooltip(edge: {
+  kind: string
+  score?: number
+  confidence?: number
+  tag?: string
+  topic?: string
+  why?: string
+  verdict?: string
+  verdict_why?: string
+}): string {
   switch (edge.kind.toUpperCase()) {
     case 'SAME_TOPIC':
       return [
@@ -196,10 +207,17 @@ function edgeKindTooltip(edge: { kind: string; score?: number; confidence?: numb
       ]
         .filter(Boolean)
         .join(' ')
-    case 'SIMILAR':
-      return (
-        `Candidate match by meaning${edge.score ? ` — summary embedding cosine ${Math.round(edge.score * 100)}%, above this query's adaptive cutoff` : ''}. This is not LLM-confirmed yet.`
-      )
+    case 'REFERS_TO':
+      return 'Direct reference: one thread pasted a Slack link to the other. Deterministic — no AI involved.'
+    case 'SIMILAR': {
+      const base = `Similar wording only${
+        edge.score ? `: the ·${Math.round(edge.score * 100)} is summary embedding cosine × 100` : ''
+      } — a shortlist signal, not a confirmed relationship.`
+      if (edge.verdict === 'refused')
+        return `${base} Rules check said DIFFERENT topic${edge.verdict_why ? `: ${edge.verdict_why}` : ''}`
+      if (edge.verdict === 'confirmed') return `${base} Rules check confirmed same topic.`
+      return `${base} Not yet checked by the rules judge.`
+    }
     case 'THREAD':
       return 'A message in the same Slack thread as the opened topic.'
     default:
@@ -237,8 +255,24 @@ function groupNeighbors(neighbors: GraphNeighbor[]): NeighborGroup[] {
       seenThread.add(tt)
     }
     const cfg = GRAPH_TYPE_GROUPS[n.node.type]
-    const label = cfg?.label ?? n.node.type
-    const order = cfg?.order ?? 99
+    let label = cfg?.label ?? n.node.type
+    let order = cfg?.order ?? 99
+    // Slack threads split by evidence strength: confirmed links and direct
+    // references are relationships; SIMILAR is only a wording nomination and
+    // must not read as one (plan 15, C4).
+    if (n.node.type === 'slack' || n.node.type === 'slack_thread') {
+      const k = n.edge.kind.toUpperCase()
+      if (k === 'SAME_TOPIC') {
+        label = 'Confirmed same topic'
+        order = (cfg?.order ?? 99) - 0.3
+      } else if (k === 'REFERS_TO') {
+        label = 'Referenced threads (pasted link)'
+        order = (cfg?.order ?? 99) - 0.2
+      } else if (k === 'SIMILAR') {
+        label = 'Similar wording — not confirmed'
+        order = (cfg?.order ?? 99) + 0.1
+      }
+    }
     let g = byLabel.get(label)
     if (!g) {
       g = { label, order, items: [] }
@@ -2919,6 +2953,31 @@ export function LiveGlobePage() {
                   const hint = neighborHint(n)
                   const expanded = expandedNbr === n.node.node_id
                   const isSlack = n.node.type === 'slack' || n.node.type === 'slack_thread'
+                  const kindU = n.edge.kind.toUpperCase()
+                  // Verdict chip: what the rules judge said about this SIMILAR pair.
+                  const verdictChip = !pinnedRow && kindU === 'SIMILAR'
+                    ? n.edge.verdict === 'refused'
+                      ? { text: '✕ different', color: '#e4606a', tip: `Rules check: different topic${n.edge.verdict_why ? ` — ${n.edge.verdict_why}` : ''}` }
+                      : n.edge.verdict === 'confirmed'
+                        ? { text: '✓ same', color: C.green, tip: 'Rules check: confirmed same topic' }
+                        : { text: '? unchecked', color: C.dim, tip: 'Not yet judged against the rules — the score is wording similarity only' }
+                    : null
+                  // Δt chip: gap between this row's activity window and the opened thread's.
+                  const gapChip = (() => {
+                    if (pinnedRow || !pinned) return null
+                    const aS = pinned.node.first_ts_ms ?? 0
+                    const aE = pinned.node.last_ts_ms || aS
+                    const bS = n.node.first_ts_ms ?? 0
+                    const bE = n.node.last_ts_ms || bS
+                    if (!aS || !bS) return null
+                    if (aS <= bE && bS <= aE)
+                      return { text: 'Δ overlap', tip: 'Active at the same time as the opened thread' }
+                    const days = Math.floor((aE < bS ? bS - aE : aS - bE) / 86400000)
+                    return {
+                      text: days < 1 ? 'Δ <1d' : `Δ ${days}d`,
+                      tip: `${days < 1 ? 'Less than a day' : `${days} day(s)`} between this thread's activity and the opened thread's`,
+                    }
+                  })()
                   return (
                     <div
                       key={n.node.node_id}
@@ -2978,6 +3037,14 @@ export function LiveGlobePage() {
                               {fmtDateHM(n.node.last_ts_ms || n.node.first_ts_ms!)}
                             </span>
                           )}
+                          {gapChip && (
+                            <span
+                              title={gapChip.tip}
+                              style={{ flexShrink: 0, color: C.dim, fontSize: 9, opacity: 0.85, cursor: 'help' }}
+                            >
+                              {gapChip.text}
+                            </span>
+                          )}
                           {n.node.channel && (
                             <span style={{ flexShrink: 0, color: C.dim, fontSize: 9, opacity: 0.85 }}>
                               #{n.node.channel}
@@ -2985,6 +3052,21 @@ export function LiveGlobePage() {
                           )}
                           {hint && !pinnedRow && (
                             <span style={{ flexShrink: 0, color: C.dim, fontSize: 9, opacity: 0.85 }}>{hint}</span>
+                          )}
+                          {verdictChip && (
+                            <span
+                              title={verdictChip.tip}
+                              style={{
+                                flexShrink: 0,
+                                color: verdictChip.color,
+                                fontSize: 8,
+                                letterSpacing: '0.04em',
+                                textTransform: 'uppercase',
+                                cursor: 'help',
+                              }}
+                            >
+                              {verdictChip.text}
+                            </span>
                           )}
                           <span
                             title={pinnedRow ? 'The thread you opened.' : edgeKindTooltip(n.edge)}

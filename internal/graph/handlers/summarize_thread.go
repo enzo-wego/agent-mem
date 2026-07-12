@@ -219,6 +219,9 @@ Summarize it so a teammate understands it quickly and deeply. Respond as JSON:
 
 STRICT GROUNDING — follow exactly:
 - Use ONLY facts, names, and ids that literally appear in the thread.
+- KEEP concrete identifiers verbatim — payment/order ids (pxx6xgkdtl), ticket
+  keys, error codes. Put the central one in the overview; downstream linking
+  depends on it surviving summarization.
 - NEVER invent ticket ids, people, dates, fixes, or outcomes.
 - Do NOT assume the issue was resolved/deployed unless the text says so.
 - If the thread is thin or inconclusive, write a short overview and return fewer

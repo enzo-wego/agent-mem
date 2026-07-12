@@ -57,6 +57,12 @@ type neighborItem struct {
 		// Score is the embedding cosine for SIMILAR edges (omitted otherwise),
 		// so the UI can explain why a semantic match was surfaced.
 		Score float64 `json:"score,omitempty"`
+		// Verdict (SIMILAR rows only) says what the rules judge concluded about
+		// this pair: "refused" (judged, different topic — VerdictWhy explains),
+		// "unchecked" (never judged). Confirmed pairs surface as SAME_TOPIC
+		// edges instead, so "confirmed" appears only when the edge is stale.
+		Verdict    string `json:"verdict,omitempty"`
+		VerdictWhy string `json:"verdict_why,omitempty"`
 	} `json:"edge"`
 	Hop int `json:"hop"`
 }
@@ -126,6 +132,33 @@ func (h *neighborsHandler) serve(w http.ResponseWriter, r *http.Request) {
 			item.Edge.Why = n.Why
 			item.Edge.Confidence = n.Confidence
 			item.Edge.Score = n.Score
+			// SIMILAR is a wording-similarity nomination, not a claim. Show what
+			// the rules judge concluded so rejected candidates stop reading as
+			// relationships (plan 15, C4).
+			if n.EdgeKind == "SIMILAR" {
+				from, to := next.id, n.NodeID
+				if to < from {
+					from, to = to, from
+				}
+				var same bool
+				var why, tag string
+				verdictErr := h.db.QueryRow(ctx, `
+SELECT same_topic, COALESCE(why,''), COALESCE(tag,'')
+FROM graph.topic_link_judgments
+WHERE source_node_id=$1 AND target_node_id=$2`, from, to).Scan(&same, &why, &tag)
+				switch {
+				case verdictErr != nil:
+					item.Edge.Verdict = "unchecked"
+				case same:
+					item.Edge.Verdict = "confirmed"
+				default:
+					item.Edge.Verdict = "refused"
+					item.Edge.VerdictWhy = why
+					if item.Edge.Tag == "" {
+						item.Edge.Tag = tag
+					}
+				}
+			}
 			// For Slack nodes, prefer the thread summary, then the first line of the
 			// body — so a row shows readable text (and a whole thread one label),
 			// never a raw slack:CHANNEL:TS id.

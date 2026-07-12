@@ -83,6 +83,12 @@ export function RulesPage() {
                       <td style={{ color: C.red, whiteSpace: 'nowrap', verticalAlign: 'top', paddingRight: 14, paddingBottom: 6 }}>DIFFERENT when</td>
                       <td style={{ paddingBottom: 6 }}>{t.different_when}</td>
                     </tr>
+                    {t.time_affinity && (
+                      <tr>
+                        <td style={{ color: C.amber, whiteSpace: 'nowrap', verticalAlign: 'top', paddingRight: 14, paddingBottom: 6 }}>TIME</td>
+                        <td style={{ paddingBottom: 6 }}>{t.time_affinity}</td>
+                      </tr>
+                    )}
                     <tr>
                       <td style={{ color: C.dim, whiteSpace: 'nowrap', verticalAlign: 'top', paddingRight: 14 }}>examples</td>
                       <td style={{ color: C.dim }}>
