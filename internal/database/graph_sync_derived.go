@@ -72,7 +72,7 @@ func (db *DB) UpsertThreadSummaryFromSync(ctx context.Context, ts *SyncableThrea
 	_, err := db.Pool.Exec(ctx, `
 		INSERT INTO graph.thread_summaries
 			(channel_id, thread_ts, signature, summary, overview, highlights, updated_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7)
+		VALUES ($1,$2,$3,$4,COALESCE($5, ''),COALESCE($6, '[]'::jsonb),$7)
 		ON CONFLICT (channel_id, thread_ts) DO UPDATE SET
 			signature  = EXCLUDED.signature,
 			summary    = EXCLUDED.summary,
@@ -114,7 +114,7 @@ func (db *DB) UpsertSlackUserFromSync(ctx context.Context, u *SyncableSlackUser)
 	_, err := db.Pool.Exec(ctx, `
 		INSERT INTO graph.slack_users
 			(slack_user_id, display_name, real_name, is_bot, refreshed_at, machine_id)
-		VALUES ($1,$2,$3,$4,$5,$6)
+		VALUES ($1,$2,COALESCE($3, ''),$4,$5,$6)
 		ON CONFLICT (slack_user_id) DO UPDATE SET
 			display_name = EXCLUDED.display_name,
 			real_name    = EXCLUDED.real_name,
