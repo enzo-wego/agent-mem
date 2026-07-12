@@ -753,6 +753,9 @@ export function LiveGlobePage() {
   const [graphView, setGraphView] = useState<'summary' | 'timeline' | 'diagram'>('summary')
   // Expanded neighbor row (single-open accordion): summary + why-related + source link.
   const [expandedNbr, setExpandedNbr] = useState<string | null>(null)
+  // Similar-wording candidates are audit trail, not relationships — collapsed
+  // by default so the panel shows only confirmed/explicit links.
+  const [showSimilar, setShowSimilar] = useState(false)
   // node_id → its row element in the Timeline tab, so a timeline dot can scroll
   // to its matching row.
   const rowRefs = useRef<Map<string, HTMLDivElement>>(new Map())
@@ -3035,12 +3038,21 @@ export function LiveGlobePage() {
                   }
                 }
                 const shownGroups = groups.filter((g) => g.items.length > 0)
+                const isSimilarGroup = (g: NeighborGroup) => g.label === 'Similar wording — not confirmed'
                 // Row numbers follow display order (group by group) and repeat on
-                // the timeline dots, so a dot can be matched to its row.
+                // the timeline dots, so a dot can be matched to its row. Collapsed
+                // similar-wording rows get no numbers and no dots.
                 const rowNo = new Map<string, number>()
                 if (pinned) rowNo.set(pinned.node.node_id, 0)
                 let nextNo = 1
-                for (const g of shownGroups) for (const n of g.items) rowNo.set(n.node.node_id, nextNo++)
+                for (const g of shownGroups) {
+                  if (isSimilarGroup(g) && !showSimilar) continue
+                  for (const n of g.items) rowNo.set(n.node.node_id, nextNo++)
+                }
+                const tlNeighbors = [
+                  ...(pinned ? [pinned] : []),
+                  ...shownGroups.filter((g) => showSimilar || !isSimilarGroup(g)).flatMap((g) => g.items),
+                ]
                 // One row for the pinned thread and every ranked match. Click
                 // expands in place (summary + why-related + source link);
                 // navigation moved into the expanded panel's explicit link.
@@ -3256,27 +3268,47 @@ export function LiveGlobePage() {
                 }
                 return (
                   <>
-                    <NeighborTimeline neighbors={neighbors} numbers={rowNo} onPick={scrollToNeighbor} />
+                    <NeighborTimeline neighbors={tlNeighbors} numbers={rowNo} onPick={scrollToNeighbor} />
                     {pinned && renderRow(pinned, true)}
-                    {shownGroups.map((g) => (
-                  <div key={g.label} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                    <div
-                      style={{
-                        display: 'flex',
-                        alignItems: 'baseline',
-                        gap: 6,
-                        color: C.dim,
-                        fontSize: 10,
-                        letterSpacing: '0.1em',
-                        textTransform: 'uppercase',
-                      }}
-                    >
-                      <span>{g.label}</span>
-                      <span style={{ color: C.dim, opacity: 0.7 }}>· {g.items.length}</span>
-                    </div>
-                    {g.items.map((n) => renderRow(n))}
-                  </div>
-                ))}
+                    {shownGroups.map((g) => {
+                      const similar = isSimilarGroup(g)
+                      const hidden = similar && !showSimilar
+                      const checking = g.items.filter((n) => !n.edge.verdict || n.edge.verdict === 'unchecked').length
+                      return (
+                        <div key={g.label} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                          <div
+                            role={similar ? 'button' : undefined}
+                            onClick={similar ? () => setShowSimilar(!showSimilar) : undefined}
+                            title={
+                              similar
+                                ? 'Wording-similarity candidates the rules judge checked and rejected (audit trail). Click to show or hide.'
+                                : undefined
+                            }
+                            style={{
+                              display: 'flex',
+                              alignItems: 'baseline',
+                              gap: 6,
+                              color: C.dim,
+                              fontSize: 10,
+                              letterSpacing: '0.1em',
+                              textTransform: 'uppercase',
+                              cursor: similar ? 'pointer' : 'default',
+                            }}
+                          >
+                            <span>{g.label}</span>
+                            <span style={{ color: C.dim, opacity: 0.7 }}>· {g.items.length}</span>
+                            {similar && (
+                              <span style={{ color: C.dim, opacity: 0.7 }}>
+                                {hidden
+                                  ? `▸ show${checking > 0 ? ` (${checking} still checking)` : ' (all checked: different topic)'}`
+                                  : '▾ hide'}
+                              </span>
+                            )}
+                          </div>
+                          {!hidden && g.items.map((n) => renderRow(n))}
+                        </div>
+                      )
+                    })}
                   </>
                 )
               })()}
