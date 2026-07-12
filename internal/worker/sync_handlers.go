@@ -248,6 +248,35 @@ func (s *Server) handleSyncPull(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(resp)
 }
 
+// handleSyncPullDerived serves derived graph tables (thread_summaries,
+// slack_users, slack_channels) by timestamp cursor. Registered inside the
+// authenticated route group alongside /api/sync/pull.
+func (s *Server) handleSyncPullDerived(w http.ResponseWriter, r *http.Request) {
+	parseTS := func(param string) time.Time {
+		t, err := time.Parse(time.RFC3339Nano, r.URL.Query().Get(param))
+		if err != nil {
+			return time.Time{}
+		}
+		return t
+	}
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	if limit <= 0 || limit > 5000 {
+		limit = 5000
+	}
+
+	ctx := r.Context()
+	threadSummaries, _ := s.db.GetThreadSummariesSince(ctx, parseTS("ts_after"), limit)
+	slackUsers, _ := s.db.GetSlackUsersSince(ctx, parseTS("su_after"), limit)
+	slackChannels, _ := s.db.GetSlackChannelsSince(ctx, parseTS("sc_after"), limit)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(sync.DerivedPullResponse{
+		ThreadSummaries: threadSummaries,
+		SlackUsers:      slackUsers,
+		SlackChannels:   slackChannels,
+	})
+}
+
 // handleSyncInfo returns current sync status.
 // Works in both local mode (with sync engine) and cloud mode (receive-only).
 func (s *Server) handleSyncInfo(w http.ResponseWriter, r *http.Request) {

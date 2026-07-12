@@ -27,14 +27,14 @@ type SyncPushPayload struct {
 	Prompts      []database.SyncablePrompt      `json:"prompts,omitempty"`
 
 	// Graph tables (FK-ordered: people → nodes → edges, then the rest)
-	GraphPeople            []database.SyncableGraphPerson           `json:"graph_people,omitempty"`
-	GraphNodes             []database.SyncableGraphNode             `json:"graph_nodes,omitempty"`
-	GraphEdges             []database.SyncableGraphEdge             `json:"graph_edges,omitempty"`
-	GraphArtifactIndex     []database.SyncableGraphArtifactIndex    `json:"graph_artifact_index,omitempty"`
-	GraphArtifactBodies    []database.SyncableGraphArtifactBody     `json:"graph_artifact_bodies,omitempty"`
-	GraphSlackGroups       []database.SyncableGraphSlackGroup       `json:"graph_slack_groups,omitempty"`
-	GraphEntities          []database.SyncableGraphEntity           `json:"graph_entities,omitempty"`
-	GraphJobs              []database.SyncableGraphJob              `json:"graph_jobs,omitempty"`
+	GraphPeople             []database.SyncableGraphPerson             `json:"graph_people,omitempty"`
+	GraphNodes              []database.SyncableGraphNode               `json:"graph_nodes,omitempty"`
+	GraphEdges              []database.SyncableGraphEdge               `json:"graph_edges,omitempty"`
+	GraphArtifactIndex      []database.SyncableGraphArtifactIndex      `json:"graph_artifact_index,omitempty"`
+	GraphArtifactBodies     []database.SyncableGraphArtifactBody       `json:"graph_artifact_bodies,omitempty"`
+	GraphSlackGroups        []database.SyncableGraphSlackGroup         `json:"graph_slack_groups,omitempty"`
+	GraphEntities           []database.SyncableGraphEntity             `json:"graph_entities,omitempty"`
+	GraphJobs               []database.SyncableGraphJob                `json:"graph_jobs,omitempty"`
 	GraphUserAffinityConfig []database.SyncableGraphUserAffinityConfig `json:"graph_user_affinity_config,omitempty"`
 }
 
@@ -72,14 +72,14 @@ type SyncPullResponse struct {
 	Cursors      PullCursors                    `json:"cursors"`
 
 	// Graph tables
-	GraphPeople             []database.SyncableGraphPerson           `json:"graph_people,omitempty"`
-	GraphNodes              []database.SyncableGraphNode             `json:"graph_nodes,omitempty"`
-	GraphEdges              []database.SyncableGraphEdge             `json:"graph_edges,omitempty"`
-	GraphArtifactIndex      []database.SyncableGraphArtifactIndex    `json:"graph_artifact_index,omitempty"`
-	GraphArtifactBodies     []database.SyncableGraphArtifactBody     `json:"graph_artifact_bodies,omitempty"`
-	GraphSlackGroups        []database.SyncableGraphSlackGroup       `json:"graph_slack_groups,omitempty"`
-	GraphEntities           []database.SyncableGraphEntity           `json:"graph_entities,omitempty"`
-	GraphJobs               []database.SyncableGraphJob              `json:"graph_jobs,omitempty"`
+	GraphPeople             []database.SyncableGraphPerson             `json:"graph_people,omitempty"`
+	GraphNodes              []database.SyncableGraphNode               `json:"graph_nodes,omitempty"`
+	GraphEdges              []database.SyncableGraphEdge               `json:"graph_edges,omitempty"`
+	GraphArtifactIndex      []database.SyncableGraphArtifactIndex      `json:"graph_artifact_index,omitempty"`
+	GraphArtifactBodies     []database.SyncableGraphArtifactBody       `json:"graph_artifact_bodies,omitempty"`
+	GraphSlackGroups        []database.SyncableGraphSlackGroup         `json:"graph_slack_groups,omitempty"`
+	GraphEntities           []database.SyncableGraphEntity             `json:"graph_entities,omitempty"`
+	GraphJobs               []database.SyncableGraphJob                `json:"graph_jobs,omitempty"`
 	GraphUserAffinityConfig []database.SyncableGraphUserAffinityConfig `json:"graph_user_affinity_config,omitempty"`
 }
 
@@ -141,6 +141,9 @@ func (e *Engine) Start(ctx context.Context) {
 			}
 			if err := e.pull(ctx); err != nil {
 				log.Error().Err(err).Msg("Sync pull failed")
+			}
+			if err := e.pullDerived(ctx); err != nil {
+				log.Error().Err(err).Msg("Sync pull_derived failed")
 			}
 		}
 	}

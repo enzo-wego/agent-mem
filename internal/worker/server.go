@@ -269,6 +269,7 @@ func NewServer(cfg *config.Config, logBuf *LogBuffer) (*Server, error) {
 		// Sync endpoints
 		r.Post("/api/sync/push", s.handleSyncPush)
 		r.Get("/api/sync/pull", s.handleSyncPull)
+		r.Get("/api/sync/pull_derived", s.handleSyncPullDerived)
 		r.Get("/api/sync/info", s.handleSyncInfo)
 		r.Get("/api/sync/cloud-stats", s.handleSyncCloudStats)
 
@@ -360,22 +361,22 @@ func liteparseConfigFromEnv() graphhandlers.LiteParseConfig {
 // fetchersConfigFromAppConfig converts app Config to fetchers.Config.
 func fetchersConfigFromAppConfig(cfg *config.Config) fetchers.Config {
 	return fetchers.Config{
-		SlackBotToken:    cfg.Graph.SlackBotToken,
-		JiraEmail:        cfg.Graph.JiraEmail,
-		JiraToken:        cfg.Graph.JiraToken,
-		JiraBaseURL:      cfg.Graph.JiraBaseURL,
-		GHToken:          cfg.Graph.GHToken,
-		GHBaseURL:        cfg.Graph.GHBaseURL,
-		CFToken:          cfg.Graph.CFToken,
-		CFBaseURL:        cfg.Graph.CFBaseURL,
-		PagerDutyToken:   cfg.Graph.PagerDutyToken,
-		PagerDutyBaseURL: cfg.Graph.PagerDutyBaseURL,
-		DatadogAPIKey:    cfg.Graph.DatadogAPIKey,
-		DatadogAppKey:    cfg.Graph.DatadogAppKey,
-		DatadogBaseURL:   cfg.Graph.DatadogBaseURL,
-		SentryAuthToken:  cfg.Graph.SentryAuthToken,
-		SentryBaseURL:    cfg.Graph.SentryBaseURL,
-		SentryOrg:        cfg.Graph.SentryOrg,
+		SlackBotToken:     cfg.Graph.SlackBotToken,
+		JiraEmail:         cfg.Graph.JiraEmail,
+		JiraToken:         cfg.Graph.JiraToken,
+		JiraBaseURL:       cfg.Graph.JiraBaseURL,
+		GHToken:           cfg.Graph.GHToken,
+		GHBaseURL:         cfg.Graph.GHBaseURL,
+		CFToken:           cfg.Graph.CFToken,
+		CFBaseURL:         cfg.Graph.CFBaseURL,
+		PagerDutyToken:    cfg.Graph.PagerDutyToken,
+		PagerDutyBaseURL:  cfg.Graph.PagerDutyBaseURL,
+		DatadogAPIKey:     cfg.Graph.DatadogAPIKey,
+		DatadogAppKey:     cfg.Graph.DatadogAppKey,
+		DatadogBaseURL:    cfg.Graph.DatadogBaseURL,
+		SentryAuthToken:   cfg.Graph.SentryAuthToken,
+		SentryBaseURL:     cfg.Graph.SentryBaseURL,
+		SentryOrg:         cfg.Graph.SentryOrg,
 		GWSServiceKeyPath: cfg.Graph.GWSServiceKeyPath,
 		WegoHubToken:      cfg.Graph.WegoHubToken,
 		WegoHubBaseURL:    cfg.Graph.WegoHubBaseURL,
