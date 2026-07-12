@@ -1573,6 +1573,9 @@ export function LiveGlobePage() {
           <button type="button" onClick={() => setSubsOpen(true)} style={segBtn(subsOpen)}>
             🔔 ALERTS
           </button>
+          <a href="/live/rules" style={{ ...segBtn(false), textDecoration: 'none', display: 'inline-block' }}>
+            📖 RULES
+          </a>
           <span style={{ color: C.dim, fontSize: 10, letterSpacing: '0.08em' }}>
             {secsAgo === null ? 'CONNECTING…' : `UPDATED ${secsAgo}S AGO`}
           </span>
