@@ -231,6 +231,53 @@ interface NeighborGroup {
   items: GraphNeighbor[]
 }
 
+// slackThreadKey identifies which Slack thread a row belongs to. Thread ROOT
+// nodes carry no thread_ts metadata (it lives only on replies), so fall back
+// to the ts inside the node id — without this, a root reached via SAME_TOPIC
+// and a reply reached via THREAD render as duplicate rows of one thread.
+function slackThreadKey(n: GraphNeighbor): string | undefined {
+  if (n.node.type !== 'slack' && n.node.type !== 'slack_thread') return undefined
+  if (n.node.thread_ts) return n.node.thread_ts
+  const parts = n.node.node_id.split(':')
+  return parts.length === 3 ? parts[2] : undefined
+}
+
+// edgeStrength ranks edge kinds by evidence: when one thread is reachable via
+// several edges, the collapsed row keeps the strongest claim.
+function edgeStrength(kind: string): number {
+  switch (kind.toUpperCase()) {
+    case 'SAME_TOPIC':
+      return 0
+    case 'REFERS_TO':
+      return 1
+    case 'THREAD':
+      return 2
+    case 'SIMILAR':
+      return 4
+    default:
+      return 3
+  }
+}
+
+// collapseThreads keeps one row per Slack thread, preferring the strongest
+// edge (SAME_TOPIC > REFERS_TO > explicit > THREAD > SIMILAR). Non-slack rows
+// pass through. Shared by the group list and the timeline dots so numbering
+// stays aligned.
+function collapseThreads(neighbors: GraphNeighbor[]): GraphNeighbor[] {
+  const bestByThread = new Map<string, GraphNeighbor>()
+  const out: GraphNeighbor[] = []
+  for (const n of neighbors) {
+    const tt = slackThreadKey(n)
+    if (!tt) {
+      out.push(n)
+      continue
+    }
+    const prev = bestByThread.get(tt)
+    if (!prev || edgeStrength(n.edge.kind) < edgeStrength(prev.edge.kind)) bestByThread.set(tt, n)
+  }
+  return [...out, ...bestByThread.values()]
+}
+
 // Group neighbors by friendly type label. Slack messages sharing a thread collapse
 // to one row (the thread summary, dated by the thread's latest message). Groups
 // sort Jira/PRs/Docs/Slack first; items within a group sort by time, newest first.
@@ -239,21 +286,16 @@ function groupNeighbors(neighbors: GraphNeighbor[]): NeighborGroup[] {
   // ts per thread across all its messages.
   const threadMax = new Map<string, number>()
   for (const n of neighbors) {
-    const tt = n.node.thread_ts
+    const tt = slackThreadKey(n)
     if (tt) threadMax.set(tt, Math.max(threadMax.get(tt) ?? 0, n.node.ts_ms ?? 0))
   }
-  const effTs = (n: GraphNeighbor): number =>
-    n.node.last_ts_ms || (n.node.thread_ts && threadMax.get(n.node.thread_ts)) || n.node.ts_ms || 0
+  const effTs = (n: GraphNeighbor): number => {
+    const tt = slackThreadKey(n)
+    return n.node.last_ts_ms || (tt && threadMax.get(tt)) || n.node.ts_ms || 0
+  }
 
   const byLabel = new Map<string, NeighborGroup>()
-  const seenThread = new Set<string>()
-  for (const n of neighbors) {
-    // Collapse a Slack thread's messages into a single row.
-    const tt = n.node.thread_ts
-    if ((n.node.type === 'slack' || n.node.type === 'slack_thread') && tt) {
-      if (seenThread.has(tt)) continue
-      seenThread.add(tt)
-    }
+  for (const n of collapseThreads(neighbors)) {
     const cfg = GRAPH_TYPE_GROUPS[n.node.type]
     let label = cfg?.label ?? n.node.type
     let order = cfg?.order ?? 99
@@ -281,10 +323,12 @@ function groupNeighbors(neighbors: GraphNeighbor[]): NeighborGroup[] {
     g.items.push(n)
   }
   for (const g of byLabel.values()) {
-    // Highest similarity first (a 84% match outranks a 77% one); explicit edges
-    // have no score and fall back to newest-first among themselves.
+    // Strongest first: cosine for SIMILAR rows, judge confidence for confirmed
+    // rows (they have no cosine score); ties fall back to newest-first.
     g.items.sort(
-      (a, b) => (b.edge.score ?? 0) - (a.edge.score ?? 0) || effTs(b) - effTs(a),
+      (a, b) =>
+        (b.edge.score ?? b.edge.confidence ?? 0) - (a.edge.score ?? a.edge.confidence ?? 0) ||
+        effTs(b) - effTs(a),
     )
   }
   return [...byLabel.values()].sort((a, b) => a.order - b.order || a.label.localeCompare(b.label))
@@ -321,22 +365,17 @@ function NeighborTimeline({
   numbers: Map<string, number>
   onPick: (nodeId: string) => void
 }) {
-  // Mirror groupNeighbors' thread collapse: one point per Slack thread, dated
-  // by its latest message.
+  // Mirror groupNeighbors' thread collapse (same helper): one point per Slack
+  // thread, keeping the strongest edge, dated by its latest message.
   const threadMax = new Map<string, number>()
   for (const n of neighbors) {
-    const tt = n.node.thread_ts
+    const tt = slackThreadKey(n)
     if (tt) threadMax.set(tt, Math.max(threadMax.get(tt) ?? 0, n.node.ts_ms ?? 0))
   }
-  const seen = new Set<string>()
   const pts: { n: GraphNeighbor; ts: number }[] = []
-  for (const n of neighbors) {
-    const tt = n.node.thread_ts
-    if ((n.node.type === 'slack' || n.node.type === 'slack_thread') && tt) {
-      if (seen.has(tt)) continue
-      seen.add(tt)
-    }
+  for (const n of collapseThreads(neighbors)) {
     if (n.node.type === 'person') continue // people aren't events in time
+    const tt = slackThreadKey(n)
     const ts = n.node.last_ts_ms || (tt && threadMax.get(tt)) || n.node.ts_ms || 0
     if (ts > 0) pts.push({ n, ts })
   }
