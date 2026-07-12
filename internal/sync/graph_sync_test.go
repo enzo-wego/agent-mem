@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/pgvector/pgvector-go"
 
 	"github.com/agent-mem/agent-mem/internal/database"
 )
@@ -144,5 +145,63 @@ func TestGraphSync_PushPull(t *testing.T) {
 		if n.ID == nodeID {
 			t.Errorf("node %q should not appear in unsynced list after MarkSynced", nodeID)
 		}
+	}
+}
+
+// TestGraphSync_ArtifactIndexEmbedding verifies embeddings survive the
+// pull -> import round trip (they are stored as halfvec(3072)).
+func TestGraphSync_ArtifactIndexEmbedding(t *testing.T) {
+	pool := openTestPool(t)
+	truncateGraphSyncTables(t, pool)
+
+	ctx := context.Background()
+	dbA := database.NewDB(pool)
+
+	// artifact_index.node_id references graph.nodes - create the node first.
+	_, err := pool.Exec(ctx, `
+		INSERT INTO graph.nodes
+			(id, type, natural_key, body, body_revision, body_ts, updated_at, machine_id)
+		VALUES ('slack:TST-EMB', 'slack_thread', 'TST-EMB', 'b', 1, NOW(), NOW(), 'cloud-test')`)
+	if err != nil {
+		t.Fatalf("insert node: %v", err)
+	}
+
+	emb := make([]float32, 3072)
+	emb[0], emb[1] = 0.5, -0.25
+	_, err = pool.Exec(ctx, `
+		INSERT INTO graph.artifact_index
+			(node_id, summary, summary_kind, embedding, refreshed_at, machine_id)
+		VALUES ('slack:TST-EMB', 'test summary', 'auto', $1, NOW(), 'cloud-test')`,
+		pgvector.NewHalfVector(emb))
+	if err != nil {
+		t.Fatalf("insert artifact_index: %v", err)
+	}
+
+	pulled, err := dbA.GetGraphArtifactIndexForPull(ctx, "local-test", 0, 10)
+	if err != nil {
+		t.Fatalf("GetGraphArtifactIndexForPull: %v", err)
+	}
+	if len(pulled) != 1 {
+		t.Fatalf("expected 1 pulled row, got %d", len(pulled))
+	}
+	if len(pulled[0].Embedding) != 3072 || pulled[0].Embedding[0] != 0.5 {
+		t.Fatalf("embedding did not survive pull: len=%d", len(pulled[0].Embedding))
+	}
+
+	// Simulate the receiving side: delete, then import the pulled row.
+	if _, err := pool.Exec(ctx, `DELETE FROM graph.artifact_index WHERE node_id = 'slack:TST-EMB'`); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if err := dbA.ImportGraphArtifactIndex(ctx, &pulled[0]); err != nil {
+		t.Fatalf("ImportGraphArtifactIndex: %v", err)
+	}
+	var n int
+	if err := pool.QueryRow(ctx, `
+		SELECT count(*) FROM graph.artifact_index
+		WHERE node_id = 'slack:TST-EMB' AND embedding IS NOT NULL`).Scan(&n); err != nil {
+		t.Fatalf("verify query: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("imported row has NULL embedding")
 	}
 }

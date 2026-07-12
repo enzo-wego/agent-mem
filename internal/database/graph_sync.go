@@ -4,6 +4,9 @@ import (
 	"context"
 	"fmt"
 	"time"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/pgvector/pgvector-go"
 )
 
 // ---------------------------------------------------------------------------
@@ -264,12 +267,33 @@ func (db *DB) GetUnsyncedGraphEdges(ctx context.Context, limit int) ([]SyncableG
 	return out, rows.Err()
 }
 
+// scanArtifactIndexRows scans rows selected with the embedding column included.
+func scanArtifactIndexRows(rows pgx.Rows) ([]SyncableGraphArtifactIndex, error) {
+	defer rows.Close()
+	var out []SyncableGraphArtifactIndex
+	for rows.Next() {
+		var ai SyncableGraphArtifactIndex
+		var emb *pgvector.HalfVector
+		if err := rows.Scan(
+			&ai.NodeID, &ai.Summary, &ai.SummaryKind, &emb, &ai.RefreshedAt,
+			&ai.SyncID, &ai.SyncVersion, &ai.MachineID,
+		); err != nil {
+			return nil, fmt.Errorf("scan graph artifact_index: %w", err)
+		}
+		if emb != nil {
+			ai.Embedding = emb.Slice()
+		}
+		out = append(out, ai)
+	}
+	return out, rows.Err()
+}
+
 // GetUnsyncedGraphArtifactIndex returns graph.artifact_index rows not yet synced.
+// Embeddings travel with the row (halfvec(3072) approximately 30KB JSON each); the engine
+// already uses a halved batch size for this table.
 func (db *DB) GetUnsyncedGraphArtifactIndex(ctx context.Context, limit int) ([]SyncableGraphArtifactIndex, error) {
-	// Note: embedding column is excluded from sync transport to keep payloads small.
-	// The receiving machine re-generates embeddings via the index_artifact job.
 	rows, err := db.Pool.Query(ctx, `
-		SELECT node_id, summary, summary_kind, refreshed_at,
+		SELECT node_id, summary, summary_kind, embedding, refreshed_at,
 		       sync_id::text, sync_version, machine_id
 		FROM graph.artifact_index
 		WHERE sync_version = 0
@@ -278,20 +302,7 @@ func (db *DB) GetUnsyncedGraphArtifactIndex(ctx context.Context, limit int) ([]S
 	if err != nil {
 		return nil, fmt.Errorf("get unsynced graph artifact_index: %w", err)
 	}
-	defer rows.Close()
-
-	var out []SyncableGraphArtifactIndex
-	for rows.Next() {
-		var ai SyncableGraphArtifactIndex
-		if err := rows.Scan(
-			&ai.NodeID, &ai.Summary, &ai.SummaryKind, &ai.RefreshedAt,
-			&ai.SyncID, &ai.SyncVersion, &ai.MachineID,
-		); err != nil {
-			return nil, fmt.Errorf("scan graph artifact_index: %w", err)
-		}
-		out = append(out, ai)
-	}
-	return out, rows.Err()
+	return scanArtifactIndexRows(rows)
 }
 
 // GetUnsyncedGraphArtifactBodies returns graph.artifact_bodies rows not yet synced.
@@ -516,13 +527,18 @@ func (db *DB) ImportGraphEdge(ctx context.Context, e *SyncableGraphEdge) error {
 
 // ImportGraphArtifactIndex imports a graph.artifact_index row from sync.
 func (db *DB) ImportGraphArtifactIndex(ctx context.Context, ai *SyncableGraphArtifactIndex) error {
+	var emb *pgvector.HalfVector
+	if len(ai.Embedding) > 0 {
+		v := pgvector.NewHalfVector(ai.Embedding)
+		emb = &v
+	}
 	_, err := db.Pool.Exec(ctx, `
 		INSERT INTO graph.artifact_index
-			(node_id, summary, summary_kind, refreshed_at,
+			(node_id, summary, summary_kind, embedding, refreshed_at,
 			 sync_id, sync_version, machine_id)
-		VALUES ($1,$2,$3,$4,$5,$6,$7)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
 		ON CONFLICT (sync_id) DO NOTHING`,
-		ai.NodeID, ai.Summary, ai.SummaryKind, ai.RefreshedAt,
+		ai.NodeID, ai.Summary, ai.SummaryKind, emb, ai.RefreshedAt,
 		ai.SyncID, ai.SyncVersion, ai.MachineID,
 	)
 	return err
@@ -740,10 +756,9 @@ func (db *DB) GetGraphEdgesForPull(ctx context.Context, excludeSource string, af
 }
 
 // GetGraphArtifactIndexForPull returns graph.artifact_index rows from other machines.
-// Embedding is excluded from sync transport; receiving machine re-generates via index_artifact job.
 func (db *DB) GetGraphArtifactIndexForPull(ctx context.Context, excludeSource string, afterOffset, limit int) ([]SyncableGraphArtifactIndex, error) {
 	rows, err := db.Pool.Query(ctx, `
-		SELECT node_id, summary, summary_kind, refreshed_at,
+		SELECT node_id, summary, summary_kind, embedding, refreshed_at,
 		       sync_id::text, sync_version, machine_id
 		FROM graph.artifact_index
 		WHERE machine_id IS DISTINCT FROM $1
@@ -753,20 +768,7 @@ func (db *DB) GetGraphArtifactIndexForPull(ctx context.Context, excludeSource st
 	if err != nil {
 		return nil, fmt.Errorf("get graph artifact_index for pull: %w", err)
 	}
-	defer rows.Close()
-
-	var out []SyncableGraphArtifactIndex
-	for rows.Next() {
-		var ai SyncableGraphArtifactIndex
-		if err := rows.Scan(
-			&ai.NodeID, &ai.Summary, &ai.SummaryKind, &ai.RefreshedAt,
-			&ai.SyncID, &ai.SyncVersion, &ai.MachineID,
-		); err != nil {
-			return nil, fmt.Errorf("scan graph artifact_index for pull: %w", err)
-		}
-		out = append(out, ai)
-	}
-	return out, rows.Err()
+	return scanArtifactIndexRows(rows)
 }
 
 // GetGraphArtifactBodiesForPull returns graph.artifact_bodies rows from other machines.
