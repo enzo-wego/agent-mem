@@ -3050,13 +3050,16 @@ export function LiveGlobePage() {
                   const expanded = expandedNbr === n.node.node_id
                   const isSlack = n.node.type === 'slack' || n.node.type === 'slack_thread'
                   const kindU = n.edge.kind.toUpperCase()
-                  // Verdict chip: what the rules judge said about this SIMILAR pair.
-                  const verdictChip = !pinnedRow && kindU === 'SIMILAR'
+                  // Verdict chip: what the rules judge said about this row vs the
+                  // OPENED thread. Shown on every non-confirmed Slack row — a hop-2
+                  // SAME_TOPIC edge or a THREAD reference is not a claim about the
+                  // opened thread; the verdict is.
+                  const verdictChip = !pinnedRow && isSlack && kindU !== 'SAME_TOPIC' && (kindU === 'SIMILAR' || n.edge.verdict)
                     ? n.edge.verdict === 'refused'
-                      ? { text: '✕ different', color: '#e4606a', tip: `Rules check: different topic${n.edge.verdict_why ? ` — ${n.edge.verdict_why}` : ''}` }
+                      ? { text: '✕ different', color: '#e4606a', tip: `Rules check vs the opened thread: different topic${n.edge.verdict_why ? ` — ${n.edge.verdict_why}` : ''}` }
                       : n.edge.verdict === 'confirmed'
-                        ? { text: '✓ same', color: C.green, tip: 'Rules check: confirmed same topic' }
-                        : { text: '? unchecked', color: C.dim, tip: 'Not yet judged against the rules — the score is wording similarity only' }
+                        ? { text: '✓ same', color: C.green, tip: 'Rules check vs the opened thread: confirmed same topic' }
+                        : { text: '? checking…', color: C.dim, tip: 'Not yet judged against the opened thread — queued for the rules judge; reopen shortly for a ✓/✕ verdict' }
                     : null
                   // Δt chip: gap between this row's activity window and the opened thread's.
                   const gapChip = (() => {
@@ -3230,6 +3233,11 @@ export function LiveGlobePage() {
                           <div style={{ color: C.dim, fontSize: 10 }}>
                             {pinnedRow ? 'This is the thread you opened.' : edgeKindTooltip(n.edge)}
                           </div>
+                          {!pinnedRow && n.node.via && (
+                            <div style={{ color: C.dim, fontSize: 10 }}>
+                              Reached via: “{n.node.via}” — its {n.edge.kind.toUpperCase() === 'SAME_TOPIC' ? 'confirmed link is with that row, not directly with the opened thread' : 'reference chain passes through that row'}.
+                            </div>
+                          )}
                           {n.node.url && (
                             <a
                               href={n.node.url}

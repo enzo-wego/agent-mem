@@ -47,6 +47,10 @@ type neighborItem struct {
 		// PendingSummary marks a row whose summarize job was just enqueued by
 		// this request — the client can re-poll shortly to swap in the summary.
 		PendingSummary bool `json:"pending_summary,omitempty"`
+		// Via names the hop-1 row this indirect (hop ≥ 2) row was reached
+		// through — a hop-2 SAME_TOPIC edge confirms against Via, not against
+		// the opened thread.
+		Via string `json:"via,omitempty"`
 	} `json:"node"`
 	Edge struct {
 		Kind       string  `json:"kind"`
@@ -96,8 +100,12 @@ func (h *neighborsHandler) serve(w http.ResponseWriter, r *http.Request) {
 	frontier := []struct {
 		id  string
 		hop int
-	}{{id, 0}}
+		via string // display title of the row this one is reached through
+	}{{id, 0, ""}}
 	var out []neighborItem
+	// Slack-thread rows displayed without a judgment against the OPENED thread
+	// get queued for judging, so on the next open every row is ✓/✕, never "?".
+	var needJudge []string
 	for len(frontier) > 0 {
 		next := frontier[0]
 		frontier = frontier[1:]
@@ -132,32 +140,8 @@ func (h *neighborsHandler) serve(w http.ResponseWriter, r *http.Request) {
 			item.Edge.Why = n.Why
 			item.Edge.Confidence = n.Confidence
 			item.Edge.Score = n.Score
-			// SIMILAR is a wording-similarity nomination, not a claim. Show what
-			// the rules judge concluded so rejected candidates stop reading as
-			// relationships (plan 15, C4).
-			if n.EdgeKind == "SIMILAR" {
-				from, to := next.id, n.NodeID
-				if to < from {
-					from, to = to, from
-				}
-				var same bool
-				var why, tag string
-				verdictErr := h.db.QueryRow(ctx, `
-SELECT same_topic, COALESCE(why,''), COALESCE(tag,'')
-FROM graph.topic_link_judgments
-WHERE source_node_id=$1 AND target_node_id=$2`, from, to).Scan(&same, &why, &tag)
-				switch {
-				case verdictErr != nil:
-					item.Edge.Verdict = "unchecked"
-				case same:
-					item.Edge.Verdict = "confirmed"
-				default:
-					item.Edge.Verdict = "refused"
-					item.Edge.VerdictWhy = why
-					if item.Edge.Tag == "" {
-						item.Edge.Tag = tag
-					}
-				}
+			if next.hop >= 1 {
+				item.Node.Via = next.via
 			}
 			// For Slack nodes, prefer the thread summary, then the first line of the
 			// body — so a row shows readable text (and a whole thread one label),
@@ -198,14 +182,6 @@ WHERE n.id=$1`, n.NodeID)
 			// Hidden from this asker: don't surface it and don't expand through it.
 			if !scopeVisible(scope, scopeSet, noFilter) {
 				continue
-			}
-			// Don't traverse through a SIMILAR link — surface related threads as leaves,
-			// not as a launch point for further semantic drift.
-			if n.EdgeKind != "SIMILAR" {
-				frontier = append(frontier, struct {
-					id  string
-					hop int
-				}{n.NodeID, next.hop + 1})
 			}
 			if item.Node.Type == "slack" || item.Node.Type == "slack_thread" {
 				switch {
@@ -257,6 +233,55 @@ WHERE n.id=$1`, n.NodeID)
 				title = firstLine(body, 120)
 			}
 			item.Node.Title = title
+			// Don't traverse through a SIMILAR link — surface related threads as leaves,
+			// not as a launch point for further semantic drift. Pushed after the title
+			// resolves so children can say which row they were reached "via".
+			if n.EdgeKind != "SIMILAR" {
+				frontier = append(frontier, struct {
+					id  string
+					hop int
+					via string
+				}{n.NodeID, next.hop + 1, firstLine(title, 80)})
+			}
+			// Every displayed Slack thread gets the rules verdict AGAINST THE
+			// OPENED THREAD — a hop-2 SAME_TOPIC edge confirms against its Via
+			// row, not the opened one, and THREAD/REFERENCES rows were never
+			// claims at all. Unjudged pairs are queued below so the next open
+			// shows ✓/✕ instead of "?".
+			if (item.Node.Type == "slack" || item.Node.Type == "slack_thread") && scope != nil && strings.HasPrefix(*scope, "slack:C") {
+				rootTs := item.Node.ThreadTS
+				if rootTs == "" {
+					if parts := strings.Split(item.Node.NodeID, ":"); len(parts) == 3 {
+						rootTs = parts[2]
+					}
+				}
+				rowRoot := "slack:" + strings.TrimPrefix(*scope, "slack:") + ":" + rootTs
+				if rowRoot != id {
+					from, to := id, rowRoot
+					if to < from {
+						from, to = to, from
+					}
+					var same bool
+					var why, tag string
+					verdictErr := h.db.QueryRow(ctx, `
+SELECT same_topic, COALESCE(why,''), COALESCE(tag,'')
+FROM graph.topic_link_judgments
+WHERE source_node_id=$1 AND target_node_id=$2`, from, to).Scan(&same, &why, &tag)
+					switch {
+					case verdictErr != nil:
+						item.Edge.Verdict = "unchecked"
+						needJudge = append(needJudge, rowRoot)
+					case same:
+						item.Edge.Verdict = "confirmed"
+					default:
+						item.Edge.Verdict = "refused"
+						item.Edge.VerdictWhy = why
+						if item.Edge.Tag == "" {
+							item.Edge.Tag = tag
+						}
+					}
+				}
+			}
 			// Drop un-enriched reference stubs: a node we linked to but never fetched
 			// has no title and no url, so the panel would render a raw id like
 			// "jira:RFC-53" or "feature:card_scan" that can't be opened. These are
@@ -267,6 +292,11 @@ WHERE n.id=$1`, n.NodeID)
 			}
 			out = append(out, item)
 		}
+	}
+	// Queue the unjudged pairs (bounded; deduped against a pending job) so the
+	// popup converges to all-✓/✕ on the next open.
+	if len(needJudge) > 0 && strings.HasPrefix(id, "slack:C") {
+		enqueueLinkTopicsWithCandidates(ctx, h.db, id, needJudge)
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{"neighbors": out})

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/sync/errgroup"
 
 	"github.com/agent-mem/agent-mem/internal/graph/jobs"
@@ -32,6 +33,10 @@ const (
 type linkTopicsPayload struct {
 	NodeID string `json:"node_id"`
 	Force  bool   `json:"force,omitempty"`
+	// ExtraCandidates are node ids to judge in addition to the generated
+	// candidates — the neighbors panel queues threads it displayed without a
+	// verdict, so every visible pair converges to confirmed/refused.
+	ExtraCandidates []string `json:"extra_candidates,omitempty"`
 }
 
 type topicLinkNode struct {
@@ -112,7 +117,13 @@ func linkTopicsHandler(deps Deps) jobs.Handler {
 		if err != nil {
 			return err
 		}
-		cands := mergeTopicCandidates(idCands, embCands)
+		var extraCands []topicLinkCandidate
+		if len(p.ExtraCandidates) > 0 {
+			if extraCands, err = explicitTopicCandidates(ctx, deps, p.NodeID, p.ExtraCandidates); err != nil {
+				return err
+			}
+		}
+		cands := mergeTopicCandidates(idCands, extraCands, embCands)
 		srcStart, srcEnd, srcOK := nodeActivityWindow(ctx, deps, p.NodeID)
 
 		g, gctx := errgroup.WithContext(ctx)
@@ -299,21 +310,76 @@ LIMIT $3`,
 	return out, rows.Err()
 }
 
-// mergeTopicCandidates puts identifier-nominated candidates first and dedups
-// the embedding shortlist against them.
-func mergeTopicCandidates(idCands, embCands []topicLinkCandidate) []topicLinkCandidate {
-	out := make([]topicLinkCandidate, 0, len(idCands)+len(embCands))
-	seen := make(map[string]struct{}, len(idCands))
-	for _, c := range idCands {
-		seen[c.NodeID] = struct{}{}
-		out = append(out, c)
-	}
-	for _, c := range embCands {
-		if _, ok := seen[c.NodeID]; !ok {
+// mergeTopicCandidates concatenates candidate lists in priority order,
+// deduping by node id — earlier lists win (identifier candidates keep their
+// SharedIDs over an embedding duplicate).
+func mergeTopicCandidates(lists ...[]topicLinkCandidate) []topicLinkCandidate {
+	var out []topicLinkCandidate
+	seen := map[string]struct{}{}
+	for _, l := range lists {
+		for _, c := range l {
+			if _, ok := seen[c.NodeID]; ok {
+				continue
+			}
+			seen[c.NodeID] = struct{}{}
 			out = append(out, c)
 		}
 	}
 	return out
+}
+
+// explicitTopicCandidates loads specific node ids as judge candidates (same
+// gates as generated candidates) — pairs a viewer saw without a verdict.
+func explicitTopicCandidates(ctx context.Context, deps Deps, nodeID string, ids []string) ([]topicLinkCandidate, error) {
+	rows, err := deps.DB.Query(ctx, `
+SELECT n.id, n.type, COALESCE(ai.summary,''), COALESCE(p.department,''),
+       COALESCE(1.0 - (ai.embedding <=> src.emb), 0) AS cosine
+FROM graph.artifact_index ai
+JOIN graph.nodes n ON n.id = ai.node_id
+LEFT JOIN graph.people p ON p.id = n.author_person_id
+LEFT JOIN (SELECT embedding AS emb FROM graph.artifact_index WHERE node_id = $1) src ON TRUE
+WHERE ai.node_id = ANY($2) AND ai.node_id <> $1
+  AND n.deleted_at IS NULL
+  AND NOT (n.type IN ('slack','slack_thread') AND ai.summary_kind <> 'thread_summary')
+  AND NOT (n.type IN ('slack','slack_thread') AND n.scope LIKE 'slack:D%')`,
+		nodeID, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []topicLinkCandidate
+	for rows.Next() {
+		var c topicLinkCandidate
+		if err := rows.Scan(&c.NodeID, &c.Type, &c.Summary, &c.Department, &c.Cosine); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+// enqueueLinkTopicsWithCandidates queues a link_topics run that additionally
+// judges the given thread roots. Deduped against any pending link_topics job
+// for the node; bounded so a busy popup can't flood the judge.
+func enqueueLinkTopicsWithCandidates(ctx context.Context, db *pgxpool.Pool, nodeID string, extras []string) {
+	if db == nil || nodeID == "" || len(extras) == 0 {
+		return
+	}
+	var pending bool
+	_ = db.QueryRow(ctx, `
+SELECT EXISTS(
+  SELECT 1 FROM graph.jobs
+  WHERE type='link_topics' AND status IN ('queued','running')
+    AND payload->>'node_id'=$1)`, nodeID).Scan(&pending)
+	if pending {
+		return
+	}
+	if len(extras) > 12 {
+		extras = extras[:12]
+	}
+	_, _ = jobs.Enqueue(ctx, db, "link_topics", linkTopicsPayload{
+		NodeID: nodeID, ExtraCandidates: extras,
+	}, jobs.EnqueueOptions{Priority: 4})
 }
 
 // nodeActivityWindow returns when a node was actually active: for Slack
