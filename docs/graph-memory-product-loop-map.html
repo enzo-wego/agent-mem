@@ -1,0 +1,409 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Graph-Memory × Product Loop — The Map</title>
+<style>
+  :root {
+    --ground: #f6f8f7; --panel: #ffffff; --ink: #1e2a26; --muted: #5b6a64;
+    --line: #dde5e1; --accent: #0e7a56; --accent-soft: #e3f1ea;
+    --warn: #96530d; --warn-soft: #f7ecdd; --crit: #b3362b; --crit-soft: #f9e8e6;
+    --ok: #177245; --ok-soft: #e2f2e8; --code-bg: #eef2f0;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --ground: #121815; --panel: #1a211d; --ink: #e4ebe7; --muted: #93a29b;
+      --line: #2c3630; --accent: #4cc596; --accent-soft: #1c2f27;
+      --warn: #e0a35c; --warn-soft: #322718; --crit: #e07a6f; --crit-soft: #33201d;
+      --ok: #5fc389; --ok-soft: #1a2e22; --code-bg: #232c27; }
+  }
+  :root[data-theme="dark"] { --ground: #121815; --panel: #1a211d; --ink: #e4ebe7; --muted: #93a29b;
+    --line: #2c3630; --accent: #4cc596; --accent-soft: #1c2f27;
+    --warn: #e0a35c; --warn-soft: #322718; --crit: #e07a6f; --crit-soft: #33201d;
+    --ok: #5fc389; --ok-soft: #1a2e22; --code-bg: #232c27; }
+  :root[data-theme="light"] { --ground: #f6f8f7; --panel: #ffffff; --ink: #1e2a26; --muted: #5b6a64;
+    --line: #dde5e1; --accent: #0e7a56; --accent-soft: #e3f1ea;
+    --warn: #96530d; --warn-soft: #f7ecdd; --crit: #b3362b; --crit-soft: #f9e8e6;
+    --ok: #177245; --ok-soft: #e2f2e8; --code-bg: #eef2f0; }
+
+  body { background: var(--ground); color: var(--ink); margin: 0; padding: 2.5rem 1.25rem 5rem;
+    font-family: "Avenir Next", Seravek, ui-sans-serif, system-ui, sans-serif; line-height: 1.55; }
+  main { max-width: 900px; margin: 0 auto; display: flex; flex-direction: column; gap: 2rem; }
+  h1 { font-size: 1.65rem; margin: 0 0 .25rem; letter-spacing: -.01em; text-wrap: balance; }
+  h2 { font-size: 1.15rem; margin: 0; display: flex; align-items: center; gap: .6rem; }
+  h3 { font-size: .95rem; margin: 1rem 0 .3rem; }
+  .eyebrow { text-transform: uppercase; letter-spacing: .09em; font-size: .72rem; color: var(--accent); font-weight: 600; }
+  .lede { color: var(--muted); margin: 0; max-width: 66ch; }
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 1.4rem 1.6rem; }
+  .qtag { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: .72rem; background: var(--accent-soft); color: var(--accent); border-radius: 5px; padding: .15rem .55rem; font-weight: 700; white-space: nowrap; }
+  code { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: .84em; background: var(--code-bg); border-radius: 4px; padding: .06rem .32rem; }
+  table { border-collapse: collapse; width: 100%; font-size: .875rem; }
+  .tablewrap { overflow-x: auto; }
+  th, td { text-align: left; padding: .45rem .8rem .45rem 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-size: .72rem; text-transform: uppercase; letter-spacing: .06em; font-weight: 600; }
+  ul { margin: .4rem 0; padding-left: 1.3rem; }
+  li { margin: .3rem 0; }
+  .pill { border-radius: 9px; padding: .06rem .55rem; font-size: .72rem; font-weight: 700; white-space: nowrap; display: inline-block; }
+  .pill.user { background: var(--accent-soft); color: var(--accent); }
+  .pill.terr { background: var(--code-bg); color: var(--muted); }
+  .pill.dec  { background: var(--ok-soft); color: var(--ok); }
+  .pill.edge { background: var(--warn-soft); color: var(--warn); }
+  .pill.crit { background: var(--crit-soft); color: var(--crit); }
+  .note { color: var(--muted); font-size: .84rem; }
+  details { border: 1px solid var(--line); border-radius: 8px; padding: .6rem .9rem; margin: .5rem 0; }
+  summary { cursor: pointer; font-weight: 600; }
+  .prompt { background: var(--code-bg); border-radius: 8px; padding: 1rem 1.1rem; margin: 0; font: .82rem/1.55 ui-monospace, "SF Mono", Menlo, monospace; white-space: pre-wrap; overflow-x: auto; }
+  .prompt:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .copybtn { background: var(--accent); color: #fff; border: none; border-radius: 8px; padding: .5rem 1.2rem; font: inherit; font-weight: 700; cursor: pointer; margin-top: .6rem; }
+  :root[data-theme="dark"] .copybtn { color: #0f1613; }
+  .copybtn:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: .3rem 1.4rem; }
+  @media (max-width: 640px) { .two { grid-template-columns: 1fr; } }
+
+  /* ---- visual layer ---- */
+  .diagram { width: 100%; overflow-x: auto; }
+  .diagram svg { display: block; min-width: 720px; width: 100%; height: auto; font-family: inherit; }
+  .dbox { fill: var(--panel); stroke: var(--line); stroke-width: 1.5; }
+  .dbox.hot { stroke: var(--accent); stroke-width: 2.5; }
+  .dbox.dim { stroke-dasharray: 4 3; }
+  .dtxt { fill: var(--ink); font-size: 13px; }
+  .dtxt.small { font-size: 10.5px; fill: var(--muted); }
+  .dtxt.hot { fill: var(--accent); font-weight: 700; }
+  .darrow { stroke: var(--muted); stroke-width: 1.8; fill: none; marker-end: url(#arr); }
+  .darrow.dash { stroke-dasharray: 6 5; stroke: var(--accent); }
+  .flowdot { fill: var(--accent); }
+  .pulse { animation: pulse 2.4s ease-in-out infinite; transform-origin: center; transform-box: fill-box; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .55; } }
+  @media (prefers-reduced-motion: reduce) { .flowdot { display: none; } .pulse { animation: none; } }
+  .pin { font-size: 10px; font-weight: 800; }
+  .pin circle { stroke: var(--panel); stroke-width: 1.5; }
+  .pin.dec circle { fill: var(--ok); } .pin.edge circle { fill: var(--warn); } .pin.crit circle { fill: var(--crit); }
+  .pin text { fill: #fff; text-anchor: middle; }
+  .pinlegend { display: flex; gap: 1rem; flex-wrap: wrap; font-size: .78rem; color: var(--muted); margin-top: .4rem; }
+  .dot { display: inline-block; width: .7rem; height: .7rem; border-radius: 50%; vertical-align: -1px; }
+  .chips-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: .6rem; margin: .8rem 0; }
+  .dchip { border: 1px solid var(--line); border-radius: 8px; padding: .55rem .8rem; font-size: .82rem; }
+  .dchip .q { color: var(--muted); font-size: .72rem; text-transform: uppercase; letter-spacing: .05em; }
+  .dchip .a { font-weight: 650; }
+  details.fold { border: 1px solid var(--line); border-radius: 8px; padding: .5rem .9rem; margin-top: .8rem; }
+  details.fold > summary { color: var(--muted); font-size: .85rem; }
+</style>
+</head>
+<body>
+<main>
+<header>
+  <div class="eyebrow">Quadrant walk · complete · 2026-07-06</div>
+  <h1>Graph-memory × the product loop — the map</h1>
+  <p class="lede">Feature mapped: a <strong>user-research synthesis agent</strong> — the first product-loop agent consuming agent-mem's knowledge graph. Weekly in-worker job → clusters partner feedback into themes → Monday DM digest with a goal candidate → writes itself back as an <code>agent_report</code> node.</p>
+</header>
+
+<!-- visual: the loop -->
+<section>
+  <h2>The picture, with the agent lit up</h2>
+  <div class="diagram" role="img" aria-label="Product development loop: Goals to Plan, Build, Verify, Review, Ship, then Monitor, Incidents, User Feedback, and a dashed arrow back to Goals. Monitor and Incidents are covered by existing pay-ops skills; this build is the User Feedback synthesis agent, feeding the dashed arrow.">
+  <svg viewBox="0 0 960 330" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="var(--muted)"/>
+      </marker>
+      <marker id="arrg" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="var(--accent)"/>
+      </marker>
+    </defs>
+    <!-- goals -->
+    <rect class="dbox" x="20" y="130" width="110" height="46" rx="8"/>
+    <text class="dtxt" x="75" y="157" text-anchor="middle">Product Goals</text>
+    <!-- top row -->
+    <g>
+      <rect class="dbox" x="180" y="40" width="110" height="44" rx="8"/><text class="dtxt" x="235" y="66" text-anchor="middle">Plan</text>
+      <rect class="dbox" x="330" y="40" width="110" height="44" rx="8"/><text class="dtxt" x="385" y="66" text-anchor="middle">Build</text>
+      <rect class="dbox" x="480" y="40" width="110" height="44" rx="8"/><text class="dtxt" x="535" y="66" text-anchor="middle">Verify</text>
+      <rect class="dbox" x="630" y="40" width="110" height="44" rx="8"/><text class="dtxt" x="685" y="66" text-anchor="middle">Review</text>
+      <rect class="dbox" x="780" y="40" width="110" height="44" rx="8"/><text class="dtxt" x="835" y="66" text-anchor="middle">Ship</text>
+    </g>
+    <path class="darrow" d="M130,145 L165,90"/>
+    <path class="darrow" d="M290,62 L326,62"/>
+    <path class="darrow" d="M440,62 L476,62"/>
+    <path class="darrow" d="M590,62 L626,62"/>
+    <path class="darrow" d="M740,62 L776,62"/>
+    <!-- down to monitor -->
+    <path class="darrow" d="M835,84 L835,196"/>
+    <!-- bottom row -->
+    <rect class="dbox dim" x="700" y="200" width="130" height="46" rx="8"/><text class="dtxt" x="765" y="221" text-anchor="middle">Monitor</text>
+    <text class="dtxt small" x="765" y="237" text-anchor="middle">pay-ops-* skills own this</text>
+    <rect class="dbox dim" x="470" y="200" width="130" height="46" rx="8"/><text class="dtxt" x="535" y="221" text-anchor="middle">Incidents</text>
+    <text class="dtxt small" x="535" y="237" text-anchor="middle">pay-ops-* skills own this</text>
+    <rect class="dbox hot pulse" x="220" y="200" width="150" height="46" rx="8"/><text class="dtxt hot" x="295" y="221" text-anchor="middle">User Feedback</text>
+    <text class="dtxt small" x="295" y="237" text-anchor="middle">← THIS BUILD: synthesis agent</text>
+    <path class="darrow" d="M696,223 L604,223"/>
+    <path class="darrow" d="M466,223 L374,223"/>
+    <!-- dashed feedback to goals -->
+    <path id="fb" class="darrow dash" d="M220,223 C120,223 75,210 75,180" marker-end="url(#arrg)"/>
+    <text class="dtxt small" x="118" y="260" text-anchor="middle">weekly 🎯 goal candidate closes the loop</text>
+    <circle class="flowdot" r="4"><animateMotion dur="3s" repeatCount="indefinite" rotate="0"><mpath href="#fb"/></animateMotion></circle>
+    <!-- ten sources note -->
+    <text class="dtxt small" x="480" y="315" text-anchor="middle">the graph already ingests every stage: Slack · Jira · GitHub · Confluence · PagerDuty · Datadog · Sentry · GWS · WegoHub · Claude artifacts — the gap was consumers, not ingestion</text>
+  </svg>
+  </div>
+</section>
+
+<!-- visual: system flow + landmines -->
+<section>
+  <h2>How it runs — and where the 15 landmines bite</h2>
+  <p class="note">Numbered pins = landmine cards from Q4. <span class="dot" style="background:var(--ok)"></span> decided&nbsp;&nbsp;<span class="dot" style="background:var(--crit)"></span> critical edge&nbsp;&nbsp;<span class="dot" style="background:var(--warn)"></span> sharp edge. Hover a pin for its one-liner; the full evidence table is folded below Q4.</p>
+  <div class="diagram" role="img" aria-label="System flow: partner and internal Slack channels feed a 6-hourly sync job that enqueues backfills into graph.nodes. Every Monday morning SGT (default 09:00) the synthesis job claims the ISO week, loads the 7-day corpus, clusters themes with an LLM, computes trends against the previous report, renders a digest, writes an agent_report node that gets embedded, and DMs Enzo unless the week is quiet. Landmine pins mark where each of the 15 risks applies.">
+  <svg viewBox="0 0 960 430" xmlns="http://www.w3.org/2000/svg">
+    <!-- sources -->
+    <rect class="dbox" x="20" y="30" width="150" height="52" rx="8"/>
+    <text class="dtxt" x="95" y="52" text-anchor="middle">partners channels</text>
+    <text class="dtxt small" x="95" y="68" text-anchor="middle">continent match: ext-wego-*</text>
+    <rect class="dbox" x="20" y="100" width="150" height="52" rx="8"/>
+    <text class="dtxt" x="95" y="122" text-anchor="middle">internal channels</text>
+    <text class="dtxt small" x="95" y="138" text-anchor="middle">settings: synthesis_internal_channels</text>
+    <g class="pin edge"><title>L6 — "partners" match list only covers ext-wego-*; partner-saudi-rail silently missing. Fix: audit + overrides at build time.</title><circle cx="170" cy="30" r="9"/><text x="170" y="33.5">6</text></g>
+    <!-- sync -->
+    <rect class="dbox" x="230" y="62" width="150" height="56" rx="8"/>
+    <text class="dtxt" x="305" y="84" text-anchor="middle">sync job ⟳ 6h</text>
+    <text class="dtxt small" x="305" y="100" text-anchor="middle">oldest = MAX(ingested ts)</text>
+    <path id="p1" class="darrow" d="M170,56 C200,56 205,75 226,80"/>
+    <path class="darrow" d="M170,126 C200,126 205,105 226,100"/>
+    <g class="pin dec"><title>L1 — no periodic Slack sync existed; DECIDED: derived watermark, self-healing on backfill failure.</title><circle cx="380" cy="62" r="9"/><text x="380" y="65.5">1</text></g>
+    <!-- backfill + nodes -->
+    <rect class="dbox" x="440" y="62" width="130" height="56" rx="8"/>
+    <text class="dtxt" x="505" y="84" text-anchor="middle">backfill jobs</text>
+    <text class="dtxt small" x="505" y="100" text-anchor="middle">existing paging, idempotent</text>
+    <path id="p2" class="darrow" d="M380,90 L436,90"/>
+    <ellipse cx="700" cy="90" rx="85" ry="34" class="dbox"/>
+    <text class="dtxt" x="700" y="87" text-anchor="middle">graph.nodes</text>
+    <text class="dtxt small" x="700" y="103" text-anchor="middle">+ people, edges, embeddings</text>
+    <path id="p3" class="darrow" d="M570,90 L610,90"/>
+    <!-- job machinery chip -->
+    <rect class="dbox dim" x="230" y="160" width="150" height="46" rx="8"/>
+    <text class="dtxt small" x="305" y="179" text-anchor="middle">Postgres job queue</text>
+    <text class="dtxt small" x="305" y="194" text-anchor="middle">lease · janitor · retries</text>
+    <g class="pin crit"><title>L3 — 120s lease kills LLM jobs; janitor reclaims mid-flight. Fix: Heartbeat:true, lease 900s.</title><circle cx="238" cy="160" r="9"/><text x="238" y="163.5">3</text></g>
+    <g class="pin crit"><title>L4 — bare error doubles the recurring chain (retry + defer). Fix: dedup-guarded reschedule on a fresh context.</title><circle cx="262" cy="160" r="9"/><text x="262" y="163.5">4</text></g>
+    <g class="pin edge"><title>L15 — boot enqueue without an EXISTS guard stacks a chain per restart. Fix: copy the guard block.</title><circle cx="286" cy="160" r="9"/><text x="286" y="163.5">15</text></g>
+    <!-- weekly lane -->
+    <text class="dtxt hot" x="20" y="262">every Monday morning SGT (default 09:00)</text>
+    <rect class="dbox" x="20" y="275" width="105" height="48" rx="8"/><text class="dtxt" x="72" y="296" text-anchor="middle">claim week</text><text class="dtxt small" x="72" y="311" text-anchor="middle">synthesis_runs</text>
+    <g class="pin edge"><title>L5 — aggregate DM has no natural dedup key. Fix: ISO-week claim row before send, rollback on DM failure.</title><circle cx="125" cy="275" r="9"/><text x="125" y="278.5">5</text></g>
+    <rect class="dbox" x="155" y="275" width="115" height="48" rx="8"/><text class="dtxt" x="212" y="296" text-anchor="middle">7-day corpus</text><text class="dtxt small" x="212" y="311" text-anchor="middle">raw bodies, no bots</text>
+    <g class="pin edge"><title>L8 — bot messages with a user field pass ingest. Fix: LEFT JOIN people + COALESCE(is_bot,false)=false.</title><circle cx="270" cy="275" r="9"/><text x="270" y="278.5">8</text></g>
+    <g class="pin edge"><title>L9 — thread_summaries is sparse. Fix: read raw graph.nodes bodies.</title><circle cx="246" cy="275" r="9"/><text x="246" y="278.5">9</text></g>
+    <g class="pin crit"><title>L10 — echo loop: last week's report must never be evidence. Fix: corpus type-filtered to 'slack'; previous report is trend STATE only.</title><circle cx="222" cy="275" r="9"/><text x="222" y="278.5">10</text></g>
+    <rect class="dbox" x="300" y="275" width="110" height="48" rx="8"/><text class="dtxt" x="355" y="296" text-anchor="middle">LLM themes</text><text class="dtxt small" x="355" y="311" text-anchor="middle">one call, strict JSON</text>
+    <rect class="dbox" x="440" y="275" width="110" height="48" rx="8"/><text class="dtxt" x="495" y="296" text-anchor="middle">trends ▲●━▼</text><text class="dtxt small" x="495" y="311" text-anchor="middle">vs previous report only</text>
+    <rect class="dbox" x="580" y="275" width="100" height="48" rx="8"/><text class="dtxt" x="630" y="296" text-anchor="middle">digest</text><text class="dtxt small" x="630" y="311" text-anchor="middle">mrkdwn + 🎯</text>
+    <path id="p4" class="darrow" d="M125,299 L151,299"/>
+    <path class="darrow" d="M270,299 L296,299"/>
+    <path class="darrow" d="M410,299 L436,299"/>
+    <path class="darrow" d="M550,299 L576,299"/>
+    <path class="darrow" d="M700,124 C700,200 495,220 495,271"/>
+    <!-- outputs -->
+    <rect class="dbox hot" x="730" y="248" width="200" height="52" rx="8"/>
+    <text class="dtxt hot" x="830" y="270" text-anchor="middle">agent_report node</text>
+    <text class="dtxt small" x="830" y="286" text-anchor="middle">scope public · embedded · edges</text>
+    <g class="pin dec"><title>L2 — scope leak-or-hide; DECIDED: scope='public' (corpus is team-visible anyway).</title><circle cx="930" cy="248" r="9"/><text x="930" y="251.5">2</text></g>
+    <g class="pin edge"><title>L12 — direct inserts never get embedded. Fix: explicit index_artifact{force:true} enqueue; failure fails the run.</title><circle cx="906" cy="248" r="9"/><text x="906" y="251.5">12</text></g>
+    <g class="pin edge"><title>L14 — NULL author renders as "someone". Fix: EnzoBot is_bot person; hard error if unavailable.</title><circle cx="882" cy="248" r="9"/><text x="882" y="251.5">14</text></g>
+    <rect class="dbox" x="730" y="330" width="200" height="52" rx="8"/>
+    <text class="dtxt" x="830" y="352" text-anchor="middle">DM Enzo 💬 (chunked)</text>
+    <text class="dtxt small" x="830" y="368" text-anchor="middle">silent when nothing new/escalating</text>
+    <g class="pin edge"><title>L7 — slackDM never chunks; msg_too_long loops. Fix: line-boundary chunking under 12k.</title><circle cx="930" cy="330" r="9"/><text x="930" y="333.5">7</text></g>
+    <path id="p5" class="darrow" d="M684,290 C710,280 715,274 726,272"/>
+    <path class="darrow" d="M684,308 C710,330 715,350 726,353"/>
+    <!-- side notes -->
+    <g class="pin dec"><title>L11 — DECIDED: exclude agent_report from cluster-summary LLM context; machine narrative never feeds human summaries.</title><circle cx="744" cy="410" r="9"/><text x="744" y="413.5">11</text></g>
+    <text class="dtxt small" x="762" y="414">cluster summaries exclude the report</text>
+    <g class="pin edge"><title>L13 — new node type needs multi-site registration: ids.go + dashboard color/legend/filter maps.</title><circle cx="500" cy="410" r="9"/><text x="500" y="413.5">13</text></g>
+    <text class="dtxt small" x="518" y="414">dashboard registers the new type</text>
+    <!-- animated dots -->
+    <circle class="flowdot" r="3.5"><animateMotion dur="2.6s" repeatCount="indefinite"><mpath href="#p1"/></animateMotion></circle>
+    <circle class="flowdot" r="3.5"><animateMotion dur="2.2s" begin="0.4s" repeatCount="indefinite"><mpath href="#p2"/></animateMotion></circle>
+    <circle class="flowdot" r="3.5"><animateMotion dur="2.2s" begin="0.9s" repeatCount="indefinite"><mpath href="#p3"/></animateMotion></circle>
+    <circle class="flowdot" r="3.5"><animateMotion dur="2.4s" begin="0.2s" repeatCount="indefinite"><mpath href="#p5"/></animateMotion></circle>
+  </svg>
+  </div>
+</section>
+
+<!-- Q1 -->
+<section>
+  <h2><span class="qtag">Q1</span> Known knowns — the settled ground</h2>
+  <ul>
+    <li><strong>The vision picture</strong> (product-loop-vision.png): Goals → Plan → Build → Verify → Review → Ship → Monitor → Incidents → User Feedback → <em>dashed arrow back to Goals</em>; agents pinned at Monitor (SRE), Incidents (responder), User Feedback (research synthesis).</li>
+    <li><strong>The graph already ingests nearly every loop stage</strong> — ten fetchers: Slack, Jira, GitHub, Confluence, PagerDuty, Datadog, Sentry, GWS, WegoHub, Claude artifacts (<code>internal/graph/fetchers/fetchers.go:127-141</code>). The gap is consumers, not ingestion.</li>
+    <li><strong>Two memory stores, unlinked</strong>: coding-session memory (<code>public</code> schema: observations/sessions) and graph memory (<code>graph</code> schema) share a DB but no code path joins them.</li>
+    <li><strong>Serving is REST-only</strong> (<code>internal/graph/handlers/router.go:18-58</code>) on port :34567 (<code>internal/config/config.go:343</code>, <code>internal/worker/server.go:296</code>); no MCP exists; <code>mem-search</code> skill curls the API.</li>
+    <li><strong>Proactive push already half-exists</strong>: <code>detect_hot_topics</code> + <code>notify_watch_channels</code> self-rescheduling jobs DM via <code>slackDM</code> (<code>slack_notify.go</code>).</li>
+    <li><strong>Retrieval scoring</strong>: Sem/Rec/Edge/Team/Auth = 0.50/0.15/0.15/0.15/0.05 (<code>internal/graph/scoring/combine.go:32-39</code>); people graph with BambooHR org-depth.</li>
+    <li><strong>Constraints</strong>: ACL built-but-unexercised with a critical <code>/node</code>+<code>/neighbors</code> bypass (<code>docs/reviews/graph-memory-review.md</code>); single binary on one VPS; effectively single-user (EnzoBot DMs you).</li>
+  </ul>
+</section>
+
+<!-- Q2 -->
+<section>
+  <h2><span class="qtag">Q2</span> Known unknowns — the decision ledger</h2>
+  <div class="chips-grid">
+    <div class="dchip"><div class="q">runtime</div><div class="a">In-worker Go job</div>detect_hot_topics pattern, heartbeat lease</div>
+    <div class="dchip"><div class="q">first agent</div><div class="a">User-research synthesis</div>incidents/monitor stay with pay-ops-*</div>
+    <div class="dchip"><div class="q">write-back</div><div class="a">Yes — agent_report node</div>edges to evidence, embedded</div>
+    <div class="dchip"><div class="q">audience</div><div class="a">DM to Enzo</div>team-addable copywriting</div>
+    <div class="dchip"><div class="q">trigger</div><div class="a">Self-rescheduling job queue</div>no cron anywhere</div>
+    <div class="dchip"><div class="q">whose loop</div><div class="a">Wego payments team</div>all sources already point there</div>
+    <div class="dchip"><div class="q">corpus</div><div class="a">Partners ∪ internal list</div>one settings key, no new source</div>
+    <div class="dchip"><div class="q">cadence</div><div class="a">Weekly, Monday 09:00 SGT</div>working default — confirm hour</div>
+    <div class="dchip"><div class="q">freshness (L1)</div><div class="a">Incremental sync, 6h</div>derived per-channel watermark</div>
+    <div class="dchip"><div class="q">scope (L2)</div><div class="a">public</div>revisit if a restricted channel joins</div>
+  </div>
+  <details class="fold"><summary>Full ledger with who-closed-what</summary>
+  <div class="tablewrap"><table>
+    <tr><th>#</th><th>Question</th><th>Answer</th><th>Closed by</th></tr>
+    <tr><td>1</td><td>Agent runtime</td><td>In-worker Go job, <code>detect_hot_topics</code> pattern — <em>but registered like</em> <code>refresh_topic_scope</code> (see L3)</td><td><span class="pill user">user</span></td></tr>
+    <tr><td>2</td><td>First agent</td><td>User-research synthesis. Incidents/Monitor excluded — <code>pay-ops-*</code> skills own them</td><td><span class="pill user">user</span></td></tr>
+    <tr><td>3</td><td>Write-back</td><td>Yes: new <code>agent_report</code> node type, REFERENCES edges to evidence, embedded</td><td><span class="pill user">user</span></td></tr>
+    <tr><td>4</td><td>Audience</td><td>DM to Enzo via existing <code>slackDM</code>; designed team-addable</td><td><span class="pill user">user</span></td></tr>
+    <tr><td>5</td><td>Trigger model</td><td>Self-rescheduling Postgres job queue; no cron</td><td><span class="pill terr">territory</span></td></tr>
+    <tr><td>6</td><td>Whose loop</td><td>Wego payments team (all configured sources point there)</td><td><span class="pill terr">territory</span></td></tr>
+    <tr><td>7</td><td>Feedback corpus</td><td>"Partners" channel group + payments internal channels; no new source in v1</td><td><span class="pill user">user (accepted)</span></td></tr>
+    <tr><td>8</td><td>Cadence</td><td>Weekly, Monday morning</td><td><span class="pill user">user (accepted)</span></td></tr>
+    <tr><td>9</td><td>Data freshness (L1)</td><td>New incremental sync job: pages <code>conversations.history</code> per corpus channel, checkpointed by a persisted per-channel <em>watermark</em> (last-seen message ts) — Slack's <code>next_cursor</code> is short-lived, used only within one pass</td><td><span class="pill user">user</span></td></tr>
+    <tr><td>10</td><td>Report scope (L2)</td><td><code>scope='public'</code> — internal-public, like wegohub nodes. Revisit if a restricted channel ever joins the corpus</td><td><span class="pill user">user</span></td></tr>
+  </table></div>
+  </details>
+  <p class="note">No OPEN design decisions remain in the ledger. Implementation-time choices (LLM model, week boundary/send hour) are listed under Q4 "small facts to confirm" — they tune the build, they don't gate the design.</p>
+</section>
+
+<!-- Q3 -->
+<section>
+  <h2><span class="qtag">Q3</span> Unknown knowns — what got extracted</h2>
+  <ul>
+    <li><strong>Fill gaps, don't duplicate skills.</strong> The correction that reshaped the walk: graph-memory must not compete with working <code>pay-ops-*</code> incident tooling. It reshaped agent choice from incident responder → research synthesis.</li>
+    <li><strong>Format taste</strong> (from the four-directions mock): <em>Theme digest</em> backbone + <em>narrative memo's</em> 🎯 goal-candidate line. Skipped: partner scoreboard (mood pills = weekly LLM judgments that drift), action queue as a format. Kept elements: trend arrows ▲●━▼, evidence links to root threads, similarity callbacks to past clusters, <strong>silence when nothing changed</strong>.</li>
+    <li><strong>"User" means partners first, travelers later</strong> — a future support/CS-feedback fetcher is on the horizon, not in v1.</li>
+    <li><strong>Agency: report-only v1.</strong> No Jira filing, no interactive buttons. You act on it.</li>
+    <li><strong>Done in 3 months =</strong> "I still open it every Monday and it changes what I do that week." Bar is personal utility, not team adoption — calibrates how much to invest in clustering quality.</li>
+    <li><strong>Audience now, team later</strong> — write copy so a forwarded digest stands alone (no "you"-only context).</li>
+  </ul>
+</section>
+
+<!-- Q4 -->
+<section>
+  <h2><span class="qtag">Q4</span> Unknown unknowns — the landmine cards</h2>
+  <p class="note">Sweep covered: job machinery (<code>worker/dispatcher/janitor/heartbeat/backoff.go</code>), the three recurring jobs, <code>slack_notify</code>, ingest → extract → embed pipeline, ACL/scope, search/BFS/cluster queries, dashboard type maps. <strong>All 15 are pinned on the flow diagram above</strong> — this table is the evidence.</p>
+  <details class="fold"><summary>Full landmine table — evidence file:line + fixes</summary>
+  <div class="tablewrap"><table>
+    <tr><th>#</th><th>Status</th><th>Landmine</th><th>Evidence</th><th>Fix on the plan</th></tr>
+    <tr><td>L1</td><td><span class="pill dec">decided</span></td><td>No periodic Slack message sync — corpus stale by design</td><td><code>server.go:152-161</code>, <code>router.go:25</code></td><td>Incremental sync job w/ per-channel last-seen-ts watermark</td></tr>
+    <tr><td>L2</td><td><span class="pill dec">decided</span></td><td>Scope leak-or-hide: NULL/public = everyone; bare scope = no one</td><td><code>acl_guard.go:41-49</code>, commit <code>1960ce4</code></td><td><code>scope='public'</code></td></tr>
+    <tr><td>L3</td><td><span class="pill crit">critical edge</span></td><td>Copying <code>detect_hot_topics</code> entry = hard 120s deadline; janitor reclaim → double-run</td><td><code>handlers.go:71-80</code>, <code>worker.go:53-58</code>, <code>janitor.go:60-86</code></td><td>Register <code>Heartbeat:true</code>, lease ≥3× worst LLM time (like <code>refresh_topic_scope</code>)</td></tr>
+    <tr><td>L4</td><td><span class="pill crit">critical edge</span></td><td>Returning an error doubles the recurring chain forever (retry + deferred reschedule)</td><td><code>worker.go:69-96</code>, <code>backoff.go:57-77</code></td><td>Swallow per-item errors; never bare-error the reschedule path</td></tr>
+    <tr><td>L5</td><td><span class="pill edge">edge</span></td><td>Aggregate DM has no natural dedup key — re-runs re-send the digest</td><td><code>detect_hot_topics.go:132-153</code> (per-item pattern)</td><td>ISO-week claim row before send; rollback on DM failure</td></tr>
+    <tr><td>L6</td><td><span class="pill edge">edge</span></td><td>"Partners" group matches only <code>ext-wego-</code> prefix; <code>partner-saudi-rail</code> silently lands in <code>other</code></td><td><code>channels.go:19-42</code>, <code>notify_watch_channels.go:42-61</code></td><td>Audit match list + overrides at build time</td></tr>
+    <tr><td>L7</td><td><span class="pill edge">edge</span></td><td>The DM path never chunks — <code>slackDM</code> forwards full text into <code>chat.postMessage</code>; long digest → <code>msg_too_long</code> → rollback → retry loop</td><td><code>slack_notify.go:17-25</code> + <code>:48-54</code></td><td>Chunk before sending</td></tr>
+    <tr><td>L8</td><td><span class="pill edge">edge</span></td><td>Bot messages with a <code>user</code> field pass ingest; no corpus query filters <code>is_bot</code></td><td><code>backfill_slack.go:58-64</code></td><td><code>LEFT JOIN people</code> + <code>COALESCE(is_bot,false)=false</code> — inner join would drop unresolved human authors (<code>author_person_id</code> can be NULL, <code>backfill_slack.go:206-217</code>)</td></tr>
+    <tr><td>L9</td><td><span class="pill edge">edge</span></td><td><code>thread_summaries</code> sparse (boot backfill, <code>count>=2</code>, LIMIT 1000)</td><td><code>summarize_thread.go:237-272</code></td><td>Read raw <code>graph.nodes</code> bodies</td></tr>
+    <tr><td>L10</td><td><span class="pill crit">critical edge</span></td><td>Echo loop: embedded report becomes evidence for next week's report; <code>/search</code> has no type exclusion</td><td><code>search.go:112-159</code></td><td><code>type &lt;&gt; 'agent_report'</code> in evidence queries. Exception: <em>deliberately</em> read last week's report for theme continuity — state, not evidence</td></tr>
+    <tr><td>L11</td><td><span class="pill dec">decided</span></td><td>Report enters cluster summaries as "Linked resources" LLM context</td><td><code>cluster_summary.go:193-197,377-383</code></td><td><strong>Exclude</strong> <code>type='agent_report'</code> from cluster-summary collection — machine narrative never feeds human summaries (consistent with L10)</td></tr>
+    <tr><td>L12</td><td><span class="pill edge">edge</span></td><td>Direct DB insert never gets embedded; ingest path needs a fetcher <code>agent_report</code> lacks</td><td><code>fetch_body.go:50-53</code></td><td>Direct insert + explicit <code>index_artifact{force:true}</code> enqueue</td></tr>
+    <tr><td>L13</td><td><span class="pill edge">edge</span></td><td>New node type = multi-site edit or gray-dot rendering</td><td><code>ids.go:178-193</code>, <code>ClusterGraph.tsx:6-33</code>, <code>Graph.tsx:51-60</code></td><td>Follow <code>jira_attachment</code> precedent (<code>61c5f6f</code>)</td></tr>
+    <tr><td>L14</td><td><span class="pill edge">edge</span></td><td>NULL author renders as literal "someone" in summaries</td><td><code>cluster_summary.go:392-403</code></td><td>One <code>is_bot=true</code> EnzoBot person as <code>author_person_id</code></td></tr>
+    <tr><td>L15</td><td><span class="pill edge">edge</span></td><td>Boot enqueue without an <code>EXISTS</code> guard stacks a chain per restart</td><td><code>server.go:149-187</code></td><td>Copy the guard block</td></tr>
+  </table></div>
+  </details>
+
+  <h3>Small facts to confirm before coding</h3>
+  <ul>
+    <li>Enumerate the actual partner channels vs the <code>ext-wego-</code> match list; write the override entries (L6).</li>
+    <li>Which LLM for synthesis — <strong>working default in the kickoff prompt:</strong> <code>claude-sonnet-5</code> if configured, else Gemini (already wired for graph summaries — default model <code>config.go:350</code>, wiring <code>internal/worker/server.go:97-126</code>). Confirm per cost/quality before shipping.</li>
+    <li>Week boundary + send hour — <strong>working default in the kickoff prompt:</strong> Monday morning SGT. Confirm the exact hour.</li>
+    <li>Never route <code>agent_report</code> through <code>fetch_body</code> — no fetcher (fatal) and <code>refreshThreadsForResourceLink</code> would force N thread re-summaries weekly (<code>fetch_body.go:281-309</code>).</li>
+  </ul>
+</section>
+
+<!-- build plan -->
+<section>
+  <h2>Tweakable build plan <span class="note" style="font-weight:400">— sorted by likelihood you'll tweak it, not execution order</span></h2>
+
+  <h3>Judgment calls (tweak here)</h3>
+  <ul>
+    <li><strong>Theme continuity across weeks</strong> — trend arrows need last week's themes. Plan: read <em>only the immediately-previous</em> <code>agent_report</code> node as prior state (theme key = embedding centroid match ≥ 0.75, else "new"). <span class="note">Alt: LLM matches theme titles; simpler, drifts more.</span></li>
+    <li><strong>Corpus window & set</strong> — 7-day window over the synthesis set: "partners" continent group + payments internal channels (explicit id list in one settings key, read by both the sync job and the corpus query so they can't diverge); raw node bodies, bot-filtered, threads grouped. <span class="note">Alt: 14-day sliding window for slow-burn themes.</span></li>
+    <li><strong>Digest composition</strong> — theme digest (A) + one 🎯 goal-candidate line (B); silence-when-quiet = skip DM entirely, but still write the report node. <span class="note">Alt: always DM a one-liner even when quiet.</span></li>
+    <li><strong>Sync cadence</strong> — incremental sync of the full synthesis set (both corpus halves) every 6h. <span class="note">Alt: daily; or a pre-synthesis sync burst Sunday night.</span></li>
+  </ul>
+
+  <h3>Mechanical (trust-you-on-this)</h3>
+  <details><summary>15 items — every landmine as a build requirement</summary>
+    <ul class="two">
+      <li><code>scope='public'</code> on the report node (L2)</li>
+      <li>Partners match-list audit + overrides (L6)</li>
+      <li>Exclude <code>agent_report</code> from cluster-summary collection (L11)</li>
+      <li>Job entry: <code>Heartbeat:true</code>, lease 900s (L3)</li>
+      <li>Swallow per-item errors; nil-return reschedule path (L4)</li>
+      <li><code>graph.synthesis_runs</code> ISO-week claim table (L5)</li>
+      <li>Boot <code>EXISTS</code> guard in <code>server.go</code> (L15)</li>
+      <li>Chunked DM helper over <code>slackDM</code> (L7)</li>
+      <li>Bot filter: <code>LEFT JOIN people</code> + <code>COALESCE(is_bot,false)=false</code> (L8)</li>
+      <li>Raw bodies, not <code>thread_summaries</code> (L9)</li>
+      <li><code>type &lt;&gt; 'agent_report'</code> in evidence queries (L10)</li>
+      <li>Direct insert + <code>index_artifact{force:true}</code> (L12)</li>
+      <li>Register type in <code>ids.go</code> + dashboard maps (L13)</li>
+      <li>EnzoBot <code>is_bot</code> person + <code>author_person_id</code> (L14)</li>
+      <li>Incremental sync job + per-channel last-seen-ts watermark (L1)</li>
+    </ul>
+  </details>
+
+  <h3>Later horizons (from the walk, explicitly deferred)</h3>
+  <ul class="note">
+    <li>Traveler/support feedback fetcher → widens "user" beyond partners.</li>
+    <li>Plan-stage context packs; session↔graph store linking; read-only MCP.</li>
+    <li>Interactive Jira drafts (needs Slack buttons + callback endpoint).</li>
+    <li>Team-visible delivery → revisit scope + fix the ACL <code>/node</code> bypass first.</li>
+  </ul>
+</section>
+
+<!-- prompt -->
+<section>
+  <h2>Kick off the build — copyable prompt</h2>
+  <pre class="prompt" id="impl" tabindex="0">Implement the user-research synthesis agent in agent-mem, from the quadrant-walk map.
+
+Feature: weekly in-worker job `synthesize_user_feedback` + supporting job `sync_synthesis_channels`.
+
+Terminology: the "synthesis set" = the "partners" continent group ∪ the synthesis_internal_channels settings list. (Deliberately NOT called "watched channels" — that term already means the partner-only notifier set, notify_watch_channels.go:15-18.)
+
+Core behavior:
+- sync_synthesis_channels: self-rescheduling every 6h; for EVERY channel in the synthesis set, pages conversations.history forward from a persisted per-channel WATERMARK (last-seen message ts). Slack's next_cursor is a short-lived pagination token — reuse backfill_slack_channel's paging only WITHIN a single sync pass; never persist next_cursor across runs. The durable checkpoint is the watermark. The synthesis_internal_channels settings key is the single source of truth for the internal half — the corpus query reads the same key, so sync and synthesis can never diverge.
+- synthesize_user_feedback: weekly (working default: Mon morning SGT — confirm exact hour); corpus = last 7 days of raw graph.nodes slack bodies in the "partners" continent group + payments internal channels, LEFT JOIN graph.people p ON p.id = n.author_person_id with COALESCE(p.is_bot,false)=false (inner join would drop messages whose author never resolved), excluding type='agent_report'; cluster into themes (embeddings + LLM, claude-sonnet-5 if configured else Gemini); compute trends by matching theme centroids (>=0.75) against ONLY the immediately-previous agent_report node; DM me a theme-digest (trend arrows, thread counts, evidence permalinks) ending with one 🎯 goal-candidate line; if no changes, write the node but send no DM.
+- Write-back: direct insert node id agent_report:&lt;iso-week&gt;, scope='public', author_person_id = new is_bot EnzoBot person, REFERENCES edges to evidence threads, then enqueue index_artifact{force:true}. Never route it through fetch_body.
+
+Hard requirements from the landmine sweep (all must hold):
+- Job entry: Heartbeat:true, Lease>=900s (copy refresh_topic_scope, NOT detect_hot_topics).
+- Never return a bare error from the handler after the reschedule defer is set (retry+defer doubles the chain); swallow per-item errors.
+- ISO-week claim row (new table) claimed BEFORE the DM, rolled back if DM fails.
+- Boot-time EXISTS(queued/running) guard in server.go for both new jobs.
+- Chunk DMs under Slack limits before slackDM.
+- Exclude type='agent_report' from cluster_summary's cluster collection (cluster_summary.go BFS members / linked-resources block) so machine narrative never feeds human cluster summaries (L11).
+- Register agent_report in ids.go (const + ParseType) and dashboard maps (ClusterGraph.tsx TYPE_COLOR/LABELLED/LEGEND, Graph.tsx TYPE_COLORS/NODE_TYPES), friendlySource in cluster_summary.go.
+- Before coding: audit the partners continent match list (only ext-wego- today; partner-saudi-rail is missing) and add overrides.
+
+Start by proposing the migration(s) + job registrations, then implement. The full map with evidence lines is the artifact from this session.</pre>
+  <button class="copybtn" id="copy">Copy prompt</button>
+</section>
+</main>
+
+<script>
+  document.getElementById('copy').addEventListener('click', async () => {
+    const t = document.getElementById('impl').textContent;
+    const b = document.getElementById('copy');
+    try {
+      await navigator.clipboard.writeText(t);
+      b.textContent = 'Copied';
+    } catch (e) {
+      b.textContent = 'Copy failed — select the text manually';
+    }
+    setTimeout(() => { b.textContent = 'Copy prompt'; }, 2000);
+  });
+</script>
+</body>
+</html>
