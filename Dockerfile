@@ -40,8 +40,9 @@ RUN apt-get update \
  && mkdir -p /opt/liteparse \
  && cd /opt/liteparse \
  && npm init -y >/dev/null \
+ && NPMARCH=$(case "$(uname -m)" in x86_64) echo x64;; aarch64) echo arm64;; *) uname -m;; esac) \
  && npm install --omit=dev --no-audit --no-fund \
-      @llamaindex/liteparse @llamaindex/liteparse-linux-x64-gnu \
+      @llamaindex/liteparse "@llamaindex/liteparse-linux-${NPMARCH}-gnu" \
  && ln -s /opt/liteparse/node_modules/.bin/lit /usr/local/bin/lit \
  && lit --version
 COPY --from=builder /build/agent-mem /usr/local/bin/agent-mem
