@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   fetchChannels,
   fetchRecentActivity,
@@ -408,15 +408,12 @@ function fmtDateHM(ms: number): string {
   )
 }
 
-function typeDotColor(type: string): string {
-  if (type === 'jira' || type === 'jira_attachment') return C.amber
-  if (type === 'gh_pr') return C.green
-  if (type.startsWith('cf') || type.startsWith('gws') || type === 'wegohub' || type === 'claude_artifact')
-    return '#66aaff'
-  if (type === 'person') return '#cc88ff'
-  return C.text // slack threads + anything else
-}
 
+// Zoomable span timeline: each thread is a bar over its real activity window
+// (first→last message) on packed lanes, so clustered events separate
+// vertically instead of stacking into one dot. Scroll to zoom around the
+// cursor, drag to pan, double-click (or ⟲) to reset — the goal is that any
+// zoom level answers "when did this happen" exactly.
 function NeighborTimeline({
   neighbors,
   numbers,
@@ -426,58 +423,120 @@ function NeighborTimeline({
   numbers: Map<string, number>
   onPick: (nodeId: string) => void
 }) {
-  // Mirror groupNeighbors' thread collapse (same helper): one point per Slack
-  // thread, keeping the strongest edge, dated by its latest message.
-  const threadMax = new Map<string, number>()
-  for (const n of neighbors) {
-    const tt = slackThreadKey(n)
-    if (tt) threadMax.set(tt, Math.max(threadMax.get(tt) ?? 0, n.node.ts_ms ?? 0))
-  }
-  const pts: { n: GraphNeighbor; ts: number }[] = []
+  const wrapRef = useRef<HTMLDivElement | null>(null)
+  const [domain, setDomain] = useState<[number, number] | null>(null)
+  const dragRef = useRef<{ x: number; d0: number; d1: number } | null>(null)
+
+  // Spans per collapsed thread (threads only: one 2022-created Jira ticket
+  // would stretch the axis until every 2026 thread bunches into one column).
+  const rows: { n: GraphNeighbor; start: number; end: number }[] = []
   for (const n of collapseThreads(neighbors)) {
-    // Threads only: one 2022-created Jira ticket would stretch the axis until
-    // every 2026 thread bunches into a single unreadable pixel column.
     if (n.node.type !== 'slack' && n.node.type !== 'slack_thread') continue
-    const tt = slackThreadKey(n)
-    const ts = n.node.last_ts_ms || (tt && threadMax.get(tt)) || n.node.ts_ms || 0
-    if (ts > 0) pts.push({ n, ts })
+    const start = n.node.first_ts_ms || n.node.ts_ms || 0
+    const end = Math.max(n.node.last_ts_ms || 0, start)
+    if (start > 0) rows.push({ n, start, end })
   }
-  if (pts.length < 2) return null
-  pts.sort((a, b) => a.ts - b.ts)
-  const min = pts[0].ts
-  const max = pts[pts.length - 1].ts
-  const span = Math.max(max - min, 1)
+  rows.sort((a, b) => a.start - b.start || a.end - b.end)
 
-  // Scatter layout: x = time, y = similarity. Pixel-space so the strip can
-  // scroll: the inner width grows with point count, and time labels cluster
-  // by pixel distance (< LABEL_W) — every dot group gets a label, including
-  // the right edge.
-  const PAD_X = 12
-  const LABEL_W = 160
-  const CHART_H = 72
-  const PAD_TOP = 10
-  const PAD_BOT = 12
-  const innerW = Math.max(560, pts.length * 170)
-  const xOf = (ts: number) => PAD_X + ((ts - min) / span) * (innerW - 2 * PAD_X)
+  const fullMin = rows.length ? Math.min(...rows.map((r) => r.start)) : 0
+  const fullMax = rows.length ? Math.max(...rows.map((r) => r.end)) : 0
+  const fullSpan = Math.max(fullMax - fullMin, 60_000)
+  const defaultDomain: [number, number] = [fullMin - fullSpan * 0.04, fullMax + fullSpan * 0.04]
 
-  const scores = pts.map((p) => p.n.edge.score ?? 0).filter((s) => s > 0)
-  const smin = scores.length ? Math.min(...scores) : 0
-  const smax = scores.length ? Math.max(...scores) : 0
-  const yOf = (score: number) => {
-    if (score <= 0) return CHART_H - PAD_BOT // unscored (explicit edges) sit on the baseline
-    if (smax === smin) return CHART_H / 2
-    return PAD_TOP + ((smax - score) / (smax - smin)) * (CHART_H - PAD_TOP - PAD_BOT)
-  }
+  // Reset zoom when the opened node (and so the time extent) changes.
+  useEffect(() => {
+    setDomain(null)
+  }, [fullMin, fullMax])
 
-  const clusters: { x: number; ts: number; count: number }[] = []
-  for (const p of pts) {
-    const x = xOf(p.ts)
-    const last = clusters[clusters.length - 1]
-    if (last && x - last.x < LABEL_W) {
-      last.count++
-      continue
+  const [d0, d1] = domain ?? defaultDomain
+  const dSpan = Math.max(d1 - d0, 1)
+
+  const zoomAt = useCallback(
+    (frac: number, factor: number) => {
+      setDomain((prev) => {
+        const cur = prev ?? defaultDomain // default destructuring misses null
+        const center = cur[0] + (cur[1] - cur[0]) * frac
+        let n0 = center - (center - cur[0]) * factor
+        let n1 = center + (cur[1] - center) * factor
+        const MIN_SPAN = 5 * 60 * 1000
+        if (n1 - n0 < MIN_SPAN) {
+          const mid = (n0 + n1) / 2
+          n0 = mid - MIN_SPAN / 2
+          n1 = mid + MIN_SPAN / 2
+        }
+        // Never wander further than one full span outside the data.
+        n0 = Math.max(n0, fullMin - fullSpan)
+        n1 = Math.min(n1, fullMax + fullSpan)
+        return [n0, n1]
+      })
+    },
+    [defaultDomain, fullMin, fullMax, fullSpan],
+  )
+
+  // Native non-passive wheel listener: React's onWheel can't preventDefault,
+  // and without it the page scrolls instead of the chart zooming.
+  useEffect(() => {
+    const el = wrapRef.current
+    if (!el) return
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault()
+      const rect = el.getBoundingClientRect()
+      const frac = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width))
+      zoomAt(frac, e.deltaY > 0 ? 1.25 : 0.8)
     }
-    clusters.push({ x, ts: p.ts, count: 1 })
+    el.addEventListener('wheel', onWheel, { passive: false })
+    return () => el.removeEventListener('wheel', onWheel)
+  }, [zoomAt])
+
+  if (rows.length < 2) return null
+
+  // Greedy lane packing: overlapping spans stack, sequential ones share a lane.
+  const laneGap = fullSpan * 0.01
+  const laneEnds: number[] = []
+  const laneOf = rows.map((r) => {
+    let li = laneEnds.findIndex((e) => e + laneGap <= r.start)
+    if (li === -1) {
+      li = laneEnds.length
+      laneEnds.push(r.end)
+    } else {
+      laneEnds[li] = r.end
+    }
+    return li
+  })
+  const LANE_H = 17
+  const chartH = laneEnds.length * LANE_H + 4
+
+  const xPct = (ts: number) => ((ts - d0) / dSpan) * 100
+
+  // Adaptive ticks: pick the smallest step giving ≤ 8 labels, format by scale.
+  const H = 3600_000
+  const D = 24 * H
+  const steps = [H, 3 * H, 6 * H, 12 * H, D, 2 * D, 7 * D, 14 * D, 30 * D, 90 * D, 365 * D]
+  const step = steps.find((s) => dSpan / s <= 8) ?? 365 * D
+  const ticks: number[] = []
+  for (let t = Math.ceil(d0 / step) * step; t <= d1; t += step) ticks.push(t)
+  const fmtTick = (ms: number) => {
+    const d = new Date(ms)
+    if (step < D)
+      return (
+        d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) +
+        ' ' +
+        d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })
+      )
+    if (step < 90 * D) return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+    return d.toLocaleDateString('en-US', { month: 'short', year: 'numeric' })
+  }
+
+  const barColor = (n: GraphNeighbor) => {
+    if (numbers.get(n.node.node_id) === 0) return C.green
+    switch (n.edge.kind.toUpperCase()) {
+      case 'SAME_TOPIC':
+        return 'rgba(68,255,136,0.55)'
+      case 'REFERS_TO':
+        return '#66aaff'
+      default:
+        return 'rgba(255,255,255,0.35)'
+    }
   }
 
   return (
@@ -494,101 +553,118 @@ function NeighborTimeline({
         }}
       >
         <span>Timeline</span>
-        <span style={{ opacity: 0.7 }}>· {pts.length}</span>
-      </div>
-      <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
-        {/* y-axis: similarity, outside the scroll so it stays visible */}
-        {smax > 0 && (
-          <div
+        <span style={{ opacity: 0.7 }}>· {rows.length}</span>
+        <span style={{ opacity: 0.55, textTransform: 'none', letterSpacing: 0 }}>
+          scroll to zoom · drag to pan · double-click to reset
+        </span>
+        <span style={{ flex: 1 }} />
+        {(
+          [
+            ['−', () => zoomAt(0.5, 1.6)],
+            ['+', () => zoomAt(0.5, 0.625)],
+            ['⟲', () => setDomain(null)],
+          ] as const
+        ).map(([t, fn]) => (
+          <button
+            key={t}
+            onClick={fn}
             style={{
-              display: 'flex',
-              flexDirection: 'column',
-              justifyContent: 'space-between',
-              height: CHART_H,
-              flexShrink: 0,
+              background: 'transparent',
+              border: `1px solid ${C.border}`,
+              borderRadius: 3,
               color: C.dim,
-              fontSize: 8,
-              textAlign: 'right',
-              width: 26,
+              cursor: 'pointer',
+              fontFamily: MONO,
+              fontSize: 10,
+              lineHeight: '14px',
+              padding: '0 6px',
             }}
           >
-            <span>{Math.round(smax * 100)}%</span>
-            <span>{smax === smin ? '' : `${Math.round(smin * 100)}%`}</span>
+            {t}
+          </button>
+        ))}
+      </div>
+      <div
+        ref={wrapRef}
+        onDoubleClick={() => setDomain(null)}
+        onPointerDown={(e) => {
+          dragRef.current = { x: e.clientX, d0, d1 }
+          ;(e.currentTarget as HTMLDivElement).setPointerCapture(e.pointerId)
+        }}
+        onPointerMove={(e) => {
+          const drag = dragRef.current
+          const el = wrapRef.current
+          if (!drag || !el) return
+          const dt = ((drag.x - e.clientX) / el.clientWidth) * (drag.d1 - drag.d0)
+          setDomain([drag.d0 + dt, drag.d1 + dt])
+        }}
+        onPointerUp={() => {
+          dragRef.current = null
+        }}
+        style={{
+          position: 'relative',
+          height: chartH + 16,
+          marginTop: 6,
+          overflow: 'hidden',
+          cursor: 'grab',
+          touchAction: 'none',
+          userSelect: 'none',
+        }}
+      >
+        {/* tick grid + labels */}
+        {ticks.map((t) => (
+          <div key={t} style={{ position: 'absolute', left: `${xPct(t)}%`, top: 0, bottom: 0 }}>
+            <div style={{ position: 'absolute', top: 0, bottom: 14, width: 1, background: C.border, opacity: 0.6 }} />
+            <span
+              style={{
+                position: 'absolute',
+                bottom: 0,
+                transform: 'translateX(-50%)',
+                color: C.dim,
+                fontSize: 8,
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {fmtTick(t)}
+            </span>
           </div>
-        )}
-        <div style={{ overflowX: 'auto', flex: 1, paddingBottom: 2 }}>
-          <div style={{ width: innerW }}>
-            <div style={{ position: 'relative', height: CHART_H }}>
-              <div
-                style={{
-                  position: 'absolute',
-                  left: 0,
-                  right: 0,
-                  top: CHART_H - PAD_BOT,
-                  height: 1,
-                  background: C.border,
-                }}
-              />
-              {pts.map(({ n, ts }) => {
-                const label = n.node.title || n.node.node_id.replace(/^[a-z_]+:/, '')
-                const score = n.edge.score ?? 0
-                const no = numbers.get(n.node.node_id)
-                const confidence =
-                  n.edge.kind.toUpperCase() === 'SAME_TOPIC' && n.edge.confidence
-                    ? ` · ${Math.round(n.edge.confidence * 100)}% confidence`
-                    : ''
-                return (
-                  <button
-                    key={n.node.node_id}
-                    onClick={() => onPick(n.node.node_id)}
-                    title={`${fmtDateHM(ts)}${confidence} — ${label}`}
-                    style={{
-                      position: 'absolute',
-                      left: xOf(ts) - 6.5,
-                      top: yOf(score) - 6.5,
-                      width: 13,
-                      height: 13,
-                      padding: 0,
-                      borderRadius: '50%',
-                      border: 'none',
-                      background: typeDotColor(n.node.type),
-                      opacity: 0.9,
-                      cursor: 'pointer',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      fontSize: 8,
-                      fontWeight: 600,
-                      color: '#0a0a0a',
-                    }}
-                  >
-                    {no ?? ''}
-                  </button>
-                )
-              })}
+        ))}
+        {/* thread bars */}
+        {rows.map((r, i) => {
+          const no = numbers.get(r.n.node.node_id)
+          const label = r.n.node.title || r.n.node.node_id
+          const leftPct = xPct(r.start)
+          const wPct = Math.max(xPct(r.end) - leftPct, 0)
+          if (leftPct > 100 || xPct(r.end) < 0) return null
+          return (
+            <div
+              key={r.n.node.node_id}
+              role="button"
+              onClick={() => onPick(r.n.node.node_id)}
+              title={`#${no ?? ''} · ${fmtDateHM(r.start)} → ${fmtDateHM(r.end)} — ${label}`}
+              style={{
+                position: 'absolute',
+                top: laneOf[i] * LANE_H + 2,
+                left: `${leftPct}%`,
+                width: `max(${wPct}%, 10px)`,
+                height: LANE_H - 4,
+                background: barColor(r.n),
+                borderRadius: 3,
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                paddingLeft: 3,
+                fontSize: 8,
+                fontWeight: 600,
+                color: '#0a0a0a',
+                overflow: 'hidden',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {no ?? ''}
             </div>
-            <div style={{ position: 'relative', height: 12, marginTop: 2 }}>
-              {clusters.map((c) => (
-                <span
-                  key={c.ts}
-                  style={{
-                    position: 'absolute',
-                    left: c.x,
-                    transform:
-                      c.x < 70 ? 'none' : c.x > innerW - 70 ? 'translateX(-100%)' : 'translateX(-50%)',
-                    color: C.dim,
-                    fontSize: 8,
-                    letterSpacing: '0.04em',
-                    whiteSpace: 'nowrap',
-                  }}
-                >
-                  {fmtDateHM(c.ts)}
-                  {c.count > 1 ? ` ·${c.count}` : ''}
-                </span>
-              ))}
-            </div>
-          </div>
-        </div>
+          )
+        })}
       </div>
     </div>
   )
