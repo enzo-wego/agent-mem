@@ -106,7 +106,7 @@ ORDER BY COALESCE(to_timestamp(NULLIF(n.metadata->>'ts','')::float8), n.first_se
 		// Slack author is empty (bot notifications), so summaries name the real actor
 		// instead of "someone". Bump to regenerate rows cached with anonymous authors.
 		// Keep this prefix in sync with channels.go.
-		sig := fmt.Sprintf("v6:%d:%d", count, maxUpdated) // v6: adds kind classification; keep prefix in sync with channels.go
+		sig := fmt.Sprintf("v7:%d:%d", count, maxUpdated) // v7: confirmations are substantive, not chatter; keep prefix in sync with channels.go
 		// Skip if the cached summary already matches the current signature.
 		var existingSig string
 		_ = deps.DB.QueryRow(ctx,
@@ -220,8 +220,11 @@ Summarize it so a teammate understands it quickly and deeply. Respond as JSON:
  "kind":"substantive|chatter"}
 
 kind is "chatter" ONLY for threads with no work content at all: leave/on-call/
-absence notices, greetings, thanks, acknowledgements, "FYI" pings with nothing
-to act on. Anything discussing work — a question, bug, task, decision, doc —
+absence notices, greetings, thanks, and social acknowledgements that carry no
+information. A confirmation that validates work state IS work content and is
+"substantive" ("yes, that's correct", "confirmed, the fix is deployed", an
+approval of a proposal) — losing it would lose the fact that something was
+confirmed. Anything discussing work — a question, bug, task, decision, doc —
 is "substantive", however short.
 
 STRICT GROUNDING — follow exactly:
