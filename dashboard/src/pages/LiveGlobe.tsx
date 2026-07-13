@@ -860,6 +860,17 @@ export function LiveGlobePage() {
   const [searchResults, setSearchResults] = useState<GraphNode[] | null>(null)
   const [searchLoading, setSearchLoading] = useState(false)
 
+  // Live search: fire after a typing pause, not only on Enter — an empty box
+  // clears the panel.
+  useEffect(() => {
+    const t = setTimeout(() => {
+      if (searchQ.trim()) runSearch(searchQ)
+      else setSearchResults(null)
+    }, 450)
+    return () => clearTimeout(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchQ])
+
   function runSearch(q: string) {
     const term = q.trim()
     if (!term) {
@@ -1837,8 +1848,8 @@ export function LiveGlobePage() {
             ...panel,
             position: 'absolute',
             top: 48,
-            left: 14,
-            width: 360,
+            right: 14,
+            width: 380,
             maxWidth: 'calc(100vw - 28px)',
             maxHeight: 'calc(100vh - 140px)',
             borderRadius: 3,
@@ -1866,7 +1877,13 @@ export function LiveGlobePage() {
               <div style={{ color: C.dim, fontSize: 11 }}>no matches</div>
             )}
             {searchResults.map((n) => {
-              const label = n.title || n.summary || n.id
+              // Slack rows: the artifact summary's first line is the thread's
+              // TOPIC label; the raw node title is just the first message text
+              // and reads as noise in a result list.
+              const label =
+                (n.type === 'slack' || n.type === 'slack_thread') && n.summary
+                  ? n.summary.split('\n')[0]
+                  : n.title || n.summary || n.id
               const when = n.created_at
                 ? new Date(n.created_at).toLocaleString(undefined, {
                     month: 'short',
