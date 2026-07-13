@@ -313,6 +313,29 @@ FROM graph.nodes WHERE id = ANY($1) AND scope LIKE 'slack:%'`, slackIDs); terr =
 			trows.Close()
 		}
 	}
+	// A structurally-reachable thread the rules judge REFUSED against the
+	// opened thread must not ground the summary — its content is, verified,
+	// a different topic (the "why is crypto in my pxx6xgkdtl summary" bug).
+	// Unjudged threads stay: the popup queues their verdicts, and the excluded
+	// count below is part of the cache signature so a new refusal regenerates.
+	excludedRefused := 0
+	for tk := range threads {
+		rootID := "slack:" + tk.channel + ":" + tk.ts
+		if rootID == id {
+			continue
+		}
+		from, to := id, rootID
+		if to < from {
+			from, to = to, from
+		}
+		var same bool
+		if err := h.db.QueryRow(ctx, `
+SELECT same_topic FROM graph.topic_link_judgments
+WHERE source_node_id=$1 AND target_node_id=$2`, from, to).Scan(&same); err == nil && !same {
+			delete(threads, tk)
+			excludedRefused++
+		}
+	}
 	for tk := range threads {
 		trows, terr := h.db.Query(ctx, `
 SELECT n.id, COALESCE(n.body,''), COALESCE(NULLIF(n.metadata->'author'->>'display_name',''), p.display_name, ''),
@@ -414,7 +437,10 @@ WHERE n.id = ANY($1) AND n.deleted_at IS NULL AND COALESCE(n.body,'') <> ''`, sl
 	// summaries that were cached with anonymous "Someone (leadership)" authors.
 	// v9: transcript lines now carry [T#]/[R#] source markers and the LLM must
 	// cite them per sentence. Bump so cached un-cited summaries regenerate.
-	sig := fmt.Sprintf("v9:%d:%d:%d:%d", total, maxUpdated, len(slackMsgs), lastMs)
+	// v10: refused threads are excluded from the transcript and the originator
+	// is the OPENED thread's root (not the cluster's oldest message) — both
+	// change what the LLM sees, and a new refusal must regenerate the summary.
+	sig := fmt.Sprintf("v10:%d:%d:%d:%d:%d", total, maxUpdated, len(slackMsgs), lastMs, excludedRefused)
 
 	var cachedSig, cachedOverview string
 	var cachedHl []byte
@@ -449,7 +475,8 @@ WHERE n.id = ANY($1) AND n.deleted_at IS NULL AND COALESCE(n.body,'') <> ''`, sl
 			}
 			b.WriteString("\nSlack discussion (oldest first):\n")
 		}
-		for i, m := range slackMsgs {
+		taggedOriginator := false
+		for _, m := range slackMsgs {
 			text := firstLine(m.body, 280)
 			if text == "" {
 				text = firstLine(m.title, 280)
@@ -470,8 +497,12 @@ WHERE n.id = ANY($1) AND n.deleted_at IS NULL AND COALESCE(n.body,'') <> ''`, sl
 			if named && m.depth >= 0 && m.depth <= 2 {
 				author += " [leadership]"
 			}
-			if i == 0 && rootIsSlack {
+			// The originator is the OPENED thread's first message. Tagging the
+			// cluster's chronologically-first message instead made the summary
+			// open with whatever linked thread happened to be oldest.
+			if rootIsSlack && !taggedOriginator && m.src == id {
 				author += " [originator]"
+				taggedOriginator = true
 			}
 			prefix := ""
 			if mk := srcMarker[m.src]; mk != "" {
@@ -531,7 +562,10 @@ EMPHASIS:
   force a single narrative tying every ticket together, and do NOT open with an unrelated
   ticket just because its message is oldest.
 - If a message is tagged [originator], START the overview with what it raised (who, and
-  the actual problem/request). This is the most important context; never omit it.
+  the actual problem/request). This is the most important context; never omit it. The
+  [originator] belongs to the thread this summary is ABOUT; messages with other source
+  markers are related context — never open the overview with them, and do not claim they
+  are the origin of this topic.
 - Give extra weight to messages tagged [leadership] (senior people); surface their
   asks and decisions explicitly and attribute them by name.
 - An author may be written as "Name (Department)". When you name that person, keep
