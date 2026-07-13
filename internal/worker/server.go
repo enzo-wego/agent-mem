@@ -138,6 +138,7 @@ func NewServer(cfg *config.Config, logBuf *LogBuffer) (*Server, error) {
 		SlackBotToken: cfg.Graph.SlackBotToken,
 		SlackDMUserID: cfg.Graph.SlackDMUserID,
 		Runner:        cfg.Graph.Runner,
+		PublicBaseURL: cfg.PublicBaseURL,
 	}
 
 	rate := rateFromAppConfig(cfg)

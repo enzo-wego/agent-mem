@@ -46,6 +46,9 @@ type Deps struct {
 	SlackBotToken string // bot token used to DM via chat.postMessage
 	SlackDMUserID string // default Slack user id (U…) to DM when a sub omits one
 	Runner        string // target_runner for self-rescheduled jobs ("any"|"vps"|"local")
+	// PublicBaseURL is the public dashboard origin (settings: public_base_url,
+	// e.g. https://enzogo.io.vn) for outward links in DMs. Empty = no link.
+	PublicBaseURL string
 }
 
 // RegisterAll registers all handlers with the given Registry.

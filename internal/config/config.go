@@ -92,6 +92,9 @@ type Config struct {
 
 	SyncEnabled  bool   `json:"sync_enabled"`
 	SyncURL      string `json:"sync_url"`
+	// PublicBaseURL is the public dashboard origin (e.g. https://enzogo.io.vn)
+	// used when composing outward links (alert DMs). Empty = no links emitted.
+	PublicBaseURL string `json:"public_base_url"`
 	SyncInterval string `json:"sync_interval"`
 	APIKey       string `json:"api_key"`
 	MachineID    string `json:"machine_id"`
@@ -131,6 +134,7 @@ func (c *Config) RuntimeSettings() map[string]string {
 		"log_level":              c.LogLevel,
 		"sync_enabled":           strconv.FormatBool(c.SyncEnabled),
 		"sync_url":               c.SyncURL,
+		"public_base_url":        c.PublicBaseURL,
 		"sync_interval":          c.SyncInterval,
 		"api_key":                c.APIKey,
 		"machine_id":             c.MachineID,
@@ -181,6 +185,8 @@ func (c *Config) ApplyDBSettings(dbSettings map[string]string) {
 			c.SyncEnabled = strings.EqualFold(v, "true")
 		case "sync_url":
 			c.SyncURL = v
+		case "public_base_url":
+			c.PublicBaseURL = v
 		case "sync_interval":
 			c.SyncInterval = v
 		case "api_key":
@@ -211,6 +217,7 @@ func (c *Config) snapshot() ConfigSnapshot {
 		IgnoredProjects:      c.IgnoredProjects,
 		SyncEnabled:          c.SyncEnabled,
 		SyncURL:              c.SyncURL,
+		PublicBaseURL:        c.PublicBaseURL,
 		SyncInterval:         c.SyncInterval,
 		APIKey:               c.APIKey,
 		MachineID:            c.MachineID,
@@ -237,6 +244,7 @@ type ConfigSnapshot struct {
 	IgnoredProjects      string `json:"ignored_projects"`
 	SyncEnabled          bool   `json:"sync_enabled"`
 	SyncURL              string `json:"sync_url"`
+	PublicBaseURL        string `json:"public_base_url"`
 	SyncInterval         string `json:"sync_interval"`
 	APIKey               string `json:"api_key"`
 	MachineID            string `json:"machine_id"`
@@ -313,6 +321,10 @@ func (c *Config) Update(partial map[string]any) (geminiChanged bool) {
 		case "sync_url":
 			if s, ok := v.(string); ok {
 				c.SyncURL = s
+			}
+		case "public_base_url":
+			if s, ok := v.(string); ok {
+				c.PublicBaseURL = s
 			}
 		case "sync_interval":
 			if s, ok := v.(string); ok {
@@ -464,6 +476,9 @@ func ApplyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("AGENT_MEM_SYNC_URL"); v != "" {
 		cfg.SyncURL = v
+	}
+	if v := os.Getenv("AGENT_MEM_PUBLIC_BASE_URL"); v != "" {
+		cfg.PublicBaseURL = v
 	}
 	if v := os.Getenv("AGENT_MEM_SYNC_INTERVAL"); v != "" {
 		cfg.SyncInterval = v

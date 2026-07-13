@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -504,6 +505,9 @@ ORDER BY COALESCE(to_timestamp(NULLIF(n.metadata->>'ts','')::float8), n.first_se
 	fmt.Fprintf(&b, "\n_Flagged because %s._\n", whyFlagged(h))
 	if link := slackPermalink(h.RootNodeID); link != "" {
 		b.WriteString(link)
+	}
+	if base := strings.TrimSuffix(deps.PublicBaseURL, "/"); base != "" {
+		fmt.Fprintf(&b, "\n📊 <%s/live/graph?node=%s|Open graph view>", base, url.QueryEscape(h.RootNodeID))
 	}
 	return b.String()
 }

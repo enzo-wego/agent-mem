@@ -855,6 +855,26 @@ export function LiveGlobePage() {
     }, 1200)
   }
 
+  // Deep link: /live/graph?node=<nodeId> (used by EnzoBot alert DMs) opens that
+  // node's graph popup on load. Title resolves via the graph; falls back to the
+  // raw id so the popup still opens when the resolve fails.
+  useEffect(() => {
+    const nodeParam = new URLSearchParams(window.location.search).get('node')
+    if (!nodeParam) return
+    graphResolve([nodeParam], undefined, 1)
+      .then((r) => {
+        const root = (r.artifacts || []).find((a) => a.hop === 0)
+        openGraphForNode({
+          id: nodeParam,
+          type: root?.type || 'slack',
+          title: root?.title || '',
+          url: root?.url || '',
+        } as GraphNode)
+      })
+      .catch(() => openGraphForNode({ id: nodeParam, type: 'slack', title: '', url: '' } as GraphNode))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   // ── Graph search (ordered by score, then created_at desc — server-side) ───────
   const [searchQ, setSearchQ] = useState('')
   const [searchResults, setSearchResults] = useState<GraphNode[] | null>(null)
