@@ -278,6 +278,12 @@ type topicView struct {
 	FirstMs      int64    `json:"first_ms"`
 	LastMs       int64    `json:"last_ms"`
 	URL          string   `json:"url"`
+	// Kind from the summarizer: "chatter" (leave notices, greetings, acks) is
+	// hidden by the panel; ""/"substantive" shows.
+	Kind string `json:"kind,omitempty"`
+	// TopicGroup: views whose threads are SAME_TOPIC-linked share a group id,
+	// so the panel can render one card per topic instead of one per thread.
+	TopicGroup string `json:"topic_group,omitempty"`
 }
 
 // firstLine returns the first non-empty line of s, trimmed to n runes.
@@ -423,19 +429,21 @@ LIMIT 3000`, id, days)
 	cachedSig := map[string]string{}         // thread_ts -> signature it was generated for
 	cachedOverview := map[string]string{}    // thread_ts -> deep overview
 	cachedHl := map[string][]string{}        // thread_ts -> highlights
+	cachedKind := map[string]string{}        // thread_ts -> substantive|chatter
 	if len(cacheKeys) > 0 {
 		crows, cerr := h.db.Query(ctx,
-			`SELECT thread_ts, summary, COALESCE(signature,''), COALESCE(overview,''), COALESCE(highlights,'[]'::jsonb)
+			`SELECT thread_ts, summary, COALESCE(signature,''), COALESCE(overview,''), COALESCE(highlights,'[]'::jsonb), COALESCE(kind,'')
 			 FROM graph.thread_summaries WHERE channel_id=$1 AND thread_ts = ANY($2)`,
 			id, cacheKeys)
 		if cerr == nil {
 			for crows.Next() {
-				var tt, sum, sig, overview string
+				var tt, sum, sig, overview, kind string
 				var hlRaw []byte
-				if crows.Scan(&tt, &sum, &sig, &overview, &hlRaw) == nil {
+				if crows.Scan(&tt, &sum, &sig, &overview, &hlRaw, &kind) == nil {
 					cached[tt] = sum
 					cachedSig[tt] = sig
 					cachedOverview[tt] = overview
+					cachedKind[tt] = kind
 					var hl []string
 					if json.Unmarshal(hlRaw, &hl) == nil {
 						cachedHl[tt] = hl
@@ -466,7 +474,7 @@ GROUP BY 1`, id, cacheKeys)
 				var last int64
 				if lrows.Scan(&tt, &cnt, &last) == nil {
 					// Must match summarize_thread's sig format ("v4:" prefix).
-					liveSig[tt] = fmt.Sprintf("v5:%d:%d", cnt, last)
+					liveSig[tt] = fmt.Sprintf("v6:%d:%d", cnt, last)
 				}
 			}
 			lrows.Close()
@@ -482,10 +490,59 @@ GROUP BY 1`, id, cacheKeys)
 		// Deep fields (overview + highlights) are shown when a thread is expanded.
 		views[i].Overview = cachedOverview[v.ThreadTS]
 		views[i].Highlights = cachedHl[v.ThreadTS]
+		views[i].Kind = cachedKind[v.ThreadTS]
 		// Refresh on a miss OR when the cached summary is stale vs the live thread.
 		stale := !ok || s == "" || cachedSig[v.ThreadTS] != liveSig[v.ThreadTS]
 		if stale {
 			enqueueSummarizeThread(ctx, h.db, id, v.ThreadTS, false)
+		}
+	}
+
+	// Topic grouping: threads confirmed SAME_TOPIC collapse into one card (e.g.
+	// a bot-echoed RFC announcement, its epic, and the PRD-shared thread are one
+	// initiative). Union-find over the SAME_TOPIC edges among the visible views;
+	// the group id is the cluster's smallest node id, set only for real groups.
+	if len(views) > 1 {
+		nodeIDs := make([]string, len(views))
+		parent := map[string]string{}
+		var find func(string) string
+		find = func(x string) string {
+			if parent[x] == x {
+				return x
+			}
+			parent[x] = find(parent[x])
+			return parent[x]
+		}
+		for i, v := range views {
+			nodeIDs[i] = v.NodeID
+			parent[v.NodeID] = v.NodeID
+		}
+		erows, eerr := h.db.Query(ctx, `
+SELECT from_node_id, to_node_id FROM graph.edges
+WHERE kind='SAME_TOPIC' AND from_node_id = ANY($1) AND to_node_id = ANY($1)`, nodeIDs)
+		if eerr == nil {
+			for erows.Next() {
+				var a, b string
+				if erows.Scan(&a, &b) == nil {
+					ra, rb := find(a), find(b)
+					if ra != rb {
+						if rb < ra {
+							ra, rb = rb, ra
+						}
+						parent[rb] = ra
+					}
+				}
+			}
+			erows.Close()
+			sizes := map[string]int{}
+			for _, v := range views {
+				sizes[find(v.NodeID)]++
+			}
+			for i, v := range views {
+				if root := find(v.NodeID); sizes[root] > 1 {
+					views[i].TopicGroup = root
+				}
+			}
 		}
 	}
 

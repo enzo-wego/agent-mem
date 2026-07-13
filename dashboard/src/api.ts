@@ -602,6 +602,8 @@ export interface ChannelTopic {
   first_ms: number;
   last_ms: number;
   url: string;
+  kind?: string; // "chatter" (leave notices, greetings) is hidden by the panel
+  topic_group?: string; // shared by SAME_TOPIC-linked threads → one card per topic
 }
 
 // TopicRules is the single source of truth for how the linker decides two

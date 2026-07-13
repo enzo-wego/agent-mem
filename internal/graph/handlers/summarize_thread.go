@@ -106,7 +106,7 @@ ORDER BY COALESCE(to_timestamp(NULLIF(n.metadata->>'ts','')::float8), n.first_se
 		// Slack author is empty (bot notifications), so summaries name the real actor
 		// instead of "someone". Bump to regenerate rows cached with anonymous authors.
 		// Keep this prefix in sync with channels.go.
-		sig := fmt.Sprintf("v5:%d:%d", count, maxUpdated)
+		sig := fmt.Sprintf("v6:%d:%d", count, maxUpdated) // v6: adds kind classification; keep prefix in sync with channels.go
 		// Skip if the cached summary already matches the current signature.
 		var existingSig string
 		_ = deps.DB.QueryRow(ctx,
@@ -122,7 +122,7 @@ ORDER BY COALESCE(to_timestamp(NULLIF(n.metadata->>'ts','')::float8), n.first_se
 		// short body excerpt too so the summary can describe it.
 		resBlock := linkedResourceBlock(ctx, deps, p.ChannelID, p.ThreadTs, !hasDiscussion)
 
-		topic, overview, highlights := genThreadDeepSummary(ctx, deps.Gemini, resBlock+b.String())
+		topic, overview, highlights, kind := genThreadDeepSummary(ctx, deps.Gemini, resBlock+b.String())
 		if topic == "" && overview == "" {
 			return nil // transient LLM failure; leave prior summary, retry later
 		}
@@ -131,12 +131,13 @@ ORDER BY COALESCE(to_timestamp(NULLIF(n.metadata->>'ts','')::float8), n.first_se
 			hlJSON = []byte("[]")
 		}
 		_, err = deps.DB.Exec(ctx,
-			`INSERT INTO graph.thread_summaries(channel_id,thread_ts,signature,summary,overview,highlights,updated_at)
-			 VALUES($1,$2,$3,$4,$5,$6,NOW())
+			`INSERT INTO graph.thread_summaries(channel_id,thread_ts,signature,summary,overview,highlights,kind,updated_at)
+			 VALUES($1,$2,$3,$4,$5,$6,$7,NOW())
 			 ON CONFLICT (channel_id,thread_ts) DO UPDATE SET
 			   signature=excluded.signature, summary=excluded.summary,
-			   overview=excluded.overview, highlights=excluded.highlights, updated_at=NOW()`,
-			p.ChannelID, p.ThreadTs, sig, topic, overview, hlJSON)
+			   overview=excluded.overview, highlights=excluded.highlights,
+			   kind=excluded.kind, updated_at=NOW()`,
+			p.ChannelID, p.ThreadTs, sig, topic, overview, hlJSON, kind)
 		if err == nil {
 			if _, jErr := jobs.Enqueue(ctx, deps.DB, "index_artifact", map[string]any{
 				"node_id": ids.SlackMessage(p.ChannelID, p.ThreadTs),
@@ -200,9 +201,9 @@ ORDER BY 1`, channelID, threadTs)
 }
 
 // genThreadDeepSummary asks the LLM for a one-line topic label PLUS a short
-// overview and chronological highlights for a single Slack thread, so a thread
-// can be understood quickly and deeply. Returns ("","",nil) on error.
-func genThreadDeepSummary(ctx context.Context, g GeminiClient, transcript string) (string, string, []string) {
+// overview, chronological highlights, and a kind classification (substantive
+// vs chatter) for a single Slack thread. Returns ("","",nil,"") on error.
+func genThreadDeepSummary(ctx context.Context, g GeminiClient, transcript string) (string, string, []string, string) {
 	const sys = `You are given one Slack thread (messages oldest first, as "author: text").
 An author may be written as "Name (Department)" — when you name that person, keep
 their department on first mention, e.g. "Hazwan (Flights) reported…". Do not add a
@@ -215,7 +216,13 @@ title and excerpt) instead of saying no context was provided.
 Summarize it so a teammate understands it quickly and deeply. Respond as JSON:
 {"topic":"short factual label, max 10 words, no trailing period",
  "overview":"2-3 sentences: what was raised and the current state/outcome",
- "highlights":["chronological key points / decisions, each one short line, max 6 items"]}
+ "highlights":["chronological key points / decisions, each one short line, max 6 items"],
+ "kind":"substantive|chatter"}
+
+kind is "chatter" ONLY for threads with no work content at all: leave/on-call/
+absence notices, greetings, thanks, acknowledgements, "FYI" pings with nothing
+to act on. Anything discussing work — a question, bug, task, decision, doc —
+is "substantive", however short.
 
 STRICT GROUNDING — follow exactly:
 - Use ONLY facts, names, and ids that literally appear in the thread.
@@ -229,20 +236,25 @@ STRICT GROUNDING — follow exactly:
 No markdown, no quotes around the whole thing.`
 	out, err := g.Generate(ctx, sys, transcript)
 	if err != nil || out == "" {
-		return "", "", nil
+		return "", "", nil, ""
 	}
 	var parsed struct {
 		Topic      string   `json:"topic"`
 		Overview   string   `json:"overview"`
 		Highlights []string `json:"highlights"`
+		Kind       string   `json:"kind"`
 	}
 	if json.Unmarshal([]byte(out), &parsed) != nil {
 		// Non-JSON prose reply (see prose() in cluster_summary.go): keep it as the
 		// overview so the thread still summarizes and caches instead of retrying
 		// forever. Topic label stays empty; callers fall back to the thread's title.
-		return "", prose(out), nil
+		return "", prose(out), nil, ""
 	}
-	return firstLine(parsed.Topic, 90), strings.TrimSpace(parsed.Overview), parsed.Highlights
+	kind := parsed.Kind
+	if kind != "chatter" {
+		kind = "substantive" // anything unexpected defaults to visible
+	}
+	return firstLine(parsed.Topic, 90), strings.TrimSpace(parsed.Overview), parsed.Highlights, kind
 }
 
 // BackfillMissingThreadSummaries enqueues summarize_thread for threads that

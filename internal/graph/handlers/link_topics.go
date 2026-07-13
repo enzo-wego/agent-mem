@@ -46,6 +46,7 @@ type topicLinkNode struct {
 	Summary     string
 	SummaryKind string
 	Department  string
+	Kind        string // thread_summaries.kind: "chatter" never links
 }
 
 type topicLinkCandidate struct {
@@ -172,13 +173,17 @@ func linkTopicsHandler(deps Deps) jobs.Handler {
 func loadTopicLinkSource(ctx context.Context, deps Deps, nodeID string) (topicLinkNode, error) {
 	var n topicLinkNode
 	err := deps.DB.QueryRow(ctx, `
-SELECT n.id, n.type, COALESCE(n.scope,''), COALESCE(ai.summary,''), COALESCE(ai.summary_kind,''), COALESCE(p.department,'')
+SELECT n.id, n.type, COALESCE(n.scope,''), COALESCE(ai.summary,''), COALESCE(ai.summary_kind,''), COALESCE(p.department,''),
+       COALESCE(ts.kind,'')
 FROM graph.nodes n
 JOIN graph.artifact_index ai ON ai.node_id = n.id
 LEFT JOIN graph.people p ON p.id = n.author_person_id
+LEFT JOIN graph.thread_summaries ts
+  ON ts.channel_id = REPLACE(n.scope,'slack:','')
+  AND ts.thread_ts = COALESCE(NULLIF(n.metadata->>'thread_ts',''), split_part(n.id,':',3))
 WHERE n.id=$1 AND n.deleted_at IS NULL`,
 		nodeID,
-	).Scan(&n.NodeID, &n.Type, &n.Scope, &n.Summary, &n.SummaryKind, &n.Department)
+	).Scan(&n.NodeID, &n.Type, &n.Scope, &n.Summary, &n.SummaryKind, &n.Department, &n.Kind)
 	return n, err
 }
 
@@ -197,6 +202,9 @@ const topicLinkMinSummaryChars = 40
 func skipTopicLinkSource(source topicLinkNode) bool {
 	if source.Type == "slack_file" || source.Type == "jira_attachment" {
 		return true
+	}
+	if source.Kind == "chatter" {
+		return true // leave notices, greetings, acks — nothing to topic-link
 	}
 	if len(strings.TrimSpace(source.Summary)) < topicLinkMinSummaryChars {
 		return true
@@ -232,6 +240,11 @@ sims AS (
     AND NOT (n.type IN ('slack','slack_thread') AND ai.summary_kind <> 'thread_summary')
   AND n.type NOT IN ('slack_file','jira_attachment')
   AND length(TRIM(COALESCE(ai.summary,''))) >= 40
+  AND NOT EXISTS (SELECT 1 FROM graph.thread_summaries tsk
+    WHERE n.type IN ('slack','slack_thread')
+      AND tsk.channel_id = REPLACE(n.scope,'slack:','')
+      AND tsk.thread_ts = COALESCE(NULLIF(n.metadata->>'thread_ts',''), split_part(n.id,':',3))
+      AND tsk.kind = 'chatter')
     AND NOT (n.type IN ('slack','slack_thread') AND n.scope LIKE 'slack:D%')
     AND NOT (n.type IN ('slack','slack_thread')
       AND REPLACE(n.scope,'slack:','') = src.ch
@@ -340,6 +353,11 @@ WHERE ai.node_id <> $1
   AND NOT (n.type IN ('slack','slack_thread') AND ai.summary_kind <> 'thread_summary')
   AND n.type NOT IN ('slack_file','jira_attachment')
   AND length(TRIM(COALESCE(ai.summary,''))) >= 40
+  AND NOT EXISTS (SELECT 1 FROM graph.thread_summaries tsk
+    WHERE n.type IN ('slack','slack_thread')
+      AND tsk.channel_id = REPLACE(n.scope,'slack:','')
+      AND tsk.thread_ts = COALESCE(NULLIF(n.metadata->>'thread_ts',''), split_part(n.id,':',3))
+      AND tsk.kind = 'chatter')
   AND NOT (n.type IN ('slack','slack_thread') AND n.scope LIKE 'slack:D%')
   AND NOT (n.type IN ('slack','slack_thread')
     AND REPLACE(n.scope,'slack:','') = src.ch
@@ -395,6 +413,11 @@ WHERE ai.node_id = ANY($2) AND ai.node_id <> $1
   AND NOT (n.type IN ('slack','slack_thread') AND ai.summary_kind <> 'thread_summary')
   AND n.type NOT IN ('slack_file','jira_attachment')
   AND length(TRIM(COALESCE(ai.summary,''))) >= 40
+  AND NOT EXISTS (SELECT 1 FROM graph.thread_summaries tsk
+    WHERE n.type IN ('slack','slack_thread')
+      AND tsk.channel_id = REPLACE(n.scope,'slack:','')
+      AND tsk.thread_ts = COALESCE(NULLIF(n.metadata->>'thread_ts',''), split_part(n.id,':',3))
+      AND tsk.kind = 'chatter')
   AND NOT (n.type IN ('slack','slack_thread') AND n.scope LIKE 'slack:D%')`,
 		nodeID, ids)
 	if err != nil {

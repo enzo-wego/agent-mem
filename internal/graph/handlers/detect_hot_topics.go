@@ -446,7 +446,7 @@ ORDER BY COALESCE(to_timestamp(NULLIF(n.metadata->>'ts','')::float8), n.first_se
 			}
 			tb.WriteString(withDept(a, m.dept) + ": " + firstLine(m.text, 280) + "\n")
 		}
-		_, overview, highlights = genThreadDeepSummary(ctx, deps.Gemini, tb.String())
+		_, overview, highlights, _ = genThreadDeepSummary(ctx, deps.Gemini, tb.String())
 	}
 
 	// Resolve Slack mention codes (<@U…>, <#C…>, <url|text>) to readable names so

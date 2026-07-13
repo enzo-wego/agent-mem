@@ -2295,7 +2295,29 @@ export function LiveGlobePage() {
               <div style={{ color: C.dim, fontSize: 11 }}>no topics in window</div>
             )}
             {!topicsLoading &&
-              topics.map((t) => {
+              (() => {
+                // Chatter (leave notices, greetings, acks) hides; SAME_TOPIC-
+                // linked threads fold into one card under the newest member.
+                const chatterCount = topics.filter((x) => x.kind === 'chatter').length
+                const seenGroup = new Map<string, { t: ChannelTopic; related: ChannelTopic[] }>()
+                const items: { t: ChannelTopic; related: ChannelTopic[] }[] = []
+                for (const x of topics) {
+                  if (x.kind === 'chatter') continue
+                  if (!x.topic_group) {
+                    items.push({ t: x, related: [] })
+                    continue
+                  }
+                  const ex = seenGroup.get(x.topic_group)
+                  if (ex) ex.related.push(x)
+                  else {
+                    const item = { t: x, related: [] as ChannelTopic[] }
+                    seenGroup.set(x.topic_group, item)
+                    items.push(item)
+                  }
+                }
+                return (
+                  <>
+                    {items.map(({ t, related }) => {
                 const isNew = t.last_ms > lastSeen
                 const isOpen = expanded.has(t.thread_ts)
                 // "open in Slack": prefer the topic's url, else build a permalink
@@ -2574,9 +2596,78 @@ export function LiveGlobePage() {
                             })}
                       </div>
                     )}
+
+                    {related.length > 0 && (
+                      <div
+                        style={{
+                          borderTop: `1px solid ${C.border}`,
+                          paddingTop: 6,
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: 4,
+                        }}
+                      >
+                        <div style={{ color: C.dim, fontSize: 8, letterSpacing: '0.1em', textTransform: 'uppercase' }}>
+                          same topic · {related.length} more thread{related.length === 1 ? '' : 's'}
+                        </div>
+                        {related.map((rt) => {
+                          const rl =
+                            rt.url ||
+                            (rt.thread_ts
+                              ? `https://wego.slack.com/archives/${selected.channelId}/p${rt.thread_ts.replace('.', '')}`
+                              : '')
+                          const rWhen = rt.last_ms
+                            ? new Date(rt.last_ms).toLocaleString(undefined, {
+                                month: 'short',
+                                day: 'numeric',
+                                hour: 'numeric',
+                                minute: '2-digit',
+                              })
+                            : ''
+                          return (
+                            <div key={rt.thread_ts} style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
+                              <span
+                                style={{
+                                  flex: 1,
+                                  minWidth: 0,
+                                  color: C.dim,
+                                  fontSize: 10,
+                                  lineHeight: 1.35,
+                                  overflow: 'hidden',
+                                  textOverflow: 'ellipsis',
+                                  whiteSpace: 'nowrap',
+                                }}
+                              >
+                                {cfg ? applyGroupNames(rt.summary, cfg) : rt.summary}
+                              </span>
+                              <span style={{ flexShrink: 0, color: C.dim, fontSize: 8 }}>{rWhen}</span>
+                              {rl && (
+                                <a
+                                  href={rl}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  onClick={(e) => e.stopPropagation()}
+                                  style={{ flexShrink: 0, color: C.green, fontSize: 8, letterSpacing: '0.06em', textDecoration: 'none' }}
+                                >
+                                  slack ↗
+                                </a>
+                              )}
+                            </div>
+                          )
+                        })}
+                      </div>
+                    )}
                   </div>
                 )
-              })}
+                    })}
+                    {chatterCount > 0 && (
+                      <div style={{ color: C.dim, fontSize: 9, opacity: 0.7, padding: '2px 4px' }}>
+                        · {chatterCount} chatter thread{chatterCount === 1 ? '' : 's'} hidden (leave notices, greetings)
+                      </div>
+                    )}
+                  </>
+                )
+              })()}
           </div>
         </div>
       )}

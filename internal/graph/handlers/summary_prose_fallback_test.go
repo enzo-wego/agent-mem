@@ -47,7 +47,7 @@ func TestGenThreadDeepSummary_ProseFallback(t *testing.T) {
 	gem.generateResult = func() (string, error) {
 		return "Ross reported refunds returning none; the team is investigating.", nil
 	}
-	topic, ov, hl := genThreadDeepSummary(context.Background(), gem, "transcript")
+	topic, ov, hl, _ := genThreadDeepSummary(context.Background(), gem, "transcript")
 	if topic != "" {
 		t.Errorf("topic = %q, want empty", topic)
 	}
