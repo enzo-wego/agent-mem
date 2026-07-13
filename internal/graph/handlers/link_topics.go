@@ -182,11 +182,25 @@ WHERE n.id=$1 AND n.deleted_at IS NULL`,
 	return n, err
 }
 
+// topicLinkMinSummaryChars: below this, a summary carries no topic signal —
+// the 806-edge "identical content ('Context')" class was Jira stubs whose
+// whole summary was one boilerplate heading. ponytail: raise-only knob; the
+// real fix is substantive Jira summaries (describe-then-embed bead).
+const topicLinkMinSummaryChars = 40
+
 // skipTopicLinkSource keeps the Slack thread as the linking unit: individual
 // Slack messages carry only a heuristic (raw-text) summary, and linking on raw
 // text is exactly the noise this feature replaces. Only thread roots embedding
-// their resource-aware summary link out; non-Slack resources always may.
+// their resource-aware summary link out. Files never link (identical HTML
+// exports judged "same topic" 252 times), and no-substance summaries can't
+// establish a topic at all.
 func skipTopicLinkSource(source topicLinkNode) bool {
+	if source.Type == "slack_file" || source.Type == "jira_attachment" {
+		return true
+	}
+	if len(strings.TrimSpace(source.Summary)) < topicLinkMinSummaryChars {
+		return true
+	}
 	if source.Type != "slack" && source.Type != "slack_thread" {
 		return false
 	}
@@ -216,6 +230,8 @@ sims AS (
     AND ai.embedding IS NOT NULL
     AND n.deleted_at IS NULL
     AND NOT (n.type IN ('slack','slack_thread') AND ai.summary_kind <> 'thread_summary')
+  AND n.type NOT IN ('slack_file','jira_attachment')
+  AND length(TRIM(COALESCE(ai.summary,''))) >= 40
     AND NOT (n.type IN ('slack','slack_thread') AND n.scope LIKE 'slack:D%')
     AND NOT (n.type IN ('slack','slack_thread')
       AND REPLACE(n.scope,'slack:','') = src.ch
@@ -322,6 +338,8 @@ WHERE ai.node_id <> $1
   AND ai.identifiers && (SELECT COALESCE(array_agg(ident), '{}') FROM rare)
   AND n.deleted_at IS NULL
   AND NOT (n.type IN ('slack','slack_thread') AND ai.summary_kind <> 'thread_summary')
+  AND n.type NOT IN ('slack_file','jira_attachment')
+  AND length(TRIM(COALESCE(ai.summary,''))) >= 40
   AND NOT (n.type IN ('slack','slack_thread') AND n.scope LIKE 'slack:D%')
   AND NOT (n.type IN ('slack','slack_thread')
     AND REPLACE(n.scope,'slack:','') = src.ch
@@ -375,6 +393,8 @@ LEFT JOIN (SELECT embedding AS emb FROM graph.artifact_index WHERE node_id = $1)
 WHERE ai.node_id = ANY($2) AND ai.node_id <> $1
   AND n.deleted_at IS NULL
   AND NOT (n.type IN ('slack','slack_thread') AND ai.summary_kind <> 'thread_summary')
+  AND n.type NOT IN ('slack_file','jira_attachment')
+  AND length(TRIM(COALESCE(ai.summary,''))) >= 40
   AND NOT (n.type IN ('slack','slack_thread') AND n.scope LIKE 'slack:D%')`,
 		nodeID, ids)
 	if err != nil {

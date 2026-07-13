@@ -79,11 +79,13 @@ func TestIndexArtifactNeverForcesTopicRelink(t *testing.T) {
 	}
 }
 
+const testSubstantiveSummary = "Payment pxx6xgkdtl incorrectly flipped to Abandoned by the status-sync poll"
+
 func TestTopicLinkSourceIsSkippedForSlackDM(t *testing.T) {
-	if !skipTopicLinkSource(topicLinkNode{Type: "slack", Scope: "slack:D123", SummaryKind: "thread_summary", Summary: "private thread"}) {
+	if !skipTopicLinkSource(topicLinkNode{Type: "slack", Scope: "slack:D123", SummaryKind: "thread_summary", Summary: testSubstantiveSummary}) {
 		t.Fatal("Slack DM source should be skipped")
 	}
-	if skipTopicLinkSource(topicLinkNode{Type: "slack", Scope: "slack:C123", SummaryKind: "thread_summary", Summary: "public channel thread"}) {
+	if skipTopicLinkSource(topicLinkNode{Type: "slack", Scope: "slack:C123", SummaryKind: "thread_summary", Summary: testSubstantiveSummary}) {
 		t.Fatal("public Slack thread root should not be skipped")
 	}
 }
@@ -91,10 +93,24 @@ func TestTopicLinkSourceIsSkippedForSlackDM(t *testing.T) {
 func TestTopicLinkSourceIsSkippedForRawTextSlackMessages(t *testing.T) {
 	// The Slack thread is the linking unit: heuristic (raw-text) message
 	// summaries must never link out — that is the noise this feature replaces.
-	if !skipTopicLinkSource(topicLinkNode{Type: "slack", Scope: "slack:C123", SummaryKind: "heuristic"}) {
+	if !skipTopicLinkSource(topicLinkNode{Type: "slack", Scope: "slack:C123", SummaryKind: "heuristic", Summary: testSubstantiveSummary}) {
 		t.Fatal("heuristic Slack message source should be skipped")
 	}
-	if skipTopicLinkSource(topicLinkNode{Type: "jira", SummaryKind: "heuristic"}) {
+	if skipTopicLinkSource(topicLinkNode{Type: "jira", SummaryKind: "heuristic", Summary: testSubstantiveSummary}) {
 		t.Fatal("non-Slack resource should link regardless of summary kind")
+	}
+}
+
+func TestTopicLinkSourceIsSkippedForFilesAndStubSummaries(t *testing.T) {
+	// Files judged each other "same topic" 252 times (identical HTML exports);
+	// a boilerplate stub summary ("Context") carries no topic signal at all.
+	if !skipTopicLinkSource(topicLinkNode{Type: "slack_file", Summary: testSubstantiveSummary}) {
+		t.Fatal("slack_file source should be skipped")
+	}
+	if !skipTopicLinkSource(topicLinkNode{Type: "jira_attachment", Summary: testSubstantiveSummary}) {
+		t.Fatal("jira_attachment source should be skipped")
+	}
+	if !skipTopicLinkSource(topicLinkNode{Type: "jira", SummaryKind: "heuristic", Summary: "Context"}) {
+		t.Fatal("boilerplate stub summary should be skipped")
 	}
 }
