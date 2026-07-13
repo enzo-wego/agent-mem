@@ -855,23 +855,27 @@ export function LiveGlobePage() {
     }, 1200)
   }
 
-  // Deep link: /live/graph?node=<nodeId> (used by EnzoBot alert DMs) opens that
-  // node's graph popup on load. Title resolves via the graph; falls back to the
-  // raw id so the popup still opens when the resolve fails.
-  useEffect(() => {
-    const nodeParam = new URLSearchParams(window.location.search).get('node')
-    if (!nodeParam) return
-    graphResolve([nodeParam], undefined, 1)
+  // openGraphForNodeID resolves a node id's title and opens its graph popup —
+  // used by the /live/graph?node= deep link (alert DMs) and by pasting a Slack
+  // link into search. Falls back to the raw id so the popup always opens.
+  function openGraphForNodeID(nodeId: string) {
+    graphResolve([nodeId], undefined, 1)
       .then((r) => {
         const root = (r.artifacts || []).find((a) => a.hop === 0)
         openGraphForNode({
-          id: nodeParam,
+          id: nodeId,
           type: root?.type || 'slack',
           title: root?.title || '',
           url: root?.url || '',
         } as GraphNode)
       })
-      .catch(() => openGraphForNode({ id: nodeParam, type: 'slack', title: '', url: '' } as GraphNode))
+      .catch(() => openGraphForNode({ id: nodeId, type: 'slack', title: '', url: '' } as GraphNode))
+  }
+
+  // Deep link: /live/graph?node=<nodeId> opens that node's popup on load.
+  useEffect(() => {
+    const nodeParam = new URLSearchParams(window.location.search).get('node')
+    if (nodeParam) openGraphForNodeID(nodeParam)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -898,29 +902,14 @@ export function LiveGlobePage() {
       return
     }
     setSearchLoading(true)
-    // Slack thread link → resolve the thread node + its linked graph memory,
-    // mapped into GraphNode shape so the result cards render unchanged (thread
-    // first at hop 0, then linked items by score).
+    // A pasted Slack link means "show me this thread" — open its graph popup
+    // (summary + timeline + graph) directly instead of listing raw node ids.
     const slack = parseSlackLink(term)
     if (slack) {
-      graphResolve([slack.nodeId], undefined, 2)
-        .then((r) => {
-          const arts = (r.artifacts || [])
-            .slice()
-            .sort((a, b) => a.hop - b.hop || (b.score ?? 0) - (a.score ?? 0))
-          setSearchResults(
-            arts.map((a) => ({
-              id: a.node_id,
-              type: a.type,
-              title: a.title,
-              url: a.url,
-              author: a.author,
-              score: a.score,
-            })),
-          )
-        })
-        .catch(() => setSearchResults([]))
-        .finally(() => setSearchLoading(false))
+      setSearchLoading(false)
+      setSearchResults(null)
+      setSearchQ('')
+      openGraphForNodeID(slack.nodeId)
       return
     }
     graphSearch(term, undefined, 20)
