@@ -234,6 +234,35 @@ Example:
 		},
 	}
 
-	entitiesCmd.AddCommand(seedPartnersCmd, loadCSVCmd, listCmd, importBambooHRCmd, refreshSlackUsersCmd)
+	// entities refresh-slack-bots
+	refreshSlackBotsCmd := &cobra.Command{
+		Use:   "refresh-slack-bots",
+		Short: "Enqueue a refresh_slack_bots job (resolve bot_id authors to names)",
+		Long: `Enqueues a refresh_slack_bots job. The worker calls Slack bots.info for each
+graph.people row whose display_name is still a raw bot_id (B…) and fills in the
+real bot name (e.g. "GitHub", "PagerDuty"). Bot ids never appear in users.list,
+so refresh_slack_users can't reach them.
+
+Example:
+  agent-mem entities refresh-slack-bots`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := context.Background()
+			cfg := getCfg()
+			pool, err := database.Connect(ctx, cfg.DatabaseURL)
+			if err != nil {
+				return fmt.Errorf("open db: %w", err)
+			}
+			defer pool.Close()
+			jobID, err := jobs.Enqueue(ctx, pool, "refresh_slack_bots", map[string]any{},
+				jobs.EnqueueOptions{Priority: 5, MachineID: cfg.MachineID})
+			if err != nil {
+				return fmt.Errorf("enqueue refresh_slack_bots job: %w", err)
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "enqueued refresh_slack_bots job id=%d\n", jobID)
+			return nil
+		},
+	}
+
+	entitiesCmd.AddCommand(seedPartnersCmd, loadCSVCmd, listCmd, importBambooHRCmd, refreshSlackUsersCmd, refreshSlackBotsCmd)
 	return entitiesCmd
 }

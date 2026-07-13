@@ -92,6 +92,7 @@ func NewDetectHotTopics(deps Deps) jobs.Handler {
 		if err != nil {
 			return fmt.Errorf("list subscriptions: %w", err)
 		}
+		ignored := ignoredChannelIDs(ctx, deps.DB)
 		for _, s := range subs {
 			// Resolve the subscriber's "important people" (their reporting line +
 			// within ~2 hops), so a message from one of them lowers the bar.
@@ -108,7 +109,7 @@ func NewDetectHotTopics(deps Deps) jobs.Handler {
 			// eventually flips a borderline "false" to "true" hours later.
 			judged := loadJudgments(ctx, deps.DB, s.ID)
 			for _, h := range hot {
-				if notified[h.RootNodeID] {
+				if notified[h.RootNodeID] || ignored[h.Channel] {
 					continue
 				}
 				// Topic gate: is this hot thread genuinely ABOUT the topic? Decided

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -23,6 +24,7 @@ const defaultContinents = `{
     {"id":"other","label":"Other","color":"#8b949e","center":[25,110],"match":["*"]}
   ],
   "overrides": {},
+  "ignore": ["C0B1BR522F5"],
   "names": {
     "C08S954G2LX":"payments-alerts","C05RNSE8TBR":"payments-team","CUV9EAYGY":"payments-dev",
     "C0597404MS6":"payments-pull-requests","C06Q3JHUAUV":"payments-releases","C01T60D80JV":"payments-alerts-staging",
@@ -299,6 +301,16 @@ func firstLine(s string, n int) string {
 	return s
 }
 
+// slackIDRe matches an unresolved raw Slack identifier: a user (U…), bot (B…), or
+// workspace (W…) id — an uppercase-alnum run. Real display names carry lowercase
+// or spaces, so this never rejects a genuine name.
+var slackIDRe = regexp.MustCompile(`^[BUW][A-Z0-9]{6,}$`)
+
+// looksLikeSlackID reports whether s is a raw Slack id rather than a resolved
+// name. Such values leak into author chips when a bot name hasn't been resolved
+// (refresh_slack_bots) or a user isn't in slack_users yet; hide them.
+func looksLikeSlackID(s string) bool { return slackIDRe.MatchString(s) }
+
 // withDept appends a person's department in parentheses ("Hazwan (Flights)") when
 // known, so LLM transcripts and alert lines carry the team label. Returns the bare
 // name when there's no department.
@@ -333,15 +345,22 @@ func (h *Channels) topics(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Author: bot authors carry their raw bot_id in the metadata snapshot, so for
+	// bots prefer the resolved person name (filled by refresh_slack_bots); for
+	// humans keep the metadata snapshot, falling back to the person row.
 	rows, err := h.db.Query(ctx, `
-SELECT id, ''::text AS title, LEFT(COALESCE(body,''),600), COALESCE(url,''),
-       (EXTRACT(EPOCH FROM COALESCE(to_timestamp(NULLIF(metadata->>'ts','')::float8), first_seen_at)) * 1000)::bigint AS ts_ms,
-       COALESCE(metadata->>'thread_ts',''),
-       COALESCE(metadata->'author'->>'display_name','')
-FROM graph.nodes
-WHERE scope = 'slack:' || $1 AND deleted_at IS NULL
-  AND ($2 = 0 OR first_seen_at >= now() - make_interval(days => $2))
-ORDER BY COALESCE(to_timestamp(NULLIF(metadata->>'ts','')::float8), first_seen_at) ASC
+SELECT n.id, ''::text AS title, LEFT(COALESCE(n.body,''),600), COALESCE(n.url,''),
+       (EXTRACT(EPOCH FROM COALESCE(to_timestamp(NULLIF(n.metadata->>'ts','')::float8), n.first_seen_at)) * 1000)::bigint AS ts_ms,
+       COALESCE(n.metadata->>'thread_ts',''),
+       CASE WHEN p.is_bot
+            THEN COALESCE(NULLIF(p.display_name,''), '')
+            ELSE COALESCE(NULLIF(n.metadata->'author'->>'display_name',''), p.display_name, '')
+       END AS author
+FROM graph.nodes n
+LEFT JOIN graph.people p ON p.id = n.author_person_id
+WHERE n.scope = 'slack:' || $1 AND n.deleted_at IS NULL
+  AND ($2 = 0 OR n.first_seen_at >= now() - make_interval(days => $2))
+ORDER BY COALESCE(to_timestamp(NULLIF(n.metadata->>'ts','')::float8), n.first_seen_at) ASC
 LIMIT 3000`, id, days)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -383,7 +402,7 @@ LIMIT 3000`, id, days)
 			if m.TSMs > v.LastMs {
 				v.LastMs = m.TSMs
 			}
-			if m.Author != "" && !g.seen[m.Author] {
+			if m.Author != "" && !looksLikeSlackID(m.Author) && !g.seen[m.Author] {
 				g.seen[m.Author] = true
 				v.Participants = append(v.Participants, m.Author)
 			}

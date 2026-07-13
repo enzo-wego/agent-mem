@@ -34,6 +34,19 @@ type continentsConfig struct {
 	} `json:"continents"`
 	Overrides map[string]string `json:"overrides"`
 	Names     map[string]string `json:"names"`
+	// Ignore lists channel ids muted from ALL notifications (hot-topic + watch).
+	Ignore []string `json:"ignore"`
+}
+
+// ignoredChannelIDs returns the set of slack channel ids muted from every
+// notification path, read from the graph_continents "ignore" list.
+func ignoredChannelIDs(ctx context.Context, db *pgxpool.Pool) map[string]bool {
+	cfg := loadContinentsConfig(ctx, db)
+	out := make(map[string]bool, len(cfg.Ignore))
+	for _, id := range cfg.Ignore {
+		out[id] = true
+	}
+	return out
 }
 
 // continentOf classifies a channel into a continent id, faithfully mirroring the
@@ -152,10 +165,14 @@ func watchedChannelIDs(ctx context.Context, db *pgxpool.Pool, cfg continentsConf
 		return nil
 	}
 	defer rows.Close()
+	ignored := make(map[string]bool, len(cfg.Ignore))
+	for _, id := range cfg.Ignore {
+		ignored[id] = true
+	}
 	var out []string
 	for rows.Next() {
 		var id, name string
-		if rows.Scan(&id, &name) == nil && continentOf(id, name, cfg) == watchContinentID {
+		if rows.Scan(&id, &name) == nil && !ignored[id] && continentOf(id, name, cfg) == watchContinentID {
 			out = append(out, id)
 		}
 	}

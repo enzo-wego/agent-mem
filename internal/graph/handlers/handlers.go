@@ -59,6 +59,7 @@ func RegisterAll(reg *jobs.Registry, deps Deps) {
 	reg.Register("index_artifact", NewIndexArtifactHandler(deps))
 	reg.Register("refresh_slack_groups", NewRefreshSlackGroupsHandler(deps))
 	reg.Register("refresh_slack_users", NewRefreshSlackUsersHandler(deps))
+	reg.Register("refresh_slack_bots", NewRefreshSlackBotsHandler(deps))
 	reg.Register("refresh_slack_channels", NewRefreshSlackChannelsHandler(deps))
 	reg.Register("backfill_created_at", NewBackfillCreatedAtHandler(deps))
 	reg.Register("merge_identities_by_name", NewMergeIdentitiesByNameHandler(deps))

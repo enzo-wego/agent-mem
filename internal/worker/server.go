@@ -170,6 +170,20 @@ func NewServer(cfg *config.Config, logBuf *LogBuffer) (*Server, error) {
 		}
 	}
 
+	// Resolve Slack bot_id authors (B…) to bot names on startup — users.list can't
+	// reach them, so they'd otherwise show as raw ids in author chips. Deduped like
+	// the channel refresh; best-effort.
+	var botsPending bool
+	_ = pool.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM graph.jobs WHERE type='refresh_slack_bots' AND status IN ('queued','running'))`).
+		Scan(&botsPending)
+	if !botsPending {
+		if _, err := jobs.Enqueue(ctx, pool, "refresh_slack_bots", map[string]any{},
+			jobs.EnqueueOptions{TargetRunner: cfg.Graph.Runner, MachineID: cfg.MachineID}); err != nil {
+			graphLog.Warn().Err(err).Msg("startup: enqueue refresh_slack_bots failed")
+		}
+	}
+
 	// Kick off the self-rescheduling hot-topic detector (deduped: skip if one is
 	// already queued/running). Each run re-enqueues the next tick.
 	var detectPending bool
