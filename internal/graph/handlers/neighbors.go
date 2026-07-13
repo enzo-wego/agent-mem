@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/url"
@@ -14,6 +15,36 @@ import (
 	"github.com/agent-mem/agent-mem/internal/graph/acl"
 	"github.com/agent-mem/agent-mem/internal/graph/bfs"
 )
+
+// expandableThrough reports whether a cluster/neighbors BFS may traverse
+// THROUGH a node. Entity tags (feature/partner/status/…), people, groups and
+// files connect every thread sharing a phrase, an author, or an upload —
+// walking through them turns "related to this thread" into "everything that
+// ever said apple pay" (verified: feature:unified_apple_pay, REFERENCES
+// degree 94). Real resources are corridors only while quiet; a popular one
+// chains dozens of unrelated threads.
+// ponytail: total REFERENCES degree ≤ 12; count distinct referrer THREADS if
+// a single chatty thread ever inflates a legit ticket past the cap.
+func expandableThrough(ctx context.Context, db *pgxpool.Pool, nodeID string) bool {
+	var typ string
+	var deg int
+	err := db.QueryRow(ctx, `
+SELECT n.type,
+       (SELECT count(*) FROM graph.edges e
+        WHERE (e.from_node_id = n.id OR e.to_node_id = n.id) AND e.kind = 'REFERENCES')
+FROM graph.nodes n WHERE n.id = $1`, nodeID).Scan(&typ, &deg)
+	if err != nil {
+		return false
+	}
+	switch typ {
+	case "slack", "slack_thread":
+		return true
+	case "jira", "gh_pr", "cf_page", "cf", "gws_doc", "gws", "wegohub", "claude_artifact", "pagerduty", "sentry", "datadog":
+		return deg <= 12
+	default:
+		return false
+	}
+}
 
 // NewNeighbors returns a chi.Router that owns /node/{id}/neighbors.
 func NewNeighbors(db *pgxpool.Pool) chi.Router {
@@ -36,9 +67,9 @@ type neighborItem struct {
 		URL      string `json:"url"`
 		Title    string `json:"title"`
 		Overview string `json:"overview,omitempty"` // slack threads: 2-3 sentence summary, for the expanded row
-		Channel  string `json:"channel"`   // slack only: human channel name (e.g. payments-dev), for display
-		ThreadTS string `json:"thread_ts"` // slack only; lets the UI collapse a thread's messages into one row
-		TSMs     int64  `json:"ts_ms"`     // node time (slack message ts, else first_seen_at), epoch millis
+		Channel  string `json:"channel"`            // slack only: human channel name (e.g. payments-dev), for display
+		ThreadTS string `json:"thread_ts"`          // slack only; lets the UI collapse a thread's messages into one row
+		TSMs     int64  `json:"ts_ms"`              // node time (slack message ts, else first_seen_at), epoch millis
 		// Slack threads only: first/last message time across the whole thread,
 		// computed server-side because SIMILAR rows are leaves (one node in the
 		// payload) so the client can't derive the span itself. 0 when unknown.
@@ -234,9 +265,10 @@ WHERE n.id=$1`, n.NodeID)
 			}
 			item.Node.Title = title
 			// Don't traverse through a SIMILAR link — surface related threads as leaves,
-			// not as a launch point for further semantic drift. Pushed after the title
-			// resolves so children can say which row they were reached "via".
-			if n.EdgeKind != "SIMILAR" {
+			// not as a launch point for further semantic drift. Entity tags, people and
+			// popular resources are leaves too (see expandableThrough). Pushed after the
+			// title resolves so children can say which row they were reached "via".
+			if n.EdgeKind != "SIMILAR" && expandableThrough(ctx, h.db, n.NodeID) {
 				frontier = append(frontier, struct {
 					id  string
 					hop int

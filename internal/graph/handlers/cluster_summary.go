@@ -163,10 +163,15 @@ func (h *clusterSummaryHandler) serve(w http.ResponseWriter, r *http.Request) {
 			}
 			seen[n.NodeID] = true
 			ordered = append(ordered, n.NodeID)
-			frontier = append(frontier, struct {
-				id  string
-				hop int
-			}{n.NodeID, cur.hop + 1})
+			// Entity tags, people and popular resources stay leaves here too —
+			// otherwise the summary synthesizes "everything that ever said
+			// apple pay" instead of this thread's cluster.
+			if expandableThrough(ctx, h.db, n.NodeID) {
+				frontier = append(frontier, struct {
+					id  string
+					hop int
+				}{n.NodeID, cur.hop + 1})
+			}
 			if len(ordered) >= maxNodes {
 				break
 			}
