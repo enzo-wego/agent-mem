@@ -354,20 +354,26 @@ function groupNeighbors(neighbors: GraphNeighbor[]): NeighborGroup[] {
     const cfg = GRAPH_TYPE_GROUPS[n.node.type]
     let label = cfg?.label ?? n.node.type
     let order = cfg?.order ?? 99
-    // Slack threads split by evidence strength: confirmed links and direct
-    // references are relationships; SIMILAR is only a wording nomination and
-    // must not read as one (plan 15, C4).
+    // Slack threads split by what the rules judge said ABOUT THE OPENED
+    // THREAD — the verdict decides the section, not the edge kind: a hop-2
+    // SAME_TOPIC edge refused against the opened thread is not a relationship
+    // of this view. Threads sort before Jira/PRs.
     if (n.node.type === 'slack' || n.node.type === 'slack_thread') {
       const k = n.edge.kind.toUpperCase()
-      if (k === 'SAME_TOPIC') {
+      if (n.edge.verdict === 'refused') {
+        label = 'Not confirmed'
+        order = 98
+      } else if (n.edge.verdict === 'confirmed' || k === 'SAME_TOPIC') {
         label = 'Confirmed same topic'
-        order = (cfg?.order ?? 99) - 0.3
+        order = -3
       } else if (k === 'REFERS_TO') {
         label = 'Referenced threads (pasted link)'
-        order = (cfg?.order ?? 99) - 0.2
+        order = -2
       } else if (k === 'SIMILAR') {
-        label = 'Similar wording — not confirmed'
-        order = (cfg?.order ?? 99) + 0.1
+        label = 'Not confirmed'
+        order = 98
+      } else {
+        order = -1
       }
     }
     let g = byLabel.get(label)
@@ -429,7 +435,9 @@ function NeighborTimeline({
   }
   const pts: { n: GraphNeighbor; ts: number }[] = []
   for (const n of collapseThreads(neighbors)) {
-    if (n.node.type === 'person') continue // people aren't events in time
+    // Threads only: one 2022-created Jira ticket would stretch the axis until
+    // every 2026 thread bunches into a single unreadable pixel column.
+    if (n.node.type !== 'slack' && n.node.type !== 'slack_thread') continue
     const tt = slackThreadKey(n)
     const ts = n.node.last_ts_ms || (tt && threadMax.get(tt)) || n.node.ts_ms || 0
     if (ts > 0) pts.push({ n, ts })
@@ -3038,7 +3046,7 @@ export function LiveGlobePage() {
                   }
                 }
                 const shownGroups = groups.filter((g) => g.items.length > 0)
-                const isSimilarGroup = (g: NeighborGroup) => g.label === 'Similar wording — not confirmed'
+                const isSimilarGroup = (g: NeighborGroup) => g.label === 'Not confirmed'
                 // Row numbers follow display order (group by group) and repeat on
                 // the timeline dots, so a dot can be matched to its row. Collapsed
                 // similar-wording rows get no numbers and no dots.
@@ -3281,7 +3289,7 @@ export function LiveGlobePage() {
                             onClick={similar ? () => setShowSimilar(!showSimilar) : undefined}
                             title={
                               similar
-                                ? 'Wording-similarity candidates the rules judge checked and rejected (audit trail). Click to show or hide.'
+                                ? 'Threads the rules judge checked and rejected against the opened thread, plus unjudged wording-similarity candidates (audit trail). Click to show or hide.'
                                 : undefined
                             }
                             style={{

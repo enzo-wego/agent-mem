@@ -1,6 +1,6 @@
 {
-  "version": 2,
-  "updated": "2026-07-12",
+  "version": 3,
+  "updated": "2026-07-13",
   "purpose": "Single source of truth for how the topic linker decides two artifacts are the SAME topic. The LLM judge applies these rules at runtime, /live/rules renders them for humans, and agents read this same file in the repo. Candidates are only nominations; these rules decide.",
   "how_it_works": [
     "1. Candidates come from three generators: (a) embedding cosine over thread/resource summaries (adaptive cutoff: mean+2σ over the corpus, floor 0.65), (b) shared RARE identifiers extracted from raw thread text — payment refs, Jira keys, PR refs, request ids — regardless of cosine and regardless of age, (c) explicit references: a pasted Slack permalink becomes a deterministic REFERS_TO edge, no LLM.",
@@ -65,7 +65,9 @@
     }
   ],
   "tie_breakers": [
-    "A shared concrete identifier (payment id, order ref, Jira key, PR number, error signature) ⇒ SAME topic, regardless of tags.",
+    "A shared PAYMENT/ORDER/DISPUTE reference or request id (e.g. pxx6xgkdtl, a request UUID) ⇒ SAME topic — these identify one concrete case.",
+    "A shared TICKET or PR id (PAY-1234, wego/repo#123) supports SAME only when BOTH artifacts substantively discuss that work item. A passing mention — stand-ups, sprint/board updates, release lists, changelogs — is NOT enough.",
+    "Recurring process threads (async stand-ups, sprint planning, board updates, on-call handovers) are NEVER the same topic as a case/incident thread, even when they mention its tickets.",
     "Shared identifiers and explicit references are NEVER time-gated — a payment created 13 months ago legitimately resurfaces in a refund case (verified: pxx6xgkdtl).",
     "Cross-tag pairs are allowed: a bug_incident and the ops_investigation or partner_comm about the same mechanism/case are the SAME topic.",
     "Same partner or same vocabulary is NEVER sufficient on its own.",

@@ -123,7 +123,11 @@ func linkTopicsHandler(deps Deps) jobs.Handler {
 				return err
 			}
 		}
-		cands := mergeTopicCandidates(idCands, extraCands, embCands)
+		edgeCands, err := existingSameTopicCandidates(ctx, deps, p.NodeID)
+		if err != nil {
+			return err
+		}
+		cands := mergeTopicCandidates(idCands, extraCands, edgeCands, embCands)
 		srcStart, srcEnd, srcOK := nodeActivityWindow(ctx, deps, p.NodeID)
 
 		g, gctx := errgroup.WithContext(ctx)
@@ -250,12 +254,42 @@ func canonicalTopicPair(a, b, aSummary, bSummary string) (from, to, fromSummary,
 }
 
 // topicLinkContentHash keys the judgment cache on everything the judge saw:
-// summaries, shared identifiers, and the COARSE time bucket (exact timestamps
-// would invalidate the cache on every new reply).
+// the rules version (a rules change must re-judge cached pairs), summaries,
+// shared identifiers, and the COARSE time bucket (exact timestamps would
+// invalidate the cache on every new reply).
 func topicLinkContentHash(from, to, fromSummary, toSummary string, sharedIDs []string, timeBucket string) string {
-	h := sha256.Sum256([]byte(from + "\x00" + to + "\x00" + fromSummary + "\x00" + toSummary +
+	h := sha256.Sum256([]byte(fmt.Sprintf("rules-v%d\x00", loadedTopicRules.Version) +
+		from + "\x00" + to + "\x00" + fromSummary + "\x00" + toSummary +
 		"\x00" + strings.Join(sharedIDs, ",") + "\x00" + timeBucket))
 	return hex.EncodeToString(h[:])
+}
+
+// existingSameTopicCandidates re-verifies the node's current SAME_TOPIC
+// partners. Without this, a pair confirmed under old rules would keep its
+// edge forever once it drops out of the shortlist — re-judging (cache-missed
+// by the rules version above) deletes edges the new rules refuse.
+func existingSameTopicCandidates(ctx context.Context, deps Deps, nodeID string) ([]topicLinkCandidate, error) {
+	rows, err := deps.DB.Query(ctx, `
+SELECT CASE WHEN from_node_id=$1 THEN to_node_id ELSE from_node_id END
+FROM graph.edges
+WHERE kind='SAME_TOPIC' AND (from_node_id=$1 OR to_node_id=$1)`, nodeID)
+	if err != nil {
+		return nil, err
+	}
+	var partners []string
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		partners = append(partners, p)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil || len(partners) == 0 {
+		return nil, err
+	}
+	return explicitTopicCandidates(ctx, deps, nodeID, partners)
 }
 
 // identifierCandidates nominates artifacts sharing at least one RARE
