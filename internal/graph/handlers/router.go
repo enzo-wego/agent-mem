@@ -55,5 +55,11 @@ func Mount(r chi.Router, deps Deps) {
 	r.Patch("/api/graph/subscriptions/{id}", subs.update)
 	r.Delete("/api/graph/subscriptions/{id}", subs.delete)
 
+	// Pinned threads (📌 quick-access panel on /live).
+	pins := NewPins(deps.DB)
+	r.Get("/api/graph/pins", pins.list)
+	r.Post("/api/graph/pins", pins.create)
+	r.Delete("/api/graph/pins", pins.delete)
+
 	r.Mount("/api/graph", NewNeighbors(deps.DB))
 }
