@@ -964,7 +964,6 @@ export function LiveGlobePage() {
     refreshPins()
     const t = setInterval(refreshPins, 60_000)
     return () => clearInterval(t)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const pinnedKeys = useMemo(() => new Set(pins.map(pinKey)), [pins])
@@ -981,13 +980,6 @@ export function LiveGlobePage() {
       /* private mode */
     }
   }
-
-  // Used by the panel added in the next task; keep this intermediate commit
-  // independently typecheck-clean under noUnusedLocals.
-  void pinsOpen
-  void setPinsOpen
-  void unseenPinCount
-  void markPinsSeen
 
   function togglePin(channelId: string, threadTs: string) {
     const op = pinnedKeys.has(`${channelId}:${threadTs}`)
@@ -1866,6 +1858,9 @@ export function LiveGlobePage() {
               </button>
             )}
           </form>
+          <button type="button" onClick={() => setPinsOpen(true)} style={segBtn(pinsOpen)}>
+            📌 PINS{unseenPinCount > 0 ? ` •${unseenPinCount}` : ''}
+          </button>
           <button type="button" onClick={() => setSubsOpen(true)} style={segBtn(subsOpen)}>
             🔔 ALERTS
           </button>
@@ -2756,6 +2751,190 @@ export function LiveGlobePage() {
                   </>
                 )
               })()}
+          </div>
+        </div>
+      )}
+
+      {pinsOpen && (
+        <div
+          onClick={() => {
+            markPinsSeen()
+            setPinsOpen(false)
+          }}
+          style={{
+            position: 'absolute',
+            inset: 0,
+            background: 'rgba(0,0,0,0.55)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 20,
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              ...panel,
+              width: 'min(560px, calc(100vw - 32px))',
+              maxHeight: 'calc(100vh - 64px)',
+              borderRadius: 4,
+              padding: 16,
+              display: 'flex',
+              flexDirection: 'column',
+              overflow: 'hidden',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+              <div style={{ color: C.text, fontSize: 13, fontWeight: 600, letterSpacing: '0.04em' }}>
+                📌 PINNED THREADS
+              </div>
+              <button
+                onClick={() => {
+                  markPinsSeen()
+                  setPinsOpen(false)
+                }}
+                style={{
+                  background: 'transparent',
+                  border: `1px solid ${C.border}`,
+                  color: C.dim,
+                  cursor: 'pointer',
+                  fontFamily: MONO,
+                  fontSize: 14,
+                  lineHeight: '14px',
+                  borderRadius: 2,
+                  padding: '2px 6px',
+                }}
+                aria-label="Close"
+              >
+                ×
+              </button>
+            </div>
+            <div style={{ color: C.dim, fontSize: 10, lineHeight: 1.5, marginTop: 8 }}>
+              Threads you pinned from a channel's topics panel. NEW = replies since you last
+              looked. Pin/unpin from the topic card, or unpin here.
+            </div>
+
+            <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 6, marginTop: 12 }}>
+              {pins.length === 0 && (
+                <div style={{ color: C.dim, fontSize: 11 }}>
+                  no pinned threads — open a channel, expand TOPICS, hit 📌 pin
+                </div>
+              )}
+              {pins.map((p) => {
+                const isNew = p.last_ms > (pinSeen[pinKey(p)] || 0)
+                const digits = p.thread_ts.replace('.', '')
+                const slackLink = p.url || `https://wego.slack.com/archives/${p.channel_id}/p${digits}`
+                return (
+                  <div
+                    key={pinKey(p)}
+                    style={{
+                      background: 'rgba(255,255,255,0.02)',
+                      border: `1px solid ${isNew ? C.green : C.border}`,
+                      borderRadius: 3,
+                      padding: 8,
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: 4,
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
+                      <span style={{ color: C.dim, fontSize: 9, letterSpacing: '0.06em', flexShrink: 0 }}>
+                        #{p.channel_name || p.channel_id}
+                      </span>
+                      <span style={{ flex: 1 }} />
+                      {isNew && (
+                        <span
+                          style={{
+                            flexShrink: 0,
+                            color: C.green,
+                            fontSize: 8,
+                            letterSpacing: '0.08em',
+                            border: `1px solid ${C.green}`,
+                            borderRadius: 2,
+                            padding: '0 3px',
+                          }}
+                        >
+                          NEW
+                        </span>
+                      )}
+                      <span style={{ color: C.dim, fontSize: 9, flexShrink: 0 }}>
+                        {p.last_ms
+                          ? new Date(p.last_ms).toLocaleString(undefined, {
+                              month: 'short',
+                              day: 'numeric',
+                              hour: 'numeric',
+                              minute: '2-digit',
+                            })
+                          : ''}
+                      </span>
+                    </div>
+                    <div style={{ color: C.text, fontSize: 11, lineHeight: 1.35 }}>
+                      {(cfg ? applyGroupNames(p.summary, cfg) : p.summary) || p.last_body || p.thread_ts}
+                    </div>
+                    {p.last_body && (
+                      <div
+                        style={{
+                          color: C.dim,
+                          fontSize: 10,
+                          lineHeight: 1.35,
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
+                        latest{p.last_author ? ` · ${p.last_author}` : ''}: {p.last_body}
+                        {p.msg_count > 0 && ` · ${p.msg_count} msgs`}
+                      </div>
+                    )}
+                    <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+                      <a
+                        href={slackLink}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style={{ color: C.green, fontSize: 9, letterSpacing: '0.06em', textDecoration: 'none' }}
+                      >
+                        open in Slack ↗
+                      </a>
+                      <button
+                        onClick={() => {
+                          markPinsSeen()
+                          setPinsOpen(false)
+                          openGraphForNodeID(p.node_id)
+                        }}
+                        style={{
+                          background: 'transparent',
+                          border: 'none',
+                          padding: 0,
+                          cursor: 'pointer',
+                          fontFamily: MONO,
+                          color: C.green,
+                          fontSize: 9,
+                          letterSpacing: '0.06em',
+                        }}
+                      >
+                        open in Graph ↗
+                      </button>
+                      <span style={{ flex: 1 }} />
+                      <button
+                        onClick={() => togglePin(p.channel_id, p.thread_ts)}
+                        style={{
+                          background: 'transparent',
+                          border: 'none',
+                          padding: 0,
+                          cursor: 'pointer',
+                          fontFamily: MONO,
+                          color: C.dim,
+                          fontSize: 9,
+                          letterSpacing: '0.06em',
+                        }}
+                      >
+                        unpin ✕
+                      </button>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
           </div>
         </div>
       )}
