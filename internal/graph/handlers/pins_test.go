@@ -138,3 +138,62 @@ ON CONFLICT (slack_channel_id) DO UPDATE SET name='payments-dev'`); err != nil {
 		t.Errorf("len(pins) after unpin = %d, want 0", len(pins))
 	}
 }
+
+// Board grouping: a thread REFERENCES a jira node; the epic map groups it under
+// its epic; chatter threads are excluded. Requires DATABASE_URL (scratch DB!).
+func TestPinsBoard(t *testing.T) {
+	pool := openTestDB(t)
+	truncateGraphHandlerTables(t, pool)
+	ctx := t.Context()
+
+	seed := func(q string, args ...any) {
+		t.Helper()
+		if _, err := pool.Exec(ctx, q, args...); err != nil {
+			t.Fatalf("seed: %v (%s)", err, q)
+		}
+	}
+	// Thread (2 msgs) in channel CB, thread_ts 200.000001.
+	for _, n := range []struct{ id, ts, body string }{
+		{"slack:CB:200.000001", "200.000001", "scan card gate broken on olympias"},
+		{"slack:CB:200.000002", "200.000002", "fix rolling out"},
+	} {
+		seed(`INSERT INTO graph.nodes (id, type, natural_key, body, scope, metadata, machine_id)
+		      VALUES ($1,'slack',$1,$2,'slack:CB',$3::jsonb,'test') ON CONFLICT (id) DO NOTHING`,
+			n.id, n.body, `{"ts":"`+n.ts+`","thread_ts":"200.000001"}`)
+	}
+	// The jira node the thread references, and the REFERENCES edge.
+	seed(`INSERT INTO graph.nodes (id, type, natural_key, title, machine_id)
+	      VALUES ('jira:PAY-2227','jira','PAY-2227','olympias capability gate','test') ON CONFLICT (id) DO NOTHING`)
+	seed(`INSERT INTO graph.edges (from_node_id, to_node_id, kind, machine_id)
+	      VALUES ('slack:CB:200.000001','jira:PAY-2227','REFERENCES','test') ON CONFLICT DO NOTHING`)
+	// Epic map row.
+	seed(`INSERT INTO graph.jira_epic_map (issue_key, issue_summary, issue_status, epic_key, epic_summary, epic_status, machine_id)
+	      VALUES ('PAY-2227','olympias capability gate','In Progress','PAY-2197','Scan Card','To Do','test')
+	      ON CONFLICT (issue_key) DO NOTHING`)
+
+	h := NewPins(pool)
+	w := httptest.NewRecorder()
+	h.board(w, httptest.NewRequest(http.MethodGet, "/api/graph/pins/board", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("board status = %d, body %s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Groups []boardEpicGroup `json:"groups"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("board json: %v", err)
+	}
+	if len(resp.Groups) != 1 {
+		t.Fatalf("len(groups) = %d, want 1: %s", len(resp.Groups), w.Body.String())
+	}
+	g := resp.Groups[0]
+	if g.EpicKey != "PAY-2197" || g.EpicSummary != "Scan Card" {
+		t.Errorf("epic = %q %q", g.EpicKey, g.EpicSummary)
+	}
+	if len(g.Threads) != 1 || g.Threads[0].ThreadTS != "200.000001" || g.Threads[0].MsgCount != 2 {
+		t.Errorf("threads = %+v", g.Threads)
+	}
+	if len(g.Issues) != 1 || g.Issues[0].Key != "PAY-2227" {
+		t.Errorf("issues = %+v", g.Issues)
+	}
+}

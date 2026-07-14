@@ -37,6 +37,7 @@ func truncateGraphHandlerTables(t *testing.T, pool *pgxpool.Pool) {
 	tables := []string{
 		"graph.artifact_index",
 		"graph.artifact_bodies",
+		"graph.jira_epic_map",
 		"graph.pinned_threads",
 		"graph.edges",
 		"graph.jobs",
