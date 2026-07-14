@@ -758,7 +758,30 @@ export async function deletePin(channelId: string, threadTs: string): Promise<vo
     method: 'DELETE',
     headers: authHeaders(),
   });
-  if (!res.ok) throw new Error(`unpin: ${res.status}`);
+	if (!res.ok) throw new Error(`unpin: ${res.status}`);
+}
+
+// BoardIssue / BoardEpicGroup: the 📌 PINS board section — threads referencing
+// a PAY board ticket, grouped by epic (like the Jira board's swimlanes).
+export interface BoardIssue {
+  key: string;
+  summary: string;
+  status: string;
+}
+
+export interface BoardEpicGroup {
+  epic_key: string; // '' = tickets with no epic
+  epic_summary: string;
+  epic_status: string;
+  issues: BoardIssue[];
+  threads: PinnedThread[];
+  last_ms: number;
+}
+
+export async function fetchBoardPins(): Promise<BoardEpicGroup[]> {
+  const res = await authFetch(`${BASE}/api/graph/pins/board`);
+  const d = await res.json();
+  return d.groups || [];
 }
 
 export async function fetchContinents(): Promise<ContinentCfg> {
