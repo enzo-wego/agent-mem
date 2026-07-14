@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -28,6 +29,7 @@ type pinnedThread struct {
 	NodeID      string `json:"node_id"`
 	Summary     string `json:"summary"`
 	Overview    string `json:"overview"`
+	Kind        string `json:"kind,omitempty"` // thread_summaries.kind; "chatter" is filtered from the board section
 	MsgCount    int    `json:"msg_count"`
 	LastMs      int64  `json:"last_ms"`
 	LastAuthor  string `json:"last_author"`
@@ -36,19 +38,32 @@ type pinnedThread struct {
 	PinnedAtMs  int64  `json:"pinned_at_ms"`
 }
 
-// list handles GET /api/graph/pins — every pin, newest-pinned first, enriched
-// with live thread stats + latest message + cached summary. Stale or missing
-// summaries re-enqueue summarize_thread (same signature check as channels.topics)
-// so the panel's summary keeps up with thread growth.
-func (h *Pins) list(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
+// threadRef identifies one Slack thread (channel + root ts).
+type threadRef struct {
+	ChannelID string
+	ThreadTS  string
+}
+
+// enrichThreads returns display data for each (channel, thread) pair: channel
+// name, cached summary, live message count + latest message, root URL. Order of
+// the result matches no particular order — callers sort. Stale/missing summaries
+// re-enqueue summarize_thread, same as channels.topics.
+func (h *Pins) enrichThreads(ctx context.Context, refs []threadRef) (map[threadRef]pinnedThread, error) {
+	if len(refs) == 0 {
+		return map[threadRef]pinnedThread{}, nil
+	}
+	chans := make([]string, len(refs))
+	threads := make([]string, len(refs))
+	for i, r := range refs {
+		chans[i], threads[i] = r.ChannelID, r.ThreadTS
+	}
 	rows, err := h.db.Query(ctx, `
+WITH p AS (SELECT DISTINCT unnest($1::text[]) AS channel_id, unnest($2::text[]) AS thread_ts)
 SELECT p.channel_id, COALESCE(sc.name,''), p.thread_ts,
-       (EXTRACT(EPOCH FROM p.pinned_at)*1000)::bigint,
-       COALESCE(ts.summary,''), COALESCE(ts.overview,''), COALESCE(ts.signature,''),
+       COALESCE(ts.summary,''), COALESCE(ts.overview,''), COALESCE(ts.signature,''), COALESCE(ts.kind,''),
        COALESCE(st.cnt,0), COALESCE(st.last_ms,0), COALESCE(st.sig_ms,0),
        COALESCE(lm.author,''), COALESCE(lm.body,''), COALESCE(rt.url,'')
-FROM graph.pinned_threads p
+FROM p
 LEFT JOIN graph.slack_channels sc ON sc.slack_channel_id = p.channel_id
 LEFT JOIN graph.thread_summaries ts
        ON ts.channel_id = p.channel_id AND ts.thread_ts = p.thread_ts
@@ -73,40 +88,82 @@ LEFT JOIN LATERAL (
   ORDER BY COALESCE(to_timestamp(NULLIF(n.metadata->>'ts','')::float8), n.first_seen_at) DESC
   LIMIT 1
 ) lm ON true
-LEFT JOIN graph.nodes rt ON rt.id = 'slack:' || p.channel_id || ':' || p.thread_ts
-ORDER BY p.pinned_at DESC`)
+LEFT JOIN graph.nodes rt ON rt.id = 'slack:' || p.channel_id || ':' || p.thread_ts`,
+		chans, threads)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+		return nil, err
 	}
 	defer rows.Close()
 
-	out := []pinnedThread{}
+	out := map[threadRef]pinnedThread{}
 	for rows.Next() {
 		var pt pinnedThread
-		var storedSig string
+		var storedSig, kind string
 		var sigMs int64
-		if err := rows.Scan(&pt.ChannelID, &pt.ChannelName, &pt.ThreadTS, &pt.PinnedAtMs,
-			&pt.Summary, &pt.Overview, &storedSig,
+		if err := rows.Scan(&pt.ChannelID, &pt.ChannelName, &pt.ThreadTS,
+			&pt.Summary, &pt.Overview, &storedSig, &kind,
 			&pt.MsgCount, &pt.LastMs, &sigMs,
 			&pt.LastAuthor, &pt.LastBody, &pt.URL); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
+			return nil, err
 		}
 		pt.NodeID = "slack:" + pt.ChannelID + ":" + pt.ThreadTS
+		pt.Kind = kind
 		if looksLikeSlackID(pt.LastAuthor) {
 			pt.LastAuthor = ""
 		}
-		// Must match summarize_thread's sig format ("v7:" prefix, count:lastUpdatedMs).
 		liveSig := fmt.Sprintf("v7:%d:%d", pt.MsgCount, sigMs)
 		if pt.MsgCount > 0 && (pt.Summary == "" || storedSig != liveSig) {
 			enqueueSummarizeThread(ctx, h.db, pt.ChannelID, pt.ThreadTS, false)
 		}
-		out = append(out, pt)
+		out[threadRef{pt.ChannelID, pt.ThreadTS}] = pt
 	}
-	if err := rows.Err(); err != nil {
+	return out, rows.Err()
+}
+
+// list handles GET /api/graph/pins — every pin, newest-pinned first, enriched
+// with live thread stats + latest message + cached summary. Stale or missing
+// summaries re-enqueue summarize_thread (same signature check as channels.topics)
+// so the panel's summary keeps up with thread growth.
+func (h *Pins) list(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	prow, err := h.db.Query(ctx, `
+SELECT channel_id, thread_ts, (EXTRACT(EPOCH FROM pinned_at)*1000)::bigint
+FROM graph.pinned_threads ORDER BY pinned_at DESC`)
+	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+	type pinRow struct {
+		ref      threadRef
+		pinnedMs int64
+	}
+	var pins []pinRow
+	for prow.Next() {
+		var pr pinRow
+		if prow.Scan(&pr.ref.ChannelID, &pr.ref.ThreadTS, &pr.pinnedMs) == nil {
+			pins = append(pins, pr)
+		}
+	}
+	prow.Close()
+
+	refs := make([]threadRef, len(pins))
+	for i, p := range pins {
+		refs[i] = p.ref
+	}
+	enriched, err := h.enrichThreads(ctx, refs)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	out := []pinnedThread{}
+	for _, p := range pins {
+		pt, ok := enriched[p.ref]
+		if !ok {
+			pt = pinnedThread{ChannelID: p.ref.ChannelID, ThreadTS: p.ref.ThreadTS,
+				NodeID: "slack:" + p.ref.ChannelID + ":" + p.ref.ThreadTS}
+		}
+		pt.PinnedAtMs = p.pinnedMs
+		out = append(out, pt)
 	}
 	writeJSON(w, http.StatusOK, out)
 }
