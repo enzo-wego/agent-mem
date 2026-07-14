@@ -722,6 +722,45 @@ export async function fetchChannelTopics(
   return res.json();
 }
 
+// PinnedThread is one pinned Slack thread with its latest activity (📌 PINS).
+export interface PinnedThread {
+  channel_id: string;
+  channel_name: string;
+  thread_ts: string;
+  node_id: string;
+  summary: string;
+  overview: string;
+  msg_count: number;
+  last_ms: number;
+  last_author: string;
+  last_body: string;
+  url: string;
+  pinned_at_ms: number;
+}
+
+export async function listPins(): Promise<PinnedThread[]> {
+  const res = await authFetch(`${BASE}/api/graph/pins`);
+  return res.json();
+}
+
+export async function createPin(channelId: string, threadTs: string): Promise<void> {
+  const res = await authFetch(`${BASE}/api/graph/pins`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ channel_id: channelId, thread_ts: threadTs }),
+  });
+  if (!res.ok) throw new Error(`pin: ${res.status}`);
+}
+
+export async function deletePin(channelId: string, threadTs: string): Promise<void> {
+  const qs = new URLSearchParams({ channel: channelId, thread: threadTs });
+  const res = await authFetch(`${BASE}/api/graph/pins?${qs.toString()}`, {
+    method: 'DELETE',
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error(`unpin: ${res.status}`);
+}
+
 export async function fetchContinents(): Promise<ContinentCfg> {
   const res = await authFetch(`${BASE}/api/graph/continents`);
   return res.json();
