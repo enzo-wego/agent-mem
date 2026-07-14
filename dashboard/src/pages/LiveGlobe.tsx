@@ -15,6 +15,9 @@ import {
   deleteSubscription,
   refreshSubscription,
   updateSubscription,
+  listPins,
+  createPin,
+  deletePin,
   type ChannelCount,
   type ContinentCfg,
   type ChannelMessage,
@@ -24,6 +27,7 @@ import {
   type GraphNode,
   type TopicSubscription,
   type TopicSource,
+  type PinnedThread,
 } from '../api'
 import { applyGroupNames, assignCountries, continentOf, nameOf } from '../continents'
 import ClusterGraph from './ClusterGraph'
@@ -933,6 +937,63 @@ export function LiveGlobePage() {
     listSubscriptions()
       .then((s) => setSubs(s || []))
       .catch(() => setSubs([]))
+  }
+
+  // ── Pinned threads (📌 quick access) ──────────────────────────────────────────
+  const [pins, setPins] = useState<PinnedThread[]>([])
+  const [pinsOpen, setPinsOpen] = useState(false)
+  // channel:thread → last_ms already seen. localStorage, not DB: single-user
+  // dashboard; ponytail: add a server column if cross-browser sync ever matters.
+  const [pinSeen, setPinSeen] = useState<Record<string, number>>(() => {
+    try {
+      return JSON.parse(localStorage.getItem('live-pin-seen') || '{}')
+    } catch {
+      return {}
+    }
+  })
+  const pinKey = (p: { channel_id: string; thread_ts: string }) => `${p.channel_id}:${p.thread_ts}`
+
+  function refreshPins() {
+    listPins()
+      .then((p) => setPins(p || []))
+      .catch(() => {})
+  }
+
+  // Load on mount + refresh every 60s so "latest" stays current.
+  useEffect(() => {
+    refreshPins()
+    const t = setInterval(refreshPins, 60_000)
+    return () => clearInterval(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const pinnedKeys = useMemo(() => new Set(pins.map(pinKey)), [pins])
+  const unseenPinCount = pins.filter((p) => p.last_ms > (pinSeen[pinKey(p)] || 0)).length
+
+  // Closing the panel marks everything currently listed as seen.
+  function markPinsSeen() {
+    const next = { ...pinSeen }
+    for (const p of pins) next[pinKey(p)] = p.last_ms
+    setPinSeen(next)
+    try {
+      localStorage.setItem('live-pin-seen', JSON.stringify(next))
+    } catch {
+      /* private mode */
+    }
+  }
+
+  // Used by the panel added in the next task; keep this intermediate commit
+  // independently typecheck-clean under noUnusedLocals.
+  void pinsOpen
+  void setPinsOpen
+  void unseenPinCount
+  void markPinsSeen
+
+  function togglePin(channelId: string, threadTs: string) {
+    const op = pinnedKeys.has(`${channelId}:${threadTs}`)
+      ? deletePin(channelId, threadTs)
+      : createPin(channelId, threadTs)
+    op.then(refreshPins).catch(() => {})
   }
 
   // ── Dynamic source rows (type dropdown + URL, add/remove) ────────────────────
@@ -2472,6 +2533,24 @@ export function LiveGlobePage() {
                             open in Graph ↗
                           </button>
                         )}
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            togglePin(selected.channelId, t.thread_ts)
+                          }}
+                          style={{
+                            background: 'transparent',
+                            border: 'none',
+                            padding: 0,
+                            cursor: 'pointer',
+                            fontFamily: MONO,
+                            color: pinnedKeys.has(`${selected.channelId}:${t.thread_ts}`) ? C.green : C.dim,
+                            fontSize: 9,
+                            letterSpacing: '0.06em',
+                          }}
+                        >
+                          {pinnedKeys.has(`${selected.channelId}:${t.thread_ts}`) ? '📌 pinned' : '📌 pin'}
+                        </button>
                       </div>
                     )}
 
