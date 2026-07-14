@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -166,6 +167,110 @@ FROM graph.pinned_threads ORDER BY pinned_at DESC`)
 		out = append(out, pt)
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// boardIssue is one board ticket that pinned-board threads reference.
+type boardIssue struct {
+	Key     string `json:"key"`
+	Summary string `json:"summary"`
+	Status  string `json:"status"`
+}
+
+// boardEpicGroup is one epic swimlane of GET /api/graph/pins/board.
+type boardEpicGroup struct {
+	EpicKey     string         `json:"epic_key"` // "" = tickets with no epic
+	EpicSummary string         `json:"epic_summary"`
+	EpicStatus  string         `json:"epic_status"`
+	Issues      []boardIssue   `json:"issues"`
+	Threads     []pinnedThread `json:"threads"`
+	LastMs      int64          `json:"last_ms"` // newest thread activity in the group
+}
+
+// boardMaxThreadsPerEpic caps each swimlane; boardWindowDays caps how far back
+// thread activity counts. ponytail: constants; querystring overrides if needed.
+const (
+	boardMaxThreadsPerEpic = 8
+	boardWindowDays        = 60
+)
+
+// board handles GET /api/graph/pins/board — every Slack thread that REFERENCES
+// a ticket in graph.jira_epic_map, grouped by the ticket's epic (the board's
+// swimlane view). Chatter threads are excluded; groups sort by newest activity.
+func (h *Pins) board(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	rows, err := h.db.Query(ctx, `
+SELECT DISTINCT
+  REPLACE(t.scope,'slack:','') AS channel_id,
+  COALESCE(NULLIF(t.metadata->>'thread_ts',''), split_part(t.id,':',3)) AS thread_ts,
+  em.epic_key, em.epic_summary, em.epic_status,
+  em.issue_key, em.issue_summary, em.issue_status
+FROM graph.edges e
+JOIN graph.nodes j ON j.id = e.to_node_id AND j.type='jira' AND j.deleted_at IS NULL
+JOIN graph.jira_epic_map em ON em.issue_key = j.natural_key
+JOIN graph.nodes t ON t.id = e.from_node_id AND t.deleted_at IS NULL AND t.scope LIKE 'slack:%'
+WHERE e.kind = 'REFERENCES'
+  AND t.first_seen_at >= now() - make_interval(days => $1)`, boardWindowDays)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	groups := map[string]*boardEpicGroup{}
+	threadEpic := map[threadRef]string{}
+	issueSeen := map[string]bool{}
+	var refs []threadRef
+	for rows.Next() {
+		var ch, tt, ek, es, est, ik, isum, ist string
+		if rows.Scan(&ch, &tt, &ek, &es, &est, &ik, &isum, &ist) != nil {
+			continue
+		}
+		g := groups[ek]
+		if g == nil {
+			g = &boardEpicGroup{EpicKey: ek, EpicSummary: es, EpicStatus: est}
+			groups[ek] = g
+		}
+		if !issueSeen[ek+"|"+ik] {
+			issueSeen[ek+"|"+ik] = true
+			g.Issues = append(g.Issues, boardIssue{Key: ik, Summary: isum, Status: ist})
+		}
+		ref := threadRef{ch, tt}
+		if _, dup := threadEpic[ref]; !dup {
+			threadEpic[ref] = ek
+			refs = append(refs, ref)
+		}
+	}
+	rows.Close()
+
+	enriched, err := h.enrichThreads(ctx, refs)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	for ref, ek := range threadEpic {
+		pt, ok := enriched[ref]
+		if !ok || pt.Kind == "chatter" || pt.MsgCount == 0 {
+			continue // hidden: chatter, or the thread has no visible messages
+		}
+		g := groups[ek]
+		g.Threads = append(g.Threads, pt)
+		if pt.LastMs > g.LastMs {
+			g.LastMs = pt.LastMs
+		}
+	}
+
+	out := []boardEpicGroup{}
+	for _, g := range groups {
+		if len(g.Threads) == 0 {
+			continue
+		}
+		sort.Slice(g.Threads, func(i, j int) bool { return g.Threads[i].LastMs > g.Threads[j].LastMs })
+		if len(g.Threads) > boardMaxThreadsPerEpic {
+			g.Threads = g.Threads[:boardMaxThreadsPerEpic]
+		}
+		sort.Slice(g.Issues, func(i, j int) bool { return g.Issues[i].Key < g.Issues[j].Key })
+		out = append(out, *g)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].LastMs > out[j].LastMs })
+	writeJSON(w, http.StatusOK, map[string]any{"groups": out})
 }
 
 // create handles POST /api/graph/pins {channel_id, thread_ts}. Idempotent —

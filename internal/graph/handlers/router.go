@@ -60,6 +60,7 @@ func Mount(r chi.Router, deps Deps) {
 	r.Get("/api/graph/pins", pins.list)
 	r.Post("/api/graph/pins", pins.create)
 	r.Delete("/api/graph/pins", pins.delete)
+	r.Get("/api/graph/pins/board", pins.board)
 
 	r.Mount("/api/graph", NewNeighbors(deps.DB))
 }
