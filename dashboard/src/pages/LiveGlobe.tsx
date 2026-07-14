@@ -969,25 +969,58 @@ export function LiveGlobePage() {
   }, [])
 
   const pinnedKeys = useMemo(() => new Set(pins.map(pinKey)), [pins])
-  const unseenPinCount = pins.filter((p) => p.last_ms > (pinSeen[pinKey(p)] || 0)).length
-
-  // Closing the panel marks everything currently listed as seen.
-  function markPinsSeen() {
-    const next = { ...pinSeen }
-    for (const p of pins) next[pinKey(p)] = p.last_ms
-    setPinSeen(next)
-    try {
-      localStorage.setItem('live-pin-seen', JSON.stringify(next))
-    } catch {
-      /* private mode */
-    }
-  }
 
   function togglePin(channelId: string, threadTs: string) {
     const op = pinnedKeys.has(`${channelId}:${threadTs}`)
       ? deletePin(channelId, threadTs)
       : createPin(channelId, threadTs)
     op.then(refreshPins).catch(() => {})
+  }
+
+  // ── Board section (auto-pinned: threads referencing PAY board tickets) ───────
+  const [boardGroups, setBoardGroups] = useState<BoardEpicGroup[]>([])
+  const [collapsedEpics, setCollapsedEpics] = useState<Set<string>>(new Set())
+
+  function refreshBoard() {
+    fetchBoardPins()
+      .then((g) => setBoardGroups(g || []))
+      .catch(() => {})
+  }
+
+  useEffect(() => {
+    refreshBoard()
+    const t = setInterval(refreshBoard, 60_000)
+    return () => clearInterval(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  function toggleEpic(key: string) {
+    setCollapsedEpics((cur) => {
+      const next = new Set(cur)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }
+
+  const boardThreads = useMemo(() => boardGroups.flatMap((g) => g.threads), [boardGroups])
+  const unseenPinCount =
+    pins.filter((p) => p.last_ms > (pinSeen[pinKey(p)] || 0)).length +
+    boardThreads.filter(
+      (p) => p.last_ms > (pinSeen[pinKey(p)] || 0) && !pinnedKeys.has(pinKey(p)),
+    ).length
+
+  // Closing the panel marks everything currently listed (manual + board) as seen.
+  function markPinsSeen() {
+    const next = { ...pinSeen }
+    for (const p of pins) next[pinKey(p)] = p.last_ms
+    for (const p of boardThreads) next[pinKey(p)] = p.last_ms
+    setPinSeen(next)
+    try {
+      localStorage.setItem('live-pin-seen', JSON.stringify(next))
+    } catch {
+      /* private mode */
+    }
   }
 
   // ── Dynamic source rows (type dropdown + URL, add/remove) ────────────────────
