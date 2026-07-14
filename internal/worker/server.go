@@ -197,6 +197,18 @@ func NewServer(cfg *config.Config, logBuf *LogBuffer) (*Server, error) {
 		}
 	}
 
+	// Kick off the self-rescheduling Jira board→epic map refresh (deduped).
+	var jiraBoardPending bool
+	_ = pool.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM graph.jobs WHERE type='refresh_jira_board' AND status IN ('queued','running'))`).
+		Scan(&jiraBoardPending)
+	if !jiraBoardPending {
+		if _, err := jobs.Enqueue(ctx, pool, "refresh_jira_board", map[string]any{},
+			jobs.EnqueueOptions{TargetRunner: cfg.Graph.Runner, MachineID: cfg.MachineID}); err != nil {
+			graphLog.Warn().Err(err).Msg("startup: enqueue refresh_jira_board failed")
+		}
+	}
+
 	// Kick off the self-rescheduling watch-channels notifier (DMs every message in
 	// the Payment Partners group). Deduped: skip if one is already queued/running.
 	var watchPending bool

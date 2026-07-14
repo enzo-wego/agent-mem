@@ -12,6 +12,7 @@ import (
 // be used to inject arbitrary work.
 var enqueuableTypes = map[string]bool{
 	"backfill_created_at":      true,
+	"refresh_jira_board":       true,
 	"refresh_slack_channels":   true,
 	"refresh_slack_users":      true,
 	"refresh_slack_bots":       true,
