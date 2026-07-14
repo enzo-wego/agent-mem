@@ -18,6 +18,7 @@ import {
   listPins,
   createPin,
   deletePin,
+  fetchBoardPins,
   type ChannelCount,
   type ContinentCfg,
   type ChannelMessage,
@@ -28,6 +29,7 @@ import {
   type TopicSubscription,
   type TopicSource,
   type PinnedThread,
+  type BoardEpicGroup,
 } from '../api'
 import { applyGroupNames, assignCountries, continentOf, nameOf } from '../continents'
 import ClusterGraph from './ClusterGraph'
