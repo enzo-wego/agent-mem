@@ -1653,6 +1653,123 @@ export function LiveGlobePage() {
     textTransform: 'uppercase',
   })
 
+  function renderPinCard(p: PinnedThread, opts: { unpin: boolean }) {
+    const isNew = p.last_ms > (pinSeen[pinKey(p)] || 0)
+    const digits = p.thread_ts.replace('.', '')
+    const slackLink = p.url || `https://wego.slack.com/archives/${p.channel_id}/p${digits}`
+    return (
+      <div
+        key={pinKey(p)}
+        style={{
+          background: 'rgba(255,255,255,0.02)',
+          border: `1px solid ${isNew ? C.green : C.border}`,
+          borderRadius: 3,
+          padding: 8,
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 4,
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
+          <span style={{ color: C.dim, fontSize: 9, letterSpacing: '0.06em', flexShrink: 0 }}>
+            #{p.channel_name || p.channel_id}
+          </span>
+          <span style={{ flex: 1 }} />
+          {isNew && (
+            <span
+              style={{
+                flexShrink: 0,
+                color: C.green,
+                fontSize: 8,
+                letterSpacing: '0.08em',
+                border: `1px solid ${C.green}`,
+                borderRadius: 2,
+                padding: '0 3px',
+              }}
+            >
+              NEW
+            </span>
+          )}
+          <span style={{ color: C.dim, fontSize: 9, flexShrink: 0 }}>
+            {p.last_ms
+              ? new Date(p.last_ms).toLocaleString(undefined, {
+                  month: 'short',
+                  day: 'numeric',
+                  hour: 'numeric',
+                  minute: '2-digit',
+                })
+              : ''}
+          </span>
+        </div>
+        <div style={{ color: C.text, fontSize: 11, lineHeight: 1.35 }}>
+          {(cfg ? applyGroupNames(p.summary, cfg) : p.summary) || p.last_body || p.thread_ts}
+        </div>
+        {p.last_body && (
+          <div
+            style={{
+              color: C.dim,
+              fontSize: 10,
+              lineHeight: 1.35,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            latest{p.last_author ? ` · ${p.last_author}` : ''}: {p.last_body}
+            {p.msg_count > 0 && ` · ${p.msg_count} msgs`}
+          </div>
+        )}
+        <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+          <a
+            href={slackLink}
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{ color: C.green, fontSize: 9, letterSpacing: '0.06em', textDecoration: 'none' }}
+          >
+            open in Slack ↗
+          </a>
+          <button
+            onClick={() => {
+              markPinsSeen()
+              setPinsOpen(false)
+              openGraphForNodeID(p.node_id)
+            }}
+            style={{
+              background: 'transparent',
+              border: 'none',
+              padding: 0,
+              cursor: 'pointer',
+              fontFamily: MONO,
+              color: C.green,
+              fontSize: 9,
+              letterSpacing: '0.06em',
+            }}
+          >
+            open in Graph ↗
+          </button>
+          <span style={{ flex: 1 }} />
+          {opts.unpin && (
+            <button
+              onClick={() => togglePin(p.channel_id, p.thread_ts)}
+              style={{
+                background: 'transparent',
+                border: 'none',
+                padding: 0,
+                cursor: 'pointer',
+                fontFamily: MONO,
+                color: C.dim,
+                fontSize: 9,
+                letterSpacing: '0.06em',
+              }}
+            >
+              unpin ✕
+            </button>
+          )}
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div style={{ position: 'fixed', inset: 0, width: '100vw', height: '100vh', overflow: 'hidden', background: C.bg }}>
       <style>{`
@@ -2850,37 +2967,73 @@ export function LiveGlobePage() {
             </div>
 
             <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 6, marginTop: 12 }}>
+              {/* ── Manual pins ── */}
+              <div style={{ color: C.dim, fontSize: 9, letterSpacing: '0.12em', textTransform: 'uppercase' }}>
+                Pinned
+              </div>
               {pins.length === 0 && (
                 <div style={{ color: C.dim, fontSize: 11 }}>
                   no pinned threads — open a channel, expand TOPICS, hit 📌 pin
                 </div>
               )}
-              {pins.map((p) => {
-                const isNew = p.last_ms > (pinSeen[pinKey(p)] || 0)
-                const digits = p.thread_ts.replace('.', '')
-                const slackLink = p.url || `https://wego.slack.com/archives/${p.channel_id}/p${digits}`
+              {pins.map((p) => renderPinCard(p, { unpin: true }))}
+
+              {/* ── PAY board, grouped by epic (auto) ── */}
+              <div
+                style={{
+                  color: C.dim,
+                  fontSize: 9,
+                  letterSpacing: '0.12em',
+                  textTransform: 'uppercase',
+                  marginTop: 10,
+                  display: 'flex',
+                  alignItems: 'baseline',
+                  gap: 8,
+                }}
+              >
+                Payments &amp; Tax board
+                <a
+                  href="https://wegomushi.atlassian.net/jira/software/c/projects/PAY/boards/193"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{ color: C.green, fontSize: 9, letterSpacing: '0.06em', textDecoration: 'none', textTransform: 'none' }}
+                >
+                  open board ↗
+                </a>
+              </div>
+              {boardGroups.length === 0 && (
+                <div style={{ color: C.dim, fontSize: 11 }}>
+                  no board threads yet — epic map refreshes every 6h
+                </div>
+              )}
+              {boardGroups.map((g) => {
+                const gKey = g.epic_key || '(no epic)'
+                const collapsed = collapsedEpics.has(gKey)
+                const unseen = g.threads.filter((p) => p.last_ms > (pinSeen[pinKey(p)] || 0)).length
                 return (
-                  <div
-                    key={pinKey(p)}
-                    style={{
-                      background: 'rgba(255,255,255,0.02)',
-                      border: `1px solid ${isNew ? C.green : C.border}`,
-                      borderRadius: 3,
-                      padding: 8,
-                      display: 'flex',
-                      flexDirection: 'column',
-                      gap: 4,
-                    }}
-                  >
-                    <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
-                      <span style={{ color: C.dim, fontSize: 9, letterSpacing: '0.06em', flexShrink: 0 }}>
-                        #{p.channel_name || p.channel_id}
+                  <div key={gKey} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    <div
+                      onClick={() => toggleEpic(gKey)}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'baseline',
+                        gap: 6,
+                        cursor: 'pointer',
+                        borderBottom: `1px solid ${C.border}`,
+                        paddingBottom: 3,
+                      }}
+                    >
+                      <span style={{ color: C.dim, fontSize: 10 }}>{collapsed ? '▸' : '▾'}</span>
+                      <span style={{ color: C.text, fontSize: 11, fontWeight: 600 }}>
+                        {g.epic_key ? `${g.epic_key} — ${g.epic_summary}` : 'No epic'}
                       </span>
+                      {g.epic_status && (
+                        <span style={{ color: C.dim, fontSize: 9 }}>{g.epic_status}</span>
+                      )}
                       <span style={{ flex: 1 }} />
-                      {isNew && (
+                      {unseen > 0 && (
                         <span
                           style={{
-                            flexShrink: 0,
                             color: C.green,
                             fontSize: 8,
                             letterSpacing: '0.08em',
@@ -2889,83 +3042,14 @@ export function LiveGlobePage() {
                             padding: '0 3px',
                           }}
                         >
-                          NEW
+                          {unseen} NEW
                         </span>
                       )}
-                      <span style={{ color: C.dim, fontSize: 9, flexShrink: 0 }}>
-                        {p.last_ms
-                          ? new Date(p.last_ms).toLocaleString(undefined, {
-                              month: 'short',
-                              day: 'numeric',
-                              hour: 'numeric',
-                              minute: '2-digit',
-                            })
-                          : ''}
+                      <span style={{ color: C.dim, fontSize: 9 }}>
+                        {g.threads.length} thread{g.threads.length === 1 ? '' : 's'}
                       </span>
                     </div>
-                    <div style={{ color: C.text, fontSize: 11, lineHeight: 1.35 }}>
-                      {(cfg ? applyGroupNames(p.summary, cfg) : p.summary) || p.last_body || p.thread_ts}
-                    </div>
-                    {p.last_body && (
-                      <div
-                        style={{
-                          color: C.dim,
-                          fontSize: 10,
-                          lineHeight: 1.35,
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                          whiteSpace: 'nowrap',
-                        }}
-                      >
-                        latest{p.last_author ? ` · ${p.last_author}` : ''}: {p.last_body}
-                        {p.msg_count > 0 && ` · ${p.msg_count} msgs`}
-                      </div>
-                    )}
-                    <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
-                      <a
-                        href={slackLink}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        style={{ color: C.green, fontSize: 9, letterSpacing: '0.06em', textDecoration: 'none' }}
-                      >
-                        open in Slack ↗
-                      </a>
-                      <button
-                        onClick={() => {
-                          markPinsSeen()
-                          setPinsOpen(false)
-                          openGraphForNodeID(p.node_id)
-                        }}
-                        style={{
-                          background: 'transparent',
-                          border: 'none',
-                          padding: 0,
-                          cursor: 'pointer',
-                          fontFamily: MONO,
-                          color: C.green,
-                          fontSize: 9,
-                          letterSpacing: '0.06em',
-                        }}
-                      >
-                        open in Graph ↗
-                      </button>
-                      <span style={{ flex: 1 }} />
-                      <button
-                        onClick={() => togglePin(p.channel_id, p.thread_ts)}
-                        style={{
-                          background: 'transparent',
-                          border: 'none',
-                          padding: 0,
-                          cursor: 'pointer',
-                          fontFamily: MONO,
-                          color: C.dim,
-                          fontSize: 9,
-                          letterSpacing: '0.06em',
-                        }}
-                      >
-                        unpin ✕
-                      </button>
-                    </div>
+                    {!collapsed && g.threads.map((p) => renderPinCard(p, { unpin: false }))}
                   </div>
                 )
               })}
