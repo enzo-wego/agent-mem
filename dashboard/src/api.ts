@@ -776,12 +776,13 @@ export interface BoardEpicGroup {
   issues: BoardIssue[];
   threads: PinnedThread[];
   last_ms: number;
+  active_count: number; // threads with a new message inside the active window
 }
 
-export async function fetchBoardPins(): Promise<BoardEpicGroup[]> {
+export async function fetchBoardPins(): Promise<{ groups: BoardEpicGroup[]; activeHours: number }> {
   const res = await authFetch(`${BASE}/api/graph/pins/board`);
   const d = await res.json();
-  return d.groups || [];
+  return { groups: d.groups || [], activeHours: d.active_hours || 24 };
 }
 
 export async function fetchContinents(): Promise<ContinentCfg> {

@@ -983,12 +983,13 @@ export function LiveGlobePage() {
   // Swimlanes collapse by default. Seed each epic key once, so the 60s refresh
   // can't re-collapse a swimlane the user manually expanded.
   const seededEpicsRef = useRef<Set<string>>(new Set())
+  const [activeHours, setActiveHours] = useState(24)
 
   function refreshBoard() {
     fetchBoardPins()
-      .then((g) => {
-        const groups = g || []
+      .then(({ groups, activeHours: hrs }) => {
         setBoardGroups(groups)
+        setActiveHours(hrs)
         setCollapsedEpics((cur) => {
           const next = new Set(cur)
           for (const grp of groups) {
@@ -3059,6 +3060,21 @@ export function LiveGlobePage() {
                           }}
                         >
                           {unseen} NEW
+                        </span>
+                      )}
+                      {g.active_count > 0 && (
+                        <span
+                          title={`threads with a new message in the last ${activeHours}h`}
+                          style={{
+                            color: '#d99a2b',
+                            fontSize: 8,
+                            letterSpacing: '0.08em',
+                            border: '1px solid #d99a2b',
+                            borderRadius: 2,
+                            padding: '0 3px',
+                          }}
+                        >
+                          {g.active_count} · {activeHours}h
                         </span>
                       )}
                       <span style={{ color: C.dim, fontSize: 9 }}>
