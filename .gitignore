@@ -40,6 +40,7 @@ go.work.sum
 .omx/
 /.codex
 /.omc
+/docs/.omc
 /vendor
 docker-compose.override.yml
 
