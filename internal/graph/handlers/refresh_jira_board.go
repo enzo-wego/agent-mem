@@ -339,8 +339,16 @@ func refreshJiraBoardHandler(deps Deps) jobs.Handler {
 				if err != nil {
 					return fmt.Errorf("jira search: %w", err)
 				}
-				allRows = append(allRows, rows...)
 				for _, r := range rows {
+					// If the referenced issue is itself a board epic, map it to
+					// itself so a thread *about the epic* lands in the epic's
+					// swimlane instead of the catch-all "no epic" group.
+					if _, isEpic := ranks[r.IssueKey]; isEpic {
+						r.EpicKey = r.IssueKey
+						r.EpicSummary = r.IssueSummary
+						r.EpicStatus = r.IssueStatus
+					}
+					allRows = append(allRows, r)
 					if r.EpicKey != "" {
 						epicSet[r.EpicKey] = true
 					}
