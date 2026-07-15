@@ -22,6 +22,14 @@ import (
 // when a second board matters.
 const jiraBoardProject = "PAY"
 
+// jiraBoardID is the PAY board (board 193). Its Agile epic list gives the
+// swimlane order the /live board section mirrors.
+const jiraBoardID = 193
+
+// boardEpicNoRank sorts epics that are not on the board (and the no-epic group)
+// after every ranked epic. Matches the migration's DEFAULT.
+const boardEpicNoRank = 2147483647
+
 const refreshJiraBoardInterval = 6 * time.Hour
 
 // NewRefreshJiraBoardHandler returns the job entry for "refresh_jira_board".
@@ -91,6 +99,72 @@ func parseJiraEpicRows(body []byte) ([]epicRow, string, error) {
 	return rows, resp.NextPageToken, nil
 }
 
+// boardEpicPage is the minimal shape of GET /rest/agile/1.0/board/{id}/epic.
+type boardEpicPage struct {
+	IsLast bool `json:"isLast"`
+	Values []struct {
+		Key string `json:"key"`
+	} `json:"values"`
+}
+
+// parseBoardEpicPage returns the epic keys on one board page (in board order,
+// blank keys dropped) and whether this is the last page.
+func parseBoardEpicPage(body []byte) (keys []string, isLast bool, err error) {
+	var page boardEpicPage
+	if err := json.Unmarshal(body, &page); err != nil {
+		return nil, true, fmt.Errorf("decode board epics: %w", err)
+	}
+	for _, v := range page.Values {
+		if v.Key != "" {
+			keys = append(keys, v.Key)
+		}
+	}
+	return keys, page.IsLast, nil
+}
+
+// fetchBoardEpicRanks walks GET /rest/agile/1.0/board/193/epic and returns
+// epicKey→rank (0-based, in board order). Best-effort: on any error it returns
+// what it has so far — unranked epics fall back to boardEpicNoRank and sort last.
+func fetchBoardEpicRanks(ctx context.Context, client *http.Client, baseURL, email, token string) (map[string]int, error) {
+	ranks := map[string]int{}
+	startAt := 0
+	for {
+		url := fmt.Sprintf("%s/rest/agile/1.0/board/%d/epic?startAt=%d&maxResults=50", baseURL, jiraBoardID, startAt)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		if err != nil {
+			return ranks, err
+		}
+		req.SetBasicAuth(email, token)
+		req.Header.Set("Accept", "application/json")
+		resp, err := client.Do(req)
+		if err != nil {
+			return ranks, err
+		}
+		body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+		resp.Body.Close()
+		if err != nil {
+			return ranks, err
+		}
+		if resp.StatusCode != http.StatusOK {
+			return ranks, fmt.Errorf("board epics %d: %s", resp.StatusCode, firstLine(string(body), 200))
+		}
+		keys, isLast, err := parseBoardEpicPage(body)
+		if err != nil {
+			return ranks, err
+		}
+		for _, k := range keys {
+			if _, ok := ranks[k]; !ok {
+				ranks[k] = len(ranks) // cumulative board order across pages
+			}
+		}
+		if isLast || len(keys) == 0 {
+			break
+		}
+		startAt += len(keys)
+	}
+	return ranks, nil
+}
+
 func refreshJiraBoardHandler(deps Deps) jobs.Handler {
 	return func(ctx context.Context, _ []byte) error {
 		// Always reschedule the next tick, even on failure — same contract as
@@ -136,6 +210,10 @@ func refreshJiraBoardHandler(deps Deps) jobs.Handler {
 		}
 
 		client := &http.Client{Timeout: 30 * time.Second}
+		ranks, err := fetchBoardEpicRanks(ctx, client, baseURL, email, token)
+		if err != nil {
+			deps.Logger.Warn().Err(err).Msg("refresh_jira_board: board epic order fetch failed; ranks default to end")
+		}
 		total := 0
 		// Batched JQL: `key in (…)` in chunks — one HTTP call per ~50 issues.
 		for start := 0; start < len(keys); start += 50 {
@@ -151,14 +229,21 @@ func refreshJiraBoardHandler(deps Deps) jobs.Handler {
 					return fmt.Errorf("jira search: %w", err)
 				}
 				for _, r := range rows {
+					rank := boardEpicNoRank
+					if r.EpicKey != "" {
+						if v, ok := ranks[r.EpicKey]; ok {
+							rank = v
+						}
+					}
 					if _, err := deps.DB.Exec(ctx, `
-INSERT INTO graph.jira_epic_map (issue_key, issue_summary, issue_status, epic_key, epic_summary, epic_status, refreshed_at, machine_id)
-VALUES ($1,$2,$3,$4,$5,$6,NOW(),$7)
+INSERT INTO graph.jira_epic_map (issue_key, issue_summary, issue_status, epic_key, epic_summary, epic_status, epic_rank, refreshed_at, machine_id)
+VALUES ($1,$2,$3,$4,$5,$6,$7,NOW(),$8)
 ON CONFLICT (issue_key) DO UPDATE SET
   issue_summary=EXCLUDED.issue_summary, issue_status=EXCLUDED.issue_status,
   epic_key=EXCLUDED.epic_key, epic_summary=EXCLUDED.epic_summary,
-  epic_status=EXCLUDED.epic_status, refreshed_at=NOW(), machine_id=EXCLUDED.machine_id`,
-						r.IssueKey, r.IssueSummary, r.IssueStatus, r.EpicKey, r.EpicSummary, r.EpicStatus, deps.MachineID); err != nil {
+  epic_status=EXCLUDED.epic_status, epic_rank=EXCLUDED.epic_rank,
+  refreshed_at=NOW(), machine_id=EXCLUDED.machine_id`,
+						r.IssueKey, r.IssueSummary, r.IssueStatus, r.EpicKey, r.EpicSummary, r.EpicStatus, rank, deps.MachineID); err != nil {
 						return fmt.Errorf("upsert %s: %w", r.IssueKey, err)
 					}
 					total++
