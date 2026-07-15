@@ -5,8 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"sort"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -181,8 +184,9 @@ type boardEpicGroup struct {
 	EpicKey     string         `json:"epic_key"` // "" = tickets with no epic
 	EpicSummary string         `json:"epic_summary"`
 	EpicStatus  string         `json:"epic_status"`
-	EpicRank    int            `json:"epic_rank"` // board rank; boardEpicNoRank = off-board / no epic
-	OnBoard     bool           `json:"-"`         // epic has live board issues; off-board epics are hidden
+	EpicRank    int            `json:"epic_rank"`    // board rank; boardEpicNoRank = off-board / no epic
+	OnBoard     bool           `json:"-"`            // epic has live board issues; off-board epics are hidden
+	ActiveCount int            `json:"active_count"` // threads with a new message inside the active window
 	Issues      []boardIssue   `json:"issues"`
 	Threads     []pinnedThread `json:"threads"`
 	LastMs      int64          `json:"last_ms"` // newest thread activity in the group
@@ -194,6 +198,31 @@ const (
 	boardMaxThreadsPerEpic = 8
 	boardWindowDays        = 60
 )
+
+// boardActiveHoursDefault is the default "recent activity" window (hours) for
+// the board section's per-epic active count.
+const boardActiveHoursDefault = 24
+
+// boardActiveHours returns the active-window in hours: AGENT_MEM_BOARD_ACTIVE_HOURS
+// when set to a positive integer, otherwise boardActiveHoursDefault (24).
+func boardActiveHours() int {
+	if v, err := strconv.Atoi(os.Getenv("AGENT_MEM_BOARD_ACTIVE_HOURS")); err == nil && v > 0 {
+		return v
+	}
+	return boardActiveHoursDefault
+}
+
+// countActiveThreads returns how many threads had their latest message at or
+// after cutoffMs (epoch ms) — threads with new activity in the active window.
+func countActiveThreads(threads []pinnedThread, cutoffMs int64) int {
+	n := 0
+	for _, t := range threads {
+		if t.LastMs >= cutoffMs {
+			n++
+		}
+	}
+	return n
+}
 
 // sortBoardGroups orders epic swimlanes to mirror the PAY board: by board epic
 // rank ascending, newest thread activity breaking ties, and the "no epic" group
@@ -277,6 +306,8 @@ WHERE e.kind = 'REFERENCES'
 		}
 	}
 
+	hours := boardActiveHours()
+	cutoffMs := time.Now().Add(-time.Duration(hours) * time.Hour).UnixMilli()
 	out := []boardEpicGroup{}
 	for _, g := range groups {
 		if len(g.Threads) == 0 {
@@ -285,6 +316,9 @@ WHERE e.kind = 'REFERENCES'
 		if g.EpicKey != "" && !g.OnBoard {
 			continue // epic not live on board 193 — mirror the board's Epics panel (no-epic kept)
 		}
+		// Count over all eligible threads BEFORE the display cap, so the number
+		// reflects real recent activity even when >8 threads exist.
+		g.ActiveCount = countActiveThreads(g.Threads, cutoffMs)
 		sort.Slice(g.Threads, func(i, j int) bool { return g.Threads[i].LastMs > g.Threads[j].LastMs })
 		if len(g.Threads) > boardMaxThreadsPerEpic {
 			g.Threads = g.Threads[:boardMaxThreadsPerEpic]
@@ -293,7 +327,7 @@ WHERE e.kind = 'REFERENCES'
 		out = append(out, *g)
 	}
 	sortBoardGroups(out)
-	writeJSON(w, http.StatusOK, map[string]any{"groups": out})
+	writeJSON(w, http.StatusOK, map[string]any{"groups": out, "active_hours": hours})
 }
 
 // create handles POST /api/graph/pins {channel_id, thread_ts}. Idempotent —
