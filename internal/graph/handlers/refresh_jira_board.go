@@ -195,53 +195,82 @@ func parseBoardIssueParents(body []byte) (parents []string, pageLen, total int, 
 	return parents, len(page.Issues), page.Total, nil
 }
 
-// fetchBoardLiveEpics returns the subset of epicKeys that have at least one
-// non-Done issue on board 193 — i.e. the epics the board's Epics panel actually
-// shows. The bool is false if the fetch failed; callers then treat every epic
-// as on-board so a transient Jira error can't blank the /live board section.
-func fetchBoardLiveEpics(ctx context.Context, client *http.Client, baseURL, email, token string, epicKeys []string) (map[string]bool, bool) {
+// jiraGet does one authenticated GET and returns the body; ok is false on any
+// transport error or non-200 status.
+func jiraGet(ctx context.Context, client *http.Client, u, email, token string) ([]byte, bool) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return nil, false
+	}
+	req.SetBasicAuth(email, token)
+	req.Header.Set("Accept", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, false
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	resp.Body.Close()
+	if err != nil || resp.StatusCode != http.StatusOK {
+		return nil, false
+	}
+	return body, true
+}
+
+// sprintListPage is the minimal shape of GET /rest/agile/1.0/board/{id}/sprint.
+type sprintListPage struct {
+	Values []struct {
+		ID int `json:"id"`
+	} `json:"values"`
+}
+
+// fetchActiveSprintEpics returns the subset of epicKeys that have at least one
+// issue in board 193's active sprint(s) — exactly the epics the Scrum board's
+// Epics panel shows. (The board is Scrum, so its view is the active sprint, not
+// the whole backlog.) The bool is false on fetch failure so callers fall back
+// to showing every referenced epic and a transient Jira error can't blank the
+// /live board section.
+func fetchActiveSprintEpics(ctx context.Context, client *http.Client, baseURL, email, token string, epicKeys []string) (map[string]bool, bool) {
 	live := map[string]bool{}
 	if len(epicKeys) == 0 {
 		return live, true
 	}
-	jql := "parent in (" + strings.Join(epicKeys, ",") + ") AND statusCategory != Done"
-	startAt := 0
-	for {
-		q := url.Values{
-			"jql":        {jql},
-			"fields":     {"parent"},
-			"maxResults": {"100"},
-			"startAt":    {strconv.Itoa(startAt)},
-		}
-		u := fmt.Sprintf("%s/rest/agile/1.0/board/%d/issue?%s", baseURL, jiraBoardID, q.Encode())
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
-		if err != nil {
-			return live, false
-		}
-		req.SetBasicAuth(email, token)
-		req.Header.Set("Accept", "application/json")
-		resp, err := client.Do(req)
-		if err != nil {
-			return live, false
-		}
-		body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
-		resp.Body.Close()
-		if err != nil {
-			return live, false
-		}
-		if resp.StatusCode != http.StatusOK {
-			return live, false
-		}
-		parents, pageLen, total, err := parseBoardIssueParents(body)
-		if err != nil {
-			return live, false
-		}
-		for _, p := range parents {
-			live[p] = true
-		}
-		startAt += pageLen
-		if pageLen == 0 || startAt >= total {
-			break
+	body, ok := jiraGet(ctx, client,
+		fmt.Sprintf("%s/rest/agile/1.0/board/%d/sprint?state=active&maxResults=50", baseURL, jiraBoardID),
+		email, token)
+	if !ok {
+		return live, false
+	}
+	var sl sprintListPage
+	if err := json.Unmarshal(body, &sl); err != nil {
+		return live, false
+	}
+	jql := "parent in (" + strings.Join(epicKeys, ",") + ")"
+	for _, s := range sl.Values {
+		startAt := 0
+		for {
+			q := url.Values{
+				"jql":        {jql},
+				"fields":     {"parent"},
+				"maxResults": {"100"},
+				"startAt":    {strconv.Itoa(startAt)},
+			}
+			b, ok := jiraGet(ctx, client,
+				fmt.Sprintf("%s/rest/agile/1.0/board/%d/sprint/%d/issue?%s", baseURL, jiraBoardID, s.ID, q.Encode()),
+				email, token)
+			if !ok {
+				return live, false
+			}
+			parents, pageLen, total, err := parseBoardIssueParents(b)
+			if err != nil {
+				return live, false
+			}
+			for _, p := range parents {
+				live[p] = true
+			}
+			startAt += pageLen
+			if pageLen == 0 || startAt >= total {
+				break
+			}
 		}
 	}
 	return live, true
@@ -323,16 +352,16 @@ func refreshJiraBoardHandler(deps Deps) jobs.Handler {
 			}
 		}
 
-		// on_board = the epic has ≥1 non-Done issue on board 193 (mirrors the
-		// board's Epics panel). Best-effort: on failure treat every epic as
-		// on-board so the /live panel never empties on a transient Jira error.
+		// on_board = the epic has ≥1 issue in board 193's active sprint (mirrors
+		// the Scrum board's Epics panel). Best-effort: on failure treat every
+		// epic as on-board so the /live panel never empties on a transient error.
 		epicKeys := make([]string, 0, len(epicSet))
 		for k := range epicSet {
 			epicKeys = append(epicKeys, k)
 		}
-		onBoard, boardOK := fetchBoardLiveEpics(ctx, client, baseURL, email, token, epicKeys)
+		onBoard, boardOK := fetchActiveSprintEpics(ctx, client, baseURL, email, token, epicKeys)
 		if !boardOK {
-			deps.Logger.Warn().Msg("refresh_jira_board: board membership fetch failed; showing all referenced epics")
+			deps.Logger.Warn().Msg("refresh_jira_board: active-sprint fetch failed; showing all referenced epics")
 		}
 
 		total := 0
