@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -165,6 +167,86 @@ func fetchBoardEpicRanks(ctx context.Context, client *http.Client, baseURL, emai
 	return ranks, nil
 }
 
+// boardIssuePage is the minimal shape of GET /rest/agile/1.0/board/{id}/issue.
+type boardIssuePage struct {
+	Total  int `json:"total"`
+	Issues []struct {
+		Fields struct {
+			Parent *struct {
+				Key string `json:"key"`
+			} `json:"parent"`
+		} `json:"fields"`
+	} `json:"issues"`
+}
+
+// parseBoardIssueParents returns the parent-epic keys on one board-issue page
+// (blank/missing parents dropped), that page's issue count, and the total
+// matching issues (for pagination).
+func parseBoardIssueParents(body []byte) (parents []string, pageLen, total int, err error) {
+	var page boardIssuePage
+	if err := json.Unmarshal(body, &page); err != nil {
+		return nil, 0, 0, fmt.Errorf("decode board issues: %w", err)
+	}
+	for _, is := range page.Issues {
+		if is.Fields.Parent != nil && is.Fields.Parent.Key != "" {
+			parents = append(parents, is.Fields.Parent.Key)
+		}
+	}
+	return parents, len(page.Issues), page.Total, nil
+}
+
+// fetchBoardLiveEpics returns the subset of epicKeys that have at least one
+// non-Done issue on board 193 — i.e. the epics the board's Epics panel actually
+// shows. The bool is false if the fetch failed; callers then treat every epic
+// as on-board so a transient Jira error can't blank the /live board section.
+func fetchBoardLiveEpics(ctx context.Context, client *http.Client, baseURL, email, token string, epicKeys []string) (map[string]bool, bool) {
+	live := map[string]bool{}
+	if len(epicKeys) == 0 {
+		return live, true
+	}
+	jql := "parent in (" + strings.Join(epicKeys, ",") + ") AND statusCategory != Done"
+	startAt := 0
+	for {
+		q := url.Values{
+			"jql":        {jql},
+			"fields":     {"parent"},
+			"maxResults": {"100"},
+			"startAt":    {strconv.Itoa(startAt)},
+		}
+		u := fmt.Sprintf("%s/rest/agile/1.0/board/%d/issue?%s", baseURL, jiraBoardID, q.Encode())
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+		if err != nil {
+			return live, false
+		}
+		req.SetBasicAuth(email, token)
+		req.Header.Set("Accept", "application/json")
+		resp, err := client.Do(req)
+		if err != nil {
+			return live, false
+		}
+		body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+		resp.Body.Close()
+		if err != nil {
+			return live, false
+		}
+		if resp.StatusCode != http.StatusOK {
+			return live, false
+		}
+		parents, pageLen, total, err := parseBoardIssueParents(body)
+		if err != nil {
+			return live, false
+		}
+		for _, p := range parents {
+			live[p] = true
+		}
+		startAt += pageLen
+		if pageLen == 0 || startAt >= total {
+			break
+		}
+	}
+	return live, true
+}
+
 func refreshJiraBoardHandler(deps Deps) jobs.Handler {
 	return func(ctx context.Context, _ []byte) error {
 		// Always reschedule the next tick, even on failure — same contract as
@@ -214,13 +296,13 @@ func refreshJiraBoardHandler(deps Deps) jobs.Handler {
 		if err != nil {
 			deps.Logger.Warn().Err(err).Msg("refresh_jira_board: board epic order fetch failed; ranks default to end")
 		}
-		total := 0
+		// Collect all issue→epic rows first, so we know the full epic set before
+		// deciding which epics are live on the board (on_board needs that set).
 		// Batched JQL: `key in (…)` in chunks — one HTTP call per ~50 issues.
+		var allRows []epicRow
+		epicSet := map[string]bool{}
 		for start := 0; start < len(keys); start += 50 {
-			end := start + 50
-			if end > len(keys) {
-				end = len(keys)
-			}
+			end := min(start+50, len(keys))
 			jql := "key in (" + strings.Join(keys[start:end], ",") + ")"
 			pageToken := ""
 			for {
@@ -228,25 +310,11 @@ func refreshJiraBoardHandler(deps Deps) jobs.Handler {
 				if err != nil {
 					return fmt.Errorf("jira search: %w", err)
 				}
+				allRows = append(allRows, rows...)
 				for _, r := range rows {
-					rank := boardEpicNoRank
 					if r.EpicKey != "" {
-						if v, ok := ranks[r.EpicKey]; ok {
-							rank = v
-						}
+						epicSet[r.EpicKey] = true
 					}
-					if _, err := deps.DB.Exec(ctx, `
-INSERT INTO graph.jira_epic_map (issue_key, issue_summary, issue_status, epic_key, epic_summary, epic_status, epic_rank, refreshed_at, machine_id)
-VALUES ($1,$2,$3,$4,$5,$6,$7,NOW(),$8)
-ON CONFLICT (issue_key) DO UPDATE SET
-  issue_summary=EXCLUDED.issue_summary, issue_status=EXCLUDED.issue_status,
-  epic_key=EXCLUDED.epic_key, epic_summary=EXCLUDED.epic_summary,
-  epic_status=EXCLUDED.epic_status, epic_rank=EXCLUDED.epic_rank,
-  refreshed_at=NOW(), machine_id=EXCLUDED.machine_id`,
-						r.IssueKey, r.IssueSummary, r.IssueStatus, r.EpicKey, r.EpicSummary, r.EpicStatus, rank, deps.MachineID); err != nil {
-						return fmt.Errorf("upsert %s: %w", r.IssueKey, err)
-					}
-					total++
 				}
 				if next == "" {
 					break
@@ -254,7 +322,46 @@ ON CONFLICT (issue_key) DO UPDATE SET
 				pageToken = next
 			}
 		}
-		deps.Logger.Info().Int("issues", total).Msg("refresh_jira_board: epic map refreshed")
+
+		// on_board = the epic has ≥1 non-Done issue on board 193 (mirrors the
+		// board's Epics panel). Best-effort: on failure treat every epic as
+		// on-board so the /live panel never empties on a transient Jira error.
+		epicKeys := make([]string, 0, len(epicSet))
+		for k := range epicSet {
+			epicKeys = append(epicKeys, k)
+		}
+		onBoard, boardOK := fetchBoardLiveEpics(ctx, client, baseURL, email, token, epicKeys)
+		if !boardOK {
+			deps.Logger.Warn().Msg("refresh_jira_board: board membership fetch failed; showing all referenced epics")
+		}
+
+		total := 0
+		for _, r := range allRows {
+			rank := boardEpicNoRank
+			if r.EpicKey != "" {
+				if v, ok := ranks[r.EpicKey]; ok {
+					rank = v
+				}
+			}
+			// Epic-less rows and the transient-failure fallback stay visible.
+			onb := true
+			if boardOK && r.EpicKey != "" {
+				onb = onBoard[r.EpicKey]
+			}
+			if _, err := deps.DB.Exec(ctx, `
+INSERT INTO graph.jira_epic_map (issue_key, issue_summary, issue_status, epic_key, epic_summary, epic_status, epic_rank, on_board, refreshed_at, machine_id)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW(),$9)
+ON CONFLICT (issue_key) DO UPDATE SET
+  issue_summary=EXCLUDED.issue_summary, issue_status=EXCLUDED.issue_status,
+  epic_key=EXCLUDED.epic_key, epic_summary=EXCLUDED.epic_summary,
+  epic_status=EXCLUDED.epic_status, epic_rank=EXCLUDED.epic_rank,
+  on_board=EXCLUDED.on_board, refreshed_at=NOW(), machine_id=EXCLUDED.machine_id`,
+				r.IssueKey, r.IssueSummary, r.IssueStatus, r.EpicKey, r.EpicSummary, r.EpicStatus, rank, onb, deps.MachineID); err != nil {
+				return fmt.Errorf("upsert %s: %w", r.IssueKey, err)
+			}
+			total++
+		}
+		deps.Logger.Info().Int("issues", total).Int("live_epics", len(onBoard)).Msg("refresh_jira_board: epic map refreshed")
 		return nil
 	}
 }

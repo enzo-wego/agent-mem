@@ -182,6 +182,7 @@ type boardEpicGroup struct {
 	EpicSummary string         `json:"epic_summary"`
 	EpicStatus  string         `json:"epic_status"`
 	EpicRank    int            `json:"epic_rank"` // board rank; boardEpicNoRank = off-board / no epic
+	OnBoard     bool           `json:"-"`         // epic has live board issues; off-board epics are hidden
 	Issues      []boardIssue   `json:"issues"`
 	Threads     []pinnedThread `json:"threads"`
 	LastMs      int64          `json:"last_ms"` // newest thread activity in the group
@@ -219,7 +220,7 @@ func (h *Pins) board(w http.ResponseWriter, r *http.Request) {
 SELECT DISTINCT
   REPLACE(t.scope,'slack:','') AS channel_id,
   COALESCE(NULLIF(t.metadata->>'thread_ts',''), split_part(t.id,':',3)) AS thread_ts,
-  em.epic_key, em.epic_summary, em.epic_status, em.epic_rank,
+  em.epic_key, em.epic_summary, em.epic_status, em.epic_rank, em.on_board,
   em.issue_key, em.issue_summary, em.issue_status
 FROM graph.edges e
 JOIN graph.nodes j ON j.id = e.to_node_id AND j.type='jira' AND j.deleted_at IS NULL
@@ -238,12 +239,13 @@ WHERE e.kind = 'REFERENCES'
 	for rows.Next() {
 		var ch, tt, ek, es, est, ik, isum, ist string
 		var er int
-		if rows.Scan(&ch, &tt, &ek, &es, &est, &er, &ik, &isum, &ist) != nil {
+		var onb bool
+		if rows.Scan(&ch, &tt, &ek, &es, &est, &er, &onb, &ik, &isum, &ist) != nil {
 			continue
 		}
 		g := groups[ek]
 		if g == nil {
-			g = &boardEpicGroup{EpicKey: ek, EpicSummary: es, EpicStatus: est, EpicRank: er}
+			g = &boardEpicGroup{EpicKey: ek, EpicSummary: es, EpicStatus: est, EpicRank: er, OnBoard: onb}
 			groups[ek] = g
 		}
 		if !issueSeen[ek+"|"+ik] {
@@ -279,6 +281,9 @@ WHERE e.kind = 'REFERENCES'
 	for _, g := range groups {
 		if len(g.Threads) == 0 {
 			continue
+		}
+		if g.EpicKey != "" && !g.OnBoard {
+			continue // epic not live on board 193 — mirror the board's Epics panel (no-epic kept)
 		}
 		sort.Slice(g.Threads, func(i, j int) bool { return g.Threads[i].LastMs > g.Threads[j].LastMs })
 		if len(g.Threads) > boardMaxThreadsPerEpic {

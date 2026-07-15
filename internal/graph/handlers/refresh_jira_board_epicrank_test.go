@@ -25,3 +25,30 @@ func TestParseBoardEpicPage(t *testing.T) {
 		}
 	}
 }
+
+func TestParseBoardIssueParents(t *testing.T) {
+	body := []byte(`{"total":3,"issues":[` +
+		`{"fields":{"parent":{"key":"PAY-974"}}},` +
+		`{"fields":{"parent":{"key":"PAY-1581"}}},` +
+		`{"fields":{"parent":null}}]}`)
+
+	parents, pageLen, total, err := parseBoardIssueParents(body)
+	if err != nil {
+		t.Fatalf("parseBoardIssueParents: %v", err)
+	}
+	if total != 3 {
+		t.Fatalf("total = %d, want 3", total)
+	}
+	if pageLen != 3 {
+		t.Fatalf("pageLen = %d, want 3 (issue count incl. parentless, for pagination)", pageLen)
+	}
+	want := []string{"PAY-974", "PAY-1581"} // null parent dropped
+	if len(parents) != len(want) {
+		t.Fatalf("parents = %v, want %v", parents, want)
+	}
+	for i := range want {
+		if parents[i] != want[i] {
+			t.Fatalf("parents[%d] = %q, want %q", i, parents[i], want[i])
+		}
+	}
+}
