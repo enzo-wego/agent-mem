@@ -181,6 +181,7 @@ type boardEpicGroup struct {
 	EpicKey     string         `json:"epic_key"` // "" = tickets with no epic
 	EpicSummary string         `json:"epic_summary"`
 	EpicStatus  string         `json:"epic_status"`
+	EpicRank    int            `json:"epic_rank"` // board rank; boardEpicNoRank = off-board / no epic
 	Issues      []boardIssue   `json:"issues"`
 	Threads     []pinnedThread `json:"threads"`
 	LastMs      int64          `json:"last_ms"` // newest thread activity in the group
@@ -193,6 +194,22 @@ const (
 	boardWindowDays        = 60
 )
 
+// sortBoardGroups orders epic swimlanes to mirror the PAY board: by board epic
+// rank ascending, newest thread activity breaking ties, and the "no epic" group
+// always last regardless of rank.
+func sortBoardGroups(groups []boardEpicGroup) {
+	sort.Slice(groups, func(i, j int) bool {
+		a, b := groups[i], groups[j]
+		if aNo, bNo := a.EpicKey == "", b.EpicKey == ""; aNo != bNo {
+			return !aNo // real epic before the no-epic group
+		}
+		if a.EpicRank != b.EpicRank {
+			return a.EpicRank < b.EpicRank
+		}
+		return a.LastMs > b.LastMs
+	})
+}
+
 // board handles GET /api/graph/pins/board — every Slack thread that REFERENCES
 // a ticket in graph.jira_epic_map, grouped by the ticket's epic (the board's
 // swimlane view). Chatter threads are excluded; groups sort by newest activity.
@@ -202,7 +219,7 @@ func (h *Pins) board(w http.ResponseWriter, r *http.Request) {
 SELECT DISTINCT
   REPLACE(t.scope,'slack:','') AS channel_id,
   COALESCE(NULLIF(t.metadata->>'thread_ts',''), split_part(t.id,':',3)) AS thread_ts,
-  em.epic_key, em.epic_summary, em.epic_status,
+  em.epic_key, em.epic_summary, em.epic_status, em.epic_rank,
   em.issue_key, em.issue_summary, em.issue_status
 FROM graph.edges e
 JOIN graph.nodes j ON j.id = e.to_node_id AND j.type='jira' AND j.deleted_at IS NULL
@@ -220,12 +237,13 @@ WHERE e.kind = 'REFERENCES'
 	var refs []threadRef
 	for rows.Next() {
 		var ch, tt, ek, es, est, ik, isum, ist string
-		if rows.Scan(&ch, &tt, &ek, &es, &est, &ik, &isum, &ist) != nil {
+		var er int
+		if rows.Scan(&ch, &tt, &ek, &es, &est, &er, &ik, &isum, &ist) != nil {
 			continue
 		}
 		g := groups[ek]
 		if g == nil {
-			g = &boardEpicGroup{EpicKey: ek, EpicSummary: es, EpicStatus: est}
+			g = &boardEpicGroup{EpicKey: ek, EpicSummary: es, EpicStatus: est, EpicRank: er}
 			groups[ek] = g
 		}
 		if !issueSeen[ek+"|"+ik] {
@@ -269,7 +287,7 @@ WHERE e.kind = 'REFERENCES'
 		sort.Slice(g.Issues, func(i, j int) bool { return g.Issues[i].Key < g.Issues[j].Key })
 		out = append(out, *g)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].LastMs > out[j].LastMs })
+	sortBoardGroups(out)
 	writeJSON(w, http.StatusOK, map[string]any{"groups": out})
 }
 
