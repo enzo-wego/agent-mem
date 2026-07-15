@@ -980,10 +980,27 @@ export function LiveGlobePage() {
   // ── Board section (auto-pinned: threads referencing PAY board tickets) ───────
   const [boardGroups, setBoardGroups] = useState<BoardEpicGroup[]>([])
   const [collapsedEpics, setCollapsedEpics] = useState<Set<string>>(new Set())
+  // Swimlanes collapse by default. Seed each epic key once, so the 60s refresh
+  // can't re-collapse a swimlane the user manually expanded.
+  const seededEpicsRef = useRef<Set<string>>(new Set())
 
   function refreshBoard() {
     fetchBoardPins()
-      .then((g) => setBoardGroups(g || []))
+      .then((g) => {
+        const groups = g || []
+        setBoardGroups(groups)
+        setCollapsedEpics((cur) => {
+          const next = new Set(cur)
+          for (const grp of groups) {
+            const k = grp.epic_key || '(no epic)'
+            if (!seededEpicsRef.current.has(k)) {
+              seededEpicsRef.current.add(k)
+              next.add(k) // first time we see this epic → start collapsed
+            }
+          }
+          return next
+        })
+      })
       .catch(() => {})
   }
 
