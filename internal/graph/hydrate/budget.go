@@ -36,10 +36,21 @@ func Greedy(ctx context.Context, db *pgxpool.Pool, cands []Candidate, budgetToke
 	var missed []string
 	used := 0
 	for _, c := range cands {
+		// Slack thread titles live in graph.thread_summaries, not n.title (often
+		// empty); fall back to the summary so the opened-node header/resolve shows
+		// readable text, never a raw slack:CHANNEL:TS id. Same join the neighbor
+		// rows use. Read-time only — thread_summaries stays the source of truth.
 		row := db.QueryRow(ctx, `
-SELECT COALESCE(n.title,''), n.type, COALESCE(n.url,''), b.body_full
+SELECT COALESCE(
+         NULLIF(n.title,''),
+         CASE WHEN n.type IN ('slack','slack_thread') THEN NULLIF(ts.summary,'') END,
+         ''),
+       n.type, COALESCE(n.url,''), b.body_full
 FROM graph.nodes n
 LEFT JOIN graph.artifact_bodies b ON b.node_id = n.id
+LEFT JOIN graph.thread_summaries ts
+  ON ts.channel_id = REPLACE(n.scope,'slack:','')
+  AND ts.thread_ts = COALESCE(NULLIF(n.metadata->>'thread_ts',''), split_part(n.id,':',3))
 WHERE n.id = $1 AND n.deleted_at IS NULL
 `, c.NodeID)
 		var title, typ, url string

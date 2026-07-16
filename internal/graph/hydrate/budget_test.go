@@ -37,7 +37,7 @@ func testDB(t *testing.T) *pgxpool.Pool {
 func cleanupHydrateTables(t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
 	ctx := context.Background()
-	for _, tbl := range []string{"graph.artifact_bodies", "graph.nodes"} {
+	for _, tbl := range []string{"graph.artifact_bodies", "graph.thread_summaries", "graph.nodes"} {
 		if _, err := pool.Exec(ctx, "DELETE FROM "+tbl); err != nil {
 			t.Logf("cleanup %s: %v", tbl, err)
 		}
@@ -94,6 +94,37 @@ func TestHydrate_StopsAtBudget(t *testing.T) {
 	}
 	if out[0].NodeID != "a" {
 		t.Errorf("highest score should be loaded first; got %s", out[0].NodeID)
+	}
+}
+
+// A slack thread whose n.title is empty must hydrate with the title from
+// graph.thread_summaries, so the opened-node header shows readable text instead
+// of the raw slack:CHANNEL:TS id.
+func TestHydrate_SlackTitleFallsBackToThreadSummary(t *testing.T) {
+	ctx := context.Background()
+	pool := testDB(t)
+	const id = "slack:CTEST:111.222"
+	if _, err := pool.Exec(ctx, `
+INSERT INTO graph.nodes (id, type, natural_key, title, scope, machine_id)
+VALUES ($1, 'slack', $1, '', 'slack:CTEST', 'test')`, id); err != nil {
+		t.Fatalf("seed node: %v", err)
+	}
+	seedBody(t, pool, id, "the raw thread body")
+	if _, err := pool.Exec(ctx, `
+INSERT INTO graph.thread_summaries (channel_id, thread_ts, signature, summary)
+VALUES ('CTEST', '111.222', 'sig', 'Umrah 422 investigation')`); err != nil {
+		t.Fatalf("seed thread_summary: %v", err)
+	}
+
+	out, _, err := hydrate.Greedy(ctx, pool, []hydrate.Candidate{{NodeID: id, Score: 1}}, 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out) != 1 {
+		t.Fatalf("want 1 hydrated, got %d", len(out))
+	}
+	if out[0].Title != "Umrah 422 investigation" {
+		t.Errorf("want thread-summary title fallback, got %q", out[0].Title)
 	}
 }
 

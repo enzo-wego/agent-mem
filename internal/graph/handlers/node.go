@@ -51,8 +51,15 @@ func (h *Node) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "url or id required", http.StatusBadRequest)
 		return
 	}
+	// Slack thread titles live in graph.thread_summaries, not n.title (often
+	// empty); fall back to the summary so the node detail shows readable text,
+	// never a raw slack:CHANNEL:TS id. Same join the neighbor rows use.
 	row := h.db.QueryRow(ctx, `
-SELECT n.id, n.type, COALESCE(n.url,''), n.title,
+SELECT n.id, n.type, COALESCE(n.url,''),
+       COALESCE(
+         NULLIF(n.title,''),
+         CASE WHEN n.type IN ('slack','slack_thread') THEN NULLIF(ts.summary,'') END,
+         ''),
        COALESCE(ai.summary, ''),
        COALESCE(ab.body_full, ''),
        COALESCE(p.display_name, ''),
@@ -62,6 +69,9 @@ FROM graph.nodes n
 LEFT JOIN graph.artifact_index ai ON ai.node_id = n.id
 LEFT JOIN graph.artifact_bodies ab ON ab.node_id = n.id
 LEFT JOIN graph.people p ON p.id = n.author_person_id
+LEFT JOIN graph.thread_summaries ts
+  ON ts.channel_id = REPLACE(n.scope,'slack:','')
+  AND ts.thread_ts = COALESCE(NULLIF(n.metadata->>'thread_ts',''), split_part(n.id,':',3))
 WHERE ($1 = '' OR n.url = $1) AND ($2 = '' OR n.id = $2)
   AND n.deleted_at IS NULL
 LIMIT 1
