@@ -7,7 +7,7 @@ func TestGraphEmbeddingOptions(t *testing.T) {
 	if opts.OutputDimensionality != 3072 {
 		t.Fatalf("graph embedding dims = %d, want 3072", opts.OutputDimensionality)
 	}
-	if opts.TaskType != "SEMANTIC_SIMILARITY" {
-		t.Fatalf("graph embedding task type = %q, want SEMANTIC_SIMILARITY", opts.TaskType)
+	if opts.TaskType != "" {
+		t.Fatalf("graph embedding task type = %q, want empty (OpenRouter does not accept task_type)", opts.TaskType)
 	}
 }
