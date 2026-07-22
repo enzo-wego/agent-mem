@@ -1,59 +1,129 @@
 package gemini
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 )
 
-type captureRoundTripper struct {
-	body []byte
-}
+func TestGenerateOpenRouter(t *testing.T) {
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer test-key" {
+			t.Errorf("auth header = %q, want Bearer test-key", got)
+		}
+		if r.URL.Path != "/chat/completions" {
+			t.Errorf("path = %q, want /chat/completions", r.URL.Path)
+		}
+		b, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(b, &gotBody)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"ok\":true}"}}]}`))
+	}))
+	defer srv.Close()
 
-func (rt *captureRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
-	rt.body, _ = io.ReadAll(req.Body)
-	return &http.Response{
-		StatusCode: http.StatusOK,
-		Body:       io.NopCloser(bytes.NewBufferString(`{"embedding":{"values":[0.1,0.2]}}`)),
-		Header:     make(http.Header),
-		Request:    req,
-	}, nil
-}
+	c := NewClient("test-key", "google/gemini-2.5-flash", "google/gemini-embedding-001", 768)
+	c.baseURL = srv.URL
 
-func TestEmbedWithOptionsUsesEmbedContentConfig(t *testing.T) {
-	rt := &captureRoundTripper{}
-	c := NewClient("key", "gemini", "gemini-embedding-001", 768)
-	c.httpClient = &http.Client{Transport: rt}
-
-	got, err := c.EmbedWithOptions(context.Background(), "same topic text", EmbedOptions{
-		OutputDimensionality: 3072,
-		TaskType:             "SEMANTIC_SIMILARITY",
-	})
+	out, err := c.Generate(context.Background(), "sys", "hello")
 	if err != nil {
-		t.Fatalf("EmbedWithOptions: %v", err)
+		t.Fatal(err)
 	}
-	if len(got) != 2 {
-		t.Fatalf("embedding len = %d, want 2", len(got))
+	if out != `{"ok":true}` {
+		t.Errorf("Generate returned %q", out)
 	}
+	if gotBody["model"] != "google/gemini-2.5-flash" {
+		t.Errorf("model = %v", gotBody["model"])
+	}
+	if _, ok := gotBody["messages"]; !ok {
+		t.Error("request must use OpenAI messages[]")
+	}
+}
 
-	var req map[string]any
-	if err := json.Unmarshal(rt.body, &req); err != nil {
-		t.Fatalf("request JSON: %v", err)
+func TestEmbedOpenRouter(t *testing.T) {
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/embeddings" {
+			t.Errorf("path = %q, want /embeddings", r.URL.Path)
+		}
+		b, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(b, &gotBody)
+		_, _ = w.Write([]byte(`{"data":[{"embedding":[0.1,0.2,0.3]}]}`))
+	}))
+	defer srv.Close()
+
+	c := NewClient("test-key", "m", "google/gemini-embedding-001", 768)
+	c.baseURL = srv.URL
+
+	vec, err := c.Embed(context.Background(), "hello")
+	if err != nil {
+		t.Fatal(err)
 	}
-	if _, ok := req["outputDimensionality"]; ok {
-		t.Fatalf("outputDimensionality must be under embedContentConfig, got top-level request %s", rt.body)
+	if len(vec) != 3 {
+		t.Fatalf("embedding len = %d, want 3", len(vec))
 	}
-	cfg, ok := req["embedContentConfig"].(map[string]any)
-	if !ok {
-		t.Fatalf("missing embedContentConfig in request %s", rt.body)
+	if gotBody["dimensions"].(float64) != 768 {
+		t.Errorf("dimensions = %v, want 768", gotBody["dimensions"])
 	}
-	if got := cfg["taskType"]; got != "SEMANTIC_SIMILARITY" {
-		t.Fatalf("taskType = %v, want SEMANTIC_SIMILARITY", got)
+	if _, ok := gotBody["task_type"]; ok {
+		t.Error("task_type must NOT be sent to OpenRouter")
 	}
-	if got := cfg["outputDimensionality"]; got != float64(3072) {
-		t.Fatalf("outputDimensionality = %v, want 3072", got)
+	if gotBody["model"] != "google/gemini-embedding-001" {
+		t.Errorf("model = %v", gotBody["model"])
+	}
+}
+
+func TestEmbedWithOptionsDims(t *testing.T) {
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(b, &gotBody)
+		_, _ = w.Write([]byte(`{"data":[{"embedding":[0.1]}]}`))
+	}))
+	defer srv.Close()
+
+	c := NewClient("k", "m", "google/gemini-embedding-001", 768)
+	c.baseURL = srv.URL
+
+	_, err := c.EmbedWithOptions(context.Background(), "x", EmbedOptions{OutputDimensionality: 3072})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotBody["dimensions"].(float64) != 3072 {
+		t.Errorf("dimensions = %v, want 3072 (per-call override)", gotBody["dimensions"])
+	}
+}
+
+func TestEmbedBatchOrdering(t *testing.T) {
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/embeddings" {
+			t.Errorf("path = %q, want /embeddings", r.URL.Path)
+		}
+		b, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(b, &gotBody)
+		// Return out of order: index 1 first, then index 0.
+		_, _ = w.Write([]byte(`{"data":[{"index":1,"embedding":[2.0]},{"index":0,"embedding":[1.0]}]}`))
+	}))
+	defer srv.Close()
+
+	c := NewClient("k", "m", "google/gemini-embedding-001", 768)
+	c.baseURL = srv.URL
+
+	vecs, err := c.EmbedBatch(context.Background(), []string{"first", "second"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(vecs) != 2 {
+		t.Fatalf("got %d vectors, want 2", len(vecs))
+	}
+	if vecs[0][0] != 1.0 || vecs[1][0] != 2.0 {
+		t.Errorf("embeddings bound to wrong inputs: got %v (ordering not honored)", vecs)
+	}
+	if _, ok := gotBody["input"].([]any); !ok {
+		t.Errorf("input must be sent as a JSON array, got %T", gotBody["input"])
 	}
 }
