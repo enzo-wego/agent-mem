@@ -14,144 +14,129 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-const baseURL = "https://generativelanguage.googleapis.com/v1beta/models"
+const defaultBaseURL = "https://openrouter.ai/api/v1"
 
-// Client is a Gemini REST API client for generation and embedding.
+// Client is an OpenRouter (OpenAI-compatible) client for generation and embedding.
 type Client struct {
 	apiKey         string
 	model          string
 	embeddingModel string
 	embeddingDims  int
+	baseURL        string
 	httpClient     *http.Client
 }
 
-// NewClient creates a new Gemini API client.
+// NewClient creates a new OpenRouter API client. model/embeddingModel are
+// OpenRouter model ids (e.g. "google/gemini-2.5-flash", "google/gemini-embedding-001").
 func NewClient(apiKey, model, embeddingModel string, embeddingDims int) *Client {
 	return &Client{
 		apiKey:         apiKey,
 		model:          model,
 		embeddingModel: embeddingModel,
 		embeddingDims:  embeddingDims,
+		baseURL:        defaultBaseURL,
 		httpClient:     &http.Client{Timeout: 60 * time.Second},
 	}
 }
 
-// --- Generation ---
+// --- Chat (generation) ---
 
-type generateRequest struct {
-	Contents          []content        `json:"contents"`
-	SystemInstruction *content         `json:"systemInstruction,omitempty"`
-	GenerationConfig  generationConfig `json:"generationConfig"`
+type chatMessage struct {
+	Role    string `json:"role"`
+	Content any    `json:"content"` // string, or []contentPart for multimodal
 }
 
-type content struct {
-	Role  string `json:"role,omitempty"`
-	Parts []part `json:"parts"`
+type contentPart struct {
+	Type     string    `json:"type"`
+	Text     string    `json:"text,omitempty"`
+	ImageURL *imageURL `json:"image_url,omitempty"`
 }
 
-type part struct {
-	Text       string      `json:"text,omitempty"`
-	InlineData *inlineData `json:"inline_data,omitempty"`
+type imageURL struct {
+	URL string `json:"url"`
 }
 
-// inlineData carries a base64-encoded attachment (image/PDF page) for multimodal
-// generateContent requests.
-type inlineData struct {
-	MimeType string `json:"mime_type"`
-	Data     string `json:"data"`
+type responseFormat struct {
+	Type string `json:"type"`
 }
 
-type generationConfig struct {
-	Temperature      float64 `json:"temperature"`
-	MaxOutputTokens  int     `json:"maxOutputTokens"`
-	ResponseMimeType string  `json:"responseMimeType,omitempty"`
+type chatRequest struct {
+	Model          string          `json:"model"`
+	Messages       []chatMessage   `json:"messages"`
+	Temperature    float64         `json:"temperature"`
+	MaxTokens      int             `json:"max_tokens"`
+	ResponseFormat *responseFormat `json:"response_format,omitempty"`
 }
 
-type generateResponse struct {
-	Candidates []struct {
-		Content struct {
-			Parts []struct {
-				Text string `json:"text"`
-			} `json:"parts"`
-		} `json:"content"`
-	} `json:"candidates"`
+type chatResponse struct {
+	Choices []struct {
+		Message struct {
+			Content string `json:"content"`
+		} `json:"message"`
+	} `json:"choices"`
 	Error *apiError `json:"error,omitempty"`
 }
 
 type apiError struct {
 	Code    int    `json:"code"`
 	Message string `json:"message"`
-	Status  string `json:"status"`
 }
 
-// Generate sends a prompt to Gemini and returns the response text.
-// Uses responseMimeType=application/json to force valid JSON output.
+// Generate sends a prompt to OpenRouter and returns the response text.
+// response_format=json_object forces valid JSON output (parity with the old client).
 func (c *Client) Generate(ctx context.Context, systemPrompt, userMessage string) (string, error) {
-	req := generateRequest{
-		Contents: []content{
-			{Role: "user", Parts: []part{{Text: userMessage}}},
-		},
-		GenerationConfig: generationConfig{
-			Temperature:      0.3,
-			MaxOutputTokens:  4096,
-			ResponseMimeType: "application/json",
-		},
-	}
-
+	msgs := make([]chatMessage, 0, 2)
 	if systemPrompt != "" {
-		req.SystemInstruction = &content{
-			Parts: []part{{Text: systemPrompt}},
-		}
+		msgs = append(msgs, chatMessage{Role: "system", Content: systemPrompt})
+	}
+	msgs = append(msgs, chatMessage{Role: "user", Content: userMessage})
+
+	req := chatRequest{
+		Model:          c.model,
+		Messages:       msgs,
+		Temperature:    0.3,
+		MaxTokens:      4096,
+		ResponseFormat: &responseFormat{Type: "json_object"},
 	}
 
-	url := fmt.Sprintf("%s/%s:generateContent?key=%s", baseURL, c.model, c.apiKey)
-
-	var resp generateResponse
-	if err := c.doWithRetry(ctx, url, req, &resp); err != nil {
+	var resp chatResponse
+	if err := c.doWithRetry(ctx, "/chat/completions", req, &resp); err != nil {
 		return "", fmt.Errorf("generate: %w", err)
 	}
-
 	if resp.Error != nil {
-		return "", fmt.Errorf("gemini API error: %s (code %d)", resp.Error.Message, resp.Error.Code)
+		return "", fmt.Errorf("openrouter API error: %s (code %d)", resp.Error.Message, resp.Error.Code)
 	}
-
-	if len(resp.Candidates) == 0 || len(resp.Candidates[0].Content.Parts) == 0 {
-		return "", fmt.Errorf("empty response from Gemini")
+	if len(resp.Choices) == 0 {
+		return "", fmt.Errorf("empty response from OpenRouter")
 	}
-
-	return resp.Candidates[0].Content.Parts[0].Text, nil
+	return resp.Choices[0].Message.Content, nil
 }
 
-// Describe sends an attachment (image or rendered PDF page) to Gemini and
-// returns a prose description, extracted OCR text, and key entities. The prompt
-// is augmented to force a JSON object so the three fields come back separately.
+// Describe sends an image attachment to OpenRouter and returns a prose
+// description, OCR text, and key entities as three fields.
 func (c *Client) Describe(ctx context.Context, mimeType string, data []byte, prompt string) (string, string, []string, error) {
-	req := generateRequest{
-		Contents: []content{{
-			Role: "user",
-			Parts: []part{
-				{Text: prompt + `\nRespond as JSON only: {"description":"...","ocr":"verbatim visible text","entities":["..."]}`},
-				{InlineData: &inlineData{MimeType: mimeType, Data: base64.StdEncoding.EncodeToString(data)}},
-			},
-		}},
-		GenerationConfig: generationConfig{
-			Temperature:      0.2,
-			MaxOutputTokens:  2048,
-			ResponseMimeType: "application/json",
-		},
+	dataURI := fmt.Sprintf("data:%s;base64,%s", mimeType, base64.StdEncoding.EncodeToString(data))
+	parts := []contentPart{
+		{Type: "text", Text: prompt + `\nRespond as JSON only: {"description":"...","ocr":"verbatim visible text","entities":["..."]}`},
+		{Type: "image_url", ImageURL: &imageURL{URL: dataURI}},
+	}
+	req := chatRequest{
+		Model:          c.model,
+		Messages:       []chatMessage{{Role: "user", Content: parts}},
+		Temperature:    0.2,
+		MaxTokens:      2048,
+		ResponseFormat: &responseFormat{Type: "json_object"},
 	}
 
-	url := fmt.Sprintf("%s/%s:generateContent?key=%s", baseURL, c.model, c.apiKey)
-
-	var resp generateResponse
-	if err := c.doWithRetry(ctx, url, req, &resp); err != nil {
+	var resp chatResponse
+	if err := c.doWithRetry(ctx, "/chat/completions", req, &resp); err != nil {
 		return "", "", nil, fmt.Errorf("describe: %w", err)
 	}
 	if resp.Error != nil {
-		return "", "", nil, fmt.Errorf("gemini describe API error: %s (code %d)", resp.Error.Message, resp.Error.Code)
+		return "", "", nil, fmt.Errorf("openrouter describe error: %s (code %d)", resp.Error.Message, resp.Error.Code)
 	}
-	if len(resp.Candidates) == 0 || len(resp.Candidates[0].Content.Parts) == 0 {
-		return "", "", nil, fmt.Errorf("empty describe response from Gemini")
+	if len(resp.Choices) == 0 {
+		return "", "", nil, fmt.Errorf("empty describe response from OpenRouter")
 	}
 
 	var parsed struct {
@@ -159,7 +144,7 @@ func (c *Client) Describe(ctx context.Context, mimeType string, data []byte, pro
 		OCR         string   `json:"ocr"`
 		Entities    []string `json:"entities"`
 	}
-	if err := json.Unmarshal([]byte(resp.Candidates[0].Content.Parts[0].Text), &parsed); err != nil {
+	if err := json.Unmarshal([]byte(resp.Choices[0].Message.Content), &parsed); err != nil {
 		return "", "", nil, fmt.Errorf("describe: parse JSON: %w", err)
 	}
 	return parsed.Description, parsed.OCR, parsed.Entities, nil
@@ -168,141 +153,95 @@ func (c *Client) Describe(ctx context.Context, mimeType string, data []byte, pro
 // --- Embedding ---
 
 type embedRequest struct {
-	Model   string  `json:"model"`
-	Content content `json:"content"`
-	// v1beta REST honors ONLY these top-level fields. Verified empirically
-	// 2026-07-12: a nested embedContentConfig is silently ignored — the model
-	// returned its 3072 default and broke observation storage (vector(768)).
-	// The nested copy is still sent for forward compatibility with the newer
-	// surface that deprecates top-level; the values always agree.
-	Title                string              `json:"title,omitempty"`
-	TaskType             string              `json:"taskType,omitempty"`
-	OutputDimensionality int                 `json:"outputDimensionality,omitempty"`
-	EmbedContentConfig   *embedContentConfig `json:"embedContentConfig,omitempty"`
+	Model      string `json:"model"`
+	Input      any    `json:"input"` // string (single) or []string (batch)
+	Dimensions int    `json:"dimensions,omitempty"`
 }
 
-type embedContentConfig struct {
-	Title                string `json:"title,omitempty"`
-	TaskType             string `json:"taskType,omitempty"`
-	OutputDimensionality int    `json:"outputDimensionality,omitempty"`
+type embedResponse struct {
+	Data []struct {
+		Index     int       `json:"index"`
+		Embedding []float32 `json:"embedding"`
+	} `json:"data"`
+	Error *apiError `json:"error,omitempty"`
 }
 
-// EmbedOptions configures a single Gemini embedContent request.
+// EmbedOptions configures a single embedding request. TaskType and Title are
+// retained for API stability but IGNORED — OpenRouter's OpenAI-shaped embeddings
+// API does not accept them.
 type EmbedOptions struct {
 	Title                string
 	TaskType             string
 	OutputDimensionality int
 }
 
-type embedResponse struct {
-	Embedding *struct {
-		Values []float32 `json:"values"`
-	} `json:"embedding"`
-	Error *apiError `json:"error,omitempty"`
-}
-
-type batchEmbedRequest struct {
-	Requests []embedRequest `json:"requests"`
-}
-
-type batchEmbedResponse struct {
-	Embeddings []struct {
-		Values []float32 `json:"values"`
-	} `json:"embeddings"`
-	Error *apiError `json:"error,omitempty"`
-}
-
-// Embed generates a single embedding vector for the given text.
+// Embed generates a single embedding vector using the client's default dims.
 func (c *Client) Embed(ctx context.Context, text string) ([]float32, error) {
 	return c.EmbedWithOptions(ctx, text, EmbedOptions{OutputDimensionality: c.embeddingDims})
 }
 
-// EmbedWithOptions generates a single embedding vector for the given text using
-// per-call options. It lets graph indexing use 3072-dimensional semantic
-// similarity embeddings while core memory tables keep the client's default dims.
+// EmbedWithOptions generates a single embedding vector. OutputDimensionality
+// overrides the client default (graph indexing uses 3072).
 func (c *Client) EmbedWithOptions(ctx context.Context, text string, opts EmbedOptions) ([]float32, error) {
-	modelPath := fmt.Sprintf("models/%s", c.embeddingModel)
-	req := embedRequest{
-		Model:   modelPath,
-		Content: content{Parts: []part{{Text: text}}},
+	dims := opts.OutputDimensionality
+	if dims == 0 {
+		dims = c.embeddingDims
 	}
-	if opts.Title != "" || opts.TaskType != "" || opts.OutputDimensionality > 0 {
-		req.Title = opts.Title
-		req.TaskType = opts.TaskType
-		req.OutputDimensionality = opts.OutputDimensionality
-		req.EmbedContentConfig = &embedContentConfig{
-			Title:                opts.Title,
-			TaskType:             opts.TaskType,
-			OutputDimensionality: opts.OutputDimensionality,
-		}
-	}
-
-	url := fmt.Sprintf("%s/%s:embedContent?key=%s", baseURL, c.embeddingModel, c.apiKey)
+	req := embedRequest{Model: c.embeddingModel, Input: text, Dimensions: dims}
 
 	var resp embedResponse
-	if err := c.doWithRetry(ctx, url, req, &resp); err != nil {
+	if err := c.doWithRetry(ctx, "/embeddings", req, &resp); err != nil {
 		return nil, fmt.Errorf("embed: %w", err)
 	}
-
 	if resp.Error != nil {
 		return nil, fmt.Errorf("embed API error: %s (code %d)", resp.Error.Message, resp.Error.Code)
 	}
-
-	if resp.Embedding == nil {
+	if len(resp.Data) == 0 {
 		return nil, fmt.Errorf("empty embedding response")
 	}
-
-	return resp.Embedding.Values, nil
+	return resp.Data[0].Embedding, nil
 }
 
-// EmbedBatch generates embeddings for multiple texts (up to 100 per request).
+// EmbedBatch generates embeddings for multiple texts in one request, at the
+// client's default dims.
 func (c *Client) EmbedBatch(ctx context.Context, texts []string) ([][]float32, error) {
-	modelPath := fmt.Sprintf("models/%s", c.embeddingModel)
-	requests := make([]embedRequest, len(texts))
-	for i, text := range texts {
-		requests[i] = embedRequest{
-			Model:                modelPath,
-			Content:              content{Parts: []part{{Text: text}}},
-			OutputDimensionality: c.embeddingDims,
-			EmbedContentConfig: &embedContentConfig{
-				OutputDimensionality: c.embeddingDims,
-			},
-		}
-	}
+	req := embedRequest{Model: c.embeddingModel, Input: texts, Dimensions: c.embeddingDims}
 
-	req := batchEmbedRequest{Requests: requests}
-	url := fmt.Sprintf("%s/%s:batchEmbedContents?key=%s", baseURL, c.embeddingModel, c.apiKey)
-
-	var resp batchEmbedResponse
-	if err := c.doWithRetry(ctx, url, req, &resp); err != nil {
+	var resp embedResponse
+	if err := c.doWithRetry(ctx, "/embeddings", req, &resp); err != nil {
 		return nil, fmt.Errorf("batch embed: %w", err)
 	}
-
 	if resp.Error != nil {
 		return nil, fmt.Errorf("batch embed API error: %s (code %d)", resp.Error.Message, resp.Error.Code)
 	}
-
-	results := make([][]float32, len(resp.Embeddings))
-	for i, emb := range resp.Embeddings {
-		results[i] = emb.Values
+	if len(resp.Data) != len(texts) {
+		return nil, fmt.Errorf("batch embed: got %d embeddings for %d inputs", len(resp.Data), len(texts))
+	}
+	results := make([][]float32, len(texts))
+	for _, d := range resp.Data {
+		if d.Index < 0 || d.Index >= len(texts) {
+			return nil, fmt.Errorf("batch embed: response index %d out of range (%d inputs)", d.Index, len(texts))
+		}
+		results[d.Index] = d.Embedding
 	}
 	return results, nil
 }
 
 // --- HTTP with retry ---
 
-// doWithRetry executes an HTTP POST with exponential backoff on 429/500/503.
-func (c *Client) doWithRetry(ctx context.Context, url string, body any, result any) error {
+// doWithRetry POSTs to baseURL+path with Bearer auth and exponential backoff on 429/5xx.
+func (c *Client) doWithRetry(ctx context.Context, path string, body any, result any) error {
 	payload, err := json.Marshal(body)
 	if err != nil {
 		return fmt.Errorf("marshal request: %w", err)
 	}
+	url := c.baseURL + path
 
 	maxRetries := 5
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		if attempt > 0 {
 			backoff := time.Duration(math.Pow(2, float64(attempt-1))) * time.Second
-			log.Debug().Int("attempt", attempt).Dur("backoff", backoff).Msg("Retrying Gemini request")
+			log.Debug().Int("attempt", attempt).Dur("backoff", backoff).Msg("Retrying OpenRouter request")
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
@@ -315,6 +254,7 @@ func (c *Client) doWithRetry(ctx context.Context, url string, body any, result a
 			return fmt.Errorf("create request: %w", err)
 		}
 		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+c.apiKey)
 
 		resp, err := c.httpClient.Do(req)
 		if err != nil {
@@ -330,17 +270,16 @@ func (c *Client) doWithRetry(ctx context.Context, url string, body any, result a
 			return fmt.Errorf("read response: %w", err)
 		}
 
-		// Retry on rate limit or server errors
 		if resp.StatusCode == 429 || resp.StatusCode >= 500 {
 			if attempt == maxRetries {
-				return fmt.Errorf("gemini API returned %d after %d retries: %s", resp.StatusCode, maxRetries, string(respBody))
+				return fmt.Errorf("openrouter API returned %d after %d retries: %s", resp.StatusCode, maxRetries, string(respBody))
 			}
-			log.Warn().Int("status", resp.StatusCode).Int("attempt", attempt).Msg("Gemini API error, retrying")
+			log.Warn().Int("status", resp.StatusCode).Int("attempt", attempt).Msg("OpenRouter API error, retrying")
 			continue
 		}
 
 		if resp.StatusCode != 200 {
-			return fmt.Errorf("gemini API returned %d: %s", resp.StatusCode, string(respBody))
+			return fmt.Errorf("openrouter API returned %d: %s", resp.StatusCode, string(respBody))
 		}
 
 		if err := json.Unmarshal(respBody, result); err != nil {
@@ -348,6 +287,5 @@ func (c *Client) doWithRetry(ctx context.Context, url string, body any, result a
 		}
 		return nil
 	}
-
 	return fmt.Errorf("exhausted retries")
 }
