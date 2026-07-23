@@ -46,18 +46,30 @@ func slackOpenIM(ctx context.Context, token, userID string) (string, error) {
 
 // slackPostMessage posts text to a channel id via chat.postMessage.
 func slackPostMessage(ctx context.Context, token, channelID, text string) error {
+	_, err := slackPostMessageTS(ctx, token, channelID, text, "")
+	return err
+}
+
+// slackPostMessageTS posts text to a channel and returns the message ts. When
+// threadTS is non-empty the message is posted as a reply in that thread — this
+// is how the hourly monitor keeps its 7-day run in a single DM thread.
+func slackPostMessageTS(ctx context.Context, token, channelID, text, threadTS string) (string, error) {
+	body := map[string]any{"channel": channelID, "text": text, "unfurl_links": false}
+	if threadTS != "" {
+		body["thread_ts"] = threadTS
+	}
 	var resp struct {
 		OK    bool   `json:"ok"`
 		Error string `json:"error"`
+		TS    string `json:"ts"`
 	}
-	if err := slackPostJSON(ctx, token, "https://slack.com/api/chat.postMessage",
-		map[string]any{"channel": channelID, "text": text, "unfurl_links": false}, &resp); err != nil {
-		return err
+	if err := slackPostJSON(ctx, token, "https://slack.com/api/chat.postMessage", body, &resp); err != nil {
+		return "", err
 	}
 	if !resp.OK {
-		return fmt.Errorf("chat.postMessage: %s", resp.Error)
+		return "", fmt.Errorf("chat.postMessage: %s", resp.Error)
 	}
-	return nil
+	return resp.TS, nil
 }
 
 // slackPostJSON does a JSON POST with a Bearer token and decodes into dst.

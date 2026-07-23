@@ -222,6 +222,19 @@ func NewServer(cfg *config.Config, logBuf *LogBuffer) (*Server, error) {
 		}
 	}
 
+	// Arm the 7-day hourly monitor (threaded DM report). Deduped; the handler
+	// self-expires 7 days after its first run, so a restart after that just no-ops.
+	var monitorPending bool
+	_ = pool.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM graph.jobs WHERE type='monitor_hourly_report' AND status IN ('queued','running'))`).
+		Scan(&monitorPending)
+	if !monitorPending {
+		if _, err := jobs.Enqueue(ctx, pool, "monitor_hourly_report", map[string]any{},
+			jobs.EnqueueOptions{TargetRunner: cfg.Graph.Runner, MachineID: cfg.MachineID}); err != nil {
+			graphLog.Warn().Err(err).Msg("startup: enqueue monitor_hourly_report failed")
+		}
+	}
+
 	// Backfill summaries for discussion threads (2+ messages) that never got one
 	// — the lazy popup path only summarizes what a user happens to open. LLM
 	// required; idempotent (summarized threads no longer match the query).
