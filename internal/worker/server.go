@@ -293,6 +293,9 @@ func NewServer(cfg *config.Config, logBuf *LogBuffer) (*Server, error) {
 		// Logs endpoint
 		r.Get("/api/logs", s.handleGetLogs)
 
+		// OpenRouter usage endpoint
+		r.Get("/api/openrouter/usage", s.handleOpenRouterUsage)
+
 		// Sync endpoints
 		r.Post("/api/sync/push", s.handleSyncPush)
 		r.Get("/api/sync/pull", s.handleSyncPull)
