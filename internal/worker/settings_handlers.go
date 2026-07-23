@@ -8,7 +8,9 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
+	"github.com/agent-mem/agent-mem/internal/anthropic"
 	"github.com/agent-mem/agent-mem/internal/gemini"
+	graphhandlers "github.com/agent-mem/agent-mem/internal/graph/handlers"
 	"github.com/agent-mem/agent-mem/internal/search"
 )
 
@@ -156,6 +158,27 @@ func (s *Server) reloadGemini() {
 	s.mu.Unlock()
 
 	log.Info().Str("model", snap.GeminiModel).Msg("Gemini client reloaded")
+
+	// Mirror the startup wiring (NewServer): the graph judge/describe client
+	// runs graph_gemini_model when it differs from gemini_model, and graph
+	// summaries run on Claude when an Anthropic key is set. Swapping in place
+	// updates the adapter captured by registered job handlers.
+	if s.graphAdapter == nil {
+		return // no LLM key at boot; restart required to enable graph LLM calls
+	}
+	graphClient, graphModel := newClient, snap.GeminiModel
+	if snap.GraphGeminiModel != "" && snap.GraphGeminiModel != snap.GeminiModel {
+		graphModel = snap.GraphGeminiModel
+		graphClient = gemini.NewClient(snap.LLMProviderOrDefault(), snap.ActiveLLMKey(), graphModel, snap.GeminiEmbeddingModel, snap.GeminiEmbeddingDims)
+	}
+	var summaryLLM graphhandlers.TextGenerator
+	summaryModel := ""
+	if snap.AnthropicAPIKey != "" {
+		summaryLLM = anthropic.NewClient(snap.AnthropicAPIKey, snap.AnthropicModel)
+		summaryModel = snap.AnthropicModel
+	}
+	s.graphAdapter.Swap(graphClient, summaryLLM)
+	log.Info().Str("model", graphModel).Str("summary_model", summaryModel).Msg("Graph LLM client reloaded")
 }
 
 func keys(m map[string]any) []string {

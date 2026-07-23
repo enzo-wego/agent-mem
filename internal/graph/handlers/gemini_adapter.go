@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"sync"
 
 	"github.com/agent-mem/agent-mem/internal/gemini"
 )
@@ -11,11 +12,15 @@ type TextGenerator interface {
 	Generate(ctx context.Context, systemPrompt, userMessage string) (string, error)
 }
 
-// geminiAdapter wraps *gemini.Client to satisfy the GeminiClient interface.
+// GeminiAdapter wraps *gemini.Client to satisfy the GeminiClient interface.
 // Embed/Describe always use Gemini; Generate is routed to gen, which is Claude
 // when an Anthropic key is configured (better grounding, fewer hallucinated
 // ticket ids/outcomes) and the Gemini client otherwise.
-type geminiAdapter struct {
+//
+// The underlying clients are swappable via Swap so settings changes take
+// effect without a worker restart; all reads go through the mutex.
+type GeminiAdapter struct {
+	mu  sync.RWMutex
 	c   *gemini.Client
 	gen TextGenerator
 }
@@ -29,32 +34,60 @@ func NewGeminiAdapter(c *gemini.Client, gen TextGenerator) GeminiClient {
 	if gen == nil {
 		gen = c
 	}
-	return &geminiAdapter{c: c, gen: gen}
+	return &GeminiAdapter{c: c, gen: gen}
+}
+
+// Swap replaces the underlying clients so settings changes (graph_gemini_model,
+// llm_provider, anthropic key/model) apply to already-registered job handlers.
+// A nil gen falls back to c, mirroring NewGeminiAdapter. A nil c is ignored:
+// handlers holding a live adapter must never see a nil client, so clearing the
+// LLM key still requires a worker restart to disable graph LLM calls.
+func (a *GeminiAdapter) Swap(c *gemini.Client, gen TextGenerator) {
+	if c == nil {
+		return
+	}
+	if gen == nil {
+		gen = c
+	}
+	a.mu.Lock()
+	a.c, a.gen = c, gen
+	a.mu.Unlock()
+}
+
+func (a *GeminiAdapter) clients() (*gemini.Client, TextGenerator) {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.c, a.gen
 }
 
 // Embed proxies directly to the underlying Gemini client.
-func (a *geminiAdapter) Embed(ctx context.Context, text string) ([]float32, error) {
-	return a.c.Embed(ctx, text)
+func (a *GeminiAdapter) Embed(ctx context.Context, text string) ([]float32, error) {
+	c, _ := a.clients()
+	return c.Embed(ctx, text)
 }
 
 // EmbedWithOptions proxies directly to the underlying Gemini client.
-func (a *geminiAdapter) EmbedWithOptions(ctx context.Context, text string, opts gemini.EmbedOptions) ([]float32, error) {
-	return a.c.EmbedWithOptions(ctx, text, opts)
+func (a *GeminiAdapter) EmbedWithOptions(ctx context.Context, text string, opts gemini.EmbedOptions) ([]float32, error) {
+	c, _ := a.clients()
+	return c.EmbedWithOptions(ctx, text, opts)
 }
 
 // Generate proxies to the configured text generator (Claude or Gemini).
-func (a *geminiAdapter) Generate(ctx context.Context, systemPrompt, userMessage string) (string, error) {
-	return a.gen.Generate(ctx, systemPrompt, userMessage)
+func (a *GeminiAdapter) Generate(ctx context.Context, systemPrompt, userMessage string) (string, error) {
+	_, gen := a.clients()
+	return gen.Generate(ctx, systemPrompt, userMessage)
 }
 
 // GenerateCheap always uses Gemini Flash instead of the optional Claude summary
 // generator. The topic-link confirm gate is high-volume and already receives a
 // cosine shortlist, so it should stay on the cheap model.
-func (a *geminiAdapter) GenerateCheap(ctx context.Context, systemPrompt, userMessage string) (string, error) {
-	return a.c.Generate(ctx, systemPrompt, userMessage)
+func (a *GeminiAdapter) GenerateCheap(ctx context.Context, systemPrompt, userMessage string) (string, error) {
+	c, _ := a.clients()
+	return c.Generate(ctx, systemPrompt, userMessage)
 }
 
 // Describe proxies multimodal attachment description to the Gemini client.
-func (a *geminiAdapter) Describe(ctx context.Context, mimeType string, data []byte, prompt string) (string, string, []string, error) {
-	return a.c.Describe(ctx, mimeType, data, prompt)
+func (a *GeminiAdapter) Describe(ctx context.Context, mimeType string, data []byte, prompt string) (string, string, []string, error) {
+	c, _ := a.clients()
+	return c.Describe(ctx, mimeType, data, prompt)
 }

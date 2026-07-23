@@ -46,6 +46,11 @@ type Server struct {
 	gemini   *gemini.Client
 	searcher *search.Searcher
 
+	// graphAdapter is the graph handlers' LLM adapter; swapped in place on
+	// settings reload. Nil when no LLM key was set at boot (restart required
+	// to enable graph LLM calls in that case).
+	graphAdapter *graphhandlers.GeminiAdapter
+
 	logBuffer *LogBuffer
 }
 
@@ -114,6 +119,14 @@ func NewServer(cfg *config.Config, logBuf *LogBuffer) (*Server, error) {
 		log.Info().Str("model", cfg.AnthropicModel).Msg("Anthropic client initialized for graph summaries")
 	}
 
+	// Concrete handle kept on the Server so settings reload can Swap the
+	// underlying clients in place (job handlers capture the interface value
+	// at RegisterAll time and never see a rebuilt Deps). Deps.Gemini must be
+	// assigned the interface value, not the typed pointer — a nil *GeminiAdapter
+	// in the interface would defeat handlers' nil checks.
+	graphGemini := graphhandlers.NewGeminiAdapter(graphGeminiClient, summaryLLM)
+	graphAdapter, _ := graphGemini.(*graphhandlers.GeminiAdapter)
+
 	var searcher *search.Searcher
 	if geminiClient != nil {
 		searcher = search.NewSearcher(db, geminiClient)
@@ -135,7 +148,7 @@ func NewServer(cfg *config.Config, logBuf *LogBuffer) (*Server, error) {
 		Normalizers: normalizer.NewDefault(newDBNameCache(pool)),
 		Extractor:   extractor.New(pool, graphLog),
 		Identity:    identity.NewService(pool, graphLog),
-		Gemini:      graphhandlers.NewGeminiAdapter(graphGeminiClient, summaryLLM),
+		Gemini:      graphGemini,
 		LiteParse:   liteparseConfigFromEnv(),
 
 		SlackBotToken: cfg.Graph.SlackBotToken,
@@ -263,14 +276,15 @@ func NewServer(cfg *config.Config, logBuf *LogBuffer) (*Server, error) {
 	})
 
 	s := &Server{
-		config:     cfg,
-		db:         db,
-		gemini:     geminiClient,
-		contextBld: memctx.NewBuilder(db, cfg),
-		searcher:   searcher,
-		syncEngine: syncEng,
-		manager:    mgr,
-		logBuffer:  logBuf,
+		config:       cfg,
+		db:           db,
+		gemini:       geminiClient,
+		contextBld:   memctx.NewBuilder(db, cfg),
+		searcher:     searcher,
+		syncEngine:   syncEng,
+		manager:      mgr,
+		logBuffer:    logBuf,
+		graphAdapter: graphAdapter,
 	}
 
 	r := chi.NewRouter()
