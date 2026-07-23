@@ -112,7 +112,7 @@ export function SettingsPage() {
             placeholder="google/gemini-3.5-flash"
           />
         </Field>
-        <Field label="Embedding Model" hint="Used for semantic search embeddings.">
+        <Field label="Embedding Model" hint="Used for semantic search embeddings. gemini-embedding-001 is the same model on both providers — the google/ prefix is added/stripped automatically per provider, so you don't change this when switching provider. Changing to a different model requires re-embedding all data.">
           <SelectField
             value={settings.gemini_embedding_model}
             options={EMBEDDING_MODELS}
@@ -223,9 +223,11 @@ const ANTHROPIC_MODELS = [
   { value: 'claude-opus-4-8', label: 'Claude Opus 4.8 (highest quality)' },
 ]
 
+// Stored with the google/ namespace; the client strips it automatically on the
+// google provider, so one value works for both providers.
 const EMBEDDING_MODELS = [
-  { value: 'gemini-embedding-001', label: 'gemini-embedding-001 (latest, recommended)' },
-  { value: 'text-embedding-004', label: 'text-embedding-004' },
+  { value: 'google/gemini-embedding-001', label: 'gemini-embedding-001 (recommended)' },
+  { value: 'google/text-embedding-004', label: 'text-embedding-004 (legacy, 768-dim)' },
 ]
 
 const EMBEDDING_DIMS = [
