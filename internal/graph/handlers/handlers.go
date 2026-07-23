@@ -88,6 +88,11 @@ func RegisterAll(reg *jobs.Registry, deps Deps) {
 		PoolSize: 1,
 		Lease:    120 * time.Second,
 	})
+	reg.Register("monitor_hourly_report", jobs.Entry{
+		Handler:  NewMonitorHourlyReport(deps),
+		PoolSize: 1,
+		Lease:    120 * time.Second,
+	})
 	reg.Register("refresh_topic_scope", jobs.Entry{
 		Handler:   NewRefreshTopicScope(deps),
 		PoolSize:  1,
