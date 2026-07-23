@@ -320,7 +320,7 @@ type ConfigSnapshot struct {
 
 // Update applies partial updates from a JSON object to the config.
 // Only mutable fields are updated; restart-required fields are ignored.
-// Returns true if the Gemini API key or model changed (caller should reinit client).
+// Returns true if any LLM key/model/provider changed (caller should reinit clients).
 func (c *Config) Update(partial map[string]any) (geminiChanged bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -332,6 +332,8 @@ func (c *Config) Update(partial map[string]any) (geminiChanged bool) {
 	oldEmbDims := c.GeminiEmbeddingDims
 	oldProvider := c.LLMProvider
 	oldGoogleKey := c.GoogleAPIKey
+	oldAnthropicKey := c.AnthropicAPIKey
+	oldAnthropicModel := c.AnthropicModel
 
 	for k, v := range partial {
 		switch k {
@@ -432,7 +434,9 @@ func (c *Config) Update(partial map[string]any) (geminiChanged bool) {
 		c.GeminiEmbeddingModel != oldEmbModel ||
 		c.GeminiEmbeddingDims != oldEmbDims ||
 		c.LLMProvider != oldProvider ||
-		c.GoogleAPIKey != oldGoogleKey
+		c.GoogleAPIKey != oldGoogleKey ||
+		c.AnthropicAPIKey != oldAnthropicKey ||
+		c.AnthropicModel != oldAnthropicModel
 }
 
 func toInt(v any) (int, bool) {
