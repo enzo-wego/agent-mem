@@ -24,6 +24,8 @@ type settingsResponse struct {
 	GeminiModel          string `json:"gemini_model"`
 	GeminiEmbeddingModel string `json:"gemini_embedding_model"`
 	GeminiEmbeddingDims  int    `json:"gemini_embedding_dims"`
+	LLMProvider          string `json:"llm_provider"`
+	GoogleAPIKey         string `json:"google_api_key"`
 
 	ContextObservations int    `json:"context_observations"`
 	ContextFullCount    int    `json:"context_full_count"`
@@ -60,6 +62,8 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, _ *http.Request) {
 		GeminiModel:          snap.GeminiModel,
 		GeminiEmbeddingModel: snap.GeminiEmbeddingModel,
 		GeminiEmbeddingDims:  snap.GeminiEmbeddingDims,
+		LLMProvider:          snap.LLMProviderOrDefault(),
+		GoogleAPIKey:         maskKey(snap.GoogleAPIKey),
 		ContextObservations:  snap.ContextObservations,
 		ContextFullCount:     snap.ContextFullCount,
 		ContextSessionCount:  snap.ContextSessionCount,
@@ -128,16 +132,16 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 func (s *Server) reloadGemini() {
 	snap := s.config.Snapshot()
 
-	if snap.GeminiAPIKey == "" {
+	if snap.ActiveLLMKey() == "" {
 		s.mu.Lock()
 		s.gemini = nil
 		s.searcher = nil
 		s.mu.Unlock()
-		log.Warn().Msg("Gemini API key cleared, observation extraction disabled")
+		log.Warn().Str("provider", snap.LLMProviderOrDefault()).Msg("LLM API key cleared, observation extraction disabled")
 		return
 	}
 
-	newClient := gemini.NewClient(snap.GeminiAPIKey, snap.GeminiModel, snap.GeminiEmbeddingModel, snap.GeminiEmbeddingDims)
+	newClient := gemini.NewClient(snap.LLMProviderOrDefault(), snap.ActiveLLMKey(), snap.GeminiModel, snap.GeminiEmbeddingModel, snap.GeminiEmbeddingDims)
 	newSearcher := search.NewSearcher(s.db, newClient)
 
 	s.mu.Lock()

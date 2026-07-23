@@ -25,7 +25,7 @@ func runBackfillEmbeddings(databaseURL, geminiAPIKey, embeddingModel string, emb
 	}
 	defer pool.Close()
 
-	client := gemini.NewClient(geminiAPIKey, "", embeddingModel, embeddingDims)
+	client := gemini.NewClient(gemini.ProviderOpenRouter, geminiAPIKey, "", embeddingModel, embeddingDims)
 	return backfillEmbeddings(ctx, pool, client)
 }
 
@@ -71,7 +71,7 @@ func runMigrate(sqlitePath, databaseURL, geminiAPIKey string) error {
 
 	// Backfill embeddings if Gemini key provided
 	if geminiAPIKey != "" {
-		client := gemini.NewClient(geminiAPIKey, "", "gemini-embedding-001", 768)
+		client := gemini.NewClient(gemini.ProviderOpenRouter, geminiAPIKey, "", "gemini-embedding-001", 768)
 		if err := backfillEmbeddings(ctx, pool, client); err != nil {
 			log.Warn().Err(err).Msg("Embedding backfill had errors")
 		}

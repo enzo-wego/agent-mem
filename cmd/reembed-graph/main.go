@@ -32,7 +32,9 @@ func main() {
 	defer pg.Close()
 
 	// 3072-dim client, no task_type — matches the worker's graph query embeddings.
-	client := gemini.NewClient(apiKey, "", "google/gemini-embedding-001", 3072)
+	// Provider follows AGENT_MEM_LLM_PROVIDER (default openrouter) so a re-embed can
+	// run against either backend; vectors are compatible either way.
+	client := gemini.NewClient(os.Getenv("AGENT_MEM_LLM_PROVIDER"), apiKey, "", "google/gemini-embedding-001", 3072)
 
 	rows, err := pg.Query(ctx, `SELECT node_id, summary FROM graph.artifact_index WHERE summary <> '' ORDER BY node_id`)
 	if err != nil {

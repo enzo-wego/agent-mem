@@ -77,6 +77,12 @@ type Config struct {
 	GeminiEmbeddingModel string `json:"gemini_embedding_model"`
 	GeminiEmbeddingDims  int    `json:"gemini_embedding_dims"`
 
+	// LLMProvider picks the gemini-client backend: "openrouter" (default; uses
+	// GeminiAPIKey/sk-or) or "google" (direct Gemini API; uses GoogleAPIKey/AIza).
+	// Flip + restart the worker to fail over when OpenRouter is out of quota.
+	LLMProvider  string `json:"llm_provider"`
+	GoogleAPIKey string `json:"google_api_key"`
+
 	// AnthropicAPIKey, when set, routes graph summaries (cluster/thread/feature)
 	// to Claude instead of Gemini Flash. Embeddings always stay on Gemini.
 	AnthropicAPIKey string `json:"anthropic_api_key"`
@@ -90,14 +96,14 @@ type Config struct {
 	AllowedProjects string `json:"allowed_projects"`
 	IgnoredProjects string `json:"ignored_projects"`
 
-	SyncEnabled  bool   `json:"sync_enabled"`
-	SyncURL      string `json:"sync_url"`
+	SyncEnabled bool   `json:"sync_enabled"`
+	SyncURL     string `json:"sync_url"`
 	// PublicBaseURL is the public dashboard origin (e.g. https://enzogo.io.vn)
 	// used when composing outward links (alert DMs). Empty = no links emitted.
 	PublicBaseURL string `json:"public_base_url"`
-	SyncInterval string `json:"sync_interval"`
-	APIKey       string `json:"api_key"`
-	MachineID    string `json:"machine_id"`
+	SyncInterval  string `json:"sync_interval"`
+	APIKey        string `json:"api_key"`
+	MachineID     string `json:"machine_id"`
 
 	Graph GraphConfig `json:"graph"`
 }
@@ -115,6 +121,43 @@ func (c *Config) Save() error {
 	return nil
 }
 
+// normalizeProvider maps any value to a valid provider, defaulting to openrouter.
+func normalizeProvider(p string) string {
+	if p == "google" {
+		return "google"
+	}
+	return "openrouter"
+}
+
+// LLMProviderOrDefault returns the configured LLM provider, defaulting to openrouter.
+func (c *Config) LLMProviderOrDefault() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return normalizeProvider(c.LLMProvider)
+}
+
+// ActiveLLMKey returns the API key for the active provider: GoogleAPIKey when
+// provider is google, else GeminiAPIKey (which holds the OpenRouter key).
+func (c *Config) ActiveLLMKey() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if normalizeProvider(c.LLMProvider) == "google" {
+		return c.GoogleAPIKey
+	}
+	return c.GeminiAPIKey
+}
+
+// LLMProviderOrDefault returns the snapshot's provider, defaulting to openrouter.
+func (s ConfigSnapshot) LLMProviderOrDefault() string { return normalizeProvider(s.LLMProvider) }
+
+// ActiveLLMKey returns the snapshot's key for the active provider.
+func (s ConfigSnapshot) ActiveLLMKey() string {
+	if normalizeProvider(s.LLMProvider) == "google" {
+		return s.GoogleAPIKey
+	}
+	return s.GeminiAPIKey
+}
+
 // RuntimeSettings returns the runtime settings as a string map for DB storage.
 func (c *Config) RuntimeSettings() map[string]string {
 	c.mu.RLock()
@@ -125,6 +168,8 @@ func (c *Config) RuntimeSettings() map[string]string {
 		"graph_gemini_model":     c.GraphGeminiModel,
 		"gemini_embedding_model": c.GeminiEmbeddingModel,
 		"gemini_embedding_dims":  strconv.Itoa(c.GeminiEmbeddingDims),
+		"llm_provider":           c.LLMProvider,
+		"google_api_key":         c.GoogleAPIKey,
 		"context_observations":   strconv.Itoa(c.ContextObservations),
 		"context_full_count":     strconv.Itoa(c.ContextFullCount),
 		"context_session_count":  strconv.Itoa(c.ContextSessionCount),
@@ -161,6 +206,10 @@ func (c *Config) ApplyDBSettings(dbSettings map[string]string) {
 			if n, err := strconv.Atoi(v); err == nil {
 				c.GeminiEmbeddingDims = n
 			}
+		case "llm_provider":
+			c.LLMProvider = v
+		case "google_api_key":
+			c.GoogleAPIKey = v
 		case "context_observations":
 			if n, err := strconv.Atoi(v); err == nil {
 				c.ContextObservations = n
@@ -209,6 +258,8 @@ func (c *Config) snapshot() ConfigSnapshot {
 		GraphGeminiModel:     c.GraphGeminiModel,
 		GeminiEmbeddingModel: c.GeminiEmbeddingModel,
 		GeminiEmbeddingDims:  c.GeminiEmbeddingDims,
+		LLMProvider:          c.LLMProvider,
+		GoogleAPIKey:         c.GoogleAPIKey,
 		ContextObservations:  c.ContextObservations,
 		ContextFullCount:     c.ContextFullCount,
 		ContextSessionCount:  c.ContextSessionCount,
@@ -236,19 +287,25 @@ type ConfigSnapshot struct {
 	GraphGeminiModel     string `json:"graph_gemini_model"` // graph judge/describe model; empty = use GeminiModel (flat memory keeps its tuned model)
 	GeminiEmbeddingModel string `json:"gemini_embedding_model"`
 	GeminiEmbeddingDims  int    `json:"gemini_embedding_dims"`
-	ContextObservations  int    `json:"context_observations"`
-	ContextFullCount     int    `json:"context_full_count"`
-	ContextSessionCount  int    `json:"context_session_count"`
-	SkipTools            string `json:"skip_tools"`
-	AllowedProjects      string `json:"allowed_projects"`
-	IgnoredProjects      string `json:"ignored_projects"`
-	SyncEnabled          bool   `json:"sync_enabled"`
-	SyncURL              string `json:"sync_url"`
-	PublicBaseURL        string `json:"public_base_url"`
-	SyncInterval         string `json:"sync_interval"`
-	APIKey               string `json:"api_key"`
-	MachineID            string `json:"machine_id"`
-	Graph                GraphConfig `json:"graph"`
+
+	// LLMProvider picks the gemini-client backend: "openrouter" (default; uses
+	// GeminiAPIKey/sk-or) or "google" (direct Gemini API; uses GoogleAPIKey/AIza).
+	// Flip + restart the worker to fail over when OpenRouter is out of quota.
+	LLMProvider         string      `json:"llm_provider"`
+	GoogleAPIKey        string      `json:"google_api_key"`
+	ContextObservations int         `json:"context_observations"`
+	ContextFullCount    int         `json:"context_full_count"`
+	ContextSessionCount int         `json:"context_session_count"`
+	SkipTools           string      `json:"skip_tools"`
+	AllowedProjects     string      `json:"allowed_projects"`
+	IgnoredProjects     string      `json:"ignored_projects"`
+	SyncEnabled         bool        `json:"sync_enabled"`
+	SyncURL             string      `json:"sync_url"`
+	PublicBaseURL       string      `json:"public_base_url"`
+	SyncInterval        string      `json:"sync_interval"`
+	APIKey              string      `json:"api_key"`
+	MachineID           string      `json:"machine_id"`
+	Graph               GraphConfig `json:"graph"`
 }
 
 // Update applies partial updates from a JSON object to the config.
@@ -263,6 +320,8 @@ func (c *Config) Update(partial map[string]any) (geminiChanged bool) {
 	oldGraphModel := c.GraphGeminiModel
 	oldEmbModel := c.GeminiEmbeddingModel
 	oldEmbDims := c.GeminiEmbeddingDims
+	oldProvider := c.LLMProvider
+	oldGoogleKey := c.GoogleAPIKey
 
 	for k, v := range partial {
 		switch k {
@@ -285,6 +344,14 @@ func (c *Config) Update(partial map[string]any) (geminiChanged bool) {
 		case "gemini_embedding_dims":
 			if n, ok := toInt(v); ok {
 				c.GeminiEmbeddingDims = n
+			}
+		case "llm_provider":
+			if s, ok := v.(string); ok {
+				c.LLMProvider = s
+			}
+		case "google_api_key":
+			if s, ok := v.(string); ok {
+				c.GoogleAPIKey = s
 			}
 		case "allowed_projects":
 			if s, ok := v.(string); ok {
@@ -345,7 +412,9 @@ func (c *Config) Update(partial map[string]any) (geminiChanged bool) {
 		c.GeminiModel != oldModel ||
 		c.GraphGeminiModel != oldGraphModel ||
 		c.GeminiEmbeddingModel != oldEmbModel ||
-		c.GeminiEmbeddingDims != oldEmbDims
+		c.GeminiEmbeddingDims != oldEmbDims ||
+		c.LLMProvider != oldProvider ||
+		c.GoogleAPIKey != oldGoogleKey
 }
 
 func toInt(v any) (int, bool) {
@@ -427,6 +496,12 @@ func ApplyEnv(cfg *Config) {
 		cfg.GeminiAPIKey = v
 	} else if v := os.Getenv("GEMINI_API_KEY"); v != "" && cfg.GeminiAPIKey == "" {
 		cfg.GeminiAPIKey = v
+	}
+	if v := os.Getenv("AGENT_MEM_LLM_PROVIDER"); v != "" {
+		cfg.LLMProvider = v
+	}
+	if v := os.Getenv("AGENT_MEM_GOOGLE_API_KEY"); v != "" {
+		cfg.GoogleAPIKey = v
 	}
 	if v := os.Getenv("AGENT_MEM_ANTHROPIC_API_KEY"); v != "" {
 		cfg.AnthropicAPIKey = v
