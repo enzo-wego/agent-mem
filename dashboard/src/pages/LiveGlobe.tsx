@@ -19,6 +19,7 @@ import {
   createPin,
   deletePin,
   fetchBoardPins,
+  getOpenRouterUsage,
   type ChannelCount,
   type ContinentCfg,
   type ChannelMessage,
@@ -30,6 +31,7 @@ import {
   type TopicSource,
   type PinnedThread,
   type BoardEpicGroup,
+  type OpenRouterUsage,
 } from '../api'
 import { applyGroupNames, assignCountries, continentOf, nameOf } from '../continents'
 import ClusterGraph from './ClusterGraph'
@@ -49,6 +51,52 @@ const C = {
 } as const
 
 const MONO = 'ui-monospace, "SF Mono", Menlo, monospace'
+
+// Small OpenRouter credit badge for the globe's dark HUD top bar. Mirrors the
+// polling/guard logic of App.tsx's OpenRouterBadge, restyled to match the
+// globe palette (C) instead of the main dashboard's Tailwind classes.
+function LiveCreditBadge() {
+  const [usage, setUsage] = useState<OpenRouterUsage | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    const load = () => {
+      getOpenRouterUsage()
+        .then((data) => { if (!cancelled) setUsage(data) })
+        .catch(() => { if (!cancelled) setUsage(null) })
+    }
+    load()
+    const id = setInterval(load, 60_000)
+    return () => { cancelled = true; clearInterval(id) }
+  }, [])
+
+  if (!usage || !usage.available) return null
+
+  const label = usage.limit != null
+    ? `⚡ $${usage.limit_remaining?.toFixed(2)} left`
+    : `⚡ $${usage.usage?.toFixed(2)} used`
+
+  const title = `OpenRouter · used $${usage.usage?.toFixed(2)} / $${usage.limit ?? '∞'} · today $${usage.usage_daily?.toFixed(2)} · resets ${usage.limit_reset}`
+
+  return (
+    <span
+      title={title}
+      style={{
+        background: C.panel,
+        border: `1px solid ${C.border}`,
+        color: C.text,
+        fontFamily: MONO,
+        fontSize: 11,
+        padding: '3px 8px',
+        borderRadius: 6,
+        fontVariantNumeric: 'tabular-nums',
+        whiteSpace: 'nowrap',
+      }}
+    >
+      {label}
+    </span>
+  )
+}
 
 // Knowledge-source types a topic can be defined from (matches the graph fetchers).
 const SOURCE_TYPES: { value: string; label: string }[] = [
@@ -2053,6 +2101,7 @@ export function LiveGlobePage() {
               </button>
             ))}
           </div>
+          <LiveCreditBadge />
         </div>
       </div>
 
