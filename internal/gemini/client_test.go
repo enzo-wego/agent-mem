@@ -25,7 +25,7 @@ func TestGenerateOpenRouter(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := NewClient("test-key", "google/gemini-2.5-flash", "google/gemini-embedding-001", 768)
+	c := NewClient(ProviderOpenRouter, "test-key", "google/gemini-2.5-flash", "google/gemini-embedding-001", 768)
 	c.baseURL = srv.URL
 
 	out, err := c.Generate(context.Background(), "sys", "hello")
@@ -55,7 +55,7 @@ func TestEmbedOpenRouter(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := NewClient("test-key", "m", "google/gemini-embedding-001", 768)
+	c := NewClient(ProviderOpenRouter, "test-key", "m", "google/gemini-embedding-001", 768)
 	c.baseURL = srv.URL
 
 	vec, err := c.Embed(context.Background(), "hello")
@@ -85,7 +85,7 @@ func TestEmbedWithOptionsDims(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := NewClient("k", "m", "google/gemini-embedding-001", 768)
+	c := NewClient(ProviderOpenRouter, "k", "m", "google/gemini-embedding-001", 768)
 	c.baseURL = srv.URL
 
 	_, err := c.EmbedWithOptions(context.Background(), "x", EmbedOptions{OutputDimensionality: 3072})
@@ -110,7 +110,7 @@ func TestEmbedBatchOrdering(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := NewClient("k", "m", "google/gemini-embedding-001", 768)
+	c := NewClient(ProviderOpenRouter, "k", "m", "google/gemini-embedding-001", 768)
 	c.baseURL = srv.URL
 
 	vecs, err := c.EmbedBatch(context.Background(), []string{"first", "second"})
@@ -125,5 +125,102 @@ func TestEmbedBatchOrdering(t *testing.T) {
 	}
 	if _, ok := gotBody["input"].([]any); !ok {
 		t.Errorf("input must be sent as a JSON array, got %T", gotBody["input"])
+	}
+}
+
+func TestGenerateGoogle(t *testing.T) {
+	var gotBody map[string]any
+	var gotPath, gotQueryKey string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotQueryKey = r.URL.Query().Get("key")
+		if got := r.Header.Get("Authorization"); got != "" {
+			t.Errorf("google mode must NOT send Authorization header, got %q", got)
+		}
+		b, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(b, &gotBody)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"candidates":[{"content":{"parts":[{"text":"{\"ok\":true}"}]}}]}`))
+	}))
+	defer srv.Close()
+
+	c := NewClient(ProviderGoogle, "AIza-test", "google/gemini-2.5-flash", "google/gemini-embedding-001", 768)
+	c.baseURL = srv.URL
+
+	out, err := c.Generate(context.Background(), "sys", "hello")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != `{"ok":true}` {
+		t.Errorf("Generate returned %q", out)
+	}
+	// Model id must be bare (google/ prefix stripped) in the REST path.
+	if gotPath != "/gemini-2.5-flash:generateContent" {
+		t.Errorf("path = %q, want /gemini-2.5-flash:generateContent (bare model id)", gotPath)
+	}
+	if gotQueryKey != "AIza-test" {
+		t.Errorf("key query = %q, want AIza-test", gotQueryKey)
+	}
+	if _, ok := gotBody["contents"]; !ok {
+		t.Error("google request must use contents[] (not OpenAI messages[])")
+	}
+}
+
+func TestEmbedGoogleNoTaskType(t *testing.T) {
+	var gotBody map[string]any
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		b, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(b, &gotBody)
+		_, _ = w.Write([]byte(`{"embedding":{"values":[0.1,0.2,0.3]}}`))
+	}))
+	defer srv.Close()
+
+	c := NewClient(ProviderGoogle, "AIza-test", "m", "google/gemini-embedding-001", 768)
+	c.baseURL = srv.URL
+
+	vec, err := c.EmbedWithOptions(context.Background(), "hello", EmbedOptions{OutputDimensionality: 3072})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(vec) != 3 {
+		t.Fatalf("embedding len = %d, want 3", len(vec))
+	}
+	if gotPath != "/gemini-embedding-001:embedContent" {
+		t.Errorf("path = %q, want /gemini-embedding-001:embedContent (bare model id)", gotPath)
+	}
+	// CRITICAL: no task_type — keeps vectors in the same space as what's stored.
+	if _, ok := gotBody["taskType"]; ok {
+		t.Error("google embed must NOT send taskType (vector-space compatibility)")
+	}
+	if gotBody["outputDimensionality"].(float64) != 3072 {
+		t.Errorf("outputDimensionality = %v, want 3072", gotBody["outputDimensionality"])
+	}
+}
+
+func TestModelIDNormalization(t *testing.T) {
+	or := NewClient(ProviderOpenRouter, "k", "gemini-2.5-flash", "gemini-embedding-001", 768)
+	if got := or.modelID("gemini-2.5-flash"); got != "google/gemini-2.5-flash" {
+		t.Errorf("openrouter modelID(bare) = %q, want google/gemini-2.5-flash", got)
+	}
+	if got := or.modelID("google/gemini-2.5-flash"); got != "google/gemini-2.5-flash" {
+		t.Errorf("openrouter modelID(prefixed) = %q, want unchanged", got)
+	}
+	g := NewClient(ProviderGoogle, "k", "google/gemini-2.5-flash", "google/gemini-embedding-001", 768)
+	if got := g.modelID("google/gemini-2.5-flash"); got != "gemini-2.5-flash" {
+		t.Errorf("google modelID(prefixed) = %q, want bare gemini-2.5-flash", got)
+	}
+}
+
+func TestNewClientDefaultsProvider(t *testing.T) {
+	if c := NewClient("", "k", "m", "e", 768); c.Provider() != ProviderOpenRouter {
+		t.Errorf("empty provider = %q, want openrouter default", c.Provider())
+	}
+	if c := NewClient("bogus", "k", "m", "e", 768); c.Provider() != ProviderOpenRouter {
+		t.Errorf("unknown provider = %q, want openrouter default", c.Provider())
+	}
+	if c := NewClient(ProviderGoogle, "k", "m", "e", 768); c.baseURL != googleBaseURL {
+		t.Errorf("google baseURL = %q, want %q", c.baseURL, googleBaseURL)
 	}
 }

@@ -9,15 +9,32 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog/log"
 )
 
-const defaultBaseURL = "https://openrouter.ai/api/v1"
+// Provider selects the LLM backend. Both speak the same gemini models; they
+// differ only in wire protocol (endpoint, auth, request/response shape).
+//   - openrouter (default): OpenAI-compatible API at openrouter.ai (sk-or… key).
+//   - google: the direct Google Gemini REST API (AIza… key).
+//
+// A single toggle (config llm_provider) plus a worker restart switches every
+// call — generation, describe, and embeddings. Embeddings stay in the SAME
+// vector space across providers because both use gemini-embedding-001 with NO
+// task_type (verified cosine ~1.0), so switching needs no re-embed.
+const (
+	ProviderOpenRouter = "openrouter"
+	ProviderGoogle     = "google"
 
-// Client is an OpenRouter (OpenAI-compatible) client for generation and embedding.
+	openRouterBaseURL = "https://openrouter.ai/api/v1"
+	googleBaseURL     = "https://generativelanguage.googleapis.com/v1beta/models"
+)
+
+// Client is a dual-mode client for generation and embedding.
 type Client struct {
+	provider       string
 	apiKey         string
 	model          string
 	embeddingModel string
@@ -26,20 +43,42 @@ type Client struct {
 	httpClient     *http.Client
 }
 
-// NewClient creates a new OpenRouter API client. model/embeddingModel are
-// OpenRouter model ids (e.g. "google/gemini-2.5-flash", "google/gemini-embedding-001").
-func NewClient(apiKey, model, embeddingModel string, embeddingDims int) *Client {
+// NewClient creates a client for the given provider. An empty/unknown provider
+// defaults to OpenRouter. model/embeddingModel may be given with or without the
+// "google/" namespace prefix; it is normalized per provider at call time.
+func NewClient(provider, apiKey, model, embeddingModel string, embeddingDims int) *Client {
+	if provider != ProviderGoogle {
+		provider = ProviderOpenRouter
+	}
+	baseURL := openRouterBaseURL
+	if provider == ProviderGoogle {
+		baseURL = googleBaseURL
+	}
 	return &Client{
+		provider:       provider,
 		apiKey:         apiKey,
 		model:          model,
 		embeddingModel: embeddingModel,
 		embeddingDims:  embeddingDims,
-		baseURL:        defaultBaseURL,
+		baseURL:        baseURL,
 		httpClient:     &http.Client{Timeout: 60 * time.Second},
 	}
 }
 
-// --- Chat (generation) ---
+// Provider reports the active backend (for logging/diagnostics).
+func (c *Client) Provider() string { return c.provider }
+
+// modelID normalizes a model id for the active provider: OpenRouter needs the
+// "google/" namespace prefix; Google's REST API wants the bare id.
+func (c *Client) modelID(id string) string {
+	bare := strings.TrimPrefix(id, "google/")
+	if c.provider == ProviderOpenRouter {
+		return "google/" + bare
+	}
+	return bare
+}
+
+// --- OpenRouter (OpenAI-compatible) wire types ---
 
 type chatMessage struct {
 	Role    string `json:"role"`
@@ -77,14 +116,112 @@ type chatResponse struct {
 	Error *apiError `json:"error,omitempty"`
 }
 
+type orEmbedRequest struct {
+	Model      string `json:"model"`
+	Input      any    `json:"input"` // string (single) or []string (batch)
+	Dimensions int    `json:"dimensions,omitempty"`
+}
+
+type orEmbedResponse struct {
+	Data []struct {
+		Index     int       `json:"index"`
+		Embedding []float32 `json:"embedding"`
+	} `json:"data"`
+	Error *apiError `json:"error,omitempty"`
+}
+
+// --- Google Gemini REST wire types ---
+
+type gGenerateRequest struct {
+	Contents          []gContent        `json:"contents"`
+	SystemInstruction *gContent         `json:"systemInstruction,omitempty"`
+	GenerationConfig  gGenerationConfig `json:"generationConfig"`
+}
+
+type gContent struct {
+	Role  string  `json:"role,omitempty"`
+	Parts []gPart `json:"parts"`
+}
+
+type gPart struct {
+	Text       string       `json:"text,omitempty"`
+	InlineData *gInlineData `json:"inline_data,omitempty"`
+}
+
+type gInlineData struct {
+	MimeType string `json:"mime_type"`
+	Data     string `json:"data"`
+}
+
+type gGenerationConfig struct {
+	Temperature      float64 `json:"temperature"`
+	MaxOutputTokens  int     `json:"maxOutputTokens"`
+	ResponseMimeType string  `json:"responseMimeType,omitempty"`
+}
+
+type gGenerateResponse struct {
+	Candidates []struct {
+		Content struct {
+			Parts []struct {
+				Text string `json:"text"`
+			} `json:"parts"`
+		} `json:"content"`
+	} `json:"candidates"`
+	Error *apiError `json:"error,omitempty"`
+}
+
+type gEmbedContentConfig struct {
+	Title                string `json:"title,omitempty"`
+	TaskType             string `json:"taskType,omitempty"`
+	OutputDimensionality int    `json:"outputDimensionality,omitempty"`
+}
+
+type gEmbedRequest struct {
+	Model   string   `json:"model"`
+	Content gContent `json:"content"`
+	// v1beta REST honors ONLY these top-level fields (a nested config is silently
+	// ignored); the nested copy is sent for forward-compat and always agrees.
+	Title                string               `json:"title,omitempty"`
+	TaskType             string               `json:"taskType,omitempty"`
+	OutputDimensionality int                  `json:"outputDimensionality,omitempty"`
+	EmbedContentConfig   *gEmbedContentConfig `json:"embedContentConfig,omitempty"`
+}
+
+type gEmbedResponse struct {
+	Embedding *struct {
+		Values []float32 `json:"values"`
+	} `json:"embedding"`
+	Error *apiError `json:"error,omitempty"`
+}
+
+type gBatchEmbedRequest struct {
+	Requests []gEmbedRequest `json:"requests"`
+}
+
+type gBatchEmbedResponse struct {
+	Embeddings []struct {
+		Values []float32 `json:"values"`
+	} `json:"embeddings"`
+	Error *apiError `json:"error,omitempty"`
+}
+
 type apiError struct {
 	Code    int    `json:"code"`
 	Message string `json:"message"`
+	Status  string `json:"status,omitempty"`
 }
 
-// Generate sends a prompt to OpenRouter and returns the response text.
-// response_format=json_object forces valid JSON output (parity with the old client).
+// --- Generation ---
+
+// Generate sends a prompt and returns the response text, forced to valid JSON.
 func (c *Client) Generate(ctx context.Context, systemPrompt, userMessage string) (string, error) {
+	if c.provider == ProviderGoogle {
+		return c.generateGoogle(ctx, systemPrompt, userMessage)
+	}
+	return c.generateOpenRouter(ctx, systemPrompt, userMessage)
+}
+
+func (c *Client) generateOpenRouter(ctx context.Context, systemPrompt, userMessage string) (string, error) {
 	msgs := make([]chatMessage, 0, 2)
 	if systemPrompt != "" {
 		msgs = append(msgs, chatMessage{Role: "system", Content: systemPrompt})
@@ -92,15 +229,14 @@ func (c *Client) Generate(ctx context.Context, systemPrompt, userMessage string)
 	msgs = append(msgs, chatMessage{Role: "user", Content: userMessage})
 
 	req := chatRequest{
-		Model:          c.model,
+		Model:          c.modelID(c.model),
 		Messages:       msgs,
 		Temperature:    0.3,
 		MaxTokens:      4096,
 		ResponseFormat: &responseFormat{Type: "json_object"},
 	}
-
 	var resp chatResponse
-	if err := c.doWithRetry(ctx, "/chat/completions", req, &resp); err != nil {
+	if err := c.doPost(ctx, c.baseURL+"/chat/completions", "Bearer "+c.apiKey, req, &resp); err != nil {
 		return "", fmt.Errorf("generate: %w", err)
 	}
 	if resp.Error != nil {
@@ -112,63 +248,108 @@ func (c *Client) Generate(ctx context.Context, systemPrompt, userMessage string)
 	return resp.Choices[0].Message.Content, nil
 }
 
-// Describe sends an image attachment to OpenRouter and returns a prose
-// description, OCR text, and key entities as three fields.
-func (c *Client) Describe(ctx context.Context, mimeType string, data []byte, prompt string) (string, string, []string, error) {
-	dataURI := fmt.Sprintf("data:%s;base64,%s", mimeType, base64.StdEncoding.EncodeToString(data))
-	parts := []contentPart{
-		{Type: "text", Text: prompt + `\nRespond as JSON only: {"description":"...","ocr":"verbatim visible text","entities":["..."]}`},
-		{Type: "image_url", ImageURL: &imageURL{URL: dataURI}},
+func (c *Client) generateGoogle(ctx context.Context, systemPrompt, userMessage string) (string, error) {
+	req := gGenerateRequest{
+		Contents:         []gContent{{Role: "user", Parts: []gPart{{Text: userMessage}}}},
+		GenerationConfig: gGenerationConfig{Temperature: 0.3, MaxOutputTokens: 4096, ResponseMimeType: "application/json"},
 	}
-	req := chatRequest{
-		Model:          c.model,
-		Messages:       []chatMessage{{Role: "user", Content: parts}},
-		Temperature:    0.2,
-		MaxTokens:      2048,
-		ResponseFormat: &responseFormat{Type: "json_object"},
+	if systemPrompt != "" {
+		req.SystemInstruction = &gContent{Parts: []gPart{{Text: systemPrompt}}}
 	}
-
-	var resp chatResponse
-	if err := c.doWithRetry(ctx, "/chat/completions", req, &resp); err != nil {
-		return "", "", nil, fmt.Errorf("describe: %w", err)
+	url := fmt.Sprintf("%s/%s:generateContent?key=%s", c.baseURL, c.modelID(c.model), c.apiKey)
+	var resp gGenerateResponse
+	if err := c.doPost(ctx, url, "", req, &resp); err != nil {
+		return "", fmt.Errorf("generate: %w", err)
 	}
 	if resp.Error != nil {
-		return "", "", nil, fmt.Errorf("openrouter describe error: %s (code %d)", resp.Error.Message, resp.Error.Code)
+		return "", fmt.Errorf("gemini API error: %s (code %d)", resp.Error.Message, resp.Error.Code)
 	}
-	if len(resp.Choices) == 0 {
-		return "", "", nil, fmt.Errorf("empty describe response from OpenRouter")
+	if len(resp.Candidates) == 0 || len(resp.Candidates[0].Content.Parts) == 0 {
+		return "", fmt.Errorf("empty response from Gemini")
 	}
+	return resp.Candidates[0].Content.Parts[0].Text, nil
+}
 
+// Describe sends an image attachment and returns description, OCR, and entities.
+func (c *Client) Describe(ctx context.Context, mimeType string, data []byte, prompt string) (string, string, []string, error) {
+	promptJSON := prompt + `\nRespond as JSON only: {"description":"...","ocr":"verbatim visible text","entities":["..."]}`
+	var raw string
+	var err error
+	if c.provider == ProviderGoogle {
+		raw, err = c.describeGoogle(ctx, mimeType, data, promptJSON)
+	} else {
+		raw, err = c.describeOpenRouter(ctx, mimeType, data, promptJSON)
+	}
+	if err != nil {
+		return "", "", nil, err
+	}
 	var parsed struct {
 		Description string   `json:"description"`
 		OCR         string   `json:"ocr"`
 		Entities    []string `json:"entities"`
 	}
-	if err := json.Unmarshal([]byte(resp.Choices[0].Message.Content), &parsed); err != nil {
+	if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
 		return "", "", nil, fmt.Errorf("describe: parse JSON: %w", err)
 	}
 	return parsed.Description, parsed.OCR, parsed.Entities, nil
 }
 
+func (c *Client) describeOpenRouter(ctx context.Context, mimeType string, data []byte, promptJSON string) (string, error) {
+	dataURI := fmt.Sprintf("data:%s;base64,%s", mimeType, base64.StdEncoding.EncodeToString(data))
+	parts := []contentPart{
+		{Type: "text", Text: promptJSON},
+		{Type: "image_url", ImageURL: &imageURL{URL: dataURI}},
+	}
+	req := chatRequest{
+		Model:          c.modelID(c.model),
+		Messages:       []chatMessage{{Role: "user", Content: parts}},
+		Temperature:    0.2,
+		MaxTokens:      2048,
+		ResponseFormat: &responseFormat{Type: "json_object"},
+	}
+	var resp chatResponse
+	if err := c.doPost(ctx, c.baseURL+"/chat/completions", "Bearer "+c.apiKey, req, &resp); err != nil {
+		return "", fmt.Errorf("describe: %w", err)
+	}
+	if resp.Error != nil {
+		return "", fmt.Errorf("openrouter describe error: %s (code %d)", resp.Error.Message, resp.Error.Code)
+	}
+	if len(resp.Choices) == 0 {
+		return "", fmt.Errorf("empty describe response from OpenRouter")
+	}
+	return resp.Choices[0].Message.Content, nil
+}
+
+func (c *Client) describeGoogle(ctx context.Context, mimeType string, data []byte, promptJSON string) (string, error) {
+	req := gGenerateRequest{
+		Contents: []gContent{{
+			Role: "user",
+			Parts: []gPart{
+				{Text: promptJSON},
+				{InlineData: &gInlineData{MimeType: mimeType, Data: base64.StdEncoding.EncodeToString(data)}},
+			},
+		}},
+		GenerationConfig: gGenerationConfig{Temperature: 0.2, MaxOutputTokens: 2048, ResponseMimeType: "application/json"},
+	}
+	url := fmt.Sprintf("%s/%s:generateContent?key=%s", c.baseURL, c.modelID(c.model), c.apiKey)
+	var resp gGenerateResponse
+	if err := c.doPost(ctx, url, "", req, &resp); err != nil {
+		return "", fmt.Errorf("describe: %w", err)
+	}
+	if resp.Error != nil {
+		return "", fmt.Errorf("gemini describe error: %s (code %d)", resp.Error.Message, resp.Error.Code)
+	}
+	if len(resp.Candidates) == 0 || len(resp.Candidates[0].Content.Parts) == 0 {
+		return "", fmt.Errorf("empty describe response from Gemini")
+	}
+	return resp.Candidates[0].Content.Parts[0].Text, nil
+}
+
 // --- Embedding ---
 
-type embedRequest struct {
-	Model      string `json:"model"`
-	Input      any    `json:"input"` // string (single) or []string (batch)
-	Dimensions int    `json:"dimensions,omitempty"`
-}
-
-type embedResponse struct {
-	Data []struct {
-		Index     int       `json:"index"`
-		Embedding []float32 `json:"embedding"`
-	} `json:"data"`
-	Error *apiError `json:"error,omitempty"`
-}
-
-// EmbedOptions configures a single embedding request. TaskType and Title are
-// retained for API stability but IGNORED — OpenRouter's OpenAI-shaped embeddings
-// API does not accept them.
+// EmbedOptions configures a single embedding request. TaskType is accepted for
+// API stability; graph indexing deliberately leaves it EMPTY so both providers
+// produce vectors in the same space as what is already stored (no re-embed).
 type EmbedOptions struct {
 	Title                string
 	TaskType             string
@@ -187,10 +368,16 @@ func (c *Client) EmbedWithOptions(ctx context.Context, text string, opts EmbedOp
 	if dims == 0 {
 		dims = c.embeddingDims
 	}
-	req := embedRequest{Model: c.embeddingModel, Input: text, Dimensions: dims}
+	if c.provider == ProviderGoogle {
+		return c.embedGoogle(ctx, text, opts, dims)
+	}
+	return c.embedOpenRouter(ctx, text, dims)
+}
 
-	var resp embedResponse
-	if err := c.doWithRetry(ctx, "/embeddings", req, &resp); err != nil {
+func (c *Client) embedOpenRouter(ctx context.Context, text string, dims int) ([]float32, error) {
+	req := orEmbedRequest{Model: c.modelID(c.embeddingModel), Input: text, Dimensions: dims}
+	var resp orEmbedResponse
+	if err := c.doPost(ctx, c.baseURL+"/embeddings", "Bearer "+c.apiKey, req, &resp); err != nil {
 		return nil, fmt.Errorf("embed: %w", err)
 	}
 	if resp.Error != nil {
@@ -202,13 +389,45 @@ func (c *Client) EmbedWithOptions(ctx context.Context, text string, opts EmbedOp
 	return resp.Data[0].Embedding, nil
 }
 
+func (c *Client) embedGoogle(ctx context.Context, text string, opts EmbedOptions, dims int) ([]float32, error) {
+	bare := c.modelID(c.embeddingModel)
+	req := gEmbedRequest{
+		Model:   "models/" + bare,
+		Content: gContent{Parts: []gPart{{Text: text}}},
+	}
+	if opts.Title != "" || opts.TaskType != "" || dims > 0 {
+		req.Title = opts.Title
+		req.TaskType = opts.TaskType
+		req.OutputDimensionality = dims
+		req.EmbedContentConfig = &gEmbedContentConfig{Title: opts.Title, TaskType: opts.TaskType, OutputDimensionality: dims}
+	}
+	url := fmt.Sprintf("%s/%s:embedContent?key=%s", c.baseURL, bare, c.apiKey)
+	var resp gEmbedResponse
+	if err := c.doPost(ctx, url, "", req, &resp); err != nil {
+		return nil, fmt.Errorf("embed: %w", err)
+	}
+	if resp.Error != nil {
+		return nil, fmt.Errorf("embed API error: %s (code %d)", resp.Error.Message, resp.Error.Code)
+	}
+	if resp.Embedding == nil {
+		return nil, fmt.Errorf("empty embedding response")
+	}
+	return resp.Embedding.Values, nil
+}
+
 // EmbedBatch generates embeddings for multiple texts in one request, at the
 // client's default dims.
 func (c *Client) EmbedBatch(ctx context.Context, texts []string) ([][]float32, error) {
-	req := embedRequest{Model: c.embeddingModel, Input: texts, Dimensions: c.embeddingDims}
+	if c.provider == ProviderGoogle {
+		return c.batchEmbedGoogle(ctx, texts)
+	}
+	return c.batchEmbedOpenRouter(ctx, texts)
+}
 
-	var resp embedResponse
-	if err := c.doWithRetry(ctx, "/embeddings", req, &resp); err != nil {
+func (c *Client) batchEmbedOpenRouter(ctx context.Context, texts []string) ([][]float32, error) {
+	req := orEmbedRequest{Model: c.modelID(c.embeddingModel), Input: texts, Dimensions: c.embeddingDims}
+	var resp orEmbedResponse
+	if err := c.doPost(ctx, c.baseURL+"/embeddings", "Bearer "+c.apiKey, req, &resp); err != nil {
 		return nil, fmt.Errorf("batch embed: %w", err)
 	}
 	if resp.Error != nil {
@@ -227,21 +446,48 @@ func (c *Client) EmbedBatch(ctx context.Context, texts []string) ([][]float32, e
 	return results, nil
 }
 
+func (c *Client) batchEmbedGoogle(ctx context.Context, texts []string) ([][]float32, error) {
+	bare := c.modelID(c.embeddingModel)
+	requests := make([]gEmbedRequest, len(texts))
+	for i, text := range texts {
+		requests[i] = gEmbedRequest{
+			Model:                "models/" + bare,
+			Content:              gContent{Parts: []gPart{{Text: text}}},
+			OutputDimensionality: c.embeddingDims,
+			EmbedContentConfig:   &gEmbedContentConfig{OutputDimensionality: c.embeddingDims},
+		}
+	}
+	url := fmt.Sprintf("%s/%s:batchEmbedContents?key=%s", c.baseURL, bare, c.apiKey)
+	var resp gBatchEmbedResponse
+	if err := c.doPost(ctx, url, "", gBatchEmbedRequest{Requests: requests}, &resp); err != nil {
+		return nil, fmt.Errorf("batch embed: %w", err)
+	}
+	if resp.Error != nil {
+		return nil, fmt.Errorf("batch embed API error: %s (code %d)", resp.Error.Message, resp.Error.Code)
+	}
+	results := make([][]float32, len(resp.Embeddings))
+	for i, emb := range resp.Embeddings {
+		results[i] = emb.Values
+	}
+	return results, nil
+}
+
 // --- HTTP with retry ---
 
-// doWithRetry POSTs to baseURL+path with Bearer auth and exponential backoff on 429/5xx.
-func (c *Client) doWithRetry(ctx context.Context, path string, body any, result any) error {
+// doPost POSTs JSON to url with exponential backoff on 429/5xx. authHeader, when
+// non-empty, is sent as the Authorization header (OpenRouter Bearer); Google
+// carries its key in the URL query and passes "".
+func (c *Client) doPost(ctx context.Context, url, authHeader string, body any, result any) error {
 	payload, err := json.Marshal(body)
 	if err != nil {
 		return fmt.Errorf("marshal request: %w", err)
 	}
-	url := c.baseURL + path
 
 	maxRetries := 5
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		if attempt > 0 {
 			backoff := time.Duration(math.Pow(2, float64(attempt-1))) * time.Second
-			log.Debug().Int("attempt", attempt).Dur("backoff", backoff).Msg("Retrying OpenRouter request")
+			log.Debug().Int("attempt", attempt).Dur("backoff", backoff).Str("provider", c.provider).Msg("Retrying LLM request")
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
@@ -254,7 +500,9 @@ func (c *Client) doWithRetry(ctx context.Context, path string, body any, result 
 			return fmt.Errorf("create request: %w", err)
 		}
 		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Authorization", "Bearer "+c.apiKey)
+		if authHeader != "" {
+			req.Header.Set("Authorization", authHeader)
+		}
 
 		resp, err := c.httpClient.Do(req)
 		if err != nil {
@@ -272,14 +520,14 @@ func (c *Client) doWithRetry(ctx context.Context, path string, body any, result 
 
 		if resp.StatusCode == 429 || resp.StatusCode >= 500 {
 			if attempt == maxRetries {
-				return fmt.Errorf("openrouter API returned %d after %d retries: %s", resp.StatusCode, maxRetries, string(respBody))
+				return fmt.Errorf("%s API returned %d after %d retries: %s", c.provider, resp.StatusCode, maxRetries, string(respBody))
 			}
-			log.Warn().Int("status", resp.StatusCode).Int("attempt", attempt).Msg("OpenRouter API error, retrying")
+			log.Warn().Int("status", resp.StatusCode).Int("attempt", attempt).Str("provider", c.provider).Msg("LLM API error, retrying")
 			continue
 		}
 
 		if resp.StatusCode != 200 {
-			return fmt.Errorf("openrouter API returned %d: %s", resp.StatusCode, string(respBody))
+			return fmt.Errorf("%s API returned %d: %s", c.provider, resp.StatusCode, string(respBody))
 		}
 
 		if err := json.Unmarshal(respBody, result); err != nil {

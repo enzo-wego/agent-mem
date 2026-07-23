@@ -86,12 +86,15 @@ func NewServer(cfg *config.Config, logBuf *LogBuffer) (*Server, error) {
 		log.Info().Int("count", len(dbSettings)).Msg("Runtime settings loaded from database")
 	}
 
+	llmProvider := cfg.LLMProviderOrDefault()
+	llmKey := cfg.ActiveLLMKey()
+
 	var geminiClient *gemini.Client
-	if cfg.GeminiAPIKey != "" {
-		geminiClient = gemini.NewClient(cfg.GeminiAPIKey, cfg.GeminiModel, cfg.GeminiEmbeddingModel, cfg.GeminiEmbeddingDims)
-		log.Info().Str("model", cfg.GeminiModel).Msg("Gemini client initialized")
+	if llmKey != "" {
+		geminiClient = gemini.NewClient(llmProvider, llmKey, cfg.GeminiModel, cfg.GeminiEmbeddingModel, cfg.GeminiEmbeddingDims)
+		log.Info().Str("provider", llmProvider).Str("model", cfg.GeminiModel).Msg("LLM client initialized")
 	} else {
-		log.Warn().Msg("No Gemini API key configured, observation extraction disabled")
+		log.Warn().Str("provider", llmProvider).Msg("No API key configured for LLM provider, observation extraction disabled")
 	}
 
 	// Graph judge/describe can run a different Gemini model than flat memory —
@@ -99,8 +102,8 @@ func NewServer(cfg *config.Config, logBuf *LogBuffer) (*Server, error) {
 	// tuned against gemini_model and must not silently change with it.
 	graphGeminiClient := geminiClient
 	if geminiClient != nil && cfg.GraphGeminiModel != "" && cfg.GraphGeminiModel != cfg.GeminiModel {
-		graphGeminiClient = gemini.NewClient(cfg.GeminiAPIKey, cfg.GraphGeminiModel, cfg.GeminiEmbeddingModel, cfg.GeminiEmbeddingDims)
-		log.Info().Str("model", cfg.GraphGeminiModel).Msg("Graph Gemini client initialized (separate from flat memory)")
+		graphGeminiClient = gemini.NewClient(llmProvider, llmKey, cfg.GraphGeminiModel, cfg.GeminiEmbeddingModel, cfg.GeminiEmbeddingDims)
+		log.Info().Str("provider", llmProvider).Str("model", cfg.GraphGeminiModel).Msg("Graph LLM client initialized (separate from flat memory)")
 	}
 
 	// When an Anthropic key is set, graph summaries (cluster/thread/feature) run
