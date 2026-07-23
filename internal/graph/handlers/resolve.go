@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -67,9 +68,9 @@ func NewResolve(db *pgxpool.Pool) (*Resolve, error) {
 		return nil, err
 	}
 	return &Resolve{
-		db:     db,
-		aclBld: acl.NewBuilder(db, 5*time.Minute),
-		exp:    bfs.NewExpander(db),
+		db:      db,
+		aclBld:  acl.NewBuilder(db, 5*time.Minute),
+		exp:     bfs.NewExpander(db),
 		weights: w,
 	}, nil
 }
@@ -101,7 +102,7 @@ func (h *Resolve) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// BFS expansion from seeds.
 	frontier := bfs.NewFrontier(200)
-	for _, s := range req.Seeds {
+	for _, s := range h.canonicalizeSeeds(ctx, req.Seeds) {
 		frontier.Push(bfs.Candidate{NodeID: s, Hop: 0, Score: 1.0})
 	}
 	visited := make(map[string]bfs.Candidate)
@@ -233,6 +234,24 @@ WHERE n.id = ANY($1)`, ids); aErr == nil {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
+}
+
+func (h *Resolve) canonicalizeSeeds(ctx context.Context, seeds []string) []string {
+	resolved := make([]string, len(seeds))
+	copy(resolved, seeds)
+	for i, seed := range seeds {
+		if !strings.Contains(seed, "://") {
+			continue
+		}
+		_ = h.db.QueryRow(ctx, `
+SELECT id
+FROM graph.nodes
+WHERE url = $1 AND deleted_at IS NULL
+ORDER BY updated_at DESC
+LIMIT 1
+`, seed).Scan(&resolved[i])
+	}
+	return resolved
 }
 
 type scoredCand struct {

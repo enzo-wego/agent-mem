@@ -65,3 +65,73 @@ func TestResolve_SeedExpandsAndHydrates(t *testing.T) {
 		t.Errorf("expected PAY-2128 body included; got %+v", resp.Artifacts)
 	}
 }
+
+func TestResolve_RawURLSeedCanonicalizesToNodeID(t *testing.T) {
+	pool := testDB(t)
+
+	const (
+		prID     = "gh_pr:wego/payments#2198"
+		prURL    = "https://github.com/wego/payments/pull/2198"
+		jiraID   = "jira:PAY-2245"
+		rawQuery = "is WithRebateRepo safe to remove?"
+	)
+
+	seedNode(t, pool, prID, "gh_pr", "remove WithRebateRepo")
+	seedNodeURL(t, pool, prID, prURL)
+	seedBody(t, pool, prID, "Removes the unused rebate repository dependency.")
+	seedNode(t, pool, jiraID, "jira", "Remove obsolete rebate repository")
+	seedBody(t, pool, jiraID, "The repository is no longer used by the payment flow.")
+	seedEdge(t, pool, prID, jiraID, "REFERENCES")
+
+	body := strings.NewReader(`{
+		"seeds": ["` + prURL + `"],
+		"query": "` + rawQuery + `",
+		"depth": 2,
+		"budget_tokens": 4000,
+		"include_bodies": true
+	}`)
+	r := httptest.NewRequest(http.MethodPost, "/api/graph/resolve", body)
+	w := httptest.NewRecorder()
+
+	h, err := handlers.NewResolve(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.ServeHTTP(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d body %s", w.Code, w.Body.String())
+	}
+
+	var resp struct {
+		Artifacts []struct {
+			NodeID string `json:"node_id"`
+		} `json:"artifacts"`
+		GraphTrace struct {
+			Seeds []string `json:"seeds"`
+		} `json:"graph_trace"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Artifacts) < 2 {
+		t.Fatalf("want seed plus neighbor, got %+v", resp.Artifacts)
+	}
+	if resp.Artifacts[0].NodeID != prID {
+		t.Fatalf("first artifact = %q, want %q", resp.Artifacts[0].NodeID, prID)
+	}
+	if len(resp.GraphTrace.Seeds) != 1 || resp.GraphTrace.Seeds[0] != prURL {
+		t.Fatalf("graph_trace.seeds = %v, want original URL %q", resp.GraphTrace.Seeds, prURL)
+	}
+
+	var foundJira bool
+	for _, artifact := range resp.Artifacts {
+		if artifact.NodeID == jiraID {
+			foundJira = true
+			break
+		}
+	}
+	if !foundJira {
+		t.Fatalf("expected neighbor %q in %+v", jiraID, resp.Artifacts)
+	}
+}
