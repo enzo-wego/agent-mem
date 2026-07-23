@@ -2106,7 +2106,6 @@ export function LiveGlobePage() {
               </button>
             ))}
           </div>
-          <LiveCreditBadge />
         </div>
       </div>
 
@@ -2256,6 +2255,19 @@ export function LiveGlobePage() {
           </div>
         </div>
       )}
+
+      {/* ── OpenRouter credit badge (bottom-center, clear of legend + zoom) ───── */}
+      <div
+        style={{
+          position: 'absolute',
+          bottom: 14,
+          left: '50%',
+          transform: 'translateX(-50%)',
+          fontFamily: MONO,
+        }}
+      >
+        <LiveCreditBadge />
+      </div>
 
       {/* ── Zoom controls (bottom-right, clear of legend + data panel) ───────── */}
       <div
