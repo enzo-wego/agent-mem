@@ -343,6 +343,7 @@ func main() {
 		migrateSqliteCmd,
 		backfillCmd,
 		newEntitiesCmd(func() *config.Config { return cfg }),
+		newMCPCmd(func() *config.Config { return cfg }),
 	)
 
 	if err := rootCmd.Execute(); err != nil {
