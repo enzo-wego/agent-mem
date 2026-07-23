@@ -264,16 +264,23 @@ WHERE n.id=$1`, n.NodeID)
 				title = firstLine(body, 120)
 			}
 			item.Node.Title = title
-			// Don't traverse through a SIMILAR link — surface related threads as leaves,
-			// not as a launch point for further semantic drift. Entity tags, people and
-			// popular resources are leaves too (see expandableThrough). Pushed after the
-			// title resolves so children can say which row they were reached "via".
-			if n.EdgeKind != "SIMILAR" && expandableThrough(ctx, h.db, n.NodeID) {
-				frontier = append(frontier, struct {
-					id  string
-					hop int
-					via string
-				}{n.NodeID, next.hop + 1, firstLine(title, 80)})
+			// Only STRUCTURAL edges are corridors. SAME_TOPIC/SIMILAR are claims
+			// about the OPENED thread — chaining them re-parents a neighbor's topic
+			// matches onto this thread (a tax PR that a loyalty flow-chart matches is
+			// not "related to the loyalty thread"; verified drift on
+			// slack:C012A121AQJ:1783576586.388629 → cf:4042358787 → gh_pr). Confine
+			// topical edges to hop 1. Entity tags, people and popular resources are
+			// leaves too (see expandableThrough). Pushed after the title resolves so
+			// children can say which row they were reached "via".
+			switch n.EdgeKind {
+			case "REFERENCES", "REFERS_TO", "THREAD":
+				if expandableThrough(ctx, h.db, n.NodeID) {
+					frontier = append(frontier, struct {
+						id  string
+						hop int
+						via string
+					}{n.NodeID, next.hop + 1, firstLine(title, 80)})
+				}
 			}
 			// Every displayed Slack thread gets the rules verdict AGAINST THE
 			// OPENED THREAD — a hop-2 SAME_TOPIC edge confirms against its Via
