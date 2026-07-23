@@ -68,14 +68,19 @@ func NewClient(provider, apiKey, model, embeddingModel string, embeddingDims int
 // Provider reports the active backend (for logging/diagnostics).
 func (c *Client) Provider() string { return c.provider }
 
-// modelID normalizes a model id for the active provider: OpenRouter needs the
-// "google/" namespace prefix; Google's REST API wants the bare id.
+// modelID normalizes a model id for the active provider. On OpenRouter, ids that
+// already carry a namespace (any "…/…", e.g. "anthropic/claude-haiku-4.5") pass
+// through untouched so non-Google models work; bare ids get the "google/" prefix.
+// On Google, the "google/" prefix is stripped — the REST API serves only bare
+// Gemini ids (a non-Google id there will 404: accepted operator error).
 func (c *Client) modelID(id string) string {
-	bare := strings.TrimPrefix(id, "google/")
 	if c.provider == ProviderOpenRouter {
-		return "google/" + bare
+		if strings.Contains(id, "/") {
+			return id
+		}
+		return "google/" + id
 	}
-	return bare
+	return strings.TrimPrefix(id, "google/")
 }
 
 // --- OpenRouter (OpenAI-compatible) wire types ---

@@ -207,6 +207,13 @@ func TestModelIDNormalization(t *testing.T) {
 	if got := or.modelID("google/gemini-2.5-flash"); got != "google/gemini-2.5-flash" {
 		t.Errorf("openrouter modelID(prefixed) = %q, want unchanged", got)
 	}
+	// Non-Google OpenRouter namespaces pass through untouched (must NOT get google/).
+	if got := or.modelID("anthropic/claude-haiku-4.5"); got != "anthropic/claude-haiku-4.5" {
+		t.Errorf("openrouter modelID(anthropic) = %q, want anthropic/claude-haiku-4.5 (passthrough)", got)
+	}
+	if got := or.modelID("openai/gpt-5.6-luna"); got != "openai/gpt-5.6-luna" {
+		t.Errorf("openrouter modelID(openai) = %q, want openai/gpt-5.6-luna (passthrough)", got)
+	}
 	g := NewClient(ProviderGoogle, "k", "google/gemini-2.5-flash", "google/gemini-embedding-001", 768)
 	if got := g.modelID("google/gemini-2.5-flash"); got != "gemini-2.5-flash" {
 		t.Errorf("google modelID(prefixed) = %q, want bare gemini-2.5-flash", got)

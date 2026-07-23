@@ -22,10 +22,13 @@ type settingsResponse struct {
 
 	GeminiAPIKey         string `json:"gemini_api_key"`
 	GeminiModel          string `json:"gemini_model"`
+	GraphGeminiModel     string `json:"graph_gemini_model"`
 	GeminiEmbeddingModel string `json:"gemini_embedding_model"`
 	GeminiEmbeddingDims  int    `json:"gemini_embedding_dims"`
 	LLMProvider          string `json:"llm_provider"`
 	GoogleAPIKey         string `json:"google_api_key"`
+	AnthropicAPIKey      string `json:"anthropic_api_key"`
+	AnthropicModel       string `json:"anthropic_model"`
 
 	ContextObservations int    `json:"context_observations"`
 	ContextFullCount    int    `json:"context_full_count"`
@@ -60,10 +63,13 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, _ *http.Request) {
 		DatabaseURL:          maskKey(snap.DatabaseURL),
 		GeminiAPIKey:         maskKey(snap.GeminiAPIKey),
 		GeminiModel:          snap.GeminiModel,
+		GraphGeminiModel:     snap.GraphGeminiModel,
 		GeminiEmbeddingModel: snap.GeminiEmbeddingModel,
 		GeminiEmbeddingDims:  snap.GeminiEmbeddingDims,
 		LLMProvider:          snap.LLMProviderOrDefault(),
 		GoogleAPIKey:         maskKey(snap.GoogleAPIKey),
+		AnthropicAPIKey:      maskKey(snap.AnthropicAPIKey),
+		AnthropicModel:       snap.AnthropicModel,
 		ContextObservations:  snap.ContextObservations,
 		ContextFullCount:     snap.ContextFullCount,
 		ContextSessionCount:  snap.ContextSessionCount,
