@@ -181,6 +181,13 @@ func NewIngestContentHandler(deps Deps) http.Handler {
 		}
 
 		if req.Source == "slack" {
+			// Per-channel ingest filters (graph.channel_filters): ignore-list and
+			// content keep/drop regex — runs before any LLM/embedding work.
+			if skip, outcome := channelContentSkip(ctx, deps, req.Metadata.ChannelID, req.Body); skip {
+				writeJSON(w, http.StatusOK, ingestResponse{NodeID: nodeID, Outcome: outcome})
+				return
+			}
+
 			subtype := ""
 			if req.Metadata.Subtype != nil {
 				subtype = *req.Metadata.Subtype
@@ -221,6 +228,17 @@ func NewIngestContentHandler(deps Deps) http.Handler {
 				} else {
 					authorPersonID = &pid
 				}
+			}
+		}
+
+		// Incident-only channels (graph.channel_filters): keep only messages whose
+		// resolved author is in the allow list (e.g. PagerDuty); drop other bot noise
+		// before it reaches the extractor/embeddings.
+		if req.Source == "slack" {
+			if allowed := incidentOnlyAuthors(ctx, deps, req.Metadata.ChannelID); allowed != nil &&
+				!authorAllowed(ctx, deps, authorPersonID, allowed) {
+				writeJSON(w, http.StatusOK, ingestResponse{NodeID: nodeID, Outcome: "skipped_non_incident"})
+				return
 			}
 		}
 
