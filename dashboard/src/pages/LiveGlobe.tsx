@@ -82,13 +82,18 @@ function LiveCreditBadge() {
     <span
       title={title}
       style={{
-        background: C.panel,
+        display: 'inline-flex',
+        alignItems: 'center',
+        lineHeight: 1,
+        background: 'transparent',
         border: `1px solid ${C.border}`,
         color: C.text,
         fontFamily: MONO,
-        fontSize: 11,
-        padding: '3px 8px',
-        borderRadius: 6,
+        fontSize: 10,
+        letterSpacing: '0.06em',
+        textTransform: 'uppercase',
+        padding: '4px 8px',
+        borderRadius: 2,
         fontVariantNumeric: 'tabular-nums',
         whiteSpace: 'nowrap',
       }}
