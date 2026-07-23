@@ -258,6 +258,26 @@ export async function updateSettings(partial: Partial<Settings>): Promise<Settin
   return res.json();
 }
 
+// ── OpenRouter usage ─────────────────────────────────────────────────────────
+
+export interface OpenRouterUsage {
+  available: boolean;
+  error?: string;
+  label?: string;
+  usage?: number;
+  limit?: number | null;
+  limit_remaining?: number;
+  limit_reset?: string;
+  usage_daily?: number;
+  usage_monthly?: number;
+  is_free_tier?: boolean;
+}
+
+export async function getOpenRouterUsage(): Promise<OpenRouterUsage> {
+  const res = await authFetch(`${BASE}/api/openrouter/usage`);
+  return res.json();
+}
+
 // ── Graph backfill ──────────────────────────────────────────────────────────
 
 export interface BackfillSlackResponse {
