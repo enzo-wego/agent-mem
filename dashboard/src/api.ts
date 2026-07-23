@@ -228,6 +228,8 @@ export interface Settings {
   gemini_model: string;
   gemini_embedding_model: string;
   gemini_embedding_dims: number;
+  llm_provider: string;
+  google_api_key: string;
   context_observations: number;
   context_full_count: number;
   context_session_count: number;

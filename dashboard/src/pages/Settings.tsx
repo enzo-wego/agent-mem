@@ -8,6 +8,8 @@ export function SettingsPage() {
   const [toast, setToast] = useState<{ type: 'ok' | 'err'; msg: string } | null>(null)
   const [showKey, setShowKey] = useState(false)
   const [newKey, setNewKey] = useState('')
+  const [showGoogleKey, setShowGoogleKey] = useState(false)
+  const [newGoogleKey, setNewGoogleKey] = useState('')
 
   useEffect(() => {
     fetchSettings()
@@ -42,7 +44,15 @@ export function SettingsPage() {
 
       {/* Gemini */}
       <Section title="Gemini">
-        <Field label="API Key" hint="Get your key from Google AI Studio (aistudio.google.com).">
+        <Field label="Provider" hint="LLM backend for generation, describe, and embeddings. 'openrouter' (default) uses the OpenRouter key; 'google' uses the Google API key — the fallback when OpenRouter is out of quota. Observation extraction switches immediately; the graph pipeline picks up the new provider after a worker restart.">
+          <SelectField
+            value={settings.llm_provider || 'openrouter'}
+            options={PROVIDER_OPTIONS}
+            saving={saving}
+            onSave={(v) => save({ llm_provider: v })}
+          />
+        </Field>
+        <Field label="OpenRouter API Key" hint="OpenRouter key (sk-or…) from openrouter.ai/keys. Used when provider is 'openrouter'.">
           <div className="flex gap-2">
             <input
               type={showKey ? 'text' : 'password'}
@@ -57,6 +67,27 @@ export function SettingsPage() {
             <button
               disabled={saving || !newKey}
               onClick={() => { save({ gemini_api_key: newKey }); setNewKey('') }}
+              className={btnPrimary}
+            >
+              Update Key
+            </button>
+          </div>
+        </Field>
+        <Field label="Google API Key" hint="Google AI Studio key (AIza…) from aistudio.google.com. Used when provider is 'google'. Pre-set it so failover is a one-click provider switch.">
+          <div className="flex gap-2">
+            <input
+              type={showGoogleKey ? 'text' : 'password'}
+              placeholder={settings.google_api_key || 'Not set'}
+              value={newGoogleKey}
+              onChange={(e) => setNewGoogleKey(e.target.value)}
+              className={inputCls}
+            />
+            <button onClick={() => setShowGoogleKey(!showGoogleKey)} className={btnSecondary}>
+              {showGoogleKey ? 'Hide' : 'Show'}
+            </button>
+            <button
+              disabled={saving || !newGoogleKey}
+              onClick={() => { save({ google_api_key: newGoogleKey }); setNewGoogleKey('') }}
               className={btnPrimary}
             >
               Update Key
@@ -137,6 +168,11 @@ export function SettingsPage() {
 }
 
 // --- Constants ---
+
+const PROVIDER_OPTIONS = [
+  { value: 'openrouter', label: 'OpenRouter (default)' },
+  { value: 'google', label: 'Google Gemini API (fallback)' },
+]
 
 const GEMINI_MODELS = [
   { value: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash (fast, recommended)' },
