@@ -293,6 +293,54 @@ Seeds may be canonical node ids (`jira:PAY-2128`, `slack:C…:ts`) or raw URLs.
 **GET /api/graph/node/{id}/neighbors** — adjacency walk; `?depth=1|2|3`,
 `?kind=REFERENCES`, `?direction=in|out|both`.
 
+## Graph MCP server
+
+`agent-mem mcp` serves the graph read API as a stdio MCP server for trusted
+operators. It exposes five tools:
+
+- `graph_search` discovers candidate Slack threads, Jira issues, pull requests,
+  and documents.
+- `graph_node` fetches one artifact by canonical ID or exact source URL.
+- `graph_neighbors` walks a bounded set of related artifacts.
+- `graph_cluster_summary` returns synthesized review or decision context with
+  provenance. It can take roughly 15 seconds and return tens of kilobytes.
+- `graph_resolve` builds a question-focused context bundle from one or more
+  IDs or ingested source URLs.
+
+The production registration runs the image-shipped binary inside the worker
+container over SSH. The SSH account and the worker API key are the security
+boundary; this is an operator/admin integration, not a per-user authorization
+surface. Do not expose it through an unauthenticated network listener.
+
+Register it with any supported client:
+
+```bash
+claude mcp add --scope user agent-mem-graph -- \
+  ssh enzo@enzogo.io.vn sudo docker exec -i agent-mem-worker-1 agent-mem mcp
+
+codex mcp add agent-mem-graph -- \
+  ssh enzo@enzogo.io.vn sudo docker exec -i agent-mem-worker-1 agent-mem mcp
+
+gemini mcp add --scope user agent-mem-graph \
+  ssh enzo@enzogo.io.vn sudo docker exec -i agent-mem-worker-1 agent-mem mcp
+```
+
+Verify with `claude mcp list`, `codex mcp list`, or `gemini mcp list`. Remove
+the registration with:
+
+```bash
+claude mcp remove --scope user agent-mem-graph
+codex mcp remove agent-mem-graph
+gemini mcp remove --scope user agent-mem-graph
+```
+
+For local development, `agent-mem mcp --worker-url http://127.0.0.1:34567`
+proxies to a local worker. The command loads the runtime API key from
+PostgreSQL when `AGENT_MEM_API_KEY` is absent, probes the protected settings
+endpoint before serving, and reserves stdout exclusively for MCP protocol
+frames. `--allow-unauthenticated` is intended only for a deliberately
+unauthenticated local worker.
+
 ## Quick Start
 
 ### Local server via Docker
