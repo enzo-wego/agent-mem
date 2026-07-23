@@ -12,7 +12,7 @@ import { GlobePage } from './pages/Globe'
 import { LiveGlobePage } from './pages/LiveGlobe'
 import { RulesPage } from './pages/RulesPage'
 import { ContinentsPage } from './pages/Continents'
-import { fetchProjects, getApiKey, setApiKey, clearApiKey, type ProjectInfo } from './api'
+import { fetchProjects, getApiKey, setApiKey, clearApiKey, getOpenRouterUsage, type ProjectInfo, type OpenRouterUsage } from './api'
 import './index.css'
 
 type Page = 'timeline' | 'search' | 'sessions' | 'sync' | 'logs' | 'settings' | 'graph' | 'jobs' | 'backfill' | 'globe' | 'continents'
@@ -71,6 +71,43 @@ function LoginForm({ onLogin }: { onLogin: () => void }) {
         </button>
       </form>
     </div>
+  )
+}
+
+// OpenRouterBadge shows a small at-a-glance credit indicator in the header,
+// refreshed on mount and every 60s. Renders nothing if the backend has no key
+// configured or the request fails — a quick budget check must never crash the
+// header.
+function OpenRouterBadge() {
+  const [usage, setUsage] = useState<OpenRouterUsage | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    const load = () => {
+      getOpenRouterUsage()
+        .then((data) => { if (!cancelled) setUsage(data) })
+        .catch(() => { if (!cancelled) setUsage(null) })
+    }
+    load()
+    const id = setInterval(load, 60_000)
+    return () => { cancelled = true; clearInterval(id) }
+  }, [])
+
+  if (!usage || !usage.available) return null
+
+  const label = usage.limit != null
+    ? `⚡ $${usage.limit_remaining?.toFixed(2)} left`
+    : `⚡ $${usage.usage?.toFixed(2)} used`
+
+  const title = `OpenRouter · used $${usage.usage?.toFixed(2)} / $${usage.limit ?? '∞'} · today $${usage.usage_daily?.toFixed(2)} · resets ${usage.limit_reset}`
+
+  return (
+    <span
+      title={title}
+      className="px-2 py-1 text-xs font-medium rounded-md bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300"
+    >
+      {label}
+    </span>
   )
 }
 
@@ -141,6 +178,7 @@ function App() {
             </a>
           </div>
           <div className="flex items-center gap-2">
+            <OpenRouterBadge />
             <select
               value={project}
               onChange={(e) => setProject(e.target.value)}
