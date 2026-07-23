@@ -36,6 +36,7 @@ func Mount(r chi.Router, deps Deps) {
 	r.Method("POST", "/api/graph/resolve", resolve)
 
 	r.Method("GET", "/api/graph/slack-users", NewSlackUsersHandler(deps))
+	r.Method("GET", "/api/graph/slack-user", NewSlackUserHandler(deps))
 
 	// Globe feature: per-channel volume + channel→continent config.
 	channels := NewChannels(deps.DB)
