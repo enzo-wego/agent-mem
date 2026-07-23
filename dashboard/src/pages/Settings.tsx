@@ -10,6 +10,8 @@ export function SettingsPage() {
   const [newKey, setNewKey] = useState('')
   const [showGoogleKey, setShowGoogleKey] = useState(false)
   const [newGoogleKey, setNewGoogleKey] = useState('')
+  const [showAnthropicKey, setShowAnthropicKey] = useState(false)
+  const [newAnthropicKey, setNewAnthropicKey] = useState('')
 
   useEffect(() => {
     fetchSettings()
@@ -94,12 +96,20 @@ export function SettingsPage() {
             </button>
           </div>
         </Field>
-        <Field label="Model" hint="Used for observation extraction and session summaries.">
-          <SelectField
+        <Field label="Flat-Memory Model" hint="Model for flat memory (observation extraction, session summaries). Any OpenRouter model id, e.g. google/gemini-2.5-flash, anthropic/claude-haiku-4.5, openai/gpt-5.6-luna. On the google provider use a bare Gemini id (e.g. gemini-2.5-flash).">
+          <EditableField
             value={settings.gemini_model}
-            options={GEMINI_MODELS}
             saving={saving}
             onSave={(v) => save({ gemini_model: v })}
+            placeholder="google/gemini-2.5-flash"
+          />
+        </Field>
+        <Field label="Graph-Memory Model" hint="Model for graph memory (attachment describe, topic linking). Empty = use the flat-memory model. Same id rules as above; a non-Google id here only works on the openrouter provider.">
+          <EditableField
+            value={settings.graph_gemini_model}
+            saving={saving}
+            onSave={(v) => save({ graph_gemini_model: v })}
+            placeholder="google/gemini-3.5-flash"
           />
         </Field>
         <Field label="Embedding Model" hint="Used for semantic search embeddings.">
@@ -116,6 +126,39 @@ export function SettingsPage() {
             options={EMBEDDING_DIMS}
             saving={saving}
             onSave={(v) => save({ gemini_embedding_dims: Number(v) })}
+          />
+        </Field>
+      </Section>
+
+      {/* Claude (graph summaries) */}
+      <Section title="Claude (graph summaries)">
+        <Field label="API Key" hint="Anthropic key (sk-ant…). When set, graph summaries (thread / cluster / feature) run on Claude instead of Gemini. Takes effect after a worker restart. NOTE: if AGENT_MEM_ANTHROPIC_API_KEY is set in the VPS env, it overrides this on restart — unset it there to make the dashboard authoritative.">
+          <div className="flex gap-2">
+            <input
+              type={showAnthropicKey ? 'text' : 'password'}
+              placeholder={settings.anthropic_api_key || 'Not set'}
+              value={newAnthropicKey}
+              onChange={(e) => setNewAnthropicKey(e.target.value)}
+              className={inputCls}
+            />
+            <button onClick={() => setShowAnthropicKey(!showAnthropicKey)} className={btnSecondary}>
+              {showAnthropicKey ? 'Hide' : 'Show'}
+            </button>
+            <button
+              disabled={saving || !newAnthropicKey}
+              onClick={() => { save({ anthropic_api_key: newAnthropicKey }); setNewAnthropicKey('') }}
+              className={btnPrimary}
+            >
+              Update Key
+            </button>
+          </div>
+        </Field>
+        <Field label="Model" hint="Claude model for graph summaries. Switch to Haiku for cheaper/faster summaries. Takes effect after a worker restart.">
+          <SelectField
+            value={settings.anthropic_model || 'claude-sonnet-5'}
+            options={ANTHROPIC_MODELS}
+            saving={saving}
+            onSave={(v) => save({ anthropic_model: v })}
           />
         </Field>
       </Section>
@@ -174,12 +217,10 @@ const PROVIDER_OPTIONS = [
   { value: 'google', label: 'Google Gemini API (fallback)' },
 ]
 
-const GEMINI_MODELS = [
-  { value: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash (fast, recommended)' },
-  { value: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro (higher quality, slower)' },
-  { value: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash' },
-  { value: 'gemini-1.5-flash', label: 'Gemini 1.5 Flash' },
-  { value: 'gemini-1.5-pro', label: 'Gemini 1.5 Pro' },
+const ANTHROPIC_MODELS = [
+  { value: 'claude-sonnet-5', label: 'Claude Sonnet 5 (default)' },
+  { value: 'claude-haiku-4.5', label: 'Claude Haiku 4.5 (cheaper, faster)' },
+  { value: 'claude-opus-4-8', label: 'Claude Opus 4.8 (highest quality)' },
 ]
 
 const EMBEDDING_MODELS = [

@@ -170,6 +170,8 @@ func (c *Config) RuntimeSettings() map[string]string {
 		"gemini_embedding_dims":  strconv.Itoa(c.GeminiEmbeddingDims),
 		"llm_provider":           c.LLMProvider,
 		"google_api_key":         c.GoogleAPIKey,
+		"anthropic_api_key":      c.AnthropicAPIKey,
+		"anthropic_model":        c.AnthropicModel,
 		"context_observations":   strconv.Itoa(c.ContextObservations),
 		"context_full_count":     strconv.Itoa(c.ContextFullCount),
 		"context_session_count":  strconv.Itoa(c.ContextSessionCount),
@@ -210,6 +212,10 @@ func (c *Config) ApplyDBSettings(dbSettings map[string]string) {
 			c.LLMProvider = v
 		case "google_api_key":
 			c.GoogleAPIKey = v
+		case "anthropic_api_key":
+			c.AnthropicAPIKey = v
+		case "anthropic_model":
+			c.AnthropicModel = v
 		case "context_observations":
 			if n, err := strconv.Atoi(v); err == nil {
 				c.ContextObservations = n
@@ -260,6 +266,8 @@ func (c *Config) snapshot() ConfigSnapshot {
 		GeminiEmbeddingDims:  c.GeminiEmbeddingDims,
 		LLMProvider:          c.LLMProvider,
 		GoogleAPIKey:         c.GoogleAPIKey,
+		AnthropicAPIKey:      c.AnthropicAPIKey,
+		AnthropicModel:       c.AnthropicModel,
 		ContextObservations:  c.ContextObservations,
 		ContextFullCount:     c.ContextFullCount,
 		ContextSessionCount:  c.ContextSessionCount,
@@ -293,6 +301,8 @@ type ConfigSnapshot struct {
 	// Flip + restart the worker to fail over when OpenRouter is out of quota.
 	LLMProvider         string      `json:"llm_provider"`
 	GoogleAPIKey        string      `json:"google_api_key"`
+	AnthropicAPIKey     string      `json:"anthropic_api_key"`
+	AnthropicModel      string      `json:"anthropic_model"`
 	ContextObservations int         `json:"context_observations"`
 	ContextFullCount    int         `json:"context_full_count"`
 	ContextSessionCount int         `json:"context_session_count"`
@@ -352,6 +362,14 @@ func (c *Config) Update(partial map[string]any) (geminiChanged bool) {
 		case "google_api_key":
 			if s, ok := v.(string); ok {
 				c.GoogleAPIKey = s
+			}
+		case "anthropic_api_key":
+			if s, ok := v.(string); ok {
+				c.AnthropicAPIKey = s
+			}
+		case "anthropic_model":
+			if s, ok := v.(string); ok {
+				c.AnthropicModel = s
 			}
 		case "allowed_projects":
 			if s, ok := v.(string); ok {
