@@ -3713,6 +3713,35 @@ export function LiveGlobePage() {
                     break
                   }
                 }
+                // The opened thread is never in its own neighbors payload, so the
+                // scan above can't find it — pinned stays null and the thread you
+                // searched vanishes from its own timeline (and the horizontal chart,
+                // left with <2 slack rows, renders nothing). Synthesize the row-0
+                // anchor from the opened thread's own span (graphTopic carries
+                // first_ms/last_ms) so "this thread" is pinned and plotted next to
+                // its related threads. Root only — drilled nodes have no span here.
+                if (
+                  !pinned &&
+                  rootId === graphTopic.node_id &&
+                  rootId.startsWith('slack:') &&
+                  graphTopic.first_ms > 0
+                ) {
+                  pinned = {
+                    hop: 0,
+                    node: {
+                      node_id: rootId,
+                      type: 'slack_thread',
+                      url: graphTopic.url,
+                      title: graphStack[graphStack.length - 1]?.label || graphTopic.summary || rootId,
+                      channel: '',
+                      thread_ts: graphTopic.thread_ts,
+                      ts_ms: graphTopic.first_ms,
+                      first_ts_ms: graphTopic.first_ms,
+                      last_ts_ms: graphTopic.last_ms,
+                    },
+                    edge: { kind: 'ROOT' },
+                  }
+                }
                 const shownGroups = groups.filter((g) => g.items.length > 0)
                 const isSimilarGroup = (g: NeighborGroup) => g.label === 'Not confirmed'
                 // Row numbers follow display order (group by group) and repeat on

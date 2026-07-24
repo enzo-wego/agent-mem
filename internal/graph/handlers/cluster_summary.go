@@ -336,6 +336,29 @@ WHERE source_node_id=$1 AND target_node_id=$2`, from, to).Scan(&same); err == ni
 			excludedRefused++
 		}
 	}
+
+	// Confirmed same-topic threads: the neighbor graph links the opened thread to
+	// others with a SAME_TOPIC edge (rules-verified same topic), and the popup shows
+	// a "Confirmed same topic" chip for them — but the LLM, told to center on the
+	// primary and not force a narrative, otherwise drops their content, so the chip
+	// has no matching prose. Collect those roots; below we flag them in the transcript
+	// and require the LLM to cover each. Only meaningful when the root is a thread.
+	sameTopicRoots := map[string]bool{}
+	if strings.HasPrefix(id, "slack:") {
+		if strows, serr := h.db.Query(ctx, `
+SELECT CASE WHEN from_node_id=$1 THEN to_node_id ELSE from_node_id END
+FROM graph.edges
+WHERE kind='SAME_TOPIC' AND (from_node_id=$1 OR to_node_id=$1)`, id); serr == nil {
+			for strows.Next() {
+				var other string
+				if strows.Scan(&other) == nil && strings.HasPrefix(other, "slack:") {
+					sameTopicRoots[other] = true
+				}
+			}
+			strows.Close()
+		}
+	}
+
 	for tk := range threads {
 		trows, terr := h.db.Query(ctx, `
 SELECT n.id, COALESCE(n.body,''), COALESCE(NULLIF(n.metadata->'author'->>'display_name',''), p.display_name, ''),
@@ -413,6 +436,17 @@ WHERE n.id = ANY($1) AND n.deleted_at IS NULL AND COALESCE(n.body,'') <> ''`, sl
 		resp.Sources = sources
 	}
 
+	// Markers of grounded threads that are confirmed same-topic neighbors of the
+	// opened thread — the transcript flags these so the LLM can't drop them (sorted
+	// for deterministic output).
+	var sameTopicMarkers []string
+	for src, mk := range srcMarker {
+		if sameTopicRoots[src] {
+			sameTopicMarkers = append(sameTopicMarkers, "["+mk+"]")
+		}
+	}
+	sort.Strings(sameTopicMarkers)
+
 	// Cache key: the summary text is reused verbatim until the cluster's content
 	// changes (so it stays consistent across clicks/sessions instead of being
 	// re-generated — and re-worded — on every open). signature = node count +
@@ -440,7 +474,10 @@ WHERE n.id = ANY($1) AND n.deleted_at IS NULL AND COALESCE(n.body,'') <> ''`, sl
 	// v10: refused threads are excluded from the transcript and the originator
 	// is the OPENED thread's root (not the cluster's oldest message) — both
 	// change what the LLM sees, and a new refusal must regenerate the summary.
-	sig := fmt.Sprintf("v10:%d:%d:%d:%d:%d", total, maxUpdated, len(slackMsgs), lastMs, excludedRefused)
+	// v11: confirmed same-topic threads are flagged in the transcript and the LLM
+	// must cover each, so a newly-added SAME_TOPIC edge (which doesn't bump any
+	// member node's updated_at) must invalidate the cached summary too.
+	sig := fmt.Sprintf("v11:%d:%d:%d:%d:%d:%d", total, maxUpdated, len(slackMsgs), lastMs, excludedRefused, len(sameTopicRoots))
 
 	var cachedSig, cachedOverview string
 	var cachedHl []byte
@@ -467,6 +504,10 @@ WHERE n.id = ANY($1) AND n.deleted_at IS NULL AND COALESCE(n.body,'') <> ''`, sl
 		if !rootIsSlack && rootTitle != "" {
 			b.WriteString("PRIMARY RESOURCE (the summary is about this): " +
 				friendlySource(rootType) + " — " + rootTitle + "\n\n")
+		}
+		if len(sameTopicMarkers) > 0 {
+			b.WriteString("CONFIRMED SAME-TOPIC threads (rules-verified to be about the same topic as the primary — you MUST devote at least one highlight to the events in each, citing its marker; never drop them as loosely related): " +
+				strings.Join(sameTopicMarkers, " ") + "\n\n")
 		}
 		if len(resRefs) > 0 {
 			b.WriteString("Linked resources:\n")
@@ -568,6 +609,9 @@ EMPHASIS:
   are the origin of this topic.
 - Give extra weight to messages tagged [leadership] (senior people); surface their
   asks and decisions explicitly and attribute them by name.
+- If the input lists "CONFIRMED SAME-TOPIC threads" with markers, those threads are
+  rules-verified to share the primary's topic. You MUST devote at least one highlight to
+  the events in each such thread and cite its marker; never omit them as loosely related.
 - An author may be written as "Name (Department)". When you name that person, keep
   their department on first mention (e.g. "Hazwan (Flights) reported…"). Never add a
   department that isn't given.
