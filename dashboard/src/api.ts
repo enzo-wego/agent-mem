@@ -828,6 +828,33 @@ export async function saveContinents(cfg: ContinentCfg): Promise<ContinentCfg> {
   return res.json();
 }
 
+// Per-channel ingest filters (settings key graph.channel_filters). Muted/filtered
+// messages never reach the LLM extractor — a cost lever, not just noise control.
+export interface ChannelFilters {
+  ignore?: string[]; // channel ids: drop every message
+  incident_only?: Record<string, string[]>; // channel id -> allowed author display names
+  keep_regex?: Record<string, string>; // channel id -> keep only bodies matching
+  drop_regex?: Record<string, string>; // channel id -> drop bodies matching
+}
+
+export async function fetchChannelFilters(): Promise<ChannelFilters> {
+  const res = await authFetch(`${BASE}/api/graph/channel-filters`);
+  return res.json();
+}
+
+export async function saveChannelFilters(cfg: ChannelFilters): Promise<ChannelFilters> {
+  const res = await authFetch(`${BASE}/api/graph/channel-filters`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify(cfg),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Unknown error' }));
+    throw new Error(err.error || `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
 export async function graphNeighbors(id: string, depth = 1): Promise<GraphNeighbor[]> {
   // Keep ':' literal — the chi path param doesn't decode %3A, so node ids like
   // "jira:PAY-2190" / "slack:C..:ts" must keep their colons unencoded.

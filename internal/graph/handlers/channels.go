@@ -645,3 +645,44 @@ func (h *Channels) putContinents(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(body)
 }
+
+// getChannelFilters handles GET /api/graph/channel-filters. Returns the raw JSON
+// stored under settings key graph.channel_filters (see channel_filters.go for the
+// schema: ignore / incident_only / keep_regex / drop_regex), or "{}" if unset.
+func (h *Channels) getChannelFilters(w http.ResponseWriter, r *http.Request) {
+	var value string
+	err := h.db.QueryRow(r.Context(), `SELECT value FROM settings WHERE key=$1`, channelFiltersKey).Scan(&value)
+	if errors.Is(err, pgx.ErrNoRows) || value == "" {
+		value = "{}"
+	} else if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	io.WriteString(w, value)
+}
+
+// putChannelFilters handles PUT /api/graph/channel-filters. Validates JSON, upserts
+// it under graph.channel_filters, and invalidates the in-process filter cache so the
+// change takes effect on the next ingest instead of after the TTL.
+func (h *Channels) putChannelFilters(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<16)
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, `{"error":"failed to read body"}`, http.StatusBadRequest)
+		return
+	}
+	if !json.Valid(body) {
+		http.Error(w, `{"error":"invalid JSON"}`, http.StatusBadRequest)
+		return
+	}
+	if _, err := h.db.Exec(r.Context(),
+		`INSERT INTO settings(key,value) VALUES($1,$2) ON CONFLICT(key) DO UPDATE SET value=excluded.value`,
+		channelFiltersKey, string(body)); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	invalidateChannelFilters()
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(body)
+}

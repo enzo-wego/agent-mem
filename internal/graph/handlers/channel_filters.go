@@ -77,6 +77,15 @@ func loadChannelFilters(ctx context.Context, db *pgxpool.Pool) *compiledChannelF
 	return cfCache
 }
 
+// invalidateChannelFilters drops the in-process cache so the next ingest reloads
+// the config immediately, rather than waiting out channelFiltersTTL. Called after
+// the dashboard edits the config via PUT /api/graph/channel-filters.
+func invalidateChannelFilters() {
+	cfMu.Lock()
+	cfCache = nil
+	cfMu.Unlock()
+}
+
 // compileChannelFilters parses the JSON blob and compiles regexes. Invalid JSON
 // or an uncompilable regex is skipped (that channel simply gets no such rule)
 // rather than failing the whole config — a config typo must never wedge ingest.
