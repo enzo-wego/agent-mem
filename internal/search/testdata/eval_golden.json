@@ -1,0 +1,7 @@
+[
+  {"query": "how to fail over the LLM provider when OpenRouter is out of quota", "want": "provider"},
+  {"query": "tax alert production threshold investigation", "want": "tax"},
+  {"query": "live dashboard board section epic ranking", "want": "board"},
+  {"query": "import bamboohr org chart people", "want": "bamboohr"},
+  {"query": "slack thread summary caching signature skip", "want": "summar"}
+]

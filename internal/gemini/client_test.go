@@ -6,6 +6,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -125,6 +127,48 @@ func TestEmbedBatchOrdering(t *testing.T) {
 	}
 	if _, ok := gotBody["input"].([]any); !ok {
 		t.Errorf("input must be sent as a JSON array, got %T", gotBody["input"])
+	}
+}
+
+// TestEmbedBatchChunks verifies EmbedBatch splits inputs larger than
+// maxEmbedBatch into multiple API calls (Google caps at 100/call) and returns
+// one vector per input in order.
+func TestEmbedBatchChunks(t *testing.T) {
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		var body struct {
+			Input []string `json:"input"`
+		}
+		b, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(b, &body)
+		if len(body.Input) > maxEmbedBatch {
+			t.Errorf("chunk of %d exceeds maxEmbedBatch %d", len(body.Input), maxEmbedBatch)
+		}
+		data := make([]string, 0, len(body.Input))
+		for i := range body.Input {
+			data = append(data, `{"index":`+strconv.Itoa(i)+`,"embedding":[1.0]}`)
+		}
+		_, _ = w.Write([]byte(`{"data":[` + strings.Join(data, ",") + `]}`))
+	}))
+	defer srv.Close()
+
+	c := NewClient(ProviderOpenRouter, "k", "m", "google/gemini-embedding-001", 768)
+	c.baseURL = srv.URL
+
+	texts := make([]string, 200)
+	for i := range texts {
+		texts[i] = "t"
+	}
+	vecs, err := c.EmbedBatch(context.Background(), texts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(vecs) != 200 {
+		t.Fatalf("got %d vectors, want 200", len(vecs))
+	}
+	if want := 3; calls != want { // ceil(200/96) = 3
+		t.Errorf("made %d API calls, want %d", calls, want)
 	}
 }
 

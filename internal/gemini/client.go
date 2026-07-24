@@ -420,13 +420,33 @@ func (c *Client) embedGoogle(ctx context.Context, text string, opts EmbedOptions
 	return resp.Embedding.Values, nil
 }
 
-// EmbedBatch generates embeddings for multiple texts in one request, at the
-// client's default dims.
+// maxEmbedBatch caps texts per API call. Google's batchEmbedContents rejects
+// more than 100 requests per call; 96 stays safely under that for both providers.
+const maxEmbedBatch = 96
+
+// EmbedBatch generates embeddings for multiple texts at the client's default
+// dims, chunking into calls of at most maxEmbedBatch so large inputs don't
+// exceed provider per-call limits. Results are returned in texts order.
 func (c *Client) EmbedBatch(ctx context.Context, texts []string) ([][]float32, error) {
-	if c.provider == ProviderGoogle {
-		return c.batchEmbedGoogle(ctx, texts)
+	results := make([][]float32, 0, len(texts))
+	for start := 0; start < len(texts); start += maxEmbedBatch {
+		end := min(start+maxEmbedBatch, len(texts))
+		chunk := texts[start:end]
+		var (
+			embs [][]float32
+			err  error
+		)
+		if c.provider == ProviderGoogle {
+			embs, err = c.batchEmbedGoogle(ctx, chunk)
+		} else {
+			embs, err = c.batchEmbedOpenRouter(ctx, chunk)
+		}
+		if err != nil {
+			return nil, err
+		}
+		results = append(results, embs...)
 	}
-	return c.batchEmbedOpenRouter(ctx, texts)
+	return results, nil
 }
 
 func (c *Client) batchEmbedOpenRouter(ctx context.Context, texts []string) ([][]float32, error) {
@@ -469,6 +489,9 @@ func (c *Client) batchEmbedGoogle(ctx context.Context, texts []string) ([][]floa
 	}
 	if resp.Error != nil {
 		return nil, fmt.Errorf("batch embed API error: %s (code %d)", resp.Error.Message, resp.Error.Code)
+	}
+	if len(resp.Embeddings) != len(texts) {
+		return nil, fmt.Errorf("batch embed: got %d embeddings for %d inputs", len(resp.Embeddings), len(texts))
 	}
 	results := make([][]float32, len(resp.Embeddings))
 	for i, emb := range resp.Embeddings {
