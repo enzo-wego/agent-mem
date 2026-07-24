@@ -1,7 +1,11 @@
 [
-  {"query": "how to fail over the LLM provider when OpenRouter is out of quota", "want": "provider"},
-  {"query": "tax alert production threshold investigation", "want": "tax"},
-  {"query": "live dashboard board section epic ranking", "want": "board"},
-  {"query": "import bamboohr org chart people", "want": "bamboohr"},
-  {"query": "slack thread summary caching signature skip", "want": "summar"}
+  {"query": "why did Tap card token creation fail", "project": "payments", "want": "card-token"},
+  {"query": "3DS authentication failures on Checkout.com", "project": "payments", "want": "3DS"},
+  {"query": "403 forbidden RetrieveEncryptedCardFromToken action missing", "project": "payments", "want": "RetrieveEncryptedCardFromToken"},
+  {"query": "422 errors on the Google Merchants endpoint", "project": "payments", "want": "Google Merchants"},
+  {"query": "Juspay HTTP call failed causing a 500 error", "project": "payments", "want": "Juspay"},
+  {"query": "500 error on POST payments v2 pm token fetch failure", "project": "payments", "want": "Token Fetch"},
+  {"query": "500 errors on the Apple Pay sessions endpoint in production", "project": "payments", "want": "Apple"},
+  {"query": "tax_processed_total metric failures in production", "project": "payments", "want": "tax_processed_total"},
+  {"query": "500 error context canceled from the Checkout API", "project": "payments", "want": "context canceled"}
 ]
