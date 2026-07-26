@@ -3,13 +3,16 @@ package gemini
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"math"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -32,21 +35,44 @@ const (
 	googleBaseURL     = "https://generativelanguage.googleapis.com/v1beta/models"
 )
 
+// KeyBlockStore persists a key block so a quota-exhausted or rejected key stays
+// out of rotation across restarts and is visible in the dashboard. Optional:
+// without one, blocks live only in this process. until is the zero time for a
+// block that never expires (rejected key).
+type KeyBlockStore interface {
+	BlockLLMKey(ctx context.Context, fingerprint, keyTail, provider, reason string, until time.Time) error
+}
+
 // Client is a dual-mode client for generation and embedding.
 type Client struct {
 	provider       string
-	apiKey         string
+	keys           []string
+	rotate         time.Duration
 	model          string
 	embeddingModel string
 	embeddingDims  int
 	baseURL        string
 	httpClient     *http.Client
+
+	// blocked holds fingerprints of keys taken out of rotation (seeded from the
+	// store at construction, extended as calls fail). Guards itself; clients are
+	// shared across job goroutines.
+	mu      sync.RWMutex
+	blocked map[string]bool
+	store   KeyBlockStore
 }
 
 // NewClient creates a client for the given provider. An empty/unknown provider
 // defaults to OpenRouter. model/embeddingModel may be given with or without the
 // "google/" namespace prefix; it is normalized per provider at call time.
 func NewClient(provider, apiKey, model, embeddingModel string, embeddingDims int) *Client {
+	return NewRotatingClient(provider, []string{apiKey}, 0, model, embeddingModel, embeddingDims)
+}
+
+// NewRotatingClient is NewClient over a pool of keys: every rotate window the
+// client switches to another key from keys, spreading per-key quota. rotate <= 0
+// (or a single key) pins keys[0] forever.
+func NewRotatingClient(provider string, keys []string, rotate time.Duration, model, embeddingModel string, embeddingDims int) *Client {
 	if provider != ProviderGoogle {
 		provider = ProviderOpenRouter
 	}
@@ -56,17 +82,152 @@ func NewClient(provider, apiKey, model, embeddingModel string, embeddingDims int
 	}
 	return &Client{
 		provider:       provider,
-		apiKey:         apiKey,
+		keys:           keys,
+		rotate:         rotate,
 		model:          model,
 		embeddingModel: embeddingModel,
 		embeddingDims:  embeddingDims,
 		baseURL:        baseURL,
 		httpClient:     &http.Client{Timeout: 60 * time.Second},
+		blocked:        map[string]bool{},
 	}
+}
+
+// WithKeyBlocks wires block persistence and seeds the already-blocked
+// fingerprints (loaded from the DB at startup). Returns c for chaining.
+func (c *Client) WithKeyBlocks(store KeyBlockStore, blockedFingerprints []string) *Client {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.store = store
+	for _, fp := range blockedFingerprints {
+		c.blocked[fp] = true
+	}
+	return c
 }
 
 // Provider reports the active backend (for logging/diagnostics).
 func (c *Client) Provider() string { return c.provider }
+
+// ActiveFingerprint reports which pooled key this client would use right now.
+func (c *Client) ActiveFingerprint() string { return Fingerprint(c.apiKey()) }
+
+// Fingerprint identifies a key in logs and the DB without storing the secret.
+func Fingerprint(key string) string {
+	sum := sha256.Sum256([]byte(key))
+	return hex.EncodeToString(sum[:])[:16]
+}
+
+// keyTail is the display suffix for a key ("…aB3x"), enough to tell pool members apart.
+func keyTail(key string) string {
+	if len(key) <= 4 {
+		return key
+	}
+	return key[len(key)-4:]
+}
+
+// apiKey returns the key for the current rotation window, skipping blocked keys.
+// The window comes from the clock alone, so every goroutine — and every process
+// sharing the same config — agrees on one key per window and switches only at the
+// boundary.
+// ponytail: the pick is with replacement, so a key can win two windows in a row;
+// use a seeded permutation if strict round-robin ever matters.
+func (c *Client) apiKey() string {
+	live := c.liveKeys()
+	if len(live) == 0 {
+		return ""
+	}
+	if len(live) == 1 || c.rotate <= 0 {
+		return live[0]
+	}
+	secs := max(int64(c.rotate/time.Second), 1)
+	return pick(live, time.Now().Unix()/secs)
+}
+
+// pick maps a rotation window to a key. Split out so it can be exercised over
+// many windows without moving the clock.
+func pick(keys []string, window int64) string {
+	return keys[mix(uint64(window))%uint64(len(keys))]
+}
+
+// liveKeys returns the unblocked keys, or all keys when every one is blocked —
+// trying a blocked key beats failing every call outright (quota may have reset).
+func (c *Client) liveKeys() []string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if len(c.blocked) == 0 {
+		return c.keys
+	}
+	live := make([]string, 0, len(c.keys))
+	for _, k := range c.keys {
+		if !c.blocked[Fingerprint(k)] {
+			live = append(live, k)
+		}
+	}
+	if len(live) == 0 {
+		return c.keys
+	}
+	return live
+}
+
+// blockKey takes key out of rotation and persists the block. It reports whether
+// another key is left to retry with — false means don't bother swapping.
+func (c *Client) blockKey(ctx context.Context, key, reason string, until time.Time) bool {
+	fp := Fingerprint(key)
+
+	c.mu.Lock()
+	already := c.blocked[fp]
+	c.blocked[fp] = true
+	remaining := 0
+	for _, k := range c.keys {
+		if !c.blocked[Fingerprint(k)] {
+			remaining++
+		}
+	}
+	store := c.store
+	c.mu.Unlock()
+
+	if !already {
+		log.Warn().Str("provider", c.provider).Str("key", "…"+keyTail(key)).Str("fingerprint", fp).
+			Str("reason", reason).Time("until", until).Int("keys_left", remaining).Msg("LLM key blocked")
+		if store != nil {
+			// Fresh context: the caller's may already be cancelled by the failure.
+			sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+			defer cancel()
+			if err := store.BlockLLMKey(sctx, fp, keyTail(key), c.provider, reason, until); err != nil {
+				log.Error().Err(err).Str("fingerprint", fp).Msg("Failed to persist LLM key block")
+			}
+		}
+	}
+	return remaining > 0
+}
+
+// blockReason classifies a failed response: a non-empty reason means the key
+// itself is the problem, so rotate to the next one. until is zero for a
+// permanent block (key rejected) or a wall-clock expiry for a quota block.
+func blockReason(status int, body []byte) (reason string, until time.Time, ok bool) {
+	msg := strings.ToLower(string(body))
+	switch {
+	case status == 429:
+		// Daily/free-tier quota: clears at the provider's next reset window.
+		return "quota exhausted (429)", time.Now().Add(24 * time.Hour), true
+	case status == 402:
+		return "out of credits (402)", time.Now().Add(24 * time.Hour), true
+	case status == 401 || status == 403:
+		return fmt.Sprintf("key rejected (%d)", status), time.Time{}, true
+	case status == 400 && (strings.Contains(msg, "api_key_invalid") || strings.Contains(msg, "api key not valid")):
+		return "key invalid (400)", time.Time{}, true
+	}
+	return "", time.Time{}, false
+}
+
+// mix is splitmix64 — spreads sequential window numbers so consecutive windows
+// don't land on correlated indexes.
+func mix(x uint64) uint64 {
+	x += 0x9E3779B97F4A7C15
+	x = (x ^ (x >> 30)) * 0xBF58476D1CE4E5B9
+	x = (x ^ (x >> 27)) * 0x94D049BB133111EB
+	return x ^ (x >> 31)
+}
 
 // modelID normalizes a model id for the active provider. On OpenRouter, ids that
 // already carry a namespace (any "…/…", e.g. "anthropic/claude-haiku-4.5") pass
@@ -241,7 +402,7 @@ func (c *Client) generateOpenRouter(ctx context.Context, systemPrompt, userMessa
 		ResponseFormat: &responseFormat{Type: "json_object"},
 	}
 	var resp chatResponse
-	if err := c.doPost(ctx, c.baseURL+"/chat/completions", "Bearer "+c.apiKey, req, &resp); err != nil {
+	if err := c.doPost(ctx, c.baseURL+"/chat/completions", req, &resp); err != nil {
 		return "", fmt.Errorf("generate: %w", err)
 	}
 	if resp.Error != nil {
@@ -261,9 +422,9 @@ func (c *Client) generateGoogle(ctx context.Context, systemPrompt, userMessage s
 	if systemPrompt != "" {
 		req.SystemInstruction = &gContent{Parts: []gPart{{Text: systemPrompt}}}
 	}
-	url := fmt.Sprintf("%s/%s:generateContent?key=%s", c.baseURL, c.modelID(c.model), c.apiKey)
+	url := fmt.Sprintf("%s/%s:generateContent", c.baseURL, c.modelID(c.model))
 	var resp gGenerateResponse
-	if err := c.doPost(ctx, url, "", req, &resp); err != nil {
+	if err := c.doPost(ctx, url, req, &resp); err != nil {
 		return "", fmt.Errorf("generate: %w", err)
 	}
 	if resp.Error != nil {
@@ -313,7 +474,7 @@ func (c *Client) describeOpenRouter(ctx context.Context, mimeType string, data [
 		ResponseFormat: &responseFormat{Type: "json_object"},
 	}
 	var resp chatResponse
-	if err := c.doPost(ctx, c.baseURL+"/chat/completions", "Bearer "+c.apiKey, req, &resp); err != nil {
+	if err := c.doPost(ctx, c.baseURL+"/chat/completions", req, &resp); err != nil {
 		return "", fmt.Errorf("describe: %w", err)
 	}
 	if resp.Error != nil {
@@ -336,9 +497,9 @@ func (c *Client) describeGoogle(ctx context.Context, mimeType string, data []byt
 		}},
 		GenerationConfig: gGenerationConfig{Temperature: 0.2, MaxOutputTokens: 2048, ResponseMimeType: "application/json"},
 	}
-	url := fmt.Sprintf("%s/%s:generateContent?key=%s", c.baseURL, c.modelID(c.model), c.apiKey)
+	url := fmt.Sprintf("%s/%s:generateContent", c.baseURL, c.modelID(c.model))
 	var resp gGenerateResponse
-	if err := c.doPost(ctx, url, "", req, &resp); err != nil {
+	if err := c.doPost(ctx, url, req, &resp); err != nil {
 		return "", fmt.Errorf("describe: %w", err)
 	}
 	if resp.Error != nil {
@@ -382,7 +543,7 @@ func (c *Client) EmbedWithOptions(ctx context.Context, text string, opts EmbedOp
 func (c *Client) embedOpenRouter(ctx context.Context, text string, dims int) ([]float32, error) {
 	req := orEmbedRequest{Model: c.modelID(c.embeddingModel), Input: text, Dimensions: dims}
 	var resp orEmbedResponse
-	if err := c.doPost(ctx, c.baseURL+"/embeddings", "Bearer "+c.apiKey, req, &resp); err != nil {
+	if err := c.doPost(ctx, c.baseURL+"/embeddings", req, &resp); err != nil {
 		return nil, fmt.Errorf("embed: %w", err)
 	}
 	if resp.Error != nil {
@@ -406,9 +567,9 @@ func (c *Client) embedGoogle(ctx context.Context, text string, opts EmbedOptions
 		req.OutputDimensionality = dims
 		req.EmbedContentConfig = &gEmbedContentConfig{Title: opts.Title, TaskType: opts.TaskType, OutputDimensionality: dims}
 	}
-	url := fmt.Sprintf("%s/%s:embedContent?key=%s", c.baseURL, bare, c.apiKey)
+	url := fmt.Sprintf("%s/%s:embedContent", c.baseURL, bare)
 	var resp gEmbedResponse
-	if err := c.doPost(ctx, url, "", req, &resp); err != nil {
+	if err := c.doPost(ctx, url, req, &resp); err != nil {
 		return nil, fmt.Errorf("embed: %w", err)
 	}
 	if resp.Error != nil {
@@ -452,7 +613,7 @@ func (c *Client) EmbedBatch(ctx context.Context, texts []string) ([][]float32, e
 func (c *Client) batchEmbedOpenRouter(ctx context.Context, texts []string) ([][]float32, error) {
 	req := orEmbedRequest{Model: c.modelID(c.embeddingModel), Input: texts, Dimensions: c.embeddingDims}
 	var resp orEmbedResponse
-	if err := c.doPost(ctx, c.baseURL+"/embeddings", "Bearer "+c.apiKey, req, &resp); err != nil {
+	if err := c.doPost(ctx, c.baseURL+"/embeddings", req, &resp); err != nil {
 		return nil, fmt.Errorf("batch embed: %w", err)
 	}
 	if resp.Error != nil {
@@ -482,9 +643,9 @@ func (c *Client) batchEmbedGoogle(ctx context.Context, texts []string) ([][]floa
 			EmbedContentConfig:   &gEmbedContentConfig{OutputDimensionality: c.embeddingDims},
 		}
 	}
-	url := fmt.Sprintf("%s/%s:batchEmbedContents?key=%s", c.baseURL, bare, c.apiKey)
+	url := fmt.Sprintf("%s/%s:batchEmbedContents", c.baseURL, bare)
 	var resp gBatchEmbedResponse
-	if err := c.doPost(ctx, url, "", gBatchEmbedRequest{Requests: requests}, &resp); err != nil {
+	if err := c.doPost(ctx, url, gBatchEmbedRequest{Requests: requests}, &resp); err != nil {
 		return nil, fmt.Errorf("batch embed: %w", err)
 	}
 	if resp.Error != nil {
@@ -502,66 +663,87 @@ func (c *Client) batchEmbedGoogle(ctx context.Context, texts []string) ([][]floa
 
 // --- HTTP with retry ---
 
-// doPost POSTs JSON to url with exponential backoff on 429/5xx. authHeader, when
-// non-empty, is sent as the Authorization header (OpenRouter Bearer); Google
-// carries its key in the URL query and passes "".
-func (c *Client) doPost(ctx context.Context, url, authHeader string, body any, result any) error {
+// doPost POSTs JSON to url with exponential backoff on 429/5xx, authenticating
+// with the current rotation key. When a response says the key itself is dead
+// (quota exhausted, rejected), the key is blocked and the call is retried
+// IMMEDIATELY on the next key — that swap doesn't spend the backoff budget.
+func (c *Client) doPost(ctx context.Context, url string, body any, result any) error {
 	payload, err := json.Marshal(body)
 	if err != nil {
 		return fmt.Errorf("marshal request: %w", err)
 	}
 
-	maxRetries := 5
-	for attempt := 0; attempt <= maxRetries; attempt++ {
-		if attempt > 0 {
-			backoff := time.Duration(math.Pow(2, float64(attempt-1))) * time.Second
-			log.Debug().Int("attempt", attempt).Dur("backoff", backoff).Str("provider", c.provider).Msg("Retrying LLM request")
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-time.After(backoff):
+	const maxRetries = 5
+	attempt, swaps := 0, 0
+	for {
+		key := c.apiKey()
+		status, respBody, reqErr := c.post(ctx, url, key, payload)
+
+		if reqErr == nil && status == http.StatusOK {
+			if err := json.Unmarshal(respBody, result); err != nil {
+				return fmt.Errorf("unmarshal response: %w", err)
+			}
+			return nil
+		}
+
+		// Dead key: block it and swap immediately (bounded by pool size).
+		if reqErr == nil && swaps < len(c.keys)-1 {
+			if reason, until, ok := blockReason(status, respBody); ok && c.blockKey(ctx, key, reason, until) {
+				swaps++
+				continue
 			}
 		}
 
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload))
-		if err != nil {
-			return fmt.Errorf("create request: %w", err)
-		}
-		req.Header.Set("Content-Type", "application/json")
-		if authHeader != "" {
-			req.Header.Set("Authorization", authHeader)
+		retryable := reqErr != nil || status == 429 || status >= 500
+		if !retryable {
+			return fmt.Errorf("%s API returned %d: %s", c.provider, status, string(respBody))
 		}
 
-		resp, err := c.httpClient.Do(req)
-		if err != nil {
-			if attempt == maxRetries {
-				return fmt.Errorf("http request failed after %d retries: %w", maxRetries, err)
+		attempt++
+		if attempt > maxRetries {
+			if reqErr != nil {
+				return fmt.Errorf("http request failed after %d retries: %w", maxRetries, reqErr)
 			}
-			continue
+			return fmt.Errorf("%s API returned %d after %d retries: %s", c.provider, status, maxRetries, string(respBody))
+		}
+		if reqErr == nil {
+			log.Warn().Int("status", status).Int("attempt", attempt).Str("provider", c.provider).Msg("LLM API error, retrying")
 		}
 
-		respBody, err := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		if err != nil {
-			return fmt.Errorf("read response: %w", err)
+		backoff := time.Duration(math.Pow(2, float64(attempt-1))) * time.Second
+		log.Debug().Int("attempt", attempt).Dur("backoff", backoff).Str("provider", c.provider).Msg("Retrying LLM request")
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(backoff):
 		}
-
-		if resp.StatusCode == 429 || resp.StatusCode >= 500 {
-			if attempt == maxRetries {
-				return fmt.Errorf("%s API returned %d after %d retries: %s", c.provider, resp.StatusCode, maxRetries, string(respBody))
-			}
-			log.Warn().Int("status", resp.StatusCode).Int("attempt", attempt).Str("provider", c.provider).Msg("LLM API error, retrying")
-			continue
-		}
-
-		if resp.StatusCode != 200 {
-			return fmt.Errorf("%s API returned %d: %s", c.provider, resp.StatusCode, string(respBody))
-		}
-
-		if err := json.Unmarshal(respBody, result); err != nil {
-			return fmt.Errorf("unmarshal response: %w", err)
-		}
-		return nil
 	}
-	return fmt.Errorf("exhausted retries")
+}
+
+// post makes one authenticated attempt and returns the status and body. Auth is
+// per provider: OpenRouter takes a Bearer token, Google takes x-goog-api-key
+// (header, not query, so the key never lands in a URL or proxy log).
+func (c *Client) post(ctx context.Context, url, key string, payload []byte) (int, []byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload))
+	if err != nil {
+		return 0, nil, fmt.Errorf("create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if c.provider == ProviderGoogle {
+		req.Header.Set("x-goog-api-key", key)
+	} else {
+		req.Header.Set("Authorization", "Bearer "+key)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return resp.StatusCode, nil, fmt.Errorf("read response: %w", err)
+	}
+	return resp.StatusCode, respBody, nil
 }

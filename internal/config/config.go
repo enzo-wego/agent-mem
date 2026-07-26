@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 // GraphRateConfig holds per-source concurrency caps for the graph job dispatcher.
@@ -83,6 +84,13 @@ type Config struct {
 	LLMProvider  string `json:"llm_provider"`
 	GoogleAPIKey string `json:"google_api_key"`
 
+	// GoogleAPIKeys is an optional pool of AIza… keys (comma- or newline-separated)
+	// used on the google provider. The active key switches every
+	// LLMKeyRotateHours so per-key quota is spread across the pool; empty falls
+	// back to the single GoogleAPIKey.
+	GoogleAPIKeys     string `json:"google_api_keys"`
+	LLMKeyRotateHours int    `json:"llm_key_rotate_hours"`
+
 	// AnthropicAPIKey, when set, routes graph summaries (cluster/thread/feature)
 	// to Claude instead of Gemini Flash. Embeddings always stay on Gemini.
 	AnthropicAPIKey string `json:"anthropic_api_key"`
@@ -136,26 +144,63 @@ func (c *Config) LLMProviderOrDefault() string {
 	return normalizeProvider(c.LLMProvider)
 }
 
-// ActiveLLMKey returns the API key for the active provider: GoogleAPIKey when
-// provider is google, else GeminiAPIKey (which holds the OpenRouter key).
-func (c *Config) ActiveLLMKey() string {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	if normalizeProvider(c.LLMProvider) == "google" {
-		return c.GoogleAPIKey
-	}
-	return c.GeminiAPIKey
-}
+// ActiveLLMKey returns the first API key for the active provider (see
+// ActiveLLMKeys); callers that only need "is a key configured" use this.
+func (c *Config) ActiveLLMKey() string { return c.Snapshot().ActiveLLMKey() }
+
+// ActiveLLMKeys returns the key pool for the active provider.
+func (c *Config) ActiveLLMKeys() []string { return c.Snapshot().ActiveLLMKeys() }
+
+// LLMKeyRotateInterval returns the key-rotation window for the active provider.
+func (c *Config) LLMKeyRotateInterval() time.Duration { return c.Snapshot().LLMKeyRotateInterval() }
 
 // LLMProviderOrDefault returns the snapshot's provider, defaulting to openrouter.
 func (s ConfigSnapshot) LLMProviderOrDefault() string { return normalizeProvider(s.LLMProvider) }
 
-// ActiveLLMKey returns the snapshot's key for the active provider.
-func (s ConfigSnapshot) ActiveLLMKey() string {
+// ActiveLLMKeys returns the key pool for the active provider: the
+// google_api_keys list (falling back to the single google_api_key) when provider
+// is google, else the OpenRouter key. Never contains empty strings.
+func (s ConfigSnapshot) ActiveLLMKeys() []string {
 	if normalizeProvider(s.LLMProvider) == "google" {
-		return s.GoogleAPIKey
+		if keys := SplitKeys(s.GoogleAPIKeys); len(keys) > 0 {
+			return keys
+		}
+		return SplitKeys(s.GoogleAPIKey)
 	}
-	return s.GeminiAPIKey
+	return SplitKeys(s.GeminiAPIKey)
+}
+
+// ActiveLLMKey returns the snapshot's first key for the active provider.
+func (s ConfigSnapshot) ActiveLLMKey() string {
+	keys := s.ActiveLLMKeys()
+	if len(keys) == 0 {
+		return ""
+	}
+	return keys[0]
+}
+
+// LLMKeyRotateInterval is how long one key stays active before the client
+// switches to another key in the pool. 0 = no rotation (single key pinned).
+func (s ConfigSnapshot) LLMKeyRotateInterval() time.Duration {
+	if s.LLMKeyRotateHours <= 0 {
+		return 0
+	}
+	return time.Duration(s.LLMKeyRotateHours) * time.Hour
+}
+
+// SplitKeys parses a key list written with commas, newlines, or spaces between
+// entries — whatever the operator pasted into the dashboard.
+func SplitKeys(s string) []string {
+	fields := strings.FieldsFunc(s, func(r rune) bool {
+		return r == ',' || r == '\n' || r == '\r' || r == '\t' || r == ' ' || r == ';'
+	})
+	out := make([]string, 0, len(fields))
+	for _, f := range fields {
+		if f != "" {
+			out = append(out, f)
+		}
+	}
+	return out
 }
 
 // RuntimeSettings returns the runtime settings as a string map for DB storage.
@@ -170,6 +215,8 @@ func (c *Config) RuntimeSettings() map[string]string {
 		"gemini_embedding_dims":  strconv.Itoa(c.GeminiEmbeddingDims),
 		"llm_provider":           c.LLMProvider,
 		"google_api_key":         c.GoogleAPIKey,
+		"google_api_keys":        c.GoogleAPIKeys,
+		"llm_key_rotate_hours":   strconv.Itoa(c.LLMKeyRotateHours),
 		"anthropic_api_key":      c.AnthropicAPIKey,
 		"anthropic_model":        c.AnthropicModel,
 		"context_observations":   strconv.Itoa(c.ContextObservations),
@@ -212,6 +259,12 @@ func (c *Config) ApplyDBSettings(dbSettings map[string]string) {
 			c.LLMProvider = v
 		case "google_api_key":
 			c.GoogleAPIKey = v
+		case "google_api_keys":
+			c.GoogleAPIKeys = v
+		case "llm_key_rotate_hours":
+			if n, err := strconv.Atoi(v); err == nil {
+				c.LLMKeyRotateHours = n
+			}
 		case "anthropic_api_key":
 			c.AnthropicAPIKey = v
 		case "anthropic_model":
@@ -266,6 +319,8 @@ func (c *Config) snapshot() ConfigSnapshot {
 		GeminiEmbeddingDims:  c.GeminiEmbeddingDims,
 		LLMProvider:          c.LLMProvider,
 		GoogleAPIKey:         c.GoogleAPIKey,
+		GoogleAPIKeys:        c.GoogleAPIKeys,
+		LLMKeyRotateHours:    c.LLMKeyRotateHours,
 		AnthropicAPIKey:      c.AnthropicAPIKey,
 		AnthropicModel:       c.AnthropicModel,
 		ContextObservations:  c.ContextObservations,
@@ -301,6 +356,8 @@ type ConfigSnapshot struct {
 	// Flip + restart the worker to fail over when OpenRouter is out of quota.
 	LLMProvider         string      `json:"llm_provider"`
 	GoogleAPIKey        string      `json:"google_api_key"`
+	GoogleAPIKeys       string      `json:"google_api_keys"`
+	LLMKeyRotateHours   int         `json:"llm_key_rotate_hours"`
 	AnthropicAPIKey     string      `json:"anthropic_api_key"`
 	AnthropicModel      string      `json:"anthropic_model"`
 	ContextObservations int         `json:"context_observations"`
@@ -332,6 +389,8 @@ func (c *Config) Update(partial map[string]any) (geminiChanged bool) {
 	oldEmbDims := c.GeminiEmbeddingDims
 	oldProvider := c.LLMProvider
 	oldGoogleKey := c.GoogleAPIKey
+	oldGoogleKeys := c.GoogleAPIKeys
+	oldRotateHours := c.LLMKeyRotateHours
 	oldAnthropicKey := c.AnthropicAPIKey
 	oldAnthropicModel := c.AnthropicModel
 
@@ -364,6 +423,14 @@ func (c *Config) Update(partial map[string]any) (geminiChanged bool) {
 		case "google_api_key":
 			if s, ok := v.(string); ok {
 				c.GoogleAPIKey = s
+			}
+		case "google_api_keys":
+			if s, ok := v.(string); ok {
+				c.GoogleAPIKeys = s
+			}
+		case "llm_key_rotate_hours":
+			if n, ok := toInt(v); ok {
+				c.LLMKeyRotateHours = n
 			}
 		case "anthropic_api_key":
 			if s, ok := v.(string); ok {
@@ -435,6 +502,8 @@ func (c *Config) Update(partial map[string]any) (geminiChanged bool) {
 		c.GeminiEmbeddingDims != oldEmbDims ||
 		c.LLMProvider != oldProvider ||
 		c.GoogleAPIKey != oldGoogleKey ||
+		c.GoogleAPIKeys != oldGoogleKeys ||
+		c.LLMKeyRotateHours != oldRotateHours ||
 		c.AnthropicAPIKey != oldAnthropicKey ||
 		c.AnthropicModel != oldAnthropicModel
 }
@@ -462,6 +531,7 @@ func defaults() *Config {
 		GeminiModel:          "google/gemini-2.5-flash",
 		GeminiEmbeddingModel: "google/gemini-embedding-001",
 		GeminiEmbeddingDims:  768,
+		LLMKeyRotateHours:    6,
 		AnthropicModel:       "claude-sonnet-5",
 		ContextObservations:  50,
 		ContextFullCount:     5,
@@ -524,6 +594,14 @@ func ApplyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("AGENT_MEM_GOOGLE_API_KEY"); v != "" {
 		cfg.GoogleAPIKey = v
+	}
+	if v := os.Getenv("AGENT_MEM_GOOGLE_API_KEYS"); v != "" {
+		cfg.GoogleAPIKeys = v
+	}
+	if v := os.Getenv("AGENT_MEM_LLM_KEY_ROTATE_HOURS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.LLMKeyRotateHours = n
+		}
 	}
 	if v := os.Getenv("AGENT_MEM_ANTHROPIC_API_KEY"); v != "" {
 		cfg.AnthropicAPIKey = v

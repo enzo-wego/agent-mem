@@ -5,9 +5,12 @@ import {
   fetchChannels,
   fetchChannelFilters,
   saveChannelFilters,
+  fetchLLMKeys,
+  unblockLLMKey,
   type Settings,
   type ChannelCount,
   type ChannelFilters,
+  type LLMKeys,
 } from '../api'
 
 export function SettingsPage() {
@@ -19,6 +22,7 @@ export function SettingsPage() {
   const [newKey, setNewKey] = useState('')
   const [showGoogleKey, setShowGoogleKey] = useState(false)
   const [newGoogleKey, setNewGoogleKey] = useState('')
+  const [newGoogleKeys, setNewGoogleKeys] = useState('')
   const [showAnthropicKey, setShowAnthropicKey] = useState(false)
   const [newAnthropicKey, setNewAnthropicKey] = useState('')
 
@@ -105,6 +109,33 @@ export function SettingsPage() {
             </button>
           </div>
         </Field>
+        <Field label="Google API Key Pool" hint="One AIza… key per line (commas also work). When non-empty this replaces the single key above on the 'google' provider: the client uses one key per rotation window to spread per-key quota, and a key that returns quota-exhausted / rejected is blocked in the DB and retried on the next key immediately. Saving replaces the whole pool.">
+          <div className="space-y-2">
+            <textarea
+              rows={4}
+              value={newGoogleKeys}
+              onChange={(e) => setNewGoogleKeys(e.target.value)}
+              placeholder={settings.google_api_keys || 'Not set'}
+              className={`${inputCls} w-full font-mono text-xs`}
+            />
+            <button
+              disabled={saving || !newGoogleKeys.trim()}
+              onClick={() => { save({ google_api_keys: newGoogleKeys.trim() }); setNewGoogleKeys('') }}
+              className={btnPrimary}
+            >
+              Replace pool
+            </button>
+          </div>
+        </Field>
+        <Field label="Key Rotation (hours)" hint="How long one key serves before the client switches to another key in the pool. 0 = pin the first key (no rotation). Every process derives the same key from the clock, so no coordination is needed.">
+          <EditableField
+            value={String(settings.llm_key_rotate_hours)}
+            saving={saving}
+            onSave={(v) => save({ llm_key_rotate_hours: Number(v) })}
+            placeholder="6"
+          />
+        </Field>
+        <LLMKeysSection />
         <Field label="Flat-Memory Model" hint="Model for flat memory (observation extraction, session summaries). Any OpenRouter model id, e.g. google/gemini-2.5-flash, anthropic/claude-haiku-4.5, openai/gpt-5.6-luna. On the google provider use a bare Gemini id (e.g. gemini-2.5-flash).">
           <EditableField
             value={settings.gemini_model}
@@ -219,6 +250,89 @@ export function SettingsPage() {
       </Section>
 
     </div>
+  )
+}
+
+// --- LLM key pool status ---
+
+// LLMKeysSection shows which pooled key is serving this rotation window and
+// which keys are blocked (quota exhausted / rejected). Unblock puts a key back
+// in rotation right away — use it when quota reset early or the key was replaced.
+function LLMKeysSection() {
+  const [data, setData] = useState<LLMKeys | null>(null)
+  const [err, setErr] = useState('')
+  const [busy, setBusy] = useState('')
+
+  const load = () => fetchLLMKeys().then(setData).catch(() => setErr('Failed to load key status'))
+  useEffect(() => { load() }, [])
+
+  const unblock = async (fp: string) => {
+    setBusy(fp)
+    try {
+      await unblockLLMKey(fp)
+      await load()
+    } catch (e: any) {
+      setErr(e.message || 'Unblock failed')
+    } finally {
+      setBusy('')
+    }
+  }
+
+  if (err) return <p className="text-xs text-red-500">{err}</p>
+  if (!data) return null
+
+  const blockedFps = new Set(
+    data.blocked.filter((b) => !b.expires_at || new Date(b.expires_at) > new Date()).map((b) => b.fingerprint),
+  )
+
+  return (
+    <Field label="Key Pool Status" hint="Live view of the pool: ● = serving this rotation window, blocked keys are skipped until their block expires or you unblock them.">
+      <div className="space-y-2">
+        {data.keys.length === 0 && <p className="text-xs text-gray-400">No keys configured for this provider.</p>}
+        {data.keys.map((k) => {
+          const isBlocked = blockedFps.has(k.fingerprint)
+          const block = data.blocked.find((b) => b.fingerprint === k.fingerprint)
+          return (
+            <div key={k.fingerprint} className="flex flex-wrap items-center gap-2 text-xs">
+              <span className={k.fingerprint === data.active_now && !isBlocked ? 'text-green-600 dark:text-green-400' : 'text-gray-300 dark:text-gray-600'}>●</span>
+              <span className="font-mono">…{k.key_tail.slice(-4)}</span>
+              {isBlocked ? (
+                <>
+                  <span className="px-1.5 py-0.5 rounded bg-red-50 dark:bg-red-900/30 text-red-700 dark:text-red-300">blocked</span>
+                  <span className="text-gray-500">{block?.reason}</span>
+                  <span className="text-gray-400">
+                    {block?.expires_at ? `until ${new Date(block.expires_at).toLocaleString()}` : 'permanent'}
+                  </span>
+                  <button disabled={busy === k.fingerprint} onClick={() => unblock(k.fingerprint)} className={btnSecondary}>
+                    {busy === k.fingerprint ? '…' : 'Unblock'}
+                  </button>
+                </>
+              ) : (
+                <span className="text-gray-400">live</span>
+              )}
+            </div>
+          )
+        })}
+
+        {/* Blocks whose key is no longer in the pool — history worth seeing. */}
+        {data.blocked
+          .filter((b) => !data.keys.some((k) => k.fingerprint === b.fingerprint))
+          .map((b) => (
+            <div key={b.fingerprint} className="flex flex-wrap items-center gap-2 text-xs text-gray-400">
+              <span>·</span>
+              <span className="font-mono">…{b.key_tail}</span>
+              <span>{b.provider}</span>
+              <span>{b.reason}</span>
+              <span>(not in current pool)</span>
+              <button disabled={busy === b.fingerprint} onClick={() => unblock(b.fingerprint)} className={btnSecondary}>
+                Clear
+              </button>
+            </div>
+          ))}
+
+        <button onClick={load} className={btnSecondary}>Refresh</button>
+      </div>
+    </Field>
   )
 }
 

@@ -231,6 +231,8 @@ export interface Settings {
   gemini_embedding_dims: number;
   llm_provider: string;
   google_api_key: string;
+  google_api_keys: string;
+  llm_key_rotate_hours: number;
   anthropic_api_key: string;
   anthropic_model: string;
   context_observations: number;
@@ -261,6 +263,41 @@ export async function updateSettings(partial: Partial<Settings>): Promise<Settin
     throw new Error(err.error || `HTTP ${res.status}`);
   }
   return res.json();
+}
+
+// ── LLM key pool ─────────────────────────────────────────────────────────────
+
+export interface LLMKeyBlock {
+  fingerprint: string;
+  key_tail: string;
+  provider: string;
+  reason: string;
+  blocked_at: string;
+  expires_at: string | null; // null = permanent until unblocked
+}
+
+export interface LLMKeys {
+  provider: string;
+  rotate_hours: number;
+  keys: { fingerprint: string; key_tail: string }[];
+  blocked: LLMKeyBlock[];
+  active_now: string;
+}
+
+export async function fetchLLMKeys(): Promise<LLMKeys> {
+  const res = await authFetch(`${BASE}/api/llm-keys`);
+  return res.json();
+}
+
+export async function unblockLLMKey(fingerprint: string): Promise<void> {
+  const res = await authFetch(`${BASE}/api/llm-keys/block?fingerprint=${encodeURIComponent(fingerprint)}`, {
+    method: 'DELETE',
+    headers: authHeaders(),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Unknown error' }));
+    throw new Error(err.error || `HTTP ${res.status}`);
+  }
 }
 
 // ── OpenRouter usage ─────────────────────────────────────────────────────────

@@ -91,13 +91,14 @@ func NewServer(cfg *config.Config, logBuf *LogBuffer) (*Server, error) {
 		log.Info().Int("count", len(dbSettings)).Msg("Runtime settings loaded from database")
 	}
 
-	llmProvider := cfg.LLMProviderOrDefault()
-	llmKey := cfg.ActiveLLMKey()
+	snap := cfg.Snapshot()
+	llmProvider := snap.LLMProviderOrDefault()
 
-	var geminiClient *gemini.Client
-	if llmKey != "" {
-		geminiClient = gemini.NewClient(llmProvider, llmKey, cfg.GeminiModel, cfg.GeminiEmbeddingModel, cfg.GeminiEmbeddingDims)
-		log.Info().Str("provider", llmProvider).Str("model", cfg.GeminiModel).Msg("LLM client initialized")
+	geminiClient := newLLMClient(ctx, db, snap, cfg.GeminiModel)
+	if geminiClient != nil {
+		log.Info().Str("provider", llmProvider).Str("model", cfg.GeminiModel).
+			Int("keys", len(snap.ActiveLLMKeys())).Dur("key_rotate", snap.LLMKeyRotateInterval()).
+			Msg("LLM client initialized")
 	} else {
 		log.Warn().Str("provider", llmProvider).Msg("No API key configured for LLM provider, observation extraction disabled")
 	}
@@ -107,7 +108,7 @@ func NewServer(cfg *config.Config, logBuf *LogBuffer) (*Server, error) {
 	// tuned against gemini_model and must not silently change with it.
 	graphGeminiClient := geminiClient
 	if geminiClient != nil && cfg.GraphGeminiModel != "" && cfg.GraphGeminiModel != cfg.GeminiModel {
-		graphGeminiClient = gemini.NewClient(llmProvider, llmKey, cfg.GraphGeminiModel, cfg.GeminiEmbeddingModel, cfg.GeminiEmbeddingDims)
+		graphGeminiClient = newLLMClient(ctx, db, snap, cfg.GraphGeminiModel)
 		log.Info().Str("provider", llmProvider).Str("model", cfg.GraphGeminiModel).Msg("Graph LLM client initialized (separate from flat memory)")
 	}
 
@@ -319,6 +320,8 @@ func NewServer(cfg *config.Config, logBuf *LogBuffer) (*Server, error) {
 		// Settings endpoints
 		r.Get("/api/settings", s.handleGetSettings)
 		r.Put("/api/settings", s.handleUpdateSettings)
+		r.Get("/api/llm-keys", s.handleGetLLMKeys)
+		r.Delete("/api/llm-keys/block", s.handleUnblockLLMKey)
 
 		// Logs endpoint
 		r.Get("/api/logs", s.handleGetLogs)

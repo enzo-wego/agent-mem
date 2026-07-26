@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -9,6 +10,8 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/agent-mem/agent-mem/internal/anthropic"
+	"github.com/agent-mem/agent-mem/internal/config"
+	"github.com/agent-mem/agent-mem/internal/database"
 	"github.com/agent-mem/agent-mem/internal/gemini"
 	graphhandlers "github.com/agent-mem/agent-mem/internal/graph/handlers"
 	"github.com/agent-mem/agent-mem/internal/search"
@@ -29,6 +32,8 @@ type settingsResponse struct {
 	GeminiEmbeddingDims  int    `json:"gemini_embedding_dims"`
 	LLMProvider          string `json:"llm_provider"`
 	GoogleAPIKey         string `json:"google_api_key"`
+	GoogleAPIKeys        string `json:"google_api_keys"`
+	LLMKeyRotateHours    int    `json:"llm_key_rotate_hours"`
 	AnthropicAPIKey      string `json:"anthropic_api_key"`
 	AnthropicModel       string `json:"anthropic_model"`
 
@@ -56,6 +61,17 @@ func maskKey(key string) string {
 	return strings.Repeat("*", len(key)-4) + key[len(key)-4:]
 }
 
+// maskKeyList masks each key in a pool, one per line — the shape the dashboard
+// shows as a placeholder for the keys textarea.
+func maskKeyList(keys string) string {
+	parsed := config.SplitKeys(keys)
+	masked := make([]string, 0, len(parsed))
+	for _, k := range parsed {
+		masked = append(masked, maskKey(k))
+	}
+	return strings.Join(masked, "\n")
+}
+
 func (s *Server) handleGetSettings(w http.ResponseWriter, _ *http.Request) {
 	snap := s.config.Snapshot()
 	resp := settingsResponse{
@@ -70,6 +86,8 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, _ *http.Request) {
 		GeminiEmbeddingDims:  snap.GeminiEmbeddingDims,
 		LLMProvider:          snap.LLMProviderOrDefault(),
 		GoogleAPIKey:         maskKey(snap.GoogleAPIKey),
+		GoogleAPIKeys:        maskKeyList(snap.GoogleAPIKeys),
+		LLMKeyRotateHours:    snap.LLMKeyRotateHours,
 		AnthropicAPIKey:      maskKey(snap.AnthropicAPIKey),
 		AnthropicModel:       snap.AnthropicModel,
 		ContextObservations:  snap.ContextObservations,
@@ -137,10 +155,90 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	s.handleGetSettings(w, r)
 }
 
+// newLLMClient builds a gemini client over the active provider's key pool, with
+// DB-backed key blocks wired in: blocked keys are skipped, and a key that dies
+// mid-call is persisted as blocked so it stays out of rotation after a restart.
+// Returns nil when no key is configured.
+func newLLMClient(ctx context.Context, db *database.DB, snap config.ConfigSnapshot, model string) *gemini.Client {
+	keys := snap.ActiveLLMKeys()
+	if len(keys) == 0 {
+		return nil
+	}
+	blocked, err := db.ActiveLLMKeyBlocks(ctx)
+	if err != nil {
+		log.Warn().Err(err).Msg("Failed to load LLM key blocks, starting with all keys live")
+	}
+	return gemini.NewRotatingClient(
+		snap.LLMProviderOrDefault(), keys, snap.LLMKeyRotateInterval(),
+		model, snap.GeminiEmbeddingModel, snap.GeminiEmbeddingDims,
+	).WithKeyBlocks(db, blocked)
+}
+
+// handleGetLLMKeys reports the key pool and its block list for the dashboard.
+// Keys themselves are never returned — only tails and fingerprints.
+func (s *Server) handleGetLLMKeys(w http.ResponseWriter, r *http.Request) {
+	snap := s.config.Snapshot()
+	blocks, err := s.db.ListLLMKeyBlocks(r.Context())
+	if err != nil {
+		log.Error().Err(err).Msg("Failed to list LLM key blocks")
+		http.Error(w, `{"error":"failed to list key blocks"}`, http.StatusInternalServerError)
+		return
+	}
+
+	type poolKey struct {
+		Fingerprint string `json:"fingerprint"`
+		KeyTail     string `json:"key_tail"`
+	}
+	pool := make([]poolKey, 0)
+	for _, k := range snap.ActiveLLMKeys() {
+		pool = append(pool, poolKey{Fingerprint: gemini.Fingerprint(k), KeyTail: maskKey(k)})
+	}
+
+	// Which key is serving this rotation window — ask the live client, not the
+	// config, so the answer reflects blocks too.
+	activeNow := ""
+	if gc := s.getGemini(); gc != nil {
+		activeNow = gc.ActiveFingerprint()
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(map[string]any{
+		"provider":     snap.LLMProviderOrDefault(),
+		"rotate_hours": snap.LLMKeyRotateHours,
+		"keys":         pool,
+		"blocked":      blocks,
+		"active_now":   activeNow,
+	}); err != nil {
+		log.Error().Err(err).Msg("Failed to encode LLM keys response")
+	}
+}
+
+// handleUnblockLLMKey clears a block so the key rejoins rotation immediately
+// (quota reset early, key replaced upstream).
+func (s *Server) handleUnblockLLMKey(w http.ResponseWriter, r *http.Request) {
+	fp := r.URL.Query().Get("fingerprint")
+	if fp == "" {
+		http.Error(w, `{"error":"fingerprint required"}`, http.StatusBadRequest)
+		return
+	}
+	if err := s.db.UnblockLLMKey(r.Context(), fp); err != nil {
+		log.Error().Err(err).Str("fingerprint", fp).Msg("Failed to unblock LLM key")
+		http.Error(w, `{"error":"failed to unblock key"}`, http.StatusInternalServerError)
+		return
+	}
+	// Rebuild the clients so the in-memory blocked set drops it too.
+	s.reloadGemini()
+	log.Info().Str("fingerprint", fp).Msg("LLM key unblocked")
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write([]byte(`{"ok":true}`))
+}
+
 func (s *Server) reloadGemini() {
 	snap := s.config.Snapshot()
+	ctx := context.Background()
 
-	if snap.ActiveLLMKey() == "" {
+	newClient := newLLMClient(ctx, s.db, snap, snap.GeminiModel)
+	if newClient == nil {
 		s.mu.Lock()
 		s.gemini = nil
 		s.searcher = nil
@@ -149,7 +247,6 @@ func (s *Server) reloadGemini() {
 		return
 	}
 
-	newClient := gemini.NewClient(snap.LLMProviderOrDefault(), snap.ActiveLLMKey(), snap.GeminiModel, snap.GeminiEmbeddingModel, snap.GeminiEmbeddingDims)
 	newSearcher := search.NewSearcher(s.db, newClient)
 
 	s.mu.Lock()
@@ -169,7 +266,7 @@ func (s *Server) reloadGemini() {
 	graphClient, graphModel := newClient, snap.GeminiModel
 	if snap.GraphGeminiModel != "" && snap.GraphGeminiModel != snap.GeminiModel {
 		graphModel = snap.GraphGeminiModel
-		graphClient = gemini.NewClient(snap.LLMProviderOrDefault(), snap.ActiveLLMKey(), graphModel, snap.GeminiEmbeddingModel, snap.GeminiEmbeddingDims)
+		graphClient = newLLMClient(ctx, s.db, snap, graphModel)
 	}
 	var summaryLLM graphhandlers.TextGenerator
 	summaryModel := ""

@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestGenerateOpenRouter(t *testing.T) {
@@ -174,10 +175,10 @@ func TestEmbedBatchChunks(t *testing.T) {
 
 func TestGenerateGoogle(t *testing.T) {
 	var gotBody map[string]any
-	var gotPath, gotQueryKey string
+	var gotPath, gotAuthKey string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
-		gotQueryKey = r.URL.Query().Get("key")
+		gotAuthKey = r.Header.Get("x-goog-api-key")
 		if got := r.Header.Get("Authorization"); got != "" {
 			t.Errorf("google mode must NOT send Authorization header, got %q", got)
 		}
@@ -202,8 +203,9 @@ func TestGenerateGoogle(t *testing.T) {
 	if gotPath != "/gemini-2.5-flash:generateContent" {
 		t.Errorf("path = %q, want /gemini-2.5-flash:generateContent (bare model id)", gotPath)
 	}
-	if gotQueryKey != "AIza-test" {
-		t.Errorf("key query = %q, want AIza-test", gotQueryKey)
+	// Google auth rides the x-goog-api-key header, never the URL query.
+	if gotAuthKey != "AIza-test" {
+		t.Errorf("x-goog-api-key = %q, want AIza-test", gotAuthKey)
 	}
 	if _, ok := gotBody["contents"]; !ok {
 		t.Error("google request must use contents[] (not OpenAI messages[])")
@@ -273,5 +275,99 @@ func TestNewClientDefaultsProvider(t *testing.T) {
 	}
 	if c := NewClient(ProviderGoogle, "k", "m", "e", 768); c.baseURL != googleBaseURL {
 		t.Errorf("google baseURL = %q, want %q", c.baseURL, googleBaseURL)
+	}
+}
+
+// --- key pool: rotation + block-and-failover ---
+
+func TestPickSpreadsAcrossWindows(t *testing.T) {
+	keys := []string{"a", "b", "c"}
+	seen := map[string]int{}
+	for w := int64(0); w < 60; w++ {
+		seen[pick(keys, w)]++
+	}
+	for _, k := range keys {
+		if seen[k] == 0 {
+			t.Errorf("key %q never selected across 60 windows: %v", k, seen)
+		}
+	}
+	// Same window must always resolve to the same key (all processes agree).
+	if pick(keys, 42) != pick(keys, 42) {
+		t.Error("pick is not deterministic for a given window")
+	}
+}
+
+func TestRotationPinsSingleKeyAndZeroInterval(t *testing.T) {
+	if got := NewClient(ProviderGoogle, "solo", "m", "e", 768).apiKey(); got != "solo" {
+		t.Errorf("single key = %q, want solo", got)
+	}
+	c := NewRotatingClient(ProviderGoogle, []string{"first", "second"}, 0, "m", "e", 768)
+	if got := c.apiKey(); got != "first" {
+		t.Errorf("rotate=0 = %q, want first (pinned)", got)
+	}
+}
+
+type fakeBlockStore struct {
+	blocked map[string]string // fingerprint -> reason
+}
+
+func (f *fakeBlockStore) BlockLLMKey(_ context.Context, fingerprint, _, _, reason string, _ time.Time) error {
+	f.blocked[fingerprint] = reason
+	return nil
+}
+
+// A 429 on one key must block that key and retry the call on the next key with
+// no backoff — the failover the key pool exists for.
+func TestBlockedKeyFailsOverImmediately(t *testing.T) {
+	var tried []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		key := r.Header.Get("x-goog-api-key")
+		tried = append(tried, key)
+		if key == "dead" {
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = w.Write([]byte(`{"error":{"code":429,"message":"quota exceeded"}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"candidates":[{"content":{"parts":[{"text":"{\"ok\":true}"}]}}]}`))
+	}))
+	defer srv.Close()
+
+	store := &fakeBlockStore{blocked: map[string]string{}}
+	c := NewRotatingClient(ProviderGoogle, []string{"dead", "alive"}, 0, "gemini-2.5-flash", "e", 768).
+		WithKeyBlocks(store, nil)
+	c.baseURL = srv.URL
+
+	start := time.Now()
+	out, err := c.Generate(context.Background(), "", "hi")
+	if err != nil {
+		t.Fatalf("Generate after failover: %v", err)
+	}
+	if out != `{"ok":true}` {
+		t.Errorf("Generate = %q, want the live key's response", out)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Errorf("failover took %v, want immediate (no backoff)", elapsed)
+	}
+	if len(tried) != 2 || tried[0] != "dead" || tried[1] != "alive" {
+		t.Errorf("keys tried = %v, want [dead alive]", tried)
+	}
+	if reason := store.blocked[Fingerprint("dead")]; reason == "" {
+		t.Errorf("dead key not persisted as blocked: %v", store.blocked)
+	}
+	if store.blocked[Fingerprint("alive")] != "" {
+		t.Error("live key must not be blocked")
+	}
+	// The block sticks: the next call skips the dead key entirely.
+	if got := c.apiKey(); got != "alive" {
+		t.Errorf("apiKey after block = %q, want alive", got)
+	}
+}
+
+func TestLiveKeysFallsBackWhenAllBlocked(t *testing.T) {
+	c := NewRotatingClient(ProviderGoogle, []string{"a", "b"}, time.Hour, "m", "e", 768)
+	c.blocked[Fingerprint("a")] = true
+	c.blocked[Fingerprint("b")] = true
+	if got := len(c.liveKeys()); got != 2 {
+		t.Errorf("liveKeys with all blocked = %d keys, want 2 (retry beats hard failure)", got)
 	}
 }
