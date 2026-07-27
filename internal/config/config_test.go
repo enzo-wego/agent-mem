@@ -36,6 +36,15 @@ func TestSplitKeysEmpty(t *testing.T) {
 	}
 }
 
+// A pasted pool (or the legacy AGENT_MEM_GOOGLE_API_KEY joining it) can repeat a
+// key; a duplicate would just get double the traffic.
+func TestSplitKeysDedupes(t *testing.T) {
+	got := SplitKeys("AIza-one\nAIza-two\nAIza-one")
+	if len(got) != 2 || got[0] != "AIza-one" || got[1] != "AIza-two" {
+		t.Errorf("SplitKeys = %v, want [AIza-one AIza-two]", got)
+	}
+}
+
 // A hyphen inside a key must not be read as a comment marker.
 func TestSplitKeysKeepsHyphensInsideKeys(t *testing.T) {
 	got := SplitKeys("AIzaSy--weird-key")
@@ -47,7 +56,6 @@ func TestSplitKeysKeepsHyphensInsideKeys(t *testing.T) {
 func TestActiveLLMKeysPrefersPoolOnGoogle(t *testing.T) {
 	snap := ConfigSnapshot{
 		LLMProvider:   "google",
-		GoogleAPIKey:  "single",
 		GoogleAPIKeys: "-- a\npool-one\npool-two",
 		GeminiAPIKey:  "sk-or-openrouter",
 	}
@@ -55,10 +63,10 @@ func TestActiveLLMKeysPrefersPoolOnGoogle(t *testing.T) {
 		t.Errorf("google pool = %v, want [pool-one pool-two]", got)
 	}
 
-	// Empty pool falls back to the single google key.
-	snap.GoogleAPIKeys = ""
-	if got := snap.ActiveLLMKeys(); len(got) != 1 || got[0] != "single" {
-		t.Errorf("google fallback = %v, want [single]", got)
+	// A single google key is just a pool of one.
+	snap.GoogleAPIKeys = "solo"
+	if got := snap.ActiveLLMKeys(); len(got) != 1 || got[0] != "solo" {
+		t.Errorf("one-key pool = %v, want [solo]", got)
 	}
 
 	// The pool is google-only; openrouter keeps its one key.

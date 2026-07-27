@@ -20,8 +20,6 @@ export function SettingsPage() {
   const [toast, setToast] = useState<{ type: 'ok' | 'err'; msg: string } | null>(null)
   const [showKey, setShowKey] = useState(false)
   const [newKey, setNewKey] = useState('')
-  const [showGoogleKey, setShowGoogleKey] = useState(false)
-  const [newGoogleKey, setNewGoogleKey] = useState('')
   const [newGoogleKeys, setNewGoogleKeys] = useState('')
   const [showAnthropicKey, setShowAnthropicKey] = useState(false)
   const [newAnthropicKey, setNewAnthropicKey] = useState('')
@@ -59,7 +57,7 @@ export function SettingsPage() {
 
       {/* Gemini */}
       <Section title="Gemini">
-        <Field label="Provider" hint="LLM backend for generation, describe, and embeddings. 'openrouter' (default) uses the OpenRouter key; 'google' uses the Google API key — the fallback when OpenRouter is out of quota. Observation extraction switches immediately; the graph pipeline picks up the new provider after a worker restart.">
+        <Field label="Provider" hint="LLM backend for generation, describe, and embeddings. 'openrouter' (default) uses the OpenRouter key; 'google' uses the Google key pool below — the fallback when OpenRouter is out of quota. Observation extraction switches immediately; the graph pipeline picks up the new provider after a worker restart.">
           <SelectField
             value={settings.llm_provider || 'openrouter'}
             options={PROVIDER_OPTIONS}
@@ -88,28 +86,7 @@ export function SettingsPage() {
             </button>
           </div>
         </Field>
-        <Field label="Google API Key" hint="Google AI Studio key (AIza…) from aistudio.google.com. Used when provider is 'google'. Pre-set it so failover is a one-click provider switch.">
-          <div className="flex gap-2">
-            <input
-              type={showGoogleKey ? 'text' : 'password'}
-              placeholder={settings.google_api_key || 'Not set'}
-              value={newGoogleKey}
-              onChange={(e) => setNewGoogleKey(e.target.value)}
-              className={inputCls}
-            />
-            <button onClick={() => setShowGoogleKey(!showGoogleKey)} className={btnSecondary}>
-              {showGoogleKey ? 'Hide' : 'Show'}
-            </button>
-            <button
-              disabled={saving || !newGoogleKey}
-              onClick={() => { save({ google_api_key: newGoogleKey }); setNewGoogleKey('') }}
-              className={btnPrimary}
-            >
-              Update Key
-            </button>
-          </div>
-        </Field>
-        <Field label="Google API Key Pool" hint="One AIza… key per line (commas also work). When non-empty this replaces the single key above on the 'google' provider: the client uses one key per rotation window to spread per-key quota, and a key that returns quota-exhausted / rejected is blocked in the DB and retried on the next key immediately. Saving replaces the whole pool.">
+        <Field label="Google API Key Pool" hint="One AIza… key per line (commas also work). Used when provider is 'google'. One key is fine; with several, the client uses one key per rotation window to spread per-key quota, and a key that returns quota-exhausted / rejected is blocked in the DB and retried on the next key immediately. Saving replaces the whole pool.">
           <div className="space-y-2">
             <textarea
               rows={4}

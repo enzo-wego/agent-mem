@@ -79,15 +79,13 @@ type Config struct {
 	GeminiEmbeddingDims  int    `json:"gemini_embedding_dims"`
 
 	// LLMProvider picks the gemini-client backend: "openrouter" (default; uses
-	// GeminiAPIKey/sk-or) or "google" (direct Gemini API; uses GoogleAPIKey/AIza).
+	// GeminiAPIKey/sk-or) or "google" (direct Gemini API; uses GoogleAPIKeys/AIza).
 	// Flip + restart the worker to fail over when OpenRouter is out of quota.
-	LLMProvider  string `json:"llm_provider"`
-	GoogleAPIKey string `json:"google_api_key"`
+	LLMProvider string `json:"llm_provider"`
 
-	// GoogleAPIKeys is an optional pool of AIza… keys (comma- or newline-separated)
-	// used on the google provider. The active key switches every
-	// LLMKeyRotateHours so per-key quota is spread across the pool; empty falls
-	// back to the single GoogleAPIKey.
+	// GoogleAPIKeys is the pool of AIza… keys (comma- or newline-separated) used
+	// on the google provider — one key is enough, a pool spreads per-key quota.
+	// The active key switches every LLMKeyRotateHours.
 	GoogleAPIKeys     string `json:"google_api_keys"`
 	LLMKeyRotateHours int    `json:"llm_key_rotate_hours"`
 
@@ -158,14 +156,11 @@ func (c *Config) LLMKeyRotateInterval() time.Duration { return c.Snapshot().LLMK
 func (s ConfigSnapshot) LLMProviderOrDefault() string { return normalizeProvider(s.LLMProvider) }
 
 // ActiveLLMKeys returns the key pool for the active provider: the
-// google_api_keys list (falling back to the single google_api_key) when provider
-// is google, else the OpenRouter key. Never contains empty strings.
+// google_api_keys list when provider is google, else the OpenRouter key. A
+// single google key is just a pool of one. Never contains empty strings.
 func (s ConfigSnapshot) ActiveLLMKeys() []string {
 	if normalizeProvider(s.LLMProvider) == "google" {
-		if keys := SplitKeys(s.GoogleAPIKeys); len(keys) > 0 {
-			return keys
-		}
-		return SplitKeys(s.GoogleAPIKey)
+		return SplitKeys(s.GoogleAPIKeys)
 	}
 	return SplitKeys(s.GeminiAPIKey)
 }
@@ -194,6 +189,7 @@ func (s ConfigSnapshot) LLMKeyRotateInterval() time.Duration {
 // comments are dropped: a label parsed as a key would be blocked on first use.
 func SplitKeys(s string) []string {
 	out := []string{}
+	seen := map[string]bool{}
 	for line := range strings.SplitSeq(s, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || isComment(line) {
@@ -210,7 +206,8 @@ func SplitKeys(s string) []string {
 			return r == ',' || r == '\r' || r == '\t' || r == ' ' || r == ';'
 		})
 		for _, f := range fields {
-			if f != "" && !isComment(f) {
+			if f != "" && !isComment(f) && !seen[f] {
+				seen[f] = true
 				out = append(out, f)
 			}
 		}
@@ -233,7 +230,6 @@ func (c *Config) RuntimeSettings() map[string]string {
 		"gemini_embedding_model": c.GeminiEmbeddingModel,
 		"gemini_embedding_dims":  strconv.Itoa(c.GeminiEmbeddingDims),
 		"llm_provider":           c.LLMProvider,
-		"google_api_key":         c.GoogleAPIKey,
 		"google_api_keys":        c.GoogleAPIKeys,
 		"llm_key_rotate_hours":   strconv.Itoa(c.LLMKeyRotateHours),
 		"anthropic_api_key":      c.AnthropicAPIKey,
@@ -276,8 +272,6 @@ func (c *Config) ApplyDBSettings(dbSettings map[string]string) {
 			}
 		case "llm_provider":
 			c.LLMProvider = v
-		case "google_api_key":
-			c.GoogleAPIKey = v
 		case "google_api_keys":
 			c.GoogleAPIKeys = v
 		case "llm_key_rotate_hours":
@@ -337,7 +331,6 @@ func (c *Config) snapshot() ConfigSnapshot {
 		GeminiEmbeddingModel: c.GeminiEmbeddingModel,
 		GeminiEmbeddingDims:  c.GeminiEmbeddingDims,
 		LLMProvider:          c.LLMProvider,
-		GoogleAPIKey:         c.GoogleAPIKey,
 		GoogleAPIKeys:        c.GoogleAPIKeys,
 		LLMKeyRotateHours:    c.LLMKeyRotateHours,
 		AnthropicAPIKey:      c.AnthropicAPIKey,
@@ -371,10 +364,9 @@ type ConfigSnapshot struct {
 	GeminiEmbeddingDims  int    `json:"gemini_embedding_dims"`
 
 	// LLMProvider picks the gemini-client backend: "openrouter" (default; uses
-	// GeminiAPIKey/sk-or) or "google" (direct Gemini API; uses GoogleAPIKey/AIza).
+	// GeminiAPIKey/sk-or) or "google" (direct Gemini API; uses GoogleAPIKeys/AIza).
 	// Flip + restart the worker to fail over when OpenRouter is out of quota.
 	LLMProvider         string      `json:"llm_provider"`
-	GoogleAPIKey        string      `json:"google_api_key"`
 	GoogleAPIKeys       string      `json:"google_api_keys"`
 	LLMKeyRotateHours   int         `json:"llm_key_rotate_hours"`
 	AnthropicAPIKey     string      `json:"anthropic_api_key"`
@@ -407,7 +399,6 @@ func (c *Config) Update(partial map[string]any) (geminiChanged bool) {
 	oldEmbModel := c.GeminiEmbeddingModel
 	oldEmbDims := c.GeminiEmbeddingDims
 	oldProvider := c.LLMProvider
-	oldGoogleKey := c.GoogleAPIKey
 	oldGoogleKeys := c.GoogleAPIKeys
 	oldRotateHours := c.LLMKeyRotateHours
 	oldAnthropicKey := c.AnthropicAPIKey
@@ -438,10 +429,6 @@ func (c *Config) Update(partial map[string]any) (geminiChanged bool) {
 		case "llm_provider":
 			if s, ok := v.(string); ok {
 				c.LLMProvider = s
-			}
-		case "google_api_key":
-			if s, ok := v.(string); ok {
-				c.GoogleAPIKey = s
 			}
 		case "google_api_keys":
 			if s, ok := v.(string); ok {
@@ -520,7 +507,6 @@ func (c *Config) Update(partial map[string]any) (geminiChanged bool) {
 		c.GeminiEmbeddingModel != oldEmbModel ||
 		c.GeminiEmbeddingDims != oldEmbDims ||
 		c.LLMProvider != oldProvider ||
-		c.GoogleAPIKey != oldGoogleKey ||
 		c.GoogleAPIKeys != oldGoogleKeys ||
 		c.LLMKeyRotateHours != oldRotateHours ||
 		c.AnthropicAPIKey != oldAnthropicKey ||
@@ -611,11 +597,12 @@ func ApplyEnv(cfg *Config) {
 	if v := os.Getenv("AGENT_MEM_LLM_PROVIDER"); v != "" {
 		cfg.LLMProvider = v
 	}
-	if v := os.Getenv("AGENT_MEM_GOOGLE_API_KEY"); v != "" {
-		cfg.GoogleAPIKey = v
-	}
 	if v := os.Getenv("AGENT_MEM_GOOGLE_API_KEYS"); v != "" {
 		cfg.GoogleAPIKeys = v
+	}
+	// Legacy single-key var: joins the pool (SplitKeys dedupes).
+	if v := os.Getenv("AGENT_MEM_GOOGLE_API_KEY"); v != "" {
+		cfg.GoogleAPIKeys = strings.TrimSpace(cfg.GoogleAPIKeys + "\n" + v)
 	}
 	if v := os.Getenv("AGENT_MEM_LLM_KEY_ROTATE_HOURS"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {

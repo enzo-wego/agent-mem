@@ -31,7 +31,6 @@ type settingsResponse struct {
 	GeminiEmbeddingModel string `json:"gemini_embedding_model"`
 	GeminiEmbeddingDims  int    `json:"gemini_embedding_dims"`
 	LLMProvider          string `json:"llm_provider"`
-	GoogleAPIKey         string `json:"google_api_key"`
 	GoogleAPIKeys        string `json:"google_api_keys"`
 	LLMKeyRotateHours    int    `json:"llm_key_rotate_hours"`
 	AnthropicAPIKey      string `json:"anthropic_api_key"`
@@ -85,7 +84,6 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, _ *http.Request) {
 		GeminiEmbeddingModel: snap.GeminiEmbeddingModel,
 		GeminiEmbeddingDims:  snap.GeminiEmbeddingDims,
 		LLMProvider:          snap.LLMProviderOrDefault(),
-		GoogleAPIKey:         maskKey(snap.GoogleAPIKey),
 		GoogleAPIKeys:        maskKeyList(snap.GoogleAPIKeys),
 		LLMKeyRotateHours:    snap.LLMKeyRotateHours,
 		AnthropicAPIKey:      maskKey(snap.AnthropicAPIKey),

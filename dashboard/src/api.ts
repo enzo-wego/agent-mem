@@ -230,7 +230,6 @@ export interface Settings {
   gemini_embedding_model: string;
   gemini_embedding_dims: number;
   llm_provider: string;
-  google_api_key: string;
   google_api_keys: string;
   llm_key_rotate_hours: number;
   anthropic_api_key: string;
