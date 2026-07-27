@@ -227,7 +227,12 @@ cases AS (
       SELECT 1 FROM jsonb_array_elements_text(e.metadata->'shared_ids') AS t(sid)
       WHERE ` + caseRefSQL + `)
 ),
+-- DISTINCT ON: one node can be a case-mate of SEVERAL confirmed partners (two
+-- threads about this case both confirmed), which would emit the same pair twice
+-- and make ON CONFLICT DO UPDATE fail with "cannot affect row a second time"
+-- (hit in production on the p9y0yhtbd5 thread). Strongest verdict wins.
 derived AS (
+  SELECT DISTINCT ON (a, b) a, b, meta FROM (
   SELECT LEAST($1, q) AS a, GREATEST($1, q) AS b,
          jsonb_build_object(
            'method', '` + casePropagationMethod + `',
@@ -240,6 +245,8 @@ derived AS (
          ) AS meta
   FROM cases
   WHERE q <> $1
+  ) d
+  ORDER BY a, b, (meta->>'confidence')::float8 DESC
 )`
 	// derived deliberately does NOT filter out pairs that already have an edge:
 	// both statements below run this same CTE, so a filter here would leave the

@@ -151,8 +151,10 @@ gemini-3.6-flash on this tier is unknown, hence the calibration step below.
 1. **Calibrate (≈30 min, ~600 calls).** Enqueue 20 roots one per minute:
 
    ```sql
-   INSERT INTO graph.jobs (type, payload, priority, max_attempts, target_runner, available_at)
+   -- machine_id is NOT NULL; borrow the runner that already owns link_topics jobs.
+   INSERT INTO graph.jobs (type, payload, priority, max_attempts, target_runner, machine_id, available_at)
    SELECT 'link_topics', jsonb_build_object('node_id', n.id), 9, 5, 'any',
+          (SELECT machine_id FROM graph.jobs WHERE type='link_topics' ORDER BY id DESC LIMIT 1),
           NOW() + (row_number() OVER (ORDER BY n.id) * interval '1 minute')
    FROM graph.nodes n
    JOIN graph.artifact_index ai ON ai.node_id = n.id

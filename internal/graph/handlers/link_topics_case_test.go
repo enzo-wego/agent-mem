@@ -154,6 +154,47 @@ WHERE source_node_id=LEAST($1,$2) AND target_node_id=GREATEST($1,$2)`, s, q).Sca
 	}
 }
 
+// TestPropagateCaseTopicsSharedCaseMate covers the shape that failed in
+// production: q is a case-mate of TWO confirmed partners, so the derived set
+// names the same pair twice and an un-deduped upsert dies with "ON CONFLICT DO
+// UPDATE command cannot affect row a second time".
+func TestPropagateCaseTopicsSharedCaseMate(t *testing.T) {
+	ctx := context.Background()
+	pool := caseTestDB(t)
+	deps := Deps{DB: pool, Logger: zerolog.Nop(), MachineID: "test"}
+
+	const (
+		s  = "slack:CT1:100"
+		p1 = "slack:CT2:200"
+		p2 = "slack:CT6:600"
+		q  = "slack:CT3:300"
+	)
+	for _, id := range []string{s, p1, p2, q} {
+		caseSeedNode(t, pool, id)
+	}
+	seedTopicEdge(t, pool, s, p1, `{"method":"cosine-shortlist + llm-confirm","confidence":0.9}`)
+	seedTopicEdge(t, pool, s, p2, `{"method":"cosine-shortlist + llm-confirm","confidence":0.95}`)
+	seedTopicEdge(t, pool, p1, q, `{"method":"shared-identifier + llm-confirm","confidence":1,"shared_ids":["p0yy6hmqdw"]}`)
+	seedTopicEdge(t, pool, p2, q, `{"method":"shared-identifier + llm-confirm","confidence":1,"shared_ids":["p0yy6hmqdw"]}`)
+
+	if err := propagateCaseTopics(ctx, deps, s); err != nil {
+		t.Fatalf("propagateCaseTopics with a shared case-mate: %v", err)
+	}
+	if method, ok := sameTopicEdgeMethod(t, pool, s, q); !ok || method != casePropagationMethod {
+		t.Errorf("s~q edge: method=%q ok=%v, want %q", method, ok, casePropagationMethod)
+	}
+	// The stronger partner's confidence is the one carried over.
+	var conf float64
+	if err := pool.QueryRow(ctx, `
+SELECT (metadata->>'confidence')::float8 FROM graph.edges
+WHERE kind='SAME_TOPIC' AND from_node_id=LEAST($1,$2) AND to_node_id=GREATEST($1,$2)`, s, q).Scan(&conf); err != nil {
+		t.Fatalf("read propagated confidence: %v", err)
+	}
+	if conf != 0.95 {
+		t.Errorf("propagated confidence = %v, want 0.95 (the stronger partner)", conf)
+	}
+}
+
 // TestPropagateCaseTopicsKeepsConfirmedVerdicts checks the guard on the
 // judgment upsert: propagation fills gaps and overwrites refusals, never a
 // verdict the judge already confirmed with its own reasoning.
