@@ -189,18 +189,37 @@ func (s ConfigSnapshot) LLMKeyRotateInterval() time.Duration {
 }
 
 // SplitKeys parses a key list written with commas, newlines, or spaces between
-// entries — whatever the operator pasted into the dashboard.
+// entries — whatever the operator pasted into the dashboard. Key pools are
+// usually kept labelled ("-- n8n key" above each key), so `#`, `--` and `//`
+// comments are dropped: a label parsed as a key would be blocked on first use.
 func SplitKeys(s string) []string {
-	fields := strings.FieldsFunc(s, func(r rune) bool {
-		return r == ',' || r == '\n' || r == '\r' || r == '\t' || r == ' ' || r == ';'
-	})
-	out := make([]string, 0, len(fields))
-	for _, f := range fields {
-		if f != "" {
-			out = append(out, f)
+	out := []string{}
+	for line := range strings.SplitSeq(s, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || isComment(line) {
+			continue
+		}
+		// Trailing comment on a key line ("AIza… # personal"). The leading space
+		// keeps a "-" inside a key from being mistaken for a comment marker.
+		for _, marker := range []string{" #", " --", " //"} {
+			if i := strings.Index(line, marker); i >= 0 {
+				line = line[:i]
+			}
+		}
+		fields := strings.FieldsFunc(line, func(r rune) bool {
+			return r == ',' || r == '\r' || r == '\t' || r == ' ' || r == ';'
+		})
+		for _, f := range fields {
+			if f != "" && !isComment(f) {
+				out = append(out, f)
+			}
 		}
 	}
 	return out
+}
+
+func isComment(s string) bool {
+	return strings.HasPrefix(s, "#") || strings.HasPrefix(s, "--") || strings.HasPrefix(s, "//")
 }
 
 // RuntimeSettings returns the runtime settings as a string map for DB storage.
