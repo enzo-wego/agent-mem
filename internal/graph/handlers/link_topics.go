@@ -166,8 +166,117 @@ func linkTopicsHandler(deps Deps) jobs.Handler {
 				return deleteSameTopicEdge(gctx, deps, from, to)
 			})
 		}
-		return g.Wait()
+		if err := g.Wait(); err != nil {
+			return err
+		}
+		return propagateCaseTopics(ctx, deps, source.NodeID)
 	}
+}
+
+// caseRefSQL matches identifiers that name ONE concrete case: payment/source/
+// dispute refs (p·s·d + 9 chars, at least one digit), action refs (a + 14) and
+// request UUIDs. Jira keys and PR refs are deliberately excluded — tie-breaker
+// #2 counts a ticket only when BOTH artifacts substantively discuss it, and
+// stand-ups quote ticket ids in passing.
+const caseRefSQL = `(sid ~ '^[psd][0-9b-oqrt-z]{9}$' AND sid ~ '[0-9]')
+  OR sid ~ '^a[0-9b-oqrt-z]{14}$'
+  OR sid ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'`
+
+// casePropagationMethod marks edges derived by propagateCaseTopics rather than
+// judged directly. Propagation never chains off its own output (one hop only)
+// and existingSameTopicCandidates skips these partners — re-judging a pair the
+// rule re-derives anyway just burns a judge call.
+const casePropagationMethod = "case-propagation"
+
+// casePropagatedHash marks a judgment row the LLM never saw for this pair. It
+// can never equal a real content hash, so the next run re-judges the pair and
+// propagation re-applies afterwards — the end state of a run is consistent
+// whichever way the pairwise judge went.
+const casePropagatedHash = "case-propagated"
+
+// propagateCaseTopics closes the triangle the pairwise judge cannot see: two
+// threads joined by a shared payment/order reference are ONE case (rules
+// tie-breaker #1, "these identify one concrete case"), so a topic verdict
+// against either of them holds for both. Without this the judge contradicts
+// itself — verified on slack:C048WV1BZTK:1784600389.693489, where in one run it
+// confirmed the #ext-wego-juspay thread for order p0yy6hmqdw and refused the
+// #payments-team thread for the SAME order, which were themselves linked at
+// confidence 1.0.
+//
+// Deterministic, no LLM call. Only fills gaps: a directly judged edge keeps its
+// own metadata, and a stored verdict is overwritten only when it says DIFFERENT.
+func propagateCaseTopics(ctx context.Context, deps Deps, nodeID string) error {
+	const casesCTE = `
+WITH confirmed AS (
+  SELECT CASE WHEN e.from_node_id=$1 THEN e.to_node_id ELSE e.from_node_id END AS p,
+         e.metadata AS meta
+  FROM graph.edges e
+  WHERE e.kind='SAME_TOPIC' AND $1 IN (e.from_node_id, e.to_node_id)
+    AND COALESCE(e.metadata->>'method','') <> '` + casePropagationMethod + `'
+),
+cases AS (
+  SELECT c.p,
+         CASE WHEN e.from_node_id=c.p THEN e.to_node_id ELSE e.from_node_id END AS q,
+         c.meta,
+         e.metadata->>'shared_ids' AS shared
+  FROM confirmed c
+  JOIN graph.edges e ON e.kind='SAME_TOPIC' AND c.p IN (e.from_node_id, e.to_node_id)
+  WHERE e.metadata->>'method' = 'shared-identifier + llm-confirm'
+    AND COALESCE(NULLIF(e.metadata->>'confidence','')::float8, 0) >= 0.9
+    AND EXISTS (
+      SELECT 1 FROM jsonb_array_elements_text(e.metadata->'shared_ids') AS t(sid)
+      WHERE ` + caseRefSQL + `)
+),
+derived AS (
+  SELECT LEAST($1, q) AS a, GREATEST($1, q) AS b,
+         jsonb_build_object(
+           'method', '` + casePropagationMethod + `',
+           'confidence', COALESCE(NULLIF(meta->>'confidence','')::float8, 0.9),
+           'tag', COALESCE(meta->>'tag',''),
+           'topic', COALESCE(meta->>'topic',''),
+           'via', p,
+           'why', 'Same concrete case as ' || p || ' (shared ' || COALESCE(shared,'identifier') ||
+                  '), which is confirmed same topic as this thread.'
+         ) AS meta
+  FROM cases
+  WHERE q <> $1
+)`
+	// derived deliberately does NOT filter out pairs that already have an edge:
+	// both statements below run this same CTE, so a filter here would leave the
+	// judgment upsert nothing to do once the edge insert had run. Each statement
+	// carries its own guard instead — DO NOTHING keeps a directly judged edge's
+	// metadata, and the judgment upsert only overwrites a DIFFERENT verdict.
+
+	if _, err := deps.DB.Exec(ctx, casesCTE+`
+INSERT INTO graph.edges (from_node_id, to_node_id, kind, metadata, machine_id)
+SELECT a, b, 'SAME_TOPIC', meta, $2 FROM derived
+ON CONFLICT (from_node_id, to_node_id, kind) DO NOTHING`,
+		nodeID, deps.MachineID); err != nil {
+		return err
+	}
+
+	// The panel and every other reader take the verdict from the judgment table,
+	// not the edge — so a propagated link that leaves a stale DIFFERENT row would
+	// still render as ✕ refused.
+	_, err := deps.DB.Exec(ctx, casesCTE+`
+INSERT INTO graph.topic_link_judgments
+  (source_node_id, target_node_id, content_hash, same_topic, confidence, tag, topic, why, judged_at, machine_id)
+SELECT a, b, '`+casePropagatedHash+`', TRUE,
+       COALESCE(NULLIF(meta->>'confidence','')::float8, 0.9),
+       COALESCE(meta->>'tag',''), COALESCE(meta->>'topic',''), COALESCE(meta->>'why',''), NOW(), $2
+FROM derived
+ON CONFLICT (source_node_id, target_node_id) DO UPDATE SET
+  content_hash=EXCLUDED.content_hash,
+  same_topic=TRUE,
+  confidence=EXCLUDED.confidence,
+  tag=EXCLUDED.tag,
+  topic=EXCLUDED.topic,
+  why=EXCLUDED.why,
+  judged_at=NOW(),
+  machine_id=EXCLUDED.machine_id
+WHERE NOT graph.topic_link_judgments.same_topic`,
+		nodeID, deps.MachineID)
+	return err
 }
 
 func loadTopicLinkSource(ctx context.Context, deps Deps, nodeID string) (topicLinkNode, error) {
@@ -301,7 +410,8 @@ func existingSameTopicCandidates(ctx context.Context, deps Deps, nodeID string) 
 	rows, err := deps.DB.Query(ctx, `
 SELECT CASE WHEN from_node_id=$1 THEN to_node_id ELSE from_node_id END
 FROM graph.edges
-WHERE kind='SAME_TOPIC' AND (from_node_id=$1 OR to_node_id=$1)`, nodeID)
+WHERE kind='SAME_TOPIC' AND (from_node_id=$1 OR to_node_id=$1)
+  AND COALESCE(metadata->>'method','') <> '`+casePropagationMethod+`'`, nodeID)
 	if err != nil {
 		return nil, err
 	}

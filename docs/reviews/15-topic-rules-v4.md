@@ -200,6 +200,45 @@ zero recall. Row 4's confirmed edge disappears under v3 too. It is legitimate
 to hold the backfill entirely and let v4 apply lazily as threads are re-indexed
 or opened — the mixed-rules window costs nothing but consistency.
 
+## Case propagation — the intransitive triangle (fixed)
+
+After v4 shipped, the popup showed the contradiction directly. Three verdicts,
+all in `graph.topic_link_judgments`:
+
+| pair | verdict | conf | judged |
+|---|---|---|---|
+| `C05RNSE8TBR:1785131494` ↔ `C0736FUE03W:1785132442` | same | 1.00 | "exact same payment order ID (p0yy6hmqdw)" |
+| root ↔ `C0736FUE03W:1785132442` | same | 0.90 | v4 sibling-cases rule |
+| root ↔ `C05RNSE8TBR:1785131494` | different | 0.90 | "different payment IDs" |
+
+Two threads about ONE order, linked to each other at confidence 1.00 by
+`shared-identifier + llm-confirm`, and the judge put one inside the root's topic
+and the other outside — in the same run. Each pair is judged in isolation, so
+nothing enforces transitivity.
+
+`propagateCaseTopics` (link_topics.go) closes it deterministically, no LLM call:
+a confirmed verdict propagates across edges whose method is
+`shared-identifier + llm-confirm` and whose `shared_ids` contain a
+payment/source/dispute ref, an action ref, or a request UUID — the identifiers
+tie-breaker #1 calls "one concrete case". Jira keys and PR refs are excluded on
+purpose (tie-breaker #2). One hop only: the source's confirmed partners exclude
+propagated edges, so propagation never chains off its own output.
+
+Guards, both covered by `link_topics_case_test.go`:
+
+- edge insert is `ON CONFLICT DO NOTHING` — a directly judged edge keeps its own
+  metadata and confidence;
+- judgment upsert only overwrites rows where `NOT same_topic` — a verdict the
+  judge confirmed with its own reasoning is never rewritten;
+- the shared CTE deliberately does not filter existing edges: both statements
+  run it, so filtering there would leave the judgment upsert nothing to do once
+  the edge insert had run (caught by the test on first run).
+
+The judgment row is written with `content_hash = 'case-propagated'`, which can
+never equal a real hash — the pair is re-judged on the next run and propagation
+re-applies after, so the end state of any run is consistent whichever way the
+pairwise judge went.
+
 ## Next — what would actually fix rows 7/8
 
 Rules wording is spent: both rows are 0/3 under v3 and v4. The judge sees two
