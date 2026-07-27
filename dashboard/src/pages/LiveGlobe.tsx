@@ -343,7 +343,20 @@ interface NeighborGroup {
   label: string
   order: number
   items: GraphNeighbor[]
+  // band annotates the not-confirmed sections with their similarity range,
+  // rendered after the count ("Not confirmed · 2 (85%+)").
+  band?: string
 }
+
+// Not-confirmed rows split by wording similarity. The 85%+ band is where a
+// wrong refusal is most likely — two threads about the same defect on a
+// different payment were refused at ·86 and ·85 — so it opens by default. The
+// rest is audit trail: judged, different, rarely worth reading. A refused row
+// with no cosine (a THREAD or REFERENCES row) joins the strong band, since a
+// structural link outranks a wording one.
+const NOT_CONFIRMED = 'Not confirmed'
+const NOT_CONFIRMED_WEAK = 'Not confirmed · weak'
+const strongCosine = 0.85
 
 // slackThreadKey identifies which Slack thread a row belongs to. Thread ROOT
 // nodes carry no thread_ts metadata (it lives only on replies), so fall back
@@ -417,11 +430,18 @@ function groupNeighbors(neighbors: GraphNeighbor[]): NeighborGroup[] {
     // THREAD — the verdict decides the section, not the edge kind: a hop-2
     // SAME_TOPIC edge refused against the opened thread is not a relationship
     // of this view. Threads sort before Jira/PRs.
+    let band: string | undefined
     if (n.node.type === 'slack' || n.node.type === 'slack_thread') {
       const k = n.edge.kind.toUpperCase()
+      // A row with no cosine (refused THREAD/REFERENCES) counts as strong.
+      const weak = (n.edge.score ?? 1) < strongCosine
+      const notConfirmed = () => {
+        label = weak ? NOT_CONFIRMED_WEAK : NOT_CONFIRMED
+        order = weak ? 98.5 : 98
+        band = weak ? `< ${Math.round(strongCosine * 100)}%` : `${Math.round(strongCosine * 100)}%+`
+      }
       if (n.edge.verdict === 'refused') {
-        label = 'Not confirmed'
-        order = 98
+        notConfirmed()
       } else if (n.edge.verdict === 'confirmed' || k === 'SAME_TOPIC') {
         label = 'Confirmed same topic'
         order = -3
@@ -429,15 +449,14 @@ function groupNeighbors(neighbors: GraphNeighbor[]): NeighborGroup[] {
         label = 'Referenced threads (pasted link)'
         order = -2
       } else if (k === 'SIMILAR') {
-        label = 'Not confirmed'
-        order = 98
+        notConfirmed()
       } else {
         order = -1
       }
     }
     let g = byLabel.get(label)
     if (!g) {
-      g = { label, order, items: [] }
+      g = { label, order, items: [], band }
       byLabel.set(label, g)
     }
     g.items.push(n)
@@ -896,9 +915,15 @@ export function LiveGlobePage() {
   const [graphView, setGraphView] = useState<'summary' | 'timeline' | 'diagram'>('summary')
   // Expanded neighbor row (single-open accordion): summary + why-related + source link.
   const [expandedNbr, setExpandedNbr] = useState<string | null>(null)
-  // Similar-wording candidates are audit trail, not relationships — collapsed
-  // by default so the panel shows only confirmed/explicit links.
-  const [showSimilar, setShowSimilar] = useState(false)
+  // Collapsed not-confirmed sections, by group label. The 85%+ band stays open
+  // (near-misses are worth auditing); the weak band is audit trail.
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set([NOT_CONFIRMED_WEAK]))
+  const toggleCollapsed = (label: string) =>
+    setCollapsed((prev) => {
+      const next = new Set(prev)
+      next.has(label) ? next.delete(label) : next.add(label)
+      return next
+    })
   // node_id → its row element in the Timeline tab, so a timeline dot can scroll
   // to its matching row.
   const rowRefs = useRef<Map<string, HTMLDivElement>>(new Map())
@@ -3743,7 +3768,9 @@ export function LiveGlobePage() {
                   }
                 }
                 const shownGroups = groups.filter((g) => g.items.length > 0)
-                const isSimilarGroup = (g: NeighborGroup) => g.label === 'Not confirmed'
+                const isSimilarGroup = (g: NeighborGroup) =>
+                  g.label === NOT_CONFIRMED || g.label === NOT_CONFIRMED_WEAK
+                const isHidden = (g: NeighborGroup) => isSimilarGroup(g) && collapsed.has(g.label)
                 // Row numbers follow display order (group by group) and repeat on
                 // the timeline dots, so a dot can be matched to its row. Collapsed
                 // similar-wording rows get no numbers and no dots.
@@ -3751,12 +3778,12 @@ export function LiveGlobePage() {
                 if (pinned) rowNo.set(pinned.node.node_id, 0)
                 let nextNo = 1
                 for (const g of shownGroups) {
-                  if (isSimilarGroup(g) && !showSimilar) continue
+                  if (isHidden(g)) continue
                   for (const n of g.items) rowNo.set(n.node.node_id, nextNo++)
                 }
                 const tlNeighbors = [
                   ...(pinned ? [pinned] : []),
-                  ...shownGroups.filter((g) => showSimilar || !isSimilarGroup(g)).flatMap((g) => g.items),
+                  ...shownGroups.filter((g) => !isHidden(g)).flatMap((g) => g.items),
                 ]
                 // One row for the pinned thread and every ranked match. Click
                 // expands in place (summary + why-related + source link);
@@ -3977,17 +4004,19 @@ export function LiveGlobePage() {
                     {pinned && renderRow(pinned, true)}
                     {shownGroups.map((g) => {
                       const similar = isSimilarGroup(g)
-                      const hidden = similar && !showSimilar
+                      const hidden = isHidden(g)
                       const checking = g.items.filter((n) => !n.edge.verdict || n.edge.verdict === 'unchecked').length
                       return (
                         <div key={g.label} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                           <div
                             role={similar ? 'button' : undefined}
-                            onClick={similar ? () => setShowSimilar(!showSimilar) : undefined}
+                            onClick={similar ? () => toggleCollapsed(g.label) : undefined}
                             title={
-                              similar
-                                ? 'Threads the rules judge checked and rejected against the opened thread, plus unjudged wording-similarity candidates (audit trail). Click to show or hide.'
-                                : undefined
+                              !similar
+                                ? undefined
+                                : g.label === NOT_CONFIRMED
+                                  ? 'Near-misses: wording 85% or more similar to the opened thread, but the rules judge said different topic. A wrong refusal is most likely here — worth a read. Click to show or hide.'
+                                  : 'Audit trail: under 85% wording similarity, judged different topic. Rarely worth reading. Click to show or hide.'
                             }
                             style={{
                               display: 'flex',
@@ -4000,8 +4029,11 @@ export function LiveGlobePage() {
                               cursor: similar ? 'pointer' : 'default',
                             }}
                           >
-                            <span>{g.label}</span>
-                            <span style={{ color: C.dim, opacity: 0.7 }}>· {g.items.length}</span>
+                            <span>{similar ? NOT_CONFIRMED : g.label}</span>
+                            <span style={{ color: C.dim, opacity: 0.7 }}>
+                              · {g.items.length}
+                              {g.band ? ` (${g.band})` : ''}
+                            </span>
                             {similar && (
                               <span style={{ color: C.dim, opacity: 0.7 }}>
                                 {hidden
