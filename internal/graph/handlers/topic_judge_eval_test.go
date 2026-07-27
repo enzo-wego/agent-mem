@@ -3,7 +3,9 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
+	"strconv"
 	"testing"
 
 	"github.com/rs/zerolog"
@@ -75,7 +77,17 @@ func TestTopicJudgeGolden(t *testing.T) {
 			cfg.GeminiModel, cfg.GeminiEmbeddingModel, cfg.GeminiEmbeddingDims), nil),
 	}
 
-	t.Logf("rules version %d", loadedTopicRules.Version)
+	// The judge is a sampled LLM: a single run mistakes sampling noise for a
+	// rules improvement (verified — one v4 run scored 7/9, two more scored 6/9).
+	// Vote each pair runs times and take the majority.
+	runs := 3
+	if v := os.Getenv("AGENT_MEM_EVAL_RUNS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			runs = n
+		}
+	}
+
+	t.Logf("rules version %d, %d vote(s) per pair", loadedTopicRules.Version, runs)
 	var correct, falseNeg, falsePos int
 	for _, p := range pairs {
 		src, err := loadTopicLinkSource(ctx, deps, p.A)
@@ -92,36 +104,49 @@ func TestTopicJudgeGolden(t *testing.T) {
 		bStart, bEnd, bOK := nodeActivityWindow(ctx, deps, p.B)
 		timeDesc, _ := timeRelation(aStart, aEnd, aOK, bStart, bEnd, bOK)
 
-		j, err := confirmTopicLink(ctx, deps, src, topicLinkCandidate{
-			topicLinkNode: cnd,
-			Cosine:        pairCosine(ctx, deps, p.A, p.B),
-		}, topicLinkContext{
-			SourceWindow: formatWindow(aStart, aEnd, aOK),
-			CandWindow:   formatWindow(bStart, bEnd, bOK),
-			TimeDesc:     timeDesc,
-		})
-		if err != nil {
-			t.Errorf("judge %s ↔ %s: %v", p.A, p.B, err)
+		sameVotes, failed := 0, false
+		var last topicLinkJudgment
+		for i := 0; i < runs; i++ {
+			j, err := confirmTopicLink(ctx, deps, src, topicLinkCandidate{
+				topicLinkNode: cnd,
+				Cosine:        pairCosine(ctx, deps, p.A, p.B),
+			}, topicLinkContext{
+				SourceWindow: formatWindow(aStart, aEnd, aOK),
+				CandWindow:   formatWindow(bStart, bEnd, bOK),
+				TimeDesc:     timeDesc,
+			})
+			if err != nil {
+				t.Errorf("judge %s ↔ %s: %v", p.A, p.B, err)
+				failed = true
+				break
+			}
+			if j.SameTopic {
+				sameVotes++
+			}
+			last = j
+		}
+		if failed {
 			continue
 		}
 		got := "different"
-		if j.SameTopic {
+		if sameVotes*2 > runs {
 			got = "same"
 		}
+		vote := fmt.Sprintf("%d/%d same", sameVotes, runs)
 		switch {
 		case got == p.Want:
 			correct++
-			t.Logf("ok    %-9s %s ↔ %s  [%s] %s", got, p.A, p.B, j.Tag, j.Why)
+			t.Logf("ok    %-9s (%s) %s ↔ %s  [%s] %s", got, vote, p.A, p.B, last.Tag, last.Why)
 		case p.Want == "same":
 			falseNeg++
-			t.Logf("MISS  want same, got different  %s ↔ %s  [%s] %s", p.A, p.B, j.Tag, j.Why)
+			t.Logf("MISS  want same, got different (%s)  %s ↔ %s  [%s] %s", vote, p.A, p.B, last.Tag, last.Why)
 		default:
 			falsePos++
-			t.Logf("WRONG want different, got same  %s ↔ %s  [%s] %s", p.A, p.B, j.Tag, j.Why)
+			t.Logf("WRONG want different, got same (%s)  %s ↔ %s  [%s] %s", vote, p.A, p.B, last.Tag, last.Why)
 		}
 	}
-	t.Logf("rules v%d: %d/%d correct — %d false negatives, %d false positives",
-		loadedTopicRules.Version, correct, len(pairs), falseNeg, falsePos)
+	t.Logf("rules v%d (%d votes/pair): %d/%d correct — %d false negatives, %d false positives",
+		loadedTopicRules.Version, runs, correct, len(pairs), falseNeg, falsePos)
 }
 
 // pairCosine returns the summary-embedding cosine between two indexed nodes
