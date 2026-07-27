@@ -174,13 +174,26 @@ func linkTopicsHandler(deps Deps) jobs.Handler {
 }
 
 // caseRefSQL matches identifiers that name ONE concrete case: payment/source/
-// dispute refs (p·s·d + 9 chars, at least one digit), action refs (a + 14) and
-// request UUIDs. Jira keys and PR refs are deliberately excluded — tie-breaker
-// #2 counts a ticket only when BOTH artifacts substantively discuss it, and
-// stand-ups quote ticket ids in passing.
-const caseRefSQL = `(sid ~ '^[psd][0-9b-oqrt-z]{9}$' AND sid ~ '[0-9]')
-  OR sid ~ '^a[0-9b-oqrt-z]{14}$'
-  OR sid ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'`
+// dispute refs (p·s·d + 9 chars, at least one digit) and action refs (a + 14).
+// Stricter than extractIdentifiers on purpose — propagation OVERRIDES a judge
+// verdict, so it takes precision over recall:
+//
+//   - Jira keys and PR refs are excluded (tie-breaker #2: stand-ups and release
+//     lists quote ticket ids in passing).
+//   - Request UUIDs are excluded. The pattern is sanctioned by tie-breaker #1,
+//     but in this corpus 4 such ids spanned 51 pairs — session/artifact ids, not
+//     cases (one linked a node titled "Claude Artifact" to a PWA service-worker
+//     PR). Rarity capping does not help: 3 of the 4 sit under the cap.
+//   - A word with a trailing counter is refused. "scheduler1" is a legal
+//     payment-ref shape (s + 9 body chars + a digit) and reached production as a
+//     shared identifier. Digit-count thresholds cannot separate these: the
+//     verified real ref pxx6xgkdtl also carries a single digit.
+//
+// ponytail: the word-plus-counter guard covers the observed class only. The real
+// fix is in extractIdentifiers, which needs re-indexing to change — see the bead.
+const caseRefSQL = `(sid ~ '^[psd][0-9b-oqrt-z]{9}$' AND sid ~ '[0-9]'
+     AND sid !~ '^[psd][a-z]{8}[0-9]$')
+  OR sid ~ '^a[0-9b-oqrt-z]{14}$'`
 
 // casePropagationMethod marks edges derived by propagateCaseTopics rather than
 // judged directly. Propagation never chains off its own output (one hop only)

@@ -140,6 +140,26 @@ WHERE source_node_id=LEAST($1,$2) AND target_node_id=GREATEST($1,$2)`, s, q).Sca
 		t.Errorf("s~r edge created via a shared Jira key (method=%q); tickets are not cases", method)
 	}
 
+	// Identifier shapes that reached production but name no case: a session/
+	// artifact UUID, and an English word carrying a trailing counter that happens
+	// to satisfy the payment-ref charset.
+	for _, bad := range []struct {
+		node, id string
+	}{
+		{"slack:CT7:700", "3e9a0bee-319c-422c-ae50-3509ad253159"},
+		{"slack:CT8:800", "scheduler1"},
+	} {
+		caseSeedNode(t, pool, bad.node)
+		seedTopicEdge(t, pool, p, bad.node,
+			`{"method":"shared-identifier + llm-confirm","confidence":1,"shared_ids":["`+bad.id+`"]}`)
+		if err := propagateCaseTopics(ctx, deps, s); err != nil {
+			t.Fatalf("propagateCaseTopics with shared id %q: %v", bad.id, err)
+		}
+		if method, ok := sameTopicEdgeMethod(t, pool, s, bad.node); ok {
+			t.Errorf("propagated across shared id %q (method=%q); that names no concrete case", bad.id, method)
+		}
+	}
+
 	// One hop only: a second pass must not chain off its own output.
 	if err := propagateCaseTopics(ctx, deps, s); err != nil {
 		t.Fatalf("propagateCaseTopics (second pass): %v", err)
