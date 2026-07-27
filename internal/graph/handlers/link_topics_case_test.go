@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -17,7 +18,7 @@ func caseTestDB(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {
-		t.Skip("DATABASE_URL not set; skipping case-propagation integration test")
+		t.Skip("DATABASE_URL not set; skipping case-candidate integration test")
 	}
 	ctx := context.Background()
 	pool, err := pgxpool.New(ctx, dsn)
@@ -30,6 +31,7 @@ func caseTestDB(t *testing.T) *pgxpool.Pool {
 	}
 	clean := func() {
 		pool.Exec(ctx, `DELETE FROM graph.topic_link_judgments WHERE source_node_id LIKE 'slack:CT%' OR target_node_id LIKE 'slack:CT%'`)
+		pool.Exec(ctx, `DELETE FROM graph.artifact_index WHERE node_id LIKE 'slack:CT%'`)
 		pool.Exec(ctx, `DELETE FROM graph.edges WHERE from_node_id LIKE 'slack:CT%' OR to_node_id LIKE 'slack:CT%'`)
 		pool.Exec(ctx, `DELETE FROM graph.nodes WHERE id LIKE 'slack:CT%'`)
 	}
@@ -41,18 +43,25 @@ func caseTestDB(t *testing.T) *pgxpool.Pool {
 	return pool
 }
 
-func caseSeedNode(t *testing.T, pool *pgxpool.Pool, id string) {
+// caseSeedThread seeds a thread root with an indexed summary, since candidate
+// generators require a thread_summary of at least 40 characters.
+func caseSeedThread(t *testing.T, pool *pgxpool.Pool, id string) {
 	t.Helper()
-	if _, err := pool.Exec(context.Background(), `
-INSERT INTO graph.nodes (id, type, natural_key, title, machine_id)
-VALUES ($1, 'slack_thread', $1, $1, 'test')
+	ctx := context.Background()
+	if _, err := pool.Exec(ctx, `
+INSERT INTO graph.nodes (id, type, natural_key, title, scope, machine_id)
+VALUES ($1, 'slack_thread', $1, $1, 'slack:' || split_part($1,':',2), 'test')
 ON CONFLICT (id) DO NOTHING`, id); err != nil {
-		t.Fatalf("caseSeedNode %s: %v", id, err)
+		t.Fatalf("seed node %s: %v", id, err)
+	}
+	if _, err := pool.Exec(ctx, `
+INSERT INTO graph.artifact_index (node_id, summary, summary_kind, identifiers, refreshed_at, machine_id)
+VALUES ($1, 'A summary long enough to clear the forty character substance floor.', 'thread_summary', '{}', NOW(), 'test')
+ON CONFLICT (node_id) DO NOTHING`, id); err != nil {
+		t.Fatalf("seed artifact_index %s: %v", id, err)
 	}
 }
 
-// seedTopicEdge inserts a SAME_TOPIC edge carrying the metadata the linker
-// writes (method / confidence / shared_ids), which is what propagation reads.
 func seedTopicEdge(t *testing.T, pool *pgxpool.Pool, from, to, meta string) {
 	t.Helper()
 	if _, err := pool.Exec(context.Background(), `
@@ -64,121 +73,72 @@ ON CONFLICT (from_node_id, to_node_id, kind) DO UPDATE SET metadata=EXCLUDED.met
 	}
 }
 
-func sameTopicEdgeMethod(t *testing.T, pool *pgxpool.Pool, a, b string) (string, bool) {
-	t.Helper()
-	var method string
-	err := pool.QueryRow(context.Background(), `
-SELECT COALESCE(metadata->>'method','')
-FROM graph.edges
-WHERE kind='SAME_TOPIC' AND from_node_id=LEAST($1,$2) AND to_node_id=GREATEST($1,$2)`,
-		a, b).Scan(&method)
-	if err != nil {
-		return "", false
+func caseMateIDs(cands []topicLinkCandidate) map[string][]string {
+	out := map[string][]string{}
+	for _, c := range cands {
+		out[c.NodeID] = c.CaseIDs
 	}
-	return method, true
+	return out
 }
 
-// TestPropagateCaseTopics covers the triangle the pairwise judge cannot see:
-// two threads about ONE payment are one case, so a verdict against either holds
-// for both. Verified against production, where the judge confirmed the
+// TestCaseMateCandidates covers the triangle the pairwise judge cannot see —
+// verified on slack:C048WV1BZTK:1784600389.693489, where one run confirmed the
 // #ext-wego-juspay thread for order p0yy6hmqdw and refused the #payments-team
-// thread for the same order in the same run.
-func TestPropagateCaseTopics(t *testing.T) {
+// thread for the SAME order, while those two were linked at confidence 1.0 —
+// and the identifier shapes that must NOT nominate.
+func TestCaseMateCandidates(t *testing.T) {
 	ctx := context.Background()
 	pool := caseTestDB(t)
-	t.Cleanup(func() {
-		pool.Exec(ctx, `DELETE FROM graph.topic_link_judgments WHERE source_node_id LIKE 'slack:CT%' OR target_node_id LIKE 'slack:CT%'`)
-	})
 	deps := Deps{DB: pool, Logger: zerolog.Nop(), MachineID: "test"}
 
-	// s ── judged same ── p ── same case (p0yy6hmqdw) ── q   → propagate s~q
-	//                      p ── shared PAY ticket ────── r   → must NOT propagate
-	//                                                    q ── same case ── u
-	//                                                        → must NOT chain from the propagated s~q
 	const (
-		s = "slack:CT1:100"
-		p = "slack:CT2:200"
-		q = "slack:CT3:300"
-		r = "slack:CT4:400"
-		u = "slack:CT5:500"
+		s    = "slack:CT1:100" // the source
+		p    = "slack:CT2:200" // confirmed same topic as s
+		q    = "slack:CT3:300" // same case as p, via a payment ref  → nominate
+		tkt  = "slack:CT4:400" // shares a Jira key with p           → no
+		uuid = "slack:CT5:500" // shares a session UUID with p       → no
+		word = "slack:CT6:600" // shares "scheduler1" with p         → no
+		weak = "slack:CT7:700" // same case as p but low confidence  → no
 	)
-	for _, id := range []string{s, p, q, r, u} {
-		caseSeedNode(t, pool, id)
+	for _, id := range []string{s, p, q, tkt, uuid, word, weak} {
+		caseSeedThread(t, pool, id)
 	}
-	seedTopicEdge(t, pool, s, p, `{"method":"cosine-shortlist + llm-confirm","confidence":0.9,"tag":"bug_incident","topic":"Duplicate refund records"}`)
+	seedTopicEdge(t, pool, s, p, `{"method":"cosine-shortlist + llm-confirm","confidence":0.9}`)
 	seedTopicEdge(t, pool, p, q, `{"method":"shared-identifier + llm-confirm","confidence":1,"shared_ids":["p0yy6hmqdw"]}`)
-	seedTopicEdge(t, pool, p, r, `{"method":"shared-identifier + llm-confirm","confidence":1,"shared_ids":["PAY-2255"]}`)
-	seedTopicEdge(t, pool, q, u, `{"method":"shared-identifier + llm-confirm","confidence":1,"shared_ids":["p0yy6hmqdw"]}`)
+	seedTopicEdge(t, pool, p, tkt, `{"method":"shared-identifier + llm-confirm","confidence":1,"shared_ids":["PAY-2255"]}`)
+	seedTopicEdge(t, pool, p, uuid, `{"method":"shared-identifier + llm-confirm","confidence":1,"shared_ids":["3e9a0bee-319c-422c-ae50-3509ad253159"]}`)
+	seedTopicEdge(t, pool, p, word, `{"method":"shared-identifier + llm-confirm","confidence":1,"shared_ids":["scheduler1"]}`)
+	seedTopicEdge(t, pool, p, weak, `{"method":"shared-identifier + llm-confirm","confidence":0.6,"shared_ids":["p9y0yhtbd5"]}`)
 
-	// The stale verdict the panel would otherwise render as "✕ different".
-	if err := saveTopicLinkJudgment(ctx, deps, s, q, "stale-hash", topicLinkJudgment{
-		SameTopic: false, Confidence: 0.9, Tag: "bug_incident", Why: "different payment IDs",
-	}); err != nil {
-		t.Fatalf("seed judgment: %v", err)
+	cands, err := caseMateCandidates(ctx, deps, s)
+	if err != nil {
+		t.Fatalf("caseMateCandidates: %v", err)
 	}
+	got := caseMateIDs(cands)
 
-	if err := propagateCaseTopics(ctx, deps, s); err != nil {
-		t.Fatalf("propagateCaseTopics: %v", err)
+	if ids, ok := got[q]; !ok {
+		t.Errorf("payment-ref case-mate %s not nominated; got %v", q, got)
+	} else if len(ids) != 1 || ids[0] != "p0yy6hmqdw" {
+		t.Errorf("case ids for %s = %v, want [p0yy6hmqdw]", q, ids)
 	}
-
-	if method, ok := sameTopicEdgeMethod(t, pool, s, q); !ok || method != casePropagationMethod {
-		t.Errorf("s~q edge: method=%q ok=%v, want %q", method, ok, casePropagationMethod)
-	}
-	var same bool
-	var why string
-	if err := pool.QueryRow(ctx, `
-SELECT same_topic, why FROM graph.topic_link_judgments
-WHERE source_node_id=LEAST($1,$2) AND target_node_id=GREATEST($1,$2)`, s, q).Scan(&same, &why); err != nil {
-		t.Fatalf("read s~q judgment: %v", err)
-	}
-	if !same {
-		t.Errorf("s~q judgment still says different topic; why=%q", why)
-	}
-
-	// A shared TICKET is not a shared case (tie-breaker #2).
-	if method, ok := sameTopicEdgeMethod(t, pool, s, r); ok {
-		t.Errorf("s~r edge created via a shared Jira key (method=%q); tickets are not cases", method)
-	}
-
-	// Identifier shapes that reached production but name no case: a session/
-	// artifact UUID, and an English word carrying a trailing counter that happens
-	// to satisfy the payment-ref charset.
-	for _, bad := range []struct {
-		node, id string
-	}{
-		{"slack:CT7:700", "3e9a0bee-319c-422c-ae50-3509ad253159"},
-		{"slack:CT8:800", "scheduler1"},
+	for name, id := range map[string]string{
+		"shared Jira key (tie-breaker #2)":  tkt,
+		"session/artifact UUID":             uuid,
+		"word with a trailing counter":      word,
+		"low-confidence identifier edge":    weak,
+		"the source itself":                 s,
+		"the confirmed partner it came via": p,
 	} {
-		caseSeedNode(t, pool, bad.node)
-		seedTopicEdge(t, pool, p, bad.node,
-			`{"method":"shared-identifier + llm-confirm","confidence":1,"shared_ids":["`+bad.id+`"]}`)
-		if err := propagateCaseTopics(ctx, deps, s); err != nil {
-			t.Fatalf("propagateCaseTopics with shared id %q: %v", bad.id, err)
+		if _, bad := got[id]; bad {
+			t.Errorf("%s nominated a case-mate (%s); it names no concrete case", name, id)
 		}
-		if method, ok := sameTopicEdgeMethod(t, pool, s, bad.node); ok {
-			t.Errorf("propagated across shared id %q (method=%q); that names no concrete case", bad.id, method)
-		}
-	}
-
-	// One hop only: a second pass must not chain off its own output.
-	if err := propagateCaseTopics(ctx, deps, s); err != nil {
-		t.Fatalf("propagateCaseTopics (second pass): %v", err)
-	}
-	if method, ok := sameTopicEdgeMethod(t, pool, s, u); ok {
-		t.Errorf("s~u edge chained through a propagated edge (method=%q)", method)
-	}
-
-	// A directly judged edge keeps its own metadata.
-	if method, _ := sameTopicEdgeMethod(t, pool, s, p); method != "cosine-shortlist + llm-confirm" {
-		t.Errorf("s~p method=%q, want the original judged method", method)
 	}
 }
 
-// TestPropagateCaseTopicsSharedCaseMate covers the shape that failed in
-// production: q is a case-mate of TWO confirmed partners, so the derived set
-// names the same pair twice and an un-deduped upsert dies with "ON CONFLICT DO
-// UPDATE command cannot affect row a second time".
-func TestPropagateCaseTopicsSharedCaseMate(t *testing.T) {
+// TestCaseMateCandidatesDedupesSharedMate checks the shape that broke the
+// earlier asserting implementation in production: one node reachable as the
+// case-mate of two confirmed partners must be nominated once.
+func TestCaseMateCandidatesDedupesSharedMate(t *testing.T) {
 	ctx := context.Background()
 	pool := caseTestDB(t)
 	deps := Deps{DB: pool, Logger: zerolog.Nop(), MachineID: "test"}
@@ -190,69 +150,62 @@ func TestPropagateCaseTopicsSharedCaseMate(t *testing.T) {
 		q  = "slack:CT3:300"
 	)
 	for _, id := range []string{s, p1, p2, q} {
-		caseSeedNode(t, pool, id)
+		caseSeedThread(t, pool, id)
 	}
 	seedTopicEdge(t, pool, s, p1, `{"method":"cosine-shortlist + llm-confirm","confidence":0.9}`)
 	seedTopicEdge(t, pool, s, p2, `{"method":"cosine-shortlist + llm-confirm","confidence":0.95}`)
 	seedTopicEdge(t, pool, p1, q, `{"method":"shared-identifier + llm-confirm","confidence":1,"shared_ids":["p0yy6hmqdw"]}`)
 	seedTopicEdge(t, pool, p2, q, `{"method":"shared-identifier + llm-confirm","confidence":1,"shared_ids":["p0yy6hmqdw"]}`)
 
-	if err := propagateCaseTopics(ctx, deps, s); err != nil {
-		t.Fatalf("propagateCaseTopics with a shared case-mate: %v", err)
+	cands, err := caseMateCandidates(ctx, deps, s)
+	if err != nil {
+		t.Fatalf("caseMateCandidates: %v", err)
 	}
-	if method, ok := sameTopicEdgeMethod(t, pool, s, q); !ok || method != casePropagationMethod {
-		t.Errorf("s~q edge: method=%q ok=%v, want %q", method, ok, casePropagationMethod)
+	seen := 0
+	for _, c := range cands {
+		if c.NodeID == q {
+			seen++
+		}
 	}
-	// The stronger partner's confidence is the one carried over.
-	var conf float64
-	if err := pool.QueryRow(ctx, `
-SELECT (metadata->>'confidence')::float8 FROM graph.edges
-WHERE kind='SAME_TOPIC' AND from_node_id=LEAST($1,$2) AND to_node_id=GREATEST($1,$2)`, s, q).Scan(&conf); err != nil {
-		t.Fatalf("read propagated confidence: %v", err)
-	}
-	if conf != 0.95 {
-		t.Errorf("propagated confidence = %v, want 0.95 (the stronger partner)", conf)
+	if seen != 1 {
+		t.Errorf("case-mate %s nominated %d times, want exactly 1", q, seen)
 	}
 }
 
-// TestPropagateCaseTopicsKeepsConfirmedVerdicts checks the guard on the
-// judgment upsert: propagation fills gaps and overwrites refusals, never a
-// verdict the judge already confirmed with its own reasoning.
-func TestPropagateCaseTopicsKeepsConfirmedVerdicts(t *testing.T) {
-	ctx := context.Background()
-	pool := caseTestDB(t)
-	t.Cleanup(func() {
-		pool.Exec(ctx, `DELETE FROM graph.topic_link_judgments WHERE source_node_id LIKE 'slack:CT%' OR target_node_id LIKE 'slack:CT%'`)
-	})
-	deps := Deps{DB: pool, Logger: zerolog.Nop(), MachineID: "test"}
+// TestConfirmTopicLinkShowsCaseContextAsEvidence pins the prompt contract: the
+// judge is told about the shared case AND reminded that a release thread or a
+// passing PR mention still loses. Sampling found that identifier joining a case
+// thread to "Payments service v0.48.5 deployment".
+func TestConfirmTopicLinkShowsCaseContextAsEvidence(t *testing.T) {
+	gem := &mockGemini{}
+	gem.cheapGenerateResult = func() (string, error) {
+		return `{"tag":"bug_incident","same_topic":true,"confidence":0.9,"topic":"t","why":"w"}`, nil
+	}
+	deps := Deps{Logger: zerolog.Nop(), Gemini: gem}
+	_, err := confirmTopicLink(context.Background(), deps,
+		topicLinkNode{NodeID: "a", Type: "slack_thread", Summary: "source summary"},
+		topicLinkCandidate{
+			topicLinkNode: topicLinkNode{NodeID: "b", Type: "slack_thread", Summary: "candidate summary"},
+			CaseVia:       "slack:CX:1",
+			CaseIDs:       []string{"p0yy6hmqdw"},
+		},
+		topicLinkContext{TimeDesc: "activity windows overlap"})
+	if err != nil {
+		t.Fatalf("confirmTopicLink: %v", err)
+	}
+	for _, want := range []string{"p0yy6hmqdw", "same concrete case", "ALREADY CONFIRMED", "tie-breakers #2 and #3"} {
+		if !strings.Contains(gem.cheapGenerateUser, want) {
+			t.Errorf("prompt missing %q; got:\n%s", want, gem.cheapGenerateUser)
+		}
+	}
+}
 
-	const (
-		s = "slack:CT1:100"
-		p = "slack:CT2:200"
-		q = "slack:CT3:300"
-	)
-	for _, id := range []string{s, p, q} {
-		caseSeedNode(t, pool, id)
-	}
-	seedTopicEdge(t, pool, s, p, `{"method":"cosine-shortlist + llm-confirm","confidence":0.9}`)
-	seedTopicEdge(t, pool, p, q, `{"method":"shared-identifier + llm-confirm","confidence":1,"shared_ids":["p0yy6hmqdw"]}`)
-	if err := saveTopicLinkJudgment(ctx, deps, s, q, "real-hash", topicLinkJudgment{
-		SameTopic: true, Confidence: 0.95, Tag: "bug_incident", Why: "judged directly",
-	}); err != nil {
-		t.Fatalf("seed judgment: %v", err)
-	}
-
-	if err := propagateCaseTopics(ctx, deps, s); err != nil {
-		t.Fatalf("propagateCaseTopics: %v", err)
-	}
-
-	var hash, why string
-	if err := pool.QueryRow(ctx, `
-SELECT content_hash, why FROM graph.topic_link_judgments
-WHERE source_node_id=LEAST($1,$2) AND target_node_id=GREATEST($1,$2)`, s, q).Scan(&hash, &why); err != nil {
-		t.Fatalf("read judgment: %v", err)
-	}
-	if hash != "real-hash" || why != "judged directly" {
-		t.Errorf("propagation overwrote a confirmed verdict: hash=%q why=%q", hash, why)
+// TestTopicLinkContentHashKeyedOnCaseIDs: gaining case context is new evidence,
+// so a verdict reached without it must not be served from cache.
+func TestTopicLinkContentHashKeyedOnCaseIDs(t *testing.T) {
+	base := topicLinkContentHash("a", "b", "sa", "sb", nil, "overlap", nil)
+	withCase := topicLinkContentHash("a", "b", "sa", "sb", nil, "overlap", []string{"p0yy6hmqdw"})
+	if base == withCase {
+		t.Error("content hash ignores case ids; a pre-context refusal would be served from cache")
 	}
 }

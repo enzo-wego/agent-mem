@@ -27,6 +27,7 @@ type mockGemini struct {
 	cheapGenerateResult func() (string, error)
 	cheapGenerateCalls  atomic.Int32
 	generateUser        string // last user prompt passed to Generate
+	cheapGenerateUser   string // last user prompt passed to GenerateCheap
 }
 
 func (m *mockGemini) Describe(_ context.Context, _ string, _ []byte, _ string) (string, string, []string, error) {
@@ -59,6 +60,7 @@ func (m *mockGemini) Generate(_ context.Context, _, user string) (string, error)
 
 func (m *mockGemini) GenerateCheap(_ context.Context, _, user string) (string, error) {
 	m.cheapGenerateCalls.Add(1)
+	m.cheapGenerateUser = user
 	if m.cheapGenerateResult != nil {
 		return m.cheapGenerateResult()
 	}

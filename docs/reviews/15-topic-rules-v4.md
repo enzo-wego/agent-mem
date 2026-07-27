@@ -218,28 +218,53 @@ Two threads about ONE order, linked to each other at confidence 1.00 by
 and the other outside — in the same run. Each pair is judged in isolation, so
 nothing enforces transitivity.
 
-`propagateCaseTopics` (link_topics.go) closes it deterministically, no LLM call:
-a confirmed verdict propagates across edges whose method is
-`shared-identifier + llm-confirm` and whose `shared_ids` contain a
-payment/source/dispute ref, an action ref, or a request UUID — the identifiers
-tie-breaker #1 calls "one concrete case". Jira keys and PR refs are excluded on
-purpose (tie-breaker #2). One hop only: the source's confirmed partners exclude
-propagated edges, so propagation never chains off its own output.
+### First attempt: assert the verdict. Wrong.
 
-Guards, both covered by `link_topics_case_test.go`:
+`propagateCaseTopics` closed the triangle deterministically — a confirmed
+verdict was written across every same-case edge, no LLM call. It shipped, and
+sampling the pairs a graph-wide sweep would create killed it. Three findings, in
+increasing severity:
 
-- edge insert is `ON CONFLICT DO NOTHING` — a directly judged edge keeps its own
-  metadata and confidence;
-- judgment upsert only overwrites rows where `NOT same_topic` — a verdict the
-  judge confirmed with its own reasoning is never rewritten;
-- the shared CTE deliberately does not filter existing edges: both statements
-  run it, so filtering there would leave the judgment upsert nothing to do once
-  the edge insert had run (caught by the test on first run).
+1. **Request UUIDs are not cases.** Sanctioned by tie-breaker #1, but 4 such ids
+   spanned 51 pairs here, linking a node titled "Claude Artifact" to a PWA
+   service-worker PR. Session/artifact ids. Rarity capping does not help — 3 of
+   the 4 sit under the cap.
+2. **`extractIdentifiers` classifies English words as payment refs.**
+   "scheduler1" and "scheduler2" satisfy `^[psd][0-9b-oqrt-z]{9}$` plus the
+   has-a-digit check, reached production as shared identifiers, and propagation
+   extended one to `cf:2948071466` (deleted by hand). Digit-count thresholds
+   cannot separate these: the verified real ref `pxx6xgkdtl` also carries a
+   single digit. Filed as a bead; fixing extraction needs a re-index.
+3. **Asserting violates the architecture.** The linker's own principle is
+   "candidates are only nominations; these rules decide." The same payment id
+   joins a case thread to a *release* thread ("Payments service v0.48.5
+   deployment"), to PRs that quote the id as a test case, and to broad
+   launch/testing threads. The judge refused those correctly under tie-breakers
+   #2/#3 — and an asserting propagation would have reversed exactly those
+   refusals while fixing the one it should.
 
-The judgment row is written with `content_hash = 'case-propagated'`, which can
-never equal a real hash — the pair is re-judged on the next run and propagation
-re-applies after, so the end state of any run is consistent whichever way the
-pairwise judge went.
+### Shipped: nominate with context, judge decides
+
+`caseMateCandidates` replaces it. If P is confirmed same topic with the source
+and Q shares a payment/order/action identifier with P at confidence ≥0.9, then Q
+becomes a judge candidate carrying `CaseVia`/`CaseIDs`, and `confirmTopicLink`
+puts the case identity in the prompt as **evidence**, explicitly reminding the
+judge that a release thread, a stand-up, or a passing PR mention is still a
+different topic. No verdict is written without a judge call.
+
+- `caseRefSQL` stays stricter than nomination elsewhere: payment/source/dispute
+  refs and action refs only, minus the word-plus-trailing-counter shape.
+- `topicLinkContentHash` includes `CaseIDs`, so a verdict reached *without* case
+  context is never served from cache once the context appears.
+- Confirmed pairs get `method: "same-case + llm-confirm"` plus `case_via`.
+- Cost: 0–3 extra judge calls per node run, and only for the ~50 nodes that have
+  case edges at all.
+
+Covered by `link_topics_case_test.go`: the nomination itself, the four id shapes
+that must not nominate (Jira key, UUID, word+counter, low-confidence edge), the
+shared-case-mate dedupe (which broke the asserting version in production with
+"ON CONFLICT DO UPDATE cannot affect row a second time"), the prompt contract,
+and the hash key.
 
 ## Next — what would actually fix rows 7/8
 

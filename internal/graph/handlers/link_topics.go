@@ -55,6 +55,13 @@ type topicLinkCandidate struct {
 	// SharedIDs is non-empty for identifier-nominated candidates: the rare
 	// identifiers found in BOTH artifacts' raw text.
 	SharedIDs []string
+	// CaseVia / CaseIDs mark a case-mate nomination: this candidate is the same
+	// concrete case as CaseVia (they share the payment/order identifiers CaseIDs)
+	// and CaseVia is already confirmed same topic with the source. Passed to the
+	// judge as context, never as a verdict — a release thread that merely quotes a
+	// payment id must still lose on tie-breaker #3.
+	CaseVia string
+	CaseIDs []string
 }
 
 // topicLinkContext carries the per-pair time context shown to the judge.
@@ -128,7 +135,13 @@ func linkTopicsHandler(deps Deps) jobs.Handler {
 		if err != nil {
 			return err
 		}
-		cands := mergeTopicCandidates(idCands, extraCands, edgeCands, embCands)
+		caseCands, err := caseMateCandidates(ctx, deps, p.NodeID)
+		if err != nil {
+			return err
+		}
+		// Case-mates outrank the embedding shortlist but not the identifier or
+		// explicit paths: a candidate found by BOTH keeps its own SharedIDs.
+		cands := mergeTopicCandidates(idCands, extraCands, caseCands, edgeCands, embCands)
 		srcStart, srcEnd, srcOK := nodeActivityWindow(ctx, deps, p.NodeID)
 
 		g, gctx := errgroup.WithContext(ctx)
@@ -142,7 +155,7 @@ func linkTopicsHandler(deps Deps) jobs.Handler {
 				candStart, candEnd, candOK := nodeActivityWindow(gctx, deps, cand.NodeID)
 				timeDesc, timeBucket := timeRelation(srcStart, srcEnd, srcOK, candStart, candEnd, candOK)
 				from, to, sourceSummary, targetSummary := canonicalTopicPair(source.NodeID, cand.NodeID, source.Summary, cand.Summary)
-				contentHash := topicLinkContentHash(from, to, sourceSummary, targetSummary, cand.SharedIDs, timeBucket)
+				contentHash := topicLinkContentHash(from, to, sourceSummary, targetSummary, cand.SharedIDs, timeBucket, cand.CaseIDs)
 				judgment, cached, err := cachedTopicLinkJudgment(gctx, deps, from, to, contentHash)
 				if err != nil {
 					return err
@@ -166,10 +179,7 @@ func linkTopicsHandler(deps Deps) jobs.Handler {
 				return deleteSameTopicEdge(gctx, deps, from, to)
 			})
 		}
-		if err := g.Wait(); err != nil {
-			return err
-		}
-		return propagateCaseTopics(ctx, deps, source.NodeID)
+		return g.Wait()
 	}
 }
 
@@ -195,108 +205,72 @@ const caseRefSQL = `(sid ~ '^[psd][0-9b-oqrt-z]{9}$' AND sid ~ '[0-9]'
      AND sid !~ '^[psd][a-z]{8}[0-9]$')
   OR sid ~ '^a[0-9b-oqrt-z]{14}$'`
 
-// casePropagationMethod marks edges derived by propagateCaseTopics rather than
-// judged directly. Propagation never chains off its own output (one hop only)
-// and existingSameTopicCandidates skips these partners — re-judging a pair the
-// rule re-derives anyway just burns a judge call.
-const casePropagationMethod = "case-propagation"
-
-// casePropagatedHash marks a judgment row the LLM never saw for this pair. It
-// can never equal a real content hash, so the next run re-judges the pair and
-// propagation re-applies afterwards — the end state of a run is consistent
-// whichever way the pairwise judge went.
-const casePropagatedHash = "case-propagated"
-
-// propagateCaseTopics closes the triangle the pairwise judge cannot see: two
-// threads joined by a shared payment/order reference are ONE case (rules
-// tie-breaker #1, "these identify one concrete case"), so a topic verdict
-// against either of them holds for both. Without this the judge contradicts
-// itself — verified on slack:C048WV1BZTK:1784600389.693489, where in one run it
-// confirmed the #ext-wego-juspay thread for order p0yy6hmqdw and refused the
-// #payments-team thread for the SAME order, which were themselves linked at
-// confidence 1.0.
+// caseMateCandidates nominates the case-mates of the source's confirmed
+// partners: if P is confirmed same topic with the source and Q shares a
+// payment/order identifier with P, then P and Q are ONE case (rules tie-breaker
+// #1) and the source–Q pair deserves a verdict with that fact in front of the
+// judge.
 //
-// Deterministic, no LLM call. Only fills gaps: a directly judged edge keeps its
-// own metadata, and a stored verdict is overwritten only when it says DIFFERENT.
-func propagateCaseTopics(ctx context.Context, deps Deps, nodeID string) error {
-	const casesCTE = `
+// This is the triangle the pairwise judge cannot see. Verified on
+// slack:C048WV1BZTK:1784600389.693489, where one run confirmed the
+// #ext-wego-juspay thread for order p0yy6hmqdw and refused the #payments-team
+// thread for the SAME order, while those two were linked at confidence 1.0.
+//
+// A nomination, never a verdict: sampling showed the same identifier joining a
+// case thread to a release thread ("Payments service v0.48.5 deployment") and to
+// PRs that merely quote a payment id as a test case. Those must still lose on
+// tie-breakers #2/#3, which only the judge applies.
+func caseMateCandidates(ctx context.Context, deps Deps, nodeID string) ([]topicLinkCandidate, error) {
+	rows, err := deps.DB.Query(ctx, `
 WITH confirmed AS (
-  SELECT CASE WHEN e.from_node_id=$1 THEN e.to_node_id ELSE e.from_node_id END AS p,
-         e.metadata AS meta
+  SELECT CASE WHEN e.from_node_id=$1 THEN e.to_node_id ELSE e.from_node_id END AS p
   FROM graph.edges e
   WHERE e.kind='SAME_TOPIC' AND $1 IN (e.from_node_id, e.to_node_id)
-    AND COALESCE(e.metadata->>'method','') <> '` + casePropagationMethod + `'
 ),
 cases AS (
   SELECT c.p,
          CASE WHEN e.from_node_id=c.p THEN e.to_node_id ELSE e.from_node_id END AS q,
-         c.meta,
-         e.metadata->>'shared_ids' AS shared
+         ARRAY(SELECT t.sid
+               FROM jsonb_array_elements_text(e.metadata->'shared_ids') AS t(sid)
+               WHERE `+caseRefSQL+`
+               ORDER BY t.sid) AS ids
   FROM confirmed c
   JOIN graph.edges e ON e.kind='SAME_TOPIC' AND c.p IN (e.from_node_id, e.to_node_id)
   WHERE e.metadata->>'method' = 'shared-identifier + llm-confirm'
     AND COALESCE(NULLIF(e.metadata->>'confidence','')::float8, 0) >= 0.9
-    AND EXISTS (
-      SELECT 1 FROM jsonb_array_elements_text(e.metadata->'shared_ids') AS t(sid)
-      WHERE ` + caseRefSQL + `)
 ),
--- DISTINCT ON: one node can be a case-mate of SEVERAL confirmed partners (two
--- threads about this case both confirmed), which would emit the same pair twice
--- and make ON CONFLICT DO UPDATE fail with "cannot affect row a second time"
--- (hit in production on the p9y0yhtbd5 thread). Strongest verdict wins.
-derived AS (
-  SELECT DISTINCT ON (a, b) a, b, meta FROM (
-  SELECT LEAST($1, q) AS a, GREATEST($1, q) AS b,
-         jsonb_build_object(
-           'method', '` + casePropagationMethod + `',
-           'confidence', COALESCE(NULLIF(meta->>'confidence','')::float8, 0.9),
-           'tag', COALESCE(meta->>'tag',''),
-           'topic', COALESCE(meta->>'topic',''),
-           'via', p,
-           'why', 'Same concrete case as ' || p || ' (shared ' || COALESCE(shared,'identifier') ||
-                  '), which is confirmed same topic as this thread.'
-         ) AS meta
-  FROM cases
-  WHERE q <> $1
-  ) d
-  ORDER BY a, b, (meta->>'confidence')::float8 DESC
-)`
-	// derived deliberately does NOT filter out pairs that already have an edge:
-	// both statements below run this same CTE, so a filter here would leave the
-	// judgment upsert nothing to do once the edge insert had run. Each statement
-	// carries its own guard instead — DO NOTHING keeps a directly judged edge's
-	// metadata, and the judgment upsert only overwrites a DIFFERENT verdict.
-
-	if _, err := deps.DB.Exec(ctx, casesCTE+`
-INSERT INTO graph.edges (from_node_id, to_node_id, kind, metadata, machine_id)
-SELECT a, b, 'SAME_TOPIC', meta, $2 FROM derived
-ON CONFLICT (from_node_id, to_node_id, kind) DO NOTHING`,
-		nodeID, deps.MachineID); err != nil {
-		return err
+-- One node can be the case-mate of several confirmed partners; keep the pair once.
+mates AS (
+  SELECT DISTINCT ON (q) q, p, ids FROM cases
+  WHERE q <> $1 AND cardinality(ids) > 0
+  ORDER BY q, cardinality(ids) DESC
+)
+SELECT n.id, n.type, COALESCE(ai.summary,''), COALESCE(pe.department,''),
+       COALESCE(1.0 - (ai.embedding <=> src.emb), 0) AS cosine,
+       m.p, m.ids
+FROM mates m
+JOIN graph.nodes n ON n.id = m.q
+JOIN graph.artifact_index ai ON ai.node_id = n.id
+LEFT JOIN graph.people pe ON pe.id = n.author_person_id
+LEFT JOIN (SELECT embedding AS emb FROM graph.artifact_index WHERE node_id = $1) src ON TRUE
+WHERE n.deleted_at IS NULL
+  AND NOT (n.type IN ('slack','slack_thread') AND ai.summary_kind <> 'thread_summary')
+  AND n.type NOT IN ('slack_file','jira_attachment')
+  AND length(TRIM(COALESCE(ai.summary,''))) >= 40
+  AND NOT (n.type IN ('slack','slack_thread') AND n.scope LIKE 'slack:D%')`, nodeID)
+	if err != nil {
+		return nil, err
 	}
-
-	// The panel and every other reader take the verdict from the judgment table,
-	// not the edge — so a propagated link that leaves a stale DIFFERENT row would
-	// still render as ✕ refused.
-	_, err := deps.DB.Exec(ctx, casesCTE+`
-INSERT INTO graph.topic_link_judgments
-  (source_node_id, target_node_id, content_hash, same_topic, confidence, tag, topic, why, judged_at, machine_id)
-SELECT a, b, '`+casePropagatedHash+`', TRUE,
-       COALESCE(NULLIF(meta->>'confidence','')::float8, 0.9),
-       COALESCE(meta->>'tag',''), COALESCE(meta->>'topic',''), COALESCE(meta->>'why',''), NOW(), $2
-FROM derived
-ON CONFLICT (source_node_id, target_node_id) DO UPDATE SET
-  content_hash=EXCLUDED.content_hash,
-  same_topic=TRUE,
-  confidence=EXCLUDED.confidence,
-  tag=EXCLUDED.tag,
-  topic=EXCLUDED.topic,
-  why=EXCLUDED.why,
-  judged_at=NOW(),
-  machine_id=EXCLUDED.machine_id
-WHERE NOT graph.topic_link_judgments.same_topic`,
-		nodeID, deps.MachineID)
-	return err
+	defer rows.Close()
+	var out []topicLinkCandidate
+	for rows.Next() {
+		var c topicLinkCandidate
+		if err := rows.Scan(&c.NodeID, &c.Type, &c.Summary, &c.Department, &c.Cosine, &c.CaseVia, &c.CaseIDs); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
 }
 
 func loadTopicLinkSource(ctx context.Context, deps Deps, nodeID string) (topicLinkNode, error) {
@@ -415,10 +389,13 @@ func canonicalTopicPair(a, b, aSummary, bSummary string) (from, to, fromSummary,
 // the rules version (a rules change must re-judge cached pairs), summaries,
 // shared identifiers, and the COARSE time bucket (exact timestamps would
 // invalidate the cache on every new reply).
-func topicLinkContentHash(from, to, fromSummary, toSummary string, sharedIDs []string, timeBucket string) string {
+// caseIDs is part of the key too: gaining case context is new evidence, so a
+// verdict reached without it must not be served from cache.
+func topicLinkContentHash(from, to, fromSummary, toSummary string, sharedIDs []string, timeBucket string, caseIDs []string) string {
 	h := sha256.Sum256([]byte(fmt.Sprintf("rules-v%d\x00", loadedTopicRules.Version) +
 		from + "\x00" + to + "\x00" + fromSummary + "\x00" + toSummary +
-		"\x00" + strings.Join(sharedIDs, ",") + "\x00" + timeBucket))
+		"\x00" + strings.Join(sharedIDs, ",") + "\x00" + timeBucket +
+		"\x00" + strings.Join(caseIDs, ",")))
 	return hex.EncodeToString(h[:])
 }
 
@@ -430,8 +407,7 @@ func existingSameTopicCandidates(ctx context.Context, deps Deps, nodeID string) 
 	rows, err := deps.DB.Query(ctx, `
 SELECT CASE WHEN from_node_id=$1 THEN to_node_id ELSE from_node_id END
 FROM graph.edges
-WHERE kind='SAME_TOPIC' AND (from_node_id=$1 OR to_node_id=$1)
-  AND COALESCE(metadata->>'method','') <> '`+casePropagationMethod+`'`, nodeID)
+WHERE kind='SAME_TOPIC' AND (from_node_id=$1 OR to_node_id=$1)`, nodeID)
 	if err != nil {
 		return nil, err
 	}
@@ -724,6 +700,14 @@ Return JSON only: {"tag":"one tag from the list","same_topic":true|false,"confid
 	if len(cand.SharedIDs) > 0 {
 		fmt.Fprintf(&extra, "\nShared identifiers (found in BOTH artifacts' raw text): %s", strings.Join(cand.SharedIDs, ", "))
 	}
+	if len(cand.CaseIDs) > 0 {
+		fmt.Fprintf(&extra, "\nCase context: artifact B concerns the same concrete case (%s) as another artifact"+
+			" that is ALREADY CONFIRMED same topic as artifact A. Weigh this as evidence, not as a decision:"+
+			" if B substantively discusses that case it is the SAME topic even when it names a different"+
+			" payment id, but a release/deploy thread, a stand-up or a PR that merely quotes the id in"+
+			" passing is still a DIFFERENT topic (tie-breakers #2 and #3).",
+			strings.Join(cand.CaseIDs, ", "))
+	}
 	user := fmt.Sprintf(
 		"Artifact A (%s, department %s, active %s):\n%s\n\nArtifact B (%s, department %s, active %s, cosine %.3f):\n%s%s",
 		source.Type, blankAsUnknown(source.Department), tc.SourceWindow, source.Summary,
@@ -758,8 +742,11 @@ Return JSON only: {"tag":"one tag from the list","same_topic":true|false,"confid
 
 func upsertSameTopicEdge(ctx context.Context, deps Deps, from, to string, j topicLinkJudgment, cand topicLinkCandidate, timeDesc string) error {
 	method := "cosine-shortlist + llm-confirm"
-	if len(cand.SharedIDs) > 0 {
+	switch {
+	case len(cand.SharedIDs) > 0:
 		method = "shared-identifier + llm-confirm"
+	case len(cand.CaseIDs) > 0:
+		method = "same-case + llm-confirm"
 	}
 	fields := map[string]any{
 		"confidence": j.Confidence,
@@ -772,6 +759,10 @@ func upsertSameTopicEdge(ctx context.Context, deps Deps, from, to string, j topi
 	}
 	if len(cand.SharedIDs) > 0 {
 		fields["shared_ids"] = cand.SharedIDs
+	}
+	if len(cand.CaseIDs) > 0 {
+		fields["case_ids"] = cand.CaseIDs
+		fields["case_via"] = cand.CaseVia
 	}
 	meta, _ := json.Marshal(fields)
 	_, err := deps.DB.Exec(ctx, `
