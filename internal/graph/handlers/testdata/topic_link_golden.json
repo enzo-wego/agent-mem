@@ -1,0 +1,56 @@
+[
+  {
+    "a": "slack:C048WV1BZTK:1784600389.693489",
+    "b": "slack:C05RNSE8TBR:1785131494.881939",
+    "want": "same",
+    "note": "rules v3 false negative: sibling case of the same duplicate-refund-record defect on a different payment (p0yy6hmqdw vs p9y0yhtbd5), same day. v3 refused at 0.95 citing 'two completely different payment IDs'."
+  },
+  {
+    "a": "slack:C048WV1BZTK:1784600389.693489",
+    "b": "slack:C0736FUE03W:1785132442.506279",
+    "want": "same",
+    "note": "rules v3 false negative: the partner-channel (ext-wego-juspay) raise of the same duplicate refund on p0yy6hmqdw, 16 minutes after the internal thread. v3 refused at 0.95 on differing payment ids."
+  },
+  {
+    "a": "slack:C048WV1BZTK:1784600389.693489",
+    "b": "slack:CUV9EAYGY:1776409156.492809",
+    "want": "different",
+    "note": "precision anchor (method family): crypto/TripleA wallet overpayment vs a card refund display bug, 3 months apart. cosine 0.84 — must stay DIFFERENT."
+  },
+  {
+    "a": "slack:C048WV1BZTK:1784600389.693489",
+    "b": "slack:C048WV1BZTK:1783595567.339819",
+    "want": "different",
+    "note": "precision anchor (wrong object): Juspay status mismatch (Voided vs Captured) is a wrong payment STATUS, not duplicated refund RECORDS. cosine 0.82 — must stay DIFFERENT."
+  },
+  {
+    "a": "slack:C048WV1BZTK:1784600389.693489",
+    "b": "slack:C05RNSE8TBR:1776747089.839549",
+    "want": "different",
+    "note": "precision anchor (transaction type): IN card volume surge with duplicated transaction entries — duplicate PAYMENTS, not duplicate REFUNDS. cosine 0.79 — must stay DIFFERENT."
+  },
+  {
+    "a": "slack:C048WV1BZTK:1784600389.693489",
+    "b": "slack:CUV9EAYGY:1785125979.791169",
+    "want": "same",
+    "note": "regression anchor: confirmed under v3 (0.95, 'Duplicated Juspay refund records display and sync bug')."
+  },
+  {
+    "a": "slack:C048WV1BZTK:1784600389.693489",
+    "b": "slack:C0597404MS6:1784815640.011819",
+    "want": "same",
+    "note": "regression anchor: confirmed under v3 (0.95, 'Juspay duplicate refund display bug and fix' — PAY-2255 PR review)."
+  },
+  {
+    "a": "slack:C048WV1BZTK:1784600389.693489",
+    "b": "slack:CUV9EAYGY:1784701489.235979",
+    "want": "same",
+    "note": "regression anchor: confirmed under v3 (0.95, 'Duplicate Juspay refund display bug' ticket thread)."
+  },
+  {
+    "a": "slack:C048WV1BZTK:1784600389.693489",
+    "b": "slack:C08S954G2LX:1765255265.549959",
+    "want": "same",
+    "note": "regression anchor: confirmed under v3 (0.90, repeated wego-payments refund retry alerts) — the long-gap case, 7 months before."
+  }
+]

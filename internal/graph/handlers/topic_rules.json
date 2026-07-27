@@ -1,19 +1,20 @@
 {
-  "version": 3,
-  "updated": "2026-07-13",
+  "version": 4,
+  "updated": "2026-07-27",
   "purpose": "Single source of truth for how the topic linker decides two artifacts are the SAME topic. The LLM judge applies these rules at runtime, /live/rules renders them for humans, and agents read this same file in the repo. Candidates are only nominations; these rules decide.",
   "how_it_works": [
     "1. Candidates come from three generators: (a) embedding cosine over thread/resource summaries (adaptive cutoff: mean+2σ over the corpus, floor 0.65), (b) shared RARE identifiers extracted from raw thread text — payment refs, Jira keys, PR refs, request ids — regardless of cosine and regardless of age, (c) explicit references: a pasted Slack permalink becomes a deterministic REFERS_TO edge, no LLM.",
     "2. The judge classifies each artifact into ONE tag below, then applies that tag's criteria — including its time affinity: the judge sees both activity windows and the gap between them.",
     "3. If the two artifacts have different tags, the tie-breakers decide (a bug and the investigation of that bug CAN be the same topic).",
-    "4. Verdicts are cached per pair + content hash (summaries + shared identifiers + time bucket); a change re-judges. Confirmed pairs become SAME_TOPIC edges carrying tag, confidence, topic and why."
+    "4. Verdicts are cached per pair + content hash (rules version + summaries + shared identifiers + time bucket); a change re-judges. Confirmed pairs become SAME_TOPIC edges carrying tag, confidence, topic and why.",
+    "5. Before answering SAME the judge must clear the DISCRIMINATORS in the tie-breakers (transaction type, which object's state is wrong, method family). A mismatch there beats any wording similarity — and conversely, two different payment ids on their own never make a DIFFERENT verdict."
   ],
   "tags": [
     {
       "tag": "bug_incident",
       "classify_when": "Something is broken or wrong: errors, outages, alert spikes, stuck/failed payments, wrong status or amounts, data inconsistencies.",
       "same_when": "Same ROOT CAUSE — the same failing mechanism or code path — even if the symptoms, affected payments, or channels differ. A specific broken payment and the macro incident caused by the same mechanism are the SAME topic.",
-      "different_when": "Same symptom class but a different cause (two payments both stuck for unrelated reasons); same partner but unrelated defects.",
+      "different_when": "Same symptom class but a different cause (two payments both stuck for unrelated reasons); same partner but unrelated defects. 'A different cause' means a NAMED, distinct mechanism — different affected payment ids are not a cause difference (see the sibling-cases tie-breaker).",
       "example_same": "'Payment pxx6xgkdtl wrongly flipped to Abandoned (status-sync misreads Juspay 400)' ↔ 'Investigation: abandonment spike caused by status-sync mis-tagging' — one mechanism, two views.",
       "example_different": "'Payment stuck: Juspay refund API age limit' ↔ 'Payment stuck: Tabby capture timeout' — both stuck payments, different causes.",
       "time_affinity": "Overlapping or nearby activity windows (≤7 days) support SAME. A gap >30 days with no shared identifier and no explicit reference leans DIFFERENT — similar wording months apart is almost always a different case."
@@ -22,7 +23,7 @@
       "tag": "ops_investigation",
       "classify_when": "Tracing a specific order/payment/booking through logs, Athena, BigQuery, or dashboards (EnzoBot log checks are the canonical case).",
       "same_when": "Concerns the same payment/order/booking id, OR both traces land on one shared underlying defect.",
-      "different_when": "Merely both being log investigations. Same activity ('EnzoBot, check logs for X') is NEVER the same topic by itself — the subject decides.",
+      "different_when": "Merely both being log investigations. Same activity ('EnzoBot, check logs for X') is NEVER the same topic by itself — the subject decides. But two different subjects DO share a topic when both traces show the same symptom on the same partner and flow within ≤7 days (see the sibling-cases tie-breaker).",
       "example_same": "Two threads tracing order wg_123 through different systems.",
       "example_different": "'check logs for pxx6xgkdtl' ↔ 'check logs for p9696jn5v7' — identical activity, different subjects (unless both hit the same defect).",
       "time_affinity": "Overlapping or nearby activity windows (≤7 days) support SAME. A gap >30 days with no shared identifier and no explicit reference leans DIFFERENT."
@@ -71,6 +72,8 @@
     "Shared identifiers and explicit references are NEVER time-gated — a payment created 13 months ago legitimately resurfaces in a refund case (verified: pxx6xgkdtl).",
     "Cross-tag pairs are allowed: a bug_incident and the ops_investigation or partner_comm about the same mechanism/case are the SAME topic.",
     "Same partner or same vocabulary is NEVER sufficient on its own.",
+    "SIBLING CASES OF ONE DEFECT: different payment/order/booking ids are NOT on their own a DIFFERENT signal. Two artifacts reporting the SAME symptom on the SAME object (e.g. duplicated refund records on a payment), the same partner and the same flow, whose activity windows overlap or sit ≤7 days apart, are the SAME topic — one defect observed on two cases. Answer DIFFERENT only when the artifacts name genuinely distinct mechanisms, not merely distinct ids.",
+    "DISCRIMINATORS — clear all three before answering SAME; a mismatch in any one means DIFFERENT however similar the wording and however high the cosine: (a) TRANSACTION TYPE (authorize / capture / refund / void / dispute / payout) — a duplicated PAYMENT is not a duplicated REFUND; (b) THE OBJECT WHOSE STATE IS WRONG — a wrong payment STATUS (Voided vs Captured, a status-sync mismatch) is not a duplicated refund RECORD; (c) METHOD FAMILY (card / wallet / BNPL / bank / crypto) — a crypto (TripleA) overpayment is not a card refund defect even when routed through the same partner.",
     "When genuinely uncertain after applying the rules, answer DIFFERENT (precision over recall — a missed link is cheaper than a wrong one)."
   ],
   "domains": {
