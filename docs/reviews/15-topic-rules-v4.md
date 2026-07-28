@@ -266,6 +266,32 @@ shared-case-mate dedupe (which broke the asserting version in production with
 "ON CONFLICT DO UPDATE cannot affect row a second time"), the prompt contract,
 and the hash key.
 
+### Measured run, 2026-07-28
+
+Paced re-derivation of the 9 nodes owning contradicted verdicts (90s apart,
+priority 9, hard cap 500 judge calls, monitored):
+
+- **150 judge calls**, 0 failed jobs, **0 rows in `llm_key_blocks`** — 90s pacing
+  is safe on the 32-key pool.
+- 36 confirmed / 114 different. `same-case + llm-confirm` edges 2 → 7;
+  `SAME_TOPIC` total 2,581 → 2,650.
+- Cost per node is **~15 calls**, not the ~3 first estimated. That estimate came
+  from a node already re-judged under v4 (nearly all cache hits); a node untouched
+  since the version bump cache-misses its whole candidate set. Full 46-node run
+  would therefore be ~690 calls — measure a canary before quoting a number.
+
+The 114 refusals are the design change earning its keep. One verbatim: *"Artifact
+A is a routine service deployment (release_change) while Artifact B is a payment
+refund investigation (ops_investigation); a release thread …"* — tie-breaker #3
+applied exactly where the asserting version would have forced a link.
+
+**Metric correction:** "contradictions" (derivable via a case-mate but stored as
+different) rose 7 → 16 after the run. That is not a regression. 14 of the 16 were
+judged *in this run* with case context in the prompt, so they are informed
+refusals; only 2 are stale. Under the asserting model the metric meant
+"inconsistency"; under nomination it means "the judge declined", which is a valid
+outcome. Do not track it as a defect count.
+
 ## Next — what would actually fix rows 7/8
 
 Rules wording is spent: both rows are 0/3 under v3 and v4. The judge sees two
