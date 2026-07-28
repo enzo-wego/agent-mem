@@ -186,6 +186,7 @@ type watchedMsg struct {
 	channelName string
 	author      string
 	dept        string
+	title       string
 	text        string
 	rootNodeID  string
 }
@@ -199,6 +200,7 @@ SELECT n.id,
        COALESCE(c.name,'')                                          AS channel_name,
        COALESCE(NULLIF(n.metadata->'author'->>'display_name',''), p.display_name, '') AS author,
        COALESCE(p.department,'')                                    AS dept,
+       COALESCE(p.job_title,'')                                     AS job_title,
        COALESCE(NULLIF(n.title,''), n.body, '')                     AS text,
        CASE WHEN COALESCE(NULLIF(n.metadata->>'thread_ts',''),'') <> ''
             THEN 'slack:'||replace(n.scope,'slack:','')||':'||(n.metadata->>'thread_ts')
@@ -221,7 +223,7 @@ LIMIT 50`
 	var out []watchedMsg
 	for rows.Next() {
 		var m watchedMsg
-		if err := rows.Scan(&m.nodeID, &m.channel, &m.channelName, &m.author, &m.dept, &m.text, &m.rootNodeID); err != nil {
+		if err := rows.Scan(&m.nodeID, &m.channel, &m.channelName, &m.author, &m.dept, &m.title, &m.text, &m.rootNodeID); err != nil {
 			return nil, err
 		}
 		out = append(out, m)
@@ -249,7 +251,7 @@ func buildChannelMsg(ctx context.Context, deps Deps, m watchedMsg) string {
 	if topic != "" {
 		fmt.Fprintf(&b, "_Thread: %s_\n", humanizeSlack(topic, names))
 	}
-	fmt.Fprintf(&b, "*%s:* %s\n", withDept(author, m.dept), firstLine(text, 600))
+	fmt.Fprintf(&b, "*%s:* %s\n", withDept(author, m.dept, m.title), firstLine(text, 600))
 	if link := slackPermalink(m.rootNodeID); link != "" {
 		b.WriteString(link)
 	}

@@ -381,6 +381,7 @@ type alertMsg struct {
 	author string
 	text   string
 	dept   string
+	title  string
 	depth  int
 }
 
@@ -404,6 +405,7 @@ func buildAlert(ctx context.Context, deps Deps, s subscription, h hotThread) str
 SELECT COALESCE(NULLIF(n.metadata->'author'->>'display_name',''), p.display_name, ''),
        COALESCE(NULLIF(n.title,''), n.body, ''),
        COALESCE(p.department,''),
+       COALESCE(p.job_title,''),
        COALESCE(p.depth_from_root, 99)
 FROM graph.nodes n
 LEFT JOIN graph.people p ON p.id = n.author_person_id
@@ -413,7 +415,7 @@ ORDER BY COALESCE(to_timestamp(NULLIF(n.metadata->>'ts','')::float8), n.first_se
 		h.Channel, h.RootNodeID, threadTS); err == nil {
 		for rows.Next() {
 			var m alertMsg
-			if rows.Scan(&m.author, &m.text, &m.dept, &m.depth) == nil {
+			if rows.Scan(&m.author, &m.text, &m.dept, &m.title, &m.depth) == nil {
 				msgs = append(msgs, m)
 			}
 		}
@@ -446,7 +448,7 @@ ORDER BY COALESCE(to_timestamp(NULLIF(n.metadata->>'ts','')::float8), n.first_se
 			if a == "" {
 				a = "someone"
 			}
-			tb.WriteString(withDept(a, m.dept) + ": " + firstLine(m.text, 280) + "\n")
+			tb.WriteString(withDept(a, m.dept, m.title) + ": " + firstLine(m.text, 280) + "\n")
 		}
 		_, overview, highlights, _ = genThreadDeepSummary(ctx, deps.Gemini, tb.String())
 	}
@@ -489,7 +491,7 @@ ORDER BY COALESCE(to_timestamp(NULLIF(n.metadata->>'ts','')::float8), n.first_se
 			if a == "" {
 				a = "someone"
 			}
-			line := fmt.Sprintf("• *%s:* %s\n", withDept(a, m.dept), t)
+			line := fmt.Sprintf("• *%s:* %s\n", withDept(a, m.dept, m.title), t)
 			if b.Len()+len(line) > 2600 {
 				break
 			}

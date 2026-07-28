@@ -52,7 +52,7 @@ func summarizeThreadHandler(deps Deps) jobs.Handler {
 		// Load the thread's messages (root + replies), oldest first.
 		rows, err := deps.DB.Query(ctx, `
 SELECT COALESCE(NULLIF(n.title,''), n.body), COALESCE(NULLIF(n.metadata->'author'->>'display_name',''), p.display_name, ''),
-       COALESCE(p.department,''),
+       COALESCE(p.department,''), COALESCE(p.job_title,''),
        (EXTRACT(EPOCH FROM n.updated_at) * 1000)::bigint AS upd_ms
 FROM graph.nodes n
 LEFT JOIN graph.people p ON p.id = n.author_person_id
@@ -68,9 +68,9 @@ ORDER BY COALESCE(to_timestamp(NULLIF(n.metadata->>'ts','')::float8), n.first_se
 		var maxUpdated int64
 		var hasDiscussion bool
 		for rows.Next() {
-			var body, author, dept string
+			var body, author, dept, jobTitle string
 			var upd int64
-			if err := rows.Scan(&body, &author, &dept, &upd); err != nil {
+			if err := rows.Scan(&body, &author, &dept, &jobTitle, &upd); err != nil {
 				rows.Close()
 				return err
 			}
@@ -84,7 +84,7 @@ ORDER BY COALESCE(to_timestamp(NULLIF(n.metadata->>'ts','')::float8), n.first_se
 			if author == "" {
 				author = "someone"
 			}
-			line := withDept(author, dept) + ": " + firstLine(body, 280) + "\n"
+			line := withDept(author, dept, jobTitle) + ": " + firstLine(body, 280) + "\n"
 			if b.Len()+len(line) <= 7000 {
 				b.WriteString(line)
 			}
@@ -206,8 +206,8 @@ ORDER BY 1`, channelID, threadTs)
 func genThreadDeepSummary(ctx context.Context, g GeminiClient, transcript string) (string, string, []string, string) {
 	const sys = `You are given one Slack thread (messages oldest first, as "author: text").
 An author may be written as "Name (Department)" — when you name that person, keep
-their department on first mention, e.g. "Hazwan (Flights) reported…". Do not add a
-department that isn't given.
+their team label exactly as given on first mention, e.g. "Hazwan (Flights · Senior Engineer)
+reported…". Never invent a department or job title that isn't given.
 A "Linked resources" list may precede the thread — use those titles to identify
 what the thread is about (name the ticket/doc), but summarize the thread's
 discussion, not the resources themselves. EXCEPTION: if the thread is only a

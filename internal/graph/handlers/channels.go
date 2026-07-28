@@ -311,11 +311,24 @@ var slackIDRe = regexp.MustCompile(`^[BUW][A-Z0-9]{6,}$`)
 // (refresh_slack_bots) or a user isn't in slack_users yet; hide them.
 func looksLikeSlackID(s string) bool { return slackIDRe.MatchString(s) }
 
-// withDept appends a person's department in parentheses ("Hazwan (Flights)") when
-// known, so LLM transcripts and alert lines carry the team label. Returns the bare
-// name when there's no department.
-func withDept(author, dept string) string {
-	if d := strings.TrimSpace(dept); d != "" {
+// withDept labels a person with their team and role ("Hazwan (Flights · Senior Engineer)")
+// so LLM transcripts and alert lines carry both where someone sits and how senior they
+// are. Either part may be missing — job_title only exists for BambooHR people, so bots and
+// Slack-only accounts fall back to "Name (Dept)" or the bare name.
+//
+// The department is dropped when the title already names it, so a Payments director reads
+// "Alexandre Morin (Director, Payments, Risk & Fintech)" rather than repeating "Payments".
+func withDept(author, dept, title string) string {
+	d, t := strings.TrimSpace(dept), strings.TrimSpace(title)
+	if d != "" && t != "" && strings.Contains(strings.ToLower(t), strings.ToLower(d)) {
+		d = ""
+	}
+	switch {
+	case d != "" && t != "":
+		return author + " (" + d + " · " + t + ")"
+	case t != "":
+		return author + " (" + t + ")"
+	case d != "":
 		return author + " (" + d + ")"
 	}
 	return author

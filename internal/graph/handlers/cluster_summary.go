@@ -191,7 +191,7 @@ WHERE id = ANY($1) AND deleted_at IS NULL`, ordered)
 		return
 	}
 	type clusterNode struct {
-		id, typ, title, body, author, dept string
+		id, typ, title, body, author, dept, jobTitle string
 		src                                string // thread-root node id this message belongs to (provenance)
 		ts                                 time.Time
 		depth                              int // author org-depth (0=CEO); -1 unknown
@@ -362,7 +362,7 @@ WHERE kind='SAME_TOPIC' AND (from_node_id=$1 OR to_node_id=$1)`, id); serr == ni
 	for tk := range threads {
 		trows, terr := h.db.Query(ctx, `
 SELECT n.id, COALESCE(n.body,''), COALESCE(NULLIF(n.metadata->'author'->>'display_name',''), p.display_name, ''),
-       COALESCE(p.depth_from_root, -1), COALESCE(p.department,''),
+       COALESCE(p.depth_from_root, -1), COALESCE(p.department,''), COALESCE(p.job_title,''),
        COALESCE(to_timestamp(NULLIF(n.metadata->>'ts','')::float8), n.first_seen_at) AS ts
 FROM graph.nodes n
 LEFT JOIN graph.people p ON p.id = n.author_person_id
@@ -376,7 +376,7 @@ ORDER BY ts ASC`, tk.channel, tk.ts)
 			m.typ = "slack"
 			m.src = "slack:" + tk.channel + ":" + tk.ts
 			var depth int
-			if trows.Scan(&m.id, &m.body, &m.author, &depth, &m.dept, &m.ts) == nil && m.body != "" && !seenMsg[m.id] {
+			if trows.Scan(&m.id, &m.body, &m.author, &depth, &m.dept, &m.jobTitle, &m.ts) == nil && m.body != "" && !seenMsg[m.id] {
 				m.depth = depth
 				slackMsgs = append(slackMsgs, m)
 				seenMsg[m.id] = true
@@ -392,7 +392,7 @@ ORDER BY ts ASC`, tk.channel, tk.ts)
 	if len(slackIDs) > 0 {
 		srows, serr := h.db.Query(ctx, `
 SELECT n.id, COALESCE(n.body,''), COALESCE(NULLIF(n.metadata->'author'->>'display_name',''), p.display_name, ''),
-       COALESCE(p.depth_from_root, -1), COALESCE(p.department,''),
+       COALESCE(p.depth_from_root, -1), COALESCE(p.department,''), COALESCE(p.job_title,''),
        COALESCE(to_timestamp(NULLIF(n.metadata->>'ts','')::float8), n.first_seen_at) AS ts
 FROM graph.nodes n
 LEFT JOIN graph.people p ON p.id = n.author_person_id
@@ -402,7 +402,7 @@ WHERE n.id = ANY($1) AND n.deleted_at IS NULL AND COALESCE(n.body,'') <> ''`, sl
 				var m clusterNode
 				m.typ = "slack"
 				var depth int
-				if srows.Scan(&m.id, &m.body, &m.author, &depth, &m.dept, &m.ts) == nil && m.body != "" && !seenMsg[m.id] {
+				if srows.Scan(&m.id, &m.body, &m.author, &depth, &m.dept, &m.jobTitle, &m.ts) == nil && m.body != "" && !seenMsg[m.id] {
 					m.depth = depth
 					m.src = m.id // standalone message: it is its own source
 					slackMsgs = append(slackMsgs, m)
@@ -477,7 +477,10 @@ WHERE n.id = ANY($1) AND n.deleted_at IS NULL AND COALESCE(n.body,'') <> ''`, sl
 	// v11: confirmed same-topic threads are flagged in the transcript and the LLM
 	// must cover each, so a newly-added SAME_TOPIC edge (which doesn't bump any
 	// member node's updated_at) must invalidate the cached summary too.
-	sig := fmt.Sprintf("v11:%d:%d:%d:%d:%d:%d", total, maxUpdated, len(slackMsgs), lastMs, excludedRefused, len(sameTopicRoots))
+	// v12: author labels now carry the BambooHR job title alongside the department
+	// ("Lei Zheng (Engineering · Staff Software Engineer)"), so the LLM can weight
+	// seniority from the transcript. Bump to regenerate title-less cached summaries.
+	sig := fmt.Sprintf("v12:%d:%d:%d:%d:%d:%d", total, maxUpdated, len(slackMsgs), lastMs, excludedRefused, len(sameTopicRoots))
 
 	var cachedSig, cachedOverview string
 	var cachedHl []byte
@@ -530,7 +533,7 @@ WHERE n.id = ANY($1) AND n.deleted_at IS NULL AND COALESCE(n.body,'') <> ''`, sl
 			if author == "" {
 				author = "someone"
 			}
-			author = withDept(author, m.dept) // "Hazwan (Flights)"
+			author = withDept(author, m.dept, m.jobTitle) // "Hazwan (Flights)"
 			// Tag seniority (lower org-depth = more senior) and the originating msg so
 			// the LLM can foreground who raised it and weight leadership input. Only tag
 			// a known author — a "[leadership]" hint on an anonymous "someone" is useless
@@ -613,8 +616,8 @@ EMPHASIS:
   rules-verified to share the primary's topic. You MUST devote at least one highlight to
   the events in each such thread and cite its marker; never omit them as loosely related.
 - An author may be written as "Name (Department)". When you name that person, keep
-  their department on first mention (e.g. "Hazwan (Flights) reported…"). Never add a
-  department that isn't given.
+  their team label exactly as given on first mention (e.g. "Hazwan (Flights · Senior
+  Engineer) reported…"). Never invent a department or job title that isn't given.
 - Strip the [originator]/[leadership] tags from your output — they are hints, not text.
 
 SOURCE CITATIONS — required:
