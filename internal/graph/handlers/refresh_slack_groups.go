@@ -19,7 +19,7 @@ func NewRefreshSlackGroupsHandler(deps Deps) jobs.Entry {
 		Handler:  refreshSlackGroupsHandler(deps),
 		Systems:  []string{"slack"},
 		PoolSize: 1,
-		Lease:  300 * time.Second,
+		Lease:    300 * time.Second,
 	}
 }
 
@@ -36,27 +36,24 @@ func refreshSlackGroupsHandler(deps Deps) jobs.Handler {
 			return err
 		}
 
-		// Step 2: upsert each group.
+		// Step 2: upsert each group. A per-group failure is logged and skipped, so the
+		// total is checked afterwards — every upsert failing must not report success.
+		upserted := 0
 		for _, g := range groups {
-			memberJSON, _ := json.Marshal(g.Users)
-			_, execErr := deps.DB.Exec(ctx, `
-				INSERT INTO graph.slack_groups
-					(id, handle, name, description, member_user_ids, user_count, refreshed_at, machine_id)
-				VALUES ($1, $2, $3, $4, $5, $6, NOW(), $7)
-				ON CONFLICT (id) DO UPDATE SET
-					handle         = EXCLUDED.handle,
-					name           = EXCLUDED.name,
-					description    = EXCLUDED.description,
-					member_user_ids = EXCLUDED.member_user_ids,
-					user_count     = EXCLUDED.user_count,
-					refreshed_at   = NOW(),
-					machine_id     = EXCLUDED.machine_id`,
-				g.ID, g.Handle, g.Name, g.Description, memberJSON, g.UserCount, deps.MachineID,
-			)
+			// member_user_ids is text[]: pass the slice so pgx encodes an array. Marshalling
+			// it to JSON first made Postgres reject every row ("malformed array literal"),
+			// which — combined with the skip-on-error below — let this job report done while
+			// writing nothing, from its first run until 2026-07-28.
+			members := g.Users
+			if members == nil {
+				members = []string{}
+			}
+			execErr := upsertSlackGroup(ctx, deps, g, members)
 			if execErr != nil {
 				deps.Logger.Warn().Err(execErr).Str("group_id", g.ID).Msg("refresh_slack_groups: upsert group failed")
 				continue
 			}
+			upserted++
 
 			// Step 3: auto-detect interest groups (*-geeks, *-ops).
 			if isInterestGroup(g.Handle) {
@@ -77,6 +74,12 @@ func refreshSlackGroupsHandler(deps Deps) jobs.Handler {
 				}
 			}
 		}
+
+		// Slack returned groups but none could be stored: that is a failure, not a no-op.
+		if len(groups) > 0 && upserted == 0 {
+			return fmt.Errorf("%w: refresh_slack_groups: all %d group upserts failed", jobs.ErrTransient, len(groups))
+		}
+		deps.Logger.Info().Int("groups", len(groups)).Int("upserted", upserted).Msg("refresh_slack_groups: done")
 
 		return nil
 	}
@@ -137,4 +140,24 @@ func fetchSlackUserGroups(ctx context.Context, token string) ([]slackUserGroup, 
 // isInterestGroup returns true for handles matching *-geeks or *-ops patterns.
 func isInterestGroup(handle string) bool {
 	return strings.HasSuffix(handle, "-geeks") || strings.HasSuffix(handle, "-ops")
+}
+
+// upsertSlackGroup writes one usergroup row. members must be a []string so pgx encodes
+// graph.slack_groups.member_user_ids (text[]) as an array.
+func upsertSlackGroup(ctx context.Context, deps Deps, g slackUserGroup, members []string) error {
+	_, err := deps.DB.Exec(ctx, `
+		INSERT INTO graph.slack_groups
+			(id, handle, name, description, member_user_ids, user_count, refreshed_at, machine_id)
+		VALUES ($1, $2, $3, $4, $5, $6, NOW(), $7)
+		ON CONFLICT (id) DO UPDATE SET
+			handle          = EXCLUDED.handle,
+			name            = EXCLUDED.name,
+			description     = EXCLUDED.description,
+			member_user_ids = EXCLUDED.member_user_ids,
+			user_count      = EXCLUDED.user_count,
+			refreshed_at    = NOW(),
+			machine_id      = EXCLUDED.machine_id`,
+		g.ID, g.Handle, g.Name, g.Description, members, g.UserCount, deps.MachineID,
+	)
+	return err
 }
