@@ -39,6 +39,7 @@ func refreshSlackGroupsHandler(deps Deps) jobs.Handler {
 		// Step 2: upsert each group. A per-group failure is logged and skipped, so the
 		// total is checked afterwards — every upsert failing must not report success.
 		upserted := 0
+		interestIDs := []string{}
 		for _, g := range groups {
 			// member_user_ids is text[]: pass the slice so pgx encodes an array. Marshalling
 			// it to JSON first made Postgres reject every row ("malformed array literal"),
@@ -55,24 +56,20 @@ func refreshSlackGroupsHandler(deps Deps) jobs.Handler {
 			}
 			upserted++
 
-			// Step 3: auto-detect interest groups (*-geeks, *-ops).
 			if isInterestGroup(g.Handle) {
-				for _, uid := range g.Users {
-					_, affErr := deps.DB.Exec(ctx, `
-						INSERT INTO graph.user_affinity_config
-							(slack_user_id, group_id, group_handle, updated_at)
-						VALUES ($1, $2, $3, NOW())
-						ON CONFLICT (slack_user_id, group_id) DO UPDATE SET
-							group_handle = EXCLUDED.group_handle,
-							updated_at   = NOW()`,
-						uid, g.ID, g.Handle,
-					)
-					if affErr != nil {
-						deps.Logger.Warn().Err(affErr).Str("uid", uid).Str("group_id", g.ID).
-							Msg("refresh_slack_groups: upsert user_affinity_config failed")
-					}
-				}
+				interestIDs = append(interestIDs, g.ID)
 			}
+		}
+
+		// Step 3: project interest-group membership onto employees. One row per eeid
+		// holds the group ids they belong to. Only rows still marked autodetected are
+		// updated, so a manually curated affinity row is never clobbered by a refresh.
+		if len(interestIDs) > 0 {
+			affinityRows, affErr := projectInterestGroupAffinities(ctx, deps, interestIDs)
+			if affErr != nil {
+				return fmt.Errorf("%w: refresh_slack_groups: affinity projection: %v", jobs.ErrTransient, affErr)
+			}
+			deps.Logger.Info().Int64("affinity_rows", affinityRows).Msg("refresh_slack_groups: affinity")
 		}
 
 		// Slack returned groups but none could be stored: that is a failure, not a no-op.
@@ -160,4 +157,26 @@ func upsertSlackGroup(ctx context.Context, deps Deps, g slackUserGroup, members 
 		g.ID, g.Handle, g.Name, g.Description, members, g.UserCount, deps.MachineID,
 	)
 	return err
+}
+
+func projectInterestGroupAffinities(ctx context.Context, deps Deps, interestIDs []string) (int64, error) {
+	tag, err := deps.DB.Exec(ctx, `
+		INSERT INTO graph.user_affinity_config (eeid, team_group_ids, autodetected, machine_id)
+		SELECT p.eeid, array_agg(DISTINCT g.id), true, $2
+		FROM graph.slack_groups g
+		JOIN graph.people p ON p.slack_user_id = ANY(g.member_user_ids)
+		WHERE g.id = ANY($1)
+		  AND p.eeid IS NOT NULL
+		  AND p.merged_into IS NULL
+		GROUP BY p.eeid
+		ON CONFLICT (eeid) DO UPDATE
+		SET team_group_ids = EXCLUDED.team_group_ids,
+		    updated_at     = NOW()
+		WHERE graph.user_affinity_config.autodetected`,
+		interestIDs, deps.MachineID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
 }
