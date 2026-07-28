@@ -44,6 +44,7 @@ func NewRegistry() *Registry {
 	r.entries["resolve_identity"] = Entry{PoolSize: 4, Lease: 30 * time.Second}
 	r.entries["index_artifact"] = Entry{PoolSize: 4, Lease: 60 * time.Second}
 	r.entries["refresh_slack_groups"] = Entry{PoolSize: 1, Lease: 600 * time.Second, Heartbeat: true}
+	r.entries["derive_person_roles"] = Entry{PoolSize: 1, Lease: 300 * time.Second}
 	r.entries["import_bamboohr"] = Entry{PoolSize: 1, Lease: 600 * time.Second, Heartbeat: true}
 	r.entries["recompute_person_distance"] = Entry{PoolSize: 1, Lease: 600 * time.Second, Heartbeat: true}
 	r.entries["backfill_slack_channel"] = Entry{PoolSize: 2, Lease: 120 * time.Second, Systems: []string{"slack"}}
@@ -77,4 +78,3 @@ func (r *Registry) Types() []string {
 	}
 	return out
 }
-

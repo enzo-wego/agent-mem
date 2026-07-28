@@ -214,6 +214,19 @@ func NewServer(cfg *config.Config, logBuf *LogBuffer) (*Server, error) {
 		}
 	}
 
+	// Recompute evidence-backed person roles daily. The handler schedules its next run;
+	// startup only repairs a missing chain and triggers the first computation after deploy.
+	var rolesPending bool
+	_ = pool.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM graph.jobs WHERE type='derive_person_roles' AND status IN ('queued','running'))`).
+		Scan(&rolesPending)
+	if !rolesPending {
+		if _, err := jobs.Enqueue(ctx, pool, "derive_person_roles", map[string]any{},
+			jobs.EnqueueOptions{TargetRunner: "any", MachineID: cfg.MachineID}); err != nil {
+			graphLog.Warn().Err(err).Msg("startup: enqueue derive_person_roles failed")
+		}
+	}
+
 	// Kick off the self-rescheduling Jira board→epic map refresh (deduped).
 	var jiraBoardPending bool
 	_ = pool.QueryRow(ctx,

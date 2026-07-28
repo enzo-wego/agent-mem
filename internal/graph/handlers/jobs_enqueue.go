@@ -17,6 +17,7 @@ var enqueuableTypes = map[string]bool{
 	"refresh_slack_users":      true,
 	"refresh_slack_bots":       true,
 	"refresh_slack_groups":     true,
+	"derive_person_roles":      true,
 	"import_bamboohr":          true, // payload: {csv_path} or {csv_bytes}
 	"merge_identities_by_name": true,
 }

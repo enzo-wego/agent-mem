@@ -191,10 +191,10 @@ WHERE id = ANY($1) AND deleted_at IS NULL`, ordered)
 		return
 	}
 	type clusterNode struct {
-		id, typ, title, body, author, dept, jobTitle string
-		src                                string // thread-root node id this message belongs to (provenance)
-		ts                                 time.Time
-		depth                              int // author org-depth (0=CEO); -1 unknown
+		id, typ, title, body, author, dept, jobTitle, domain, role string
+		src                                                        string // thread-root node id this message belongs to (provenance)
+		ts                                                         time.Time
+		depth                                                      int // author org-depth (0=CEO); -1 unknown
 	}
 	type resRef struct{ label, id, url string }
 	var slackMsgs []clusterNode
@@ -363,9 +363,11 @@ WHERE kind='SAME_TOPIC' AND (from_node_id=$1 OR to_node_id=$1)`, id); serr == ni
 		trows, terr := h.db.Query(ctx, `
 SELECT n.id, COALESCE(n.body,''), COALESCE(NULLIF(CASE WHEN p.display_name ~ '^[BU][A-Z0-9]{6,}$' THEN '' ELSE p.display_name END,''), NULLIF(n.metadata->'author'->>'display_name',''), ''),
        COALESCE(p.depth_from_root, -1), COALESCE(p.department,''), COALESCE(p.job_title,''),
+       COALESCE(dr.domain,''), COALESCE(dr.role_label,''),
        COALESCE(to_timestamp(NULLIF(n.metadata->>'ts','')::float8), n.first_seen_at) AS ts
 FROM graph.nodes n
 LEFT JOIN graph.people p ON p.id = n.author_person_id
+LEFT JOIN graph.person_derived_roles dr ON dr.eeid = p.eeid
 WHERE n.scope = 'slack:' || $1 AND n.deleted_at IS NULL AND COALESCE(n.metadata->>'thread_ts','') = $2
 ORDER BY ts ASC`, tk.channel, tk.ts)
 		if terr != nil {
@@ -376,7 +378,7 @@ ORDER BY ts ASC`, tk.channel, tk.ts)
 			m.typ = "slack"
 			m.src = "slack:" + tk.channel + ":" + tk.ts
 			var depth int
-			if trows.Scan(&m.id, &m.body, &m.author, &depth, &m.dept, &m.jobTitle, &m.ts) == nil && m.body != "" && !seenMsg[m.id] {
+			if trows.Scan(&m.id, &m.body, &m.author, &depth, &m.dept, &m.jobTitle, &m.domain, &m.role, &m.ts) == nil && m.body != "" && !seenMsg[m.id] {
 				m.depth = depth
 				slackMsgs = append(slackMsgs, m)
 				seenMsg[m.id] = true
@@ -393,16 +395,18 @@ ORDER BY ts ASC`, tk.channel, tk.ts)
 		srows, serr := h.db.Query(ctx, `
 SELECT n.id, COALESCE(n.body,''), COALESCE(NULLIF(CASE WHEN p.display_name ~ '^[BU][A-Z0-9]{6,}$' THEN '' ELSE p.display_name END,''), NULLIF(n.metadata->'author'->>'display_name',''), ''),
        COALESCE(p.depth_from_root, -1), COALESCE(p.department,''), COALESCE(p.job_title,''),
+       COALESCE(dr.domain,''), COALESCE(dr.role_label,''),
        COALESCE(to_timestamp(NULLIF(n.metadata->>'ts','')::float8), n.first_seen_at) AS ts
 FROM graph.nodes n
 LEFT JOIN graph.people p ON p.id = n.author_person_id
+LEFT JOIN graph.person_derived_roles dr ON dr.eeid = p.eeid
 WHERE n.id = ANY($1) AND n.deleted_at IS NULL AND COALESCE(n.body,'') <> ''`, slackIDs)
 		if serr == nil {
 			for srows.Next() {
 				var m clusterNode
 				m.typ = "slack"
 				var depth int
-				if srows.Scan(&m.id, &m.body, &m.author, &depth, &m.dept, &m.jobTitle, &m.ts) == nil && m.body != "" && !seenMsg[m.id] {
+				if srows.Scan(&m.id, &m.body, &m.author, &depth, &m.dept, &m.jobTitle, &m.domain, &m.role, &m.ts) == nil && m.body != "" && !seenMsg[m.id] {
 					m.depth = depth
 					m.src = m.id // standalone message: it is its own source
 					slackMsgs = append(slackMsgs, m)
@@ -480,7 +484,9 @@ WHERE n.id = ANY($1) AND n.deleted_at IS NULL AND COALESCE(n.body,'') <> ''`, sl
 	// v12: author labels now carry the BambooHR job title alongside the department
 	// ("Lei Zheng (Engineering · Staff Software Engineer)"), so the LLM can weight
 	// seniority from the transcript. Bump to regenerate title-less cached summaries.
-	sig := fmt.Sprintf("v12:%d:%d:%d:%d:%d:%d", total, maxUpdated, len(slackMsgs), lastMs, excludedRefused, len(sameTopicRoots))
+	// v13: evidence-backed domain roles replace HR labels when available
+	// ("Lei Zheng (payments · engineering lead)").
+	sig := fmt.Sprintf("v13:%d:%d:%d:%d:%d:%d", total, maxUpdated, len(slackMsgs), lastMs, excludedRefused, len(sameTopicRoots))
 
 	var cachedSig, cachedOverview string
 	var cachedHl []byte
@@ -533,7 +539,7 @@ WHERE n.id = ANY($1) AND n.deleted_at IS NULL AND COALESCE(n.body,'') <> ''`, sl
 			if author == "" {
 				author = "someone"
 			}
-			author = withDept(author, m.dept, m.jobTitle) // "Hazwan (Flights)"
+			author = withDept(author, m.dept, m.jobTitle, m.domain, m.role)
 			// Tag seniority (lower org-depth = more senior) and the originating msg so
 			// the LLM can foreground who raised it and weight leadership input. Only tag
 			// a known author — a "[leadership]" hint on an anonymous "someone" is useless

@@ -53,9 +53,11 @@ func summarizeThreadHandler(deps Deps) jobs.Handler {
 		rows, err := deps.DB.Query(ctx, `
 SELECT COALESCE(NULLIF(n.title,''), n.body), COALESCE(NULLIF(CASE WHEN p.display_name ~ '^[BU][A-Z0-9]{6,}$' THEN '' ELSE p.display_name END,''), NULLIF(n.metadata->'author'->>'display_name',''), ''),
        COALESCE(p.department,''), COALESCE(p.job_title,''),
+       COALESCE(dr.domain,''), COALESCE(dr.role_label,''),
        (EXTRACT(EPOCH FROM n.updated_at) * 1000)::bigint AS upd_ms
 FROM graph.nodes n
 LEFT JOIN graph.people p ON p.id = n.author_person_id
+LEFT JOIN graph.person_derived_roles dr ON dr.eeid = p.eeid
 WHERE n.scope = 'slack:' || $1 AND n.deleted_at IS NULL
   AND COALESCE(NULLIF(n.metadata->>'thread_ts',''), split_part(n.id,':',3)) = $2
 ORDER BY COALESCE(to_timestamp(NULLIF(n.metadata->>'ts','')::float8), n.first_seen_at) ASC`,
@@ -68,9 +70,9 @@ ORDER BY COALESCE(to_timestamp(NULLIF(n.metadata->>'ts','')::float8), n.first_se
 		var maxUpdated int64
 		var hasDiscussion bool
 		for rows.Next() {
-			var body, author, dept, jobTitle string
+			var body, author, dept, jobTitle, domain, role string
 			var upd int64
-			if err := rows.Scan(&body, &author, &dept, &jobTitle, &upd); err != nil {
+			if err := rows.Scan(&body, &author, &dept, &jobTitle, &domain, &role, &upd); err != nil {
 				rows.Close()
 				return err
 			}
@@ -84,7 +86,7 @@ ORDER BY COALESCE(to_timestamp(NULLIF(n.metadata->>'ts','')::float8), n.first_se
 			if author == "" {
 				author = "someone"
 			}
-			line := withDept(author, dept, jobTitle) + ": " + firstLine(body, 280) + "\n"
+			line := withDept(author, dept, jobTitle, domain, role) + ": " + firstLine(body, 280) + "\n"
 			if b.Len()+len(line) <= 7000 {
 				b.WriteString(line)
 			}
@@ -106,7 +108,8 @@ ORDER BY COALESCE(to_timestamp(NULLIF(n.metadata->>'ts','')::float8), n.first_se
 		// Slack author is empty (bot notifications), so summaries name the real actor
 		// instead of "someone". Bump to regenerate rows cached with anonymous authors.
 		// Keep this prefix in sync with channels.go.
-		sig := fmt.Sprintf("v7:%d:%d", count, maxUpdated) // v7: confirmations are substantive, not chatter; keep prefix in sync with channels.go
+		// v8: author labels prefer evidence-backed domain roles when available.
+		sig := fmt.Sprintf("v8:%d:%d", count, maxUpdated)
 		// Skip if the cached summary already matches the current signature.
 		var existingSig string
 		_ = deps.DB.QueryRow(ctx,

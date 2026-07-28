@@ -187,6 +187,8 @@ type watchedMsg struct {
 	author      string
 	dept        string
 	title       string
+	domain      string
+	role        string
 	text        string
 	rootNodeID  string
 }
@@ -201,12 +203,15 @@ SELECT n.id,
        COALESCE(NULLIF(CASE WHEN p.display_name ~ '^[BU][A-Z0-9]{6,}$' THEN '' ELSE p.display_name END,''), NULLIF(n.metadata->'author'->>'display_name',''), '') AS author,
        COALESCE(p.department,'')                                    AS dept,
        COALESCE(p.job_title,'')                                     AS job_title,
+       COALESCE(dr.domain,'')                                       AS domain,
+       COALESCE(dr.role_label,'')                                   AS role_label,
        COALESCE(NULLIF(n.title,''), n.body, '')                     AS text,
        CASE WHEN COALESCE(NULLIF(n.metadata->>'thread_ts',''),'') <> ''
             THEN 'slack:'||replace(n.scope,'slack:','')||':'||(n.metadata->>'thread_ts')
             ELSE n.id END                                           AS root_node_id
 FROM graph.nodes n
 LEFT JOIN graph.people p ON p.id = n.author_person_id
+LEFT JOIN graph.person_derived_roles dr ON dr.eeid = p.eeid
 LEFT JOIN graph.slack_channels c ON c.slack_channel_id = replace(n.scope,'slack:','')
 WHERE n.type IN ('slack','slack_thread')
   AND n.deleted_at IS NULL
@@ -223,7 +228,7 @@ LIMIT 50`
 	var out []watchedMsg
 	for rows.Next() {
 		var m watchedMsg
-		if err := rows.Scan(&m.nodeID, &m.channel, &m.channelName, &m.author, &m.dept, &m.title, &m.text, &m.rootNodeID); err != nil {
+		if err := rows.Scan(&m.nodeID, &m.channel, &m.channelName, &m.author, &m.dept, &m.title, &m.domain, &m.role, &m.text, &m.rootNodeID); err != nil {
 			return nil, err
 		}
 		out = append(out, m)
@@ -251,7 +256,7 @@ func buildChannelMsg(ctx context.Context, deps Deps, m watchedMsg) string {
 	if topic != "" {
 		fmt.Fprintf(&b, "_Thread: %s_\n", humanizeSlack(topic, names))
 	}
-	fmt.Fprintf(&b, "*%s:* %s\n", withDept(author, m.dept, m.title), firstLine(text, 600))
+	fmt.Fprintf(&b, "*%s:* %s\n", withDept(author, m.dept, m.title, m.domain, m.role), firstLine(text, 600))
 	if link := slackPermalink(m.rootNodeID); link != "" {
 		b.WriteString(link)
 	}

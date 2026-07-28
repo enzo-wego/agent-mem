@@ -318,14 +318,20 @@ func looksLikeSlackID(s string) bool { return slackIDRe.MatchString(s) }
 // when it still holds a raw Slack/bot id (refresh_slack_bots hasn't resolved it), since a
 // readable handle beats "B0AGGSTEXS6"; see the CASE guard in each author query.
 
-// withDept labels a person with their team and role ("Hazwan (Flights · Senior Engineer)")
-// so LLM transcripts and alert lines carry both where someone sits and how senior they
-// are. Either part may be missing — job_title only exists for BambooHR people, so bots and
-// Slack-only accounts fall back to "Name (Dept)" or the bare name.
+// withDept labels a person with their evidence-backed domain role when one exists
+// ("Lei Zheng (payments · engineering lead)"). Derived roles take precedence over the
+// BambooHR fallback because they answer functional ownership, while department/title say
+// only where HR places someone. Bots, Slack-only accounts, and people without sufficient
+// inference evidence fall back to "Name (Dept · Title)" or the bare name.
 //
 // The department is dropped when the title already names it, so a Payments director reads
 // "Alexandre Morin (Director, Payments, Risk & Fintech)" rather than repeating "Payments".
-func withDept(author, dept, title string) string {
+func withDept(author, dept, title, domain, role string) string {
+	domain, role = strings.TrimSpace(domain), strings.TrimSpace(role)
+	if domain != "" && role != "" {
+		return author + " (" + domain + " · " + role + ")"
+	}
+
 	d, t := strings.TrimSpace(dept), strings.TrimSpace(title)
 	if d != "" && t != "" && strings.Contains(strings.ToLower(t), strings.ToLower(d)) {
 		d = ""
@@ -512,8 +518,8 @@ GROUP BY 1`, id, cacheKeys)
 				var cnt int
 				var last int64
 				if lrows.Scan(&tt, &cnt, &last) == nil {
-					// Must match summarize_thread's sig format ("v4:" prefix).
-					liveSig[tt] = fmt.Sprintf("v7:%d:%d", cnt, last)
+					// Must match summarize_thread's signature format.
+					liveSig[tt] = fmt.Sprintf("v8:%d:%d", cnt, last)
 				}
 			}
 			lrows.Close()
