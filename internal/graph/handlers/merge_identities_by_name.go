@@ -52,6 +52,9 @@ func mergeIdentitiesByNameHandler(deps Deps) jobs.Handler {
 			if cnt != 1 {
 				continue // ambiguous BambooHR name
 			}
+			if !plausibleFullName(name) {
+				continue // placeholder names like "A" identify nobody
+			}
 			canonicalID := nameID[name]
 			// Exactly one un-merged, eeid-less Slack person with that real_name.
 			var matches int

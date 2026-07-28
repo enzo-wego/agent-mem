@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"os"
 
@@ -148,33 +149,53 @@ Example CSV:
 	listCmd.Flags().StringVar(&listKind, "kind", "", "Filter by kind (partner, feature, status, currency, …)")
 
 	// entities import-bamboohr
-	var bambooHRCSVPath string
+	var bambooHRCSVPath, bambooHRJSONPath string
+	var bambooHRRetire bool
 	importBambooHRCmd := &cobra.Command{
 		Use:   "import-bamboohr",
-		Short: "Enqueue an import_bamboohr job from a BambooHR org-chart CSV",
-		Long: `Reads a BambooHR org-chart CSV and enqueues an import_bamboohr job in graph.jobs.
+		Short: "Enqueue an import_bamboohr job from the org-chart page graph (--json) or a CSV (--csv)",
+		Long: `Enqueues an import_bamboohr job in graph.jobs from either source.
 
-Required columns: EEID, Full Name, Reports To.
-Optional columns: Work Email (merges org identity onto Slack/Jira people),
-                  Department (shown as the person's team label, e.g. "Hazwan (Flights)").
+--json (preferred) takes the org-chart page graph: an array of
+{eeid, name, job_title, department, reports_to[, email]}. Extract it from a logged-in
+session with GET /employees/orgchart.php?id=<any-eeid>, whose HTML embeds the whole
+tree under the "OrgChart": key — 100% job-title coverage.
 
-The job worker processes the CSV to upsert graph.people rows. Re-running is safe:
-blank Name/Department cells never overwrite a value already stored.
+--csv takes the Visio export (EEID, Full Name, Reports To [, Work Email, Department]).
+That export withholds Job Title, Department and Email for everyone except the employee
+who downloaded it, so it cannot populate titles.
 
-Example:
+Re-running is safe: blank incoming cells never overwrite a stored value.
+--retire-missing marks anyone absent from the import inactive (never deletes them, since
+their authored nodes still reference the row); it is ignored for imports under 100 rows.
+
+Examples:
+  agent-mem entities import-bamboohr --json ./bamboo_people.json --retire-missing
   agent-mem entities import-bamboohr --csv ~/Downloads/bamboohr_org_chart_for_visio.csv`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if bambooHRCSVPath == "" {
-				return fmt.Errorf("--csv is required")
+			if (bambooHRCSVPath == "") == (bambooHRJSONPath == "") {
+				return fmt.Errorf("provide exactly one of --json or --csv")
 			}
 
-			data, err := os.ReadFile(bambooHRCSVPath)
+			src := bambooHRJSONPath
+			if src == "" {
+				src = bambooHRCSVPath
+			}
+			data, err := os.ReadFile(src)
 			if err != nil {
-				return fmt.Errorf("read CSV %s: %w", bambooHRCSVPath, err)
+				return fmt.Errorf("read %s: %w", src, err)
 			}
 
-			// Encode as base64 so the job payload is JSON-safe.
-			encoded := base64.StdEncoding.EncodeToString(data)
+			payload := map[string]any{"retire_missing": bambooHRRetire}
+			if bambooHRJSONPath != "" {
+				if !json.Valid(data) {
+					return fmt.Errorf("%s is not valid JSON", bambooHRJSONPath)
+				}
+				payload["people_json"] = json.RawMessage(data)
+			} else {
+				// Encode as base64 so the job payload is JSON-safe.
+				payload["csv_bytes"] = base64.StdEncoding.EncodeToString(data)
+			}
 
 			ctx := context.Background()
 			pool, err := database.Connect(ctx, getCfg().DatabaseURL)
@@ -184,9 +205,6 @@ Example:
 			defer pool.Close()
 
 			cfg := getCfg()
-			payload := map[string]string{
-				"csv_bytes": encoded,
-			}
 			jobID, err := jobs.Enqueue(ctx, pool, "import_bamboohr", payload, jobs.EnqueueOptions{
 				Priority:  5,
 				MachineID: cfg.MachineID,
@@ -195,12 +213,14 @@ Example:
 				return fmt.Errorf("enqueue import_bamboohr job: %w", err)
 			}
 
-			fmt.Fprintf(cmd.OutOrStdout(), "enqueued import_bamboohr job id=%d (csv: %s, %d bytes)\n",
-				jobID, bambooHRCSVPath, len(data))
+			fmt.Fprintf(cmd.OutOrStdout(), "enqueued import_bamboohr job id=%d (%s, %d bytes, retire_missing=%v)\n",
+				jobID, src, len(data), bambooHRRetire)
 			return nil
 		},
 	}
-	importBambooHRCmd.Flags().StringVar(&bambooHRCSVPath, "csv", "", "Path to BambooHR org-chart CSV file")
+	importBambooHRCmd.Flags().StringVar(&bambooHRCSVPath, "csv", "", "Path to BambooHR Visio org-chart CSV")
+	importBambooHRCmd.Flags().StringVar(&bambooHRJSONPath, "json", "", "Path to org-chart page-graph JSON (carries job titles)")
+	importBambooHRCmd.Flags().BoolVar(&bambooHRRetire, "retire-missing", false, "Mark people absent from the import inactive")
 
 	// entities refresh-slack-users
 	refreshSlackUsersCmd := &cobra.Command{

@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/rs/zerolog"
@@ -62,28 +63,60 @@ func TestImportBambooHRHandler_WithDB(t *testing.T) {
 	// Integration test placeholder.
 }
 
-func TestComputeDepth(t *testing.T) {
+func indexRows(rows []bambooRow) (map[string]bambooRow, map[string]string) {
+	byEEID := make(map[string]bambooRow, len(rows))
+	nameToEEID := make(map[string]string, len(rows))
+	for _, r := range rows {
+		byEEID[r.EEID] = r
+		nameToEEID[strings.ToLower(r.FullName)] = r.EEID
+	}
+	return byEEID, nameToEEID
+}
+
+// TestComputeDepthByEEID uses the shape BambooHR actually exports: "Reports To" is the
+// manager's EEID, not their name. The original fixture used names, so it passed while
+// every real import produced depth 0 for all 448 people.
+func TestComputeDepthByEEID(t *testing.T) {
+	rows := []bambooRow{
+		{EEID: "111", FullName: "Ross Veitch", ReportsTo: ""},
+		{EEID: "295", FullName: "Chu Yeow Cheah", ReportsTo: "111"},
+		{EEID: "1192", FullName: "Ryan Tan", ReportsTo: "295"},
+		{EEID: "259", FullName: "Lei Zheng", ReportsTo: "1192"},
+	}
+	byEEID, nameToEEID := indexRows(rows)
+
+	for i, want := range []int{0, 1, 2, 3} {
+		if got := computeDepth(rows[i], byEEID, nameToEEID, 0, 20); got != want {
+			t.Errorf("%s depth: got %d, want %d", rows[i].FullName, got, want)
+		}
+	}
+}
+
+// TestComputeDepthByName keeps the name-resolution path alive for hand-built CSVs.
+func TestComputeDepthByName(t *testing.T) {
 	rows := []bambooRow{
 		{EEID: "1", FullName: "CEO", ReportsTo: ""},
 		{EEID: "2", FullName: "VP Eng", ReportsTo: "CEO"},
 		{EEID: "3", FullName: "Engineer", ReportsTo: "VP Eng"},
 	}
-	nameToEEID := map[string]string{
-		"ceo":     "1",
-		"vp eng":  "2",
-		"engineer": "3",
-	}
+	byEEID, nameToEEID := indexRows(rows)
 
-	depth0 := computeDepth(rows[0], rows, nameToEEID, 0, 20)
-	if depth0 != 0 {
-		t.Errorf("CEO depth: got %d, want 0", depth0)
+	for i, want := range []int{0, 1, 2} {
+		if got := computeDepth(rows[i], byEEID, nameToEEID, 0, 20); got != want {
+			t.Errorf("%s depth: got %d, want %d", rows[i].FullName, got, want)
+		}
 	}
-	depth1 := computeDepth(rows[1], rows, nameToEEID, 0, 20)
-	if depth1 != 1 {
-		t.Errorf("VP Eng depth: got %d, want 1", depth1)
+}
+
+// TestComputeDepthCycle guards the recursion: a mutual reports_to must terminate.
+func TestComputeDepthCycle(t *testing.T) {
+	rows := []bambooRow{
+		{EEID: "1", FullName: "A", ReportsTo: "2"},
+		{EEID: "2", FullName: "B", ReportsTo: "1"},
 	}
-	depth2 := computeDepth(rows[2], rows, nameToEEID, 0, 20)
-	if depth2 != 2 {
-		t.Errorf("Engineer depth: got %d, want 2", depth2)
+	byEEID, nameToEEID := indexRows(rows)
+
+	if got := computeDepth(rows[0], byEEID, nameToEEID, 0, 20); got != 20 {
+		t.Errorf("cycle depth: got %d, want 20 (maxDepth guard)", got)
 	}
 }
