@@ -295,6 +295,34 @@ func TestEnsurePerson_BlankNameNeverOverwrites(t *testing.T) {
 		t.Fatalf("named ingest did not update: got %q", name)
 	}
 
+	// An eeid row is a BambooHR employee: HR owns the name, so ingest must not replace it
+	// with the Slack handle the person posts under. This is what actually broke in prod —
+	// "Lei Zheng" became "mysqto" ~15 minutes after the import.
+	if _, err := pool.Exec(ctx, `UPDATE graph.people SET eeid = 999259 WHERE slack_user_id = $1`, slackID); err != nil {
+		t.Fatalf("set eeid: %v", err)
+	}
+	if _, err := pool.Exec(ctx,
+		`UPDATE graph.people SET display_name = 'Lei Zheng' WHERE slack_user_id = $1`, slackID); err != nil {
+		t.Fatalf("reset name: %v", err)
+	}
+	if _, _, err := svc.EnsurePerson(ctx, identity.Ref{
+		Source: "slack", ExternalID: slackID, DisplayName: "mysqto",
+	}); err != nil {
+		t.Fatalf("EnsurePerson handle: %v", err)
+	}
+	if err := pool.QueryRow(ctx,
+		`SELECT COALESCE(display_name,'') FROM graph.people WHERE slack_user_id = $1`, slackID).Scan(&name); err != nil {
+		t.Fatalf("read 4: %v", err)
+	}
+	if name != "Lei Zheng" {
+		t.Fatalf("ingest overwrote an employee's HR name with the Slack handle: got %q", name)
+	}
+	if _, err := pool.Exec(ctx,
+		`UPDATE graph.people SET eeid = NULL, display_name = 'Lei Zheng (updated)' WHERE slack_user_id = $1`,
+		slackID); err != nil {
+		t.Fatalf("clear eeid: %v", err)
+	}
+
 	// The email-carrying branch of refreshPerson had the same unguarded assignment.
 	if _, _, err := svc.EnsurePerson(ctx, identity.Ref{
 		Source: "slack", ExternalID: slackID, DisplayName: "", Email: "blankguard@example.test",
