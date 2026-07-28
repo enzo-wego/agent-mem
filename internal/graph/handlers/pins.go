@@ -82,7 +82,7 @@ LEFT JOIN LATERAL (
 LEFT JOIN LATERAL (
   SELECT CASE WHEN pe.is_bot
               THEN COALESCE(NULLIF(pe.display_name,''), '')
-              ELSE COALESCE(NULLIF(n.metadata->'author'->>'display_name',''), pe.display_name, '')
+              ELSE COALESCE(NULLIF(CASE WHEN pe.display_name ~ '^[BU][A-Z0-9]{6,}$' THEN '' ELSE pe.display_name END,''), NULLIF(n.metadata->'author'->>'display_name',''), '')
          END AS author,
          LEFT(COALESCE(n.body,''),200) AS body
   FROM graph.nodes n

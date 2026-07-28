@@ -361,7 +361,7 @@ WHERE kind='SAME_TOPIC' AND (from_node_id=$1 OR to_node_id=$1)`, id); serr == ni
 
 	for tk := range threads {
 		trows, terr := h.db.Query(ctx, `
-SELECT n.id, COALESCE(n.body,''), COALESCE(NULLIF(n.metadata->'author'->>'display_name',''), p.display_name, ''),
+SELECT n.id, COALESCE(n.body,''), COALESCE(NULLIF(CASE WHEN p.display_name ~ '^[BU][A-Z0-9]{6,}$' THEN '' ELSE p.display_name END,''), NULLIF(n.metadata->'author'->>'display_name',''), ''),
        COALESCE(p.depth_from_root, -1), COALESCE(p.department,''), COALESCE(p.job_title,''),
        COALESCE(to_timestamp(NULLIF(n.metadata->>'ts','')::float8), n.first_seen_at) AS ts
 FROM graph.nodes n
@@ -391,7 +391,7 @@ ORDER BY ts ASC`, tk.channel, tk.ts)
 	// these still ground the summary instead of leaving it blank.
 	if len(slackIDs) > 0 {
 		srows, serr := h.db.Query(ctx, `
-SELECT n.id, COALESCE(n.body,''), COALESCE(NULLIF(n.metadata->'author'->>'display_name',''), p.display_name, ''),
+SELECT n.id, COALESCE(n.body,''), COALESCE(NULLIF(CASE WHEN p.display_name ~ '^[BU][A-Z0-9]{6,}$' THEN '' ELSE p.display_name END,''), NULLIF(n.metadata->'author'->>'display_name',''), ''),
        COALESCE(p.depth_from_root, -1), COALESCE(p.department,''), COALESCE(p.job_title,''),
        COALESCE(to_timestamp(NULLIF(n.metadata->>'ts','')::float8), n.first_seen_at) AS ts
 FROM graph.nodes n

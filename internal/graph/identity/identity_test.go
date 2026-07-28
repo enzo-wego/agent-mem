@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/zerolog"
 
 	"github.com/agent-mem/agent-mem/internal/graph/identity"
@@ -246,4 +247,77 @@ func TestResolve_FollowsChain(t *testing.T) {
 	if got != idA {
 		t.Fatalf("Resolve(%d) = %d, want %d", idA, got, idA)
 	}
+}
+
+// TestEnsurePerson_BlankNameNeverOverwrites pins the guard that cost 201 people their
+// names: every message ingest calls EnsurePerson, and Slack metadata frequently carries no
+// author display name, so an unguarded assignment wiped the stored name on each ingest.
+func TestEnsurePerson_BlankNameNeverOverwrites(t *testing.T) {
+	pool := openTestDB(t)
+	ctx := context.Background()
+	svc := identity.NewService(pool, zerolog.Nop())
+
+	const slackID = "UBLANKGUARD1"
+	if err := purgeSlackPerson(ctx, pool, slackID); err != nil {
+		t.Fatalf("clean: %v", err)
+	}
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO graph.people (display_name, slack_user_id, machine_id) VALUES ('Lei Zheng', $1, 'test')`,
+		slackID); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	t.Cleanup(func() { _ = purgeSlackPerson(context.Background(), pool, slackID) })
+
+	// Ingest twice with no display name — the stored name must survive both.
+	for i := 0; i < 2; i++ {
+		if _, _, err := svc.EnsurePerson(ctx, identity.Ref{Source: "slack", ExternalID: slackID, DisplayName: ""}); err != nil {
+			t.Fatalf("EnsurePerson %d: %v", i, err)
+		}
+	}
+	var name string
+	if err := pool.QueryRow(ctx,
+		`SELECT COALESCE(display_name,'') FROM graph.people WHERE slack_user_id = $1`, slackID).Scan(&name); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if name != "Lei Zheng" {
+		t.Fatalf("blank ingest wiped the name: got %q, want %q", name, "Lei Zheng")
+	}
+
+	// A real incoming name still updates it.
+	if _, _, err := svc.EnsurePerson(ctx, identity.Ref{Source: "slack", ExternalID: slackID, DisplayName: "Lei Zheng (updated)"}); err != nil {
+		t.Fatalf("EnsurePerson named: %v", err)
+	}
+	if err := pool.QueryRow(ctx,
+		`SELECT COALESCE(display_name,'') FROM graph.people WHERE slack_user_id = $1`, slackID).Scan(&name); err != nil {
+		t.Fatalf("read 2: %v", err)
+	}
+	if name != "Lei Zheng (updated)" {
+		t.Fatalf("named ingest did not update: got %q", name)
+	}
+
+	// The email-carrying branch of refreshPerson had the same unguarded assignment.
+	if _, _, err := svc.EnsurePerson(ctx, identity.Ref{
+		Source: "slack", ExternalID: slackID, DisplayName: "", Email: "blankguard@example.test",
+	}); err != nil {
+		t.Fatalf("EnsurePerson with email: %v", err)
+	}
+	if err := pool.QueryRow(ctx,
+		`SELECT COALESCE(display_name,'') FROM graph.people WHERE slack_user_id = $1`, slackID).Scan(&name); err != nil {
+		t.Fatalf("read 3: %v", err)
+	}
+	if name != "Lei Zheng (updated)" {
+		t.Fatalf("blank ingest with email wiped the name: got %q", name)
+	}
+}
+
+// purgeSlackPerson removes a test person and the identity_map rows that reference it
+// (EnsurePerson creates one, and the FK blocks deleting the person first).
+func purgeSlackPerson(ctx context.Context, pool *pgxpool.Pool, slackID string) error {
+	if _, err := pool.Exec(ctx,
+		`DELETE FROM graph.identity_map WHERE person_id IN (SELECT id FROM graph.people WHERE slack_user_id = $1)`,
+		slackID); err != nil {
+		return err
+	}
+	_, err := pool.Exec(ctx, `DELETE FROM graph.people WHERE slack_user_id = $1`, slackID)
+	return err
 }

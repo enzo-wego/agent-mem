@@ -311,6 +311,13 @@ var slackIDRe = regexp.MustCompile(`^[BUW][A-Z0-9]{6,}$`)
 // (refresh_slack_bots) or a user isn't in slack_users yet; hide them.
 func looksLikeSlackID(s string) bool { return slackIDRe.MatchString(s) }
 
+// Author labels resolve graph.people.display_name FIRST and fall back to the Slack
+// message metadata, because metadata carries the handle a person typed under ("mysqto")
+// while the people row carries their real name ("Lei Zheng"). The reverse order made
+// alerts read "Mysqto (Engineering · Staff Software Engineer)". The people row is skipped
+// when it still holds a raw Slack/bot id (refresh_slack_bots hasn't resolved it), since a
+// readable handle beats "B0AGGSTEXS6"; see the CASE guard in each author query.
+
 // withDept labels a person with their team and role ("Hazwan (Flights · Senior Engineer)")
 // so LLM transcripts and alert lines carry both where someone sits and how senior they
 // are. Either part may be missing — job_title only exists for BambooHR people, so bots and
@@ -367,7 +374,7 @@ SELECT n.id, ''::text AS title, LEFT(COALESCE(n.body,''),600), COALESCE(n.url,''
        COALESCE(n.metadata->>'thread_ts',''),
        CASE WHEN p.is_bot
             THEN COALESCE(NULLIF(p.display_name,''), '')
-            ELSE COALESCE(NULLIF(n.metadata->'author'->>'display_name',''), p.display_name, '')
+            ELSE COALESCE(NULLIF(CASE WHEN p.display_name ~ '^[BU][A-Z0-9]{6,}$' THEN '' ELSE p.display_name END,''), NULLIF(n.metadata->'author'->>'display_name',''), '')
        END AS author
 FROM graph.nodes n
 LEFT JOIN graph.people p ON p.id = n.author_person_id

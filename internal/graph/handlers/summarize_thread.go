@@ -51,7 +51,7 @@ func summarizeThreadHandler(deps Deps) jobs.Handler {
 
 		// Load the thread's messages (root + replies), oldest first.
 		rows, err := deps.DB.Query(ctx, `
-SELECT COALESCE(NULLIF(n.title,''), n.body), COALESCE(NULLIF(n.metadata->'author'->>'display_name',''), p.display_name, ''),
+SELECT COALESCE(NULLIF(n.title,''), n.body), COALESCE(NULLIF(CASE WHEN p.display_name ~ '^[BU][A-Z0-9]{6,}$' THEN '' ELSE p.display_name END,''), NULLIF(n.metadata->'author'->>'display_name',''), ''),
        COALESCE(p.department,''), COALESCE(p.job_title,''),
        (EXTRACT(EPOCH FROM n.updated_at) * 1000)::bigint AS upd_ms
 FROM graph.nodes n

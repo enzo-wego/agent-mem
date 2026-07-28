@@ -113,7 +113,7 @@ func (s *Service) EnsurePerson(ctx context.Context, r Ref) (personID int64, crea
 			INSERT INTO graph.people (display_name, email, %s, is_bot, machine_id)
 			VALUES ($1, $2, $3, $4, $5)
 			ON CONFLICT (%s) DO UPDATE
-			  SET display_name = EXCLUDED.display_name,
+			  SET display_name = COALESCE(NULLIF(EXCLUDED.display_name, ''), graph.people.display_name),
 			      email        = COALESCE(graph.people.email, EXCLUDED.email)
 			RETURNING id`, col, col)
 		err = s.db.QueryRow(ctx, query,
@@ -126,7 +126,7 @@ func (s *Service) EnsurePerson(ctx context.Context, r Ref) (personID int64, crea
 				INSERT INTO graph.people (display_name, email, is_bot, machine_id)
 				VALUES ($1, $2, $3, $4)
 				ON CONFLICT (email) DO UPDATE
-				  SET display_name = EXCLUDED.display_name
+				  SET display_name = COALESCE(NULLIF(EXCLUDED.display_name, ''), graph.people.display_name)
 				RETURNING id`,
 				r.DisplayName, r.Email, r.IsBot, "local",
 			).Scan(&newID)
@@ -265,11 +265,16 @@ func (s *Service) Resolve(ctx context.Context, personID int64) (int64, error) {
 }
 
 // refreshPerson updates display_name and fills in email if the existing row has NULL email.
+//
+// A blank incoming name never overwrites a stored one. This runs on every ingest, and
+// Slack message metadata often carries no author display name, so an unguarded assignment
+// wiped names continuously — that is how 201 people ended up nameless while their BambooHR
+// row sat right there with the real name.
 func (s *Service) refreshPerson(ctx context.Context, personID int64, r Ref) error {
 	if r.Email != "" {
 		_, err := s.db.Exec(ctx, `
 			UPDATE graph.people
-			SET display_name = $2,
+			SET display_name = COALESCE(NULLIF($2, ''), display_name),
 			    email        = COALESCE(email, $3)
 			WHERE id = $1`,
 			personID, r.DisplayName, r.Email,
@@ -280,7 +285,7 @@ func (s *Service) refreshPerson(ctx context.Context, personID int64, r Ref) erro
 		return nil
 	}
 	_, err := s.db.Exec(ctx, `
-		UPDATE graph.people SET display_name = $2 WHERE id = $1`,
+		UPDATE graph.people SET display_name = COALESCE(NULLIF($2, ''), display_name) WHERE id = $1`,
 		personID, r.DisplayName,
 	)
 	if err != nil {

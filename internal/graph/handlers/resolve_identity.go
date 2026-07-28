@@ -73,7 +73,7 @@ func resolveIdentityHandler(deps Deps) jobs.Handler {
 		// Step 2: UPDATE only if email is still NULL (race-safe).
 		_, err = deps.DB.Exec(ctx, `
 			UPDATE graph.people
-			SET email = $2, display_name = $3, identity_resolved_at = NOW()
+			SET email = $2, display_name = COALESCE(NULLIF($3, ''), display_name), identity_resolved_at = NOW()
 			WHERE id = $1 AND email IS NULL`,
 			p.PersonID, email, displayName,
 		)
