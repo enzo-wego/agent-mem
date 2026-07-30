@@ -37,6 +37,7 @@ type resolveArtifact struct {
 	Type           string             `json:"type"`
 	Title          string             `json:"title"`
 	Author         string             `json:"author,omitempty"`
+	ThreadTS       string             `json:"thread_ts,omitempty"`
 	Score          float64            `json:"score"`
 	ScoreBreakdown scoring.Components `json:"score_breakdown"`
 	Summary        string             `json:"summary,omitempty"`
@@ -167,23 +168,29 @@ func (h *Resolve) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	hydrated, missed, _ := hydrate.Greedy(ctx, h.db, cands, req.BudgetTokens)
 
-	// Batch-resolve author display names for the hydrated nodes (for the
-	// "Related context" block / dashboard). Best-effort.
+	// Batch-resolve author display names and Slack thread roots for the hydrated
+	// nodes (for the "Related context" block / dashboard). Best-effort.
 	authorByID := make(map[string]string)
+	threadTSByID := make(map[string]string)
 	if len(hydrated) > 0 {
 		ids := make([]string, len(hydrated))
 		for i, hyd := range hydrated {
 			ids[i] = hyd.NodeID
 		}
 		if rows, aErr := h.db.Query(ctx, `
-SELECT n.id, COALESCE(p.display_name, '')
+SELECT n.id, COALESCE(p.display_name, ''), COALESCE(n.metadata->>'thread_ts', '')
 FROM graph.nodes n
 LEFT JOIN graph.people p ON p.id = n.author_person_id
 WHERE n.id = ANY($1)`, ids); aErr == nil {
 			for rows.Next() {
-				var id, name string
-				if rows.Scan(&id, &name) == nil && name != "" {
-					authorByID[id] = name
+				var id, name, threadTS string
+				if rows.Scan(&id, &name, &threadTS) == nil {
+					if name != "" {
+						authorByID[id] = name
+					}
+					if threadTS != "" {
+						threadTSByID[id] = threadTS
+					}
 				}
 			}
 			rows.Close()
@@ -221,8 +228,9 @@ WHERE n.id = ANY($1)`, ids); aErr == nil {
 		}
 		resp.Artifacts = append(resp.Artifacts, resolveArtifact{
 			NodeID: hyd.NodeID, URL: hyd.URL, Type: hyd.Type, Title: hyd.Title,
-			Author: authorByID[hyd.NodeID],
-			Score:  score, ScoreBreakdown: bd,
+			Author:   authorByID[hyd.NodeID],
+			ThreadTS: threadTSByID[hyd.NodeID],
+			Score:    score, ScoreBreakdown: bd,
 			Body: body, Hop: hop,
 		})
 		resp.ContextTokens += hyd.Tokens
@@ -240,16 +248,33 @@ func (h *Resolve) canonicalizeSeeds(ctx context.Context, seeds []string) []strin
 	resolved := make([]string, len(seeds))
 	copy(resolved, seeds)
 	for i, seed := range seeds {
-		if !strings.Contains(seed, "://") {
-			continue
-		}
-		_ = h.db.QueryRow(ctx, `
+		if strings.Contains(seed, "://") {
+			_ = h.db.QueryRow(ctx, `
 SELECT id
 FROM graph.nodes
 WHERE url = $1 AND deleted_at IS NULL
 ORDER BY updated_at DESC
 LIMIT 1
 `, seed).Scan(&resolved[i])
+		}
+
+		if !strings.HasPrefix(resolved[i], "slack:") {
+			continue
+		}
+		var rootID string
+		if err := h.db.QueryRow(ctx, `
+SELECT root.id
+FROM graph.nodes reply
+JOIN graph.nodes root
+  ON root.id = 'slack:' || split_part(reply.id, ':', 2) || ':' ||
+               NULLIF(reply.metadata->>'thread_ts', '')
+ AND root.deleted_at IS NULL
+WHERE reply.id = $1
+  AND reply.deleted_at IS NULL
+LIMIT 1
+`, resolved[i]).Scan(&rootID); err == nil {
+			resolved[i] = rootID
+		}
 	}
 	return resolved
 }

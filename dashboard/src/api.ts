@@ -414,6 +414,7 @@ export interface ResolveArtifact {
   url?: string;
   body?: string;
   author?: string;
+  thread_ts?: string;
   score?: number;
   hop: number;
 }
@@ -434,8 +435,7 @@ export interface GraphResolveResponse {
 // into the graph node id "slack:<channel>:<ts>". The link strips the dot from
 // the ts; Slack ts is always <seconds>.<6-digit micros>, so we re-insert the
 // dot 6 digits from the end. Returns null if s is not a Slack archive link.
-// ponytail: matches thread ROOTS (node id is keyed by thread_ts); a link to a
-// reply resolves only if that reply is itself the thread root.
+// graphResolve normalizes a reply node id to its thread root server-side.
 export function parseSlackLink(s: string): { nodeId: string; channel: string; ts: string } | null {
   const m = s.match(/slack\.com\/archives\/(C\w+)\/p(\d+)/);
   if (!m) return null;

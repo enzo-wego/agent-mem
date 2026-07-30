@@ -34,7 +34,7 @@ export function SearchPage({ project }: { project: string }) {
         // Graph-memory view: resolve the thread node + its linked neighbors.
         const res = await graphResolve([slack.nodeId], undefined, 2)
         const arts = res.artifacts || []
-        const root = arts.find((a) => a.hop === 0 && a.node_id === slack.nodeId) ?? null
+        const root = arts.find((a) => a.hop === 0) ?? null
         const rest = arts.filter((a) => a !== root).sort((a, b) => (b.score ?? 0) - (a.score ?? 0))
         setThread(root)
         setLinked(rest)

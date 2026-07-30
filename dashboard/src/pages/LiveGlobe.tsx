@@ -946,11 +946,15 @@ export function LiveGlobePage() {
     graphResolve([nodeId], undefined, 1)
       .then((r) => {
         const root = (r.artifacts || []).find((a) => a.hop === 0)
+        if (!root) {
+          openGraphForNode({ id: nodeId, type: 'slack', title: '', url: '' } as GraphNode)
+          return
+        }
         openGraphForNode({
-          id: nodeId,
-          type: root?.type || 'slack',
-          title: root?.title || '',
-          url: root?.url || '',
+          id: root.node_id,
+          type: root.type || 'slack',
+          title: root.title || '',
+          url: root.url || '',
         } as GraphNode)
       })
       .catch(() => openGraphForNode({ id: nodeId, type: 'slack', title: '', url: '' } as GraphNode))
@@ -3748,8 +3752,7 @@ export function LiveGlobePage() {
                 if (
                   !pinned &&
                   rootId === graphTopic.node_id &&
-                  rootId.startsWith('slack:') &&
-                  graphTopic.first_ms > 0
+                  rootId.startsWith('slack:')
                 ) {
                   pinned = {
                     hop: 0,

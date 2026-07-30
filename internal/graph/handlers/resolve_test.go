@@ -2,6 +2,7 @@ package handlers_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -133,5 +134,97 @@ func TestResolve_RawURLSeedCanonicalizesToNodeID(t *testing.T) {
 	}
 	if !foundJira {
 		t.Fatalf("expected neighbor %q in %+v", jiraID, resp.Artifacts)
+	}
+}
+
+func TestResolve_SlackReplySeedNormalizesToThreadRoot(t *testing.T) {
+	pool := testDB(t)
+
+	const (
+		channelID = "C048WV1BZTK"
+		rootTS    = "1779273246.053139"
+		replyTS   = "1785348998.358759"
+		rootID    = "slack:" + channelID + ":" + rootTS
+		replyID   = "slack:" + channelID + ":" + replyTS
+		jiraID    = "jira:PAY-2128"
+	)
+
+	seedNode(t, pool, rootID, "slack", "Revolut VCC card declines")
+	seedBody(t, pool, rootID, "Root message")
+	seedNode(t, pool, replyID, "slack", "Reply")
+	seedBody(t, pool, replyID, "Reply message")
+	seedNode(t, pool, jiraID, "jira", "Cross-source context")
+	seedBody(t, pool, jiraID, "Jira body")
+	seedEdge(t, pool, rootID, jiraID, "REFERENCES")
+
+	if _, err := pool.Exec(context.Background(), `
+UPDATE graph.nodes
+SET scope = 'slack:' || $1,
+    metadata = jsonb_build_object('ts', split_part(id, ':', 3))
+                 || CASE WHEN id = $2
+                         THEN jsonb_build_object('thread_ts', $3::text)
+                         ELSE '{}'::jsonb
+                    END
+WHERE id = ANY($4)`,
+		channelID, replyID, rootTS, []string{rootID, replyID}); err != nil {
+		t.Fatal(err)
+	}
+
+	body := strings.NewReader(`{
+		"seeds": ["` + replyID + `"],
+		"depth": 1,
+		"budget_tokens": 4000,
+		"include_bodies": true
+	}`)
+	r := httptest.NewRequest(http.MethodPost, "/api/graph/resolve", body)
+	w := httptest.NewRecorder()
+
+	h, err := handlers.NewResolve(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.ServeHTTP(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d body %s", w.Code, w.Body.String())
+	}
+
+	var resp struct {
+		Artifacts []struct {
+			NodeID   string `json:"node_id"`
+			ThreadTS string `json:"thread_ts"`
+			Hop      int    `json:"hop"`
+		} `json:"artifacts"`
+		GraphTrace struct {
+			Seeds []string `json:"seeds"`
+		} `json:"graph_trace"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Artifacts) == 0 {
+		t.Fatal("expected resolved artifacts")
+	}
+	if resp.Artifacts[0].NodeID != rootID || resp.Artifacts[0].Hop != 0 {
+		t.Fatalf("hop-0 artifact = %+v, want root %q", resp.Artifacts[0], rootID)
+	}
+	if len(resp.GraphTrace.Seeds) != 1 || resp.GraphTrace.Seeds[0] != replyID {
+		t.Fatalf("graph_trace.seeds = %v, want original reply %q", resp.GraphTrace.Seeds, replyID)
+	}
+
+	var foundJira, foundReplyMetadata bool
+	for _, artifact := range resp.Artifacts {
+		if artifact.NodeID == jiraID {
+			foundJira = true
+		}
+		if artifact.NodeID == replyID && artifact.ThreadTS == rootTS {
+			foundReplyMetadata = true
+		}
+	}
+	if !foundJira {
+		t.Fatalf("expected root neighbor %q in %+v", jiraID, resp.Artifacts)
+	}
+	if !foundReplyMetadata {
+		t.Fatalf("expected reply artifact thread_ts %q in %+v", rootTS, resp.Artifacts)
 	}
 }
