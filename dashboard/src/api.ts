@@ -95,6 +95,7 @@ export interface SyncClientInfo {
 export interface SyncInfo {
   mode: string;
   machine_id: string;
+  processing_paused: boolean;
   sync_enabled: boolean;
   sync_interval: string;
   stats: { table: string; total: number; unsynced: number }[];
@@ -240,6 +241,7 @@ export interface Settings {
   skip_tools: string;
   allowed_projects: string;
   ignored_projects: string;
+  processing_paused: boolean;
   sync_enabled: boolean;
   sync_url: string;
   sync_interval: string;

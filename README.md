@@ -83,6 +83,29 @@ misnomer.
 > `expected 768 dimensions, not 3072` and observations stop being written while
 > the graph keeps working — a partial outage that looks like nothing is wrong.
 
+### Pausing processing without losing data
+
+`processing_paused` (Settings → **Processing**, or the settings API) stops every
+graph dispatcher and the flat-memory pending-message loop from *claiming* work,
+while the HTTP API stays up. Ingest keeps accepting webhooks and enqueueing
+jobs; nothing is sent to an LLM. Unpause and the backlog drains. Checked before
+every claim, so it takes effect within ~5s with no restart.
+
+**Use this instead of stopping the worker when an LLM budget is exhausted.**
+Stopping the worker also takes the API down, and Slack messages arrive from a
+separate webhook service that has nothing to retry into — so they are lost
+rather than queued. Pausing trades a growing queue for keeping every message.
+
+```bash
+curl -X PUT localhost:34567/api/settings -H "Authorization: Bearer $AGENT_MEM_API_KEY" \
+  -H 'Content-Type: application/json' -d '{"processing_paused": true}'
+```
+
+Anything other than `"true"` in the DB reads as running — a malformed row fails
+safe toward processing rather than toward a silent indefinite pause. Jobs are
+never failed or dropped by a pause; they simply stay claimable. The janitor
+keeps running so expired leases are still reclaimed.
+
 ### llm-gateway (separate service, not yet wired in)
 
 [`llm-gateway`](https://github.com/enzo-wego/llm-gateway) fronts Claude (on a

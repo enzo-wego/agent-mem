@@ -22,6 +22,15 @@ type DispatcherConfig struct {
 	BackoffBase  time.Duration                // default 30s
 	BackoffCap   time.Duration                // default 1h
 	Logger       zerolog.Logger
+
+	// Paused reports whether job execution is suspended. Checked before every
+	// claim, so flipping it takes effect within one idle interval and needs no
+	// restart. Jobs keep being *enqueued* while paused — they simply are not
+	// claimed, so the queue backs up harmlessly and drains when unpaused.
+	// This exists to survive a spent LLM budget without dropping ingest: the
+	// alternative (stopping the worker) makes the HTTP API unavailable, and
+	// inbound webhooks are then lost rather than queued. nil = never paused.
+	Paused func() bool
 }
 
 // TypeDispatcher claims and runs jobs of one specific type.
@@ -63,6 +72,14 @@ func (d *TypeDispatcher) Run(ctx context.Context) {
 		// Acquire a pool slot, blocking until one is free or ctx is done.
 		if err := d.pool.Acquire(ctx, 1); err != nil {
 			return
+		}
+		// Paused: release the slot and idle without claiming. Deliberately after
+		// Acquire so the check costs nothing extra, and before Claim so a paused
+		// worker never takes a lease it won't honour.
+		if d.cfg.Paused != nil && d.cfg.Paused() {
+			d.pool.Release(1)
+			d.sleep(ctx, d.cfg.IdleInterval)
+			continue
 		}
 		lease := d.entry.Lease
 		if lease == 0 {

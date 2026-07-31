@@ -287,6 +287,9 @@ func NewServer(cfg *config.Config, logBuf *LogBuffer) (*Server, error) {
 		JanitorScanInterval: 30 * time.Second,
 		JanitorBatchSize:    100,
 		Logger:              graphLog,
+		// Read per claim rather than captured once, so toggling the setting from
+		// the dashboard takes effect within one idle interval without a restart.
+		Paused: func() bool { return cfg.Snapshot().ProcessingPaused },
 	})
 
 	s := &Server{
