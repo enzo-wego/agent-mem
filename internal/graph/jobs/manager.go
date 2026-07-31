@@ -23,6 +23,11 @@ type ManagerConfig struct {
 	JanitorScanInterval time.Duration
 	JanitorBatchSize    int
 	Logger              zerolog.Logger
+
+	// Paused suspends job execution across every dispatcher. See
+	// DispatcherConfig.Paused. The janitor keeps running while paused — it only
+	// reclaims expired leases, which costs nothing and keeps the queue tidy.
+	Paused func() bool
 }
 
 // Manager owns one TypeDispatcher per registered type plus one Janitor.
@@ -54,6 +59,7 @@ func (m *Manager) Run(ctx context.Context) {
 			BackoffBase:  m.cfg.BackoffBase,
 			BackoffCap:   m.cfg.BackoffCap,
 			Logger:       m.cfg.Logger,
+			Paused:       m.cfg.Paused,
 		})
 		m.dispatchers = append(m.dispatchers, d)
 		m.wg.Add(1)

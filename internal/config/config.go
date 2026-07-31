@@ -102,6 +102,17 @@ type Config struct {
 	AllowedProjects string `json:"allowed_projects"`
 	IgnoredProjects string `json:"ignored_projects"`
 
+	// ProcessingPaused suspends all job execution — graph dispatchers and the
+	// flat-memory pending-message loop — while leaving the HTTP API up. Ingest
+	// keeps accepting webhooks and enqueueing work; nothing is claimed or sent
+	// to an LLM. Unpause and the backlog drains.
+	//
+	// This exists because the obvious alternative, stopping the worker, takes
+	// the API down with it: inbound Slack webhooks arrive via another service
+	// and are lost rather than queued if nothing answers. Pausing costs a
+	// growing queue; stopping costs data.
+	ProcessingPaused bool `json:"processing_paused"`
+
 	SyncEnabled bool   `json:"sync_enabled"`
 	SyncURL     string `json:"sync_url"`
 	// PublicBaseURL is the public dashboard origin (e.g. https://enzogo.io.vn)
@@ -241,6 +252,7 @@ func (c *Config) RuntimeSettings() map[string]string {
 		"allowed_projects":       c.AllowedProjects,
 		"ignored_projects":       c.IgnoredProjects,
 		"log_level":              c.LogLevel,
+		"processing_paused":      strconv.FormatBool(c.ProcessingPaused),
 		"sync_enabled":           strconv.FormatBool(c.SyncEnabled),
 		"sync_url":               c.SyncURL,
 		"public_base_url":        c.PublicBaseURL,
@@ -302,6 +314,8 @@ func (c *Config) ApplyDBSettings(dbSettings map[string]string) {
 			c.IgnoredProjects = v
 		case "log_level":
 			c.LogLevel = v
+		case "processing_paused":
+			c.ProcessingPaused = strings.EqualFold(v, "true")
 		case "sync_enabled":
 			c.SyncEnabled = strings.EqualFold(v, "true")
 		case "sync_url":
@@ -341,6 +355,7 @@ func (c *Config) snapshot() ConfigSnapshot {
 		SkipTools:            c.SkipTools,
 		AllowedProjects:      c.AllowedProjects,
 		IgnoredProjects:      c.IgnoredProjects,
+		ProcessingPaused:     c.ProcessingPaused,
 		SyncEnabled:          c.SyncEnabled,
 		SyncURL:              c.SyncURL,
 		PublicBaseURL:        c.PublicBaseURL,
@@ -377,6 +392,7 @@ type ConfigSnapshot struct {
 	SkipTools           string      `json:"skip_tools"`
 	AllowedProjects     string      `json:"allowed_projects"`
 	IgnoredProjects     string      `json:"ignored_projects"`
+	ProcessingPaused    bool        `json:"processing_paused"`
 	SyncEnabled         bool        `json:"sync_enabled"`
 	SyncURL             string      `json:"sync_url"`
 	PublicBaseURL       string      `json:"public_base_url"`
@@ -473,6 +489,10 @@ func (c *Config) Update(partial map[string]any) (geminiChanged bool) {
 		case "log_level":
 			if s, ok := v.(string); ok {
 				c.LogLevel = s
+			}
+		case "processing_paused":
+			if b, ok := v.(bool); ok {
+				c.ProcessingPaused = b
 			}
 		case "sync_enabled":
 			if b, ok := v.(bool); ok {

@@ -55,6 +55,28 @@ export function SettingsPage() {
         </div>
       )}
 
+      {/* Processing pause — operational kill switch, kept at the top so it is
+          findable when something is actively going wrong. */}
+      <Section title="Processing">
+        <Field
+          label="Pause processing"
+          hint="Stop claiming jobs while keeping the API up. Ingest still accepts webhooks and queues work — nothing is sent to an LLM, so this costs nothing while a budget is exhausted. Unpause and the backlog drains. Takes effect within ~5s, no restart. Prefer this over stopping the worker: a stopped worker also stops the API, and inbound Slack webhooks are lost rather than queued."
+        >
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={!!settings.processing_paused}
+              disabled={saving}
+              onChange={(e) => save({ processing_paused: e.target.checked })}
+              className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+            />
+            <span className={`text-sm font-medium ${settings.processing_paused ? 'text-amber-600 dark:text-amber-400' : 'text-gray-500 dark:text-gray-400'}`}>
+              {settings.processing_paused ? 'PAUSED — queueing only, nothing processed' : 'Running'}
+            </span>
+          </label>
+        </Field>
+      </Section>
+
       {/* Gemini */}
       <Section title="Gemini">
         <Field label="Provider" hint="LLM backend for generation, describe, and embeddings. 'openrouter' (default) uses the OpenRouter key; 'google' uses the Google key pool below — the fallback when OpenRouter is out of quota. Observation extraction switches immediately; the graph pipeline picks up the new provider after a worker restart.">

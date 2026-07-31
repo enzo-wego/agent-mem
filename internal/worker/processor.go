@@ -24,6 +24,11 @@ func (s *Server) processLoop(ctx context.Context) {
 			log.Info().Msg("Pending message processor stopped")
 			return
 		case <-ticker.C:
+			// Paused: leave messages queued. They stay claimable, so the backlog
+			// drains once the pause lifts — nothing is dropped or failed.
+			if s.config.Snapshot().ProcessingPaused {
+				continue
+			}
 			s.processPendingMessages(ctx)
 		}
 	}
