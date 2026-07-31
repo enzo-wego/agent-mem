@@ -539,7 +539,7 @@ GROUP BY 1`, id, cacheKeys)
 		// Refresh on a miss OR when the cached summary is stale vs the live thread.
 		stale := !ok || s == "" || cachedSig[v.ThreadTS] != liveSig[v.ThreadTS]
 		if stale {
-			enqueueSummarizeThread(ctx, h.db, id, v.ThreadTS, false)
+			enqueueSummarizeThread(ctx, h.db, id, v.ThreadTS)
 		}
 	}
 

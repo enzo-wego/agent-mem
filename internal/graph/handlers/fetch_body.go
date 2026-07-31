@@ -204,8 +204,8 @@ func fetchBodyHandler(deps Deps) jobs.Handler {
 		// A thread's summary names its linked resources, so refresh the Slack
 		// thread(s) whose resource links involve this node — this message gaining a
 		// reference, or (when this node is a resource) its title landing for threads
-		// that reference it. Force past the signature-skip: the messages didn't
-		// change, only the links.
+		// that reference it. Capped and deduped; the summary handler decides whether
+		// the links actually changed, so an unchanged title costs no LLM call.
 		refreshThreadsForResourceLink(ctx, deps, body.NodeID)
 
 		// Step 8: attachment edges + describe jobs.
@@ -272,12 +272,26 @@ func fetchBodyHandler(deps Deps) jobs.Handler {
 	}
 }
 
-// refreshThreadsForResourceLink force-re-enqueues summarize_thread for every Slack
+// refreshThreadsForResourceLinkCap bounds how many threads one fetched node may
+// re-enqueue. A doc linked from hundreds of threads would otherwise fan one fetch
+// out into hundreds of jobs, and fetch_body enqueues further fetch_body jobs for
+// the links it finds, so each wave seeds the next.
+//
+// ponytail: flat cap, and threads past it keep a stale link title until their own
+// messages change. Batch the refresh by resource instead if that ever bites.
+const refreshThreadsForResourceLinkCap = 50
+
+// refreshThreadsForResourceLink re-enqueues summarize_thread for every Slack
 // thread whose resource graph involves nodeID: the Slack messages that reference
 // this node (when it is a resource whose title just landed), and this node itself
 // when it is a Slack message that references a non-Slack resource. Best-effort;
-// errors are ignored. Force is required because the thread's messages are unchanged
-// — only its links are — so the signature check would otherwise skip it.
+// errors are ignored.
+//
+// Enqueue is plain and deduped — no force. summarize_thread hashes the linked
+// resource titles into link_signature, so a thread whose links genuinely changed
+// regenerates and one whose links are byte-identical costs a cheap SELECT and no
+// LLM call. Forcing here is what turned every fetch into 1,335 calls/hour for 3
+// real updates; do not reintroduce it to "make sure" a refresh lands.
 func refreshThreadsForResourceLink(ctx context.Context, deps Deps, nodeID string) {
 	rows, err := deps.DB.Query(ctx, `
 SELECT DISTINCT replace(sn.scope,'slack:',''),
@@ -290,7 +304,8 @@ WHERE sn.type IN ('slack','slack_thread') AND sn.scope LIKE 'slack:%' AND sn.del
       SELECT e.from_node_id FROM graph.edges e
         JOIN graph.nodes r ON r.id=e.to_node_id
        WHERE e.from_node_id=$1 AND e.kind='REFERENCES'
-         AND r.type NOT IN ('slack','slack_thread','slack_file'))`, nodeID)
+         AND r.type NOT IN ('slack','slack_thread','slack_file'))
+LIMIT $2`, nodeID, refreshThreadsForResourceLinkCap+1) // +1 to detect truncation
 	if err != nil {
 		return
 	}
@@ -303,8 +318,14 @@ WHERE sn.type IN ('slack','slack_thread') AND sn.scope LIKE 'slack:%' AND sn.del
 		}
 	}
 	rows.Close()
+	// Say so when the cap bites, rather than silently looking like full coverage.
+	if len(threads) > refreshThreadsForResourceLinkCap {
+		threads = threads[:refreshThreadsForResourceLinkCap]
+		deps.Logger.Warn().Str("node_id", nodeID).Int("cap", refreshThreadsForResourceLinkCap).
+			Msg("fetch_body: resource-link refresh capped; remaining threads keep their link titles until their messages change")
+	}
 	for _, th := range threads {
-		enqueueSummarizeThread(ctx, deps.DB, th.channel, th.thread, true)
+		enqueueSummarizeThread(ctx, deps.DB, th.channel, th.thread)
 	}
 }
 

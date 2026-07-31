@@ -2,6 +2,8 @@ package handlers
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"regexp"
@@ -15,13 +17,14 @@ import (
 )
 
 // summarizeThreadPayload is the JSON payload for the summarize_thread job type.
-// Force bypasses the signature-skip so a thread re-summarizes even when its
-// messages are unchanged — used when only its linked resources changed (a new
-// Jira/Confluence reference, or a referenced resource's title finally landing).
+// There is deliberately no Force field: the signature pair below covers both
+// what the messages say and what the linked resources are called, so every
+// legitimate reason to regenerate is already detected. A force flag used to
+// exist for "only the links changed" and cost 1,335 LLM calls/hour for 3 real
+// updates, because it bypassed the dedup and the skip check together.
 type summarizeThreadPayload struct {
 	ChannelID string `json:"channel_id"`
 	ThreadTs  string `json:"thread_ts"`
-	Force     bool   `json:"force,omitempty"`
 }
 
 // NewSummarizeThreadHandler returns the job entry for "summarize_thread": it
@@ -110,20 +113,33 @@ ORDER BY COALESCE(to_timestamp(NULLIF(n.metadata->>'ts','')::float8), n.first_se
 		// Keep this prefix in sync with channels.go.
 		// v8: author labels prefer evidence-backed domain roles when available.
 		sig := fmt.Sprintf("v8:%d:%d", count, maxUpdated)
-		// Skip if the cached summary already matches the current signature.
-		var existingSig string
-		_ = deps.DB.QueryRow(ctx,
-			`SELECT signature FROM graph.thread_summaries WHERE channel_id=$1 AND thread_ts=$2`,
-			p.ChannelID, p.ThreadTs).Scan(&existingSig)
-		if !p.Force && existingSig == sig {
-			return nil
-		}
 
 		// Prepend the thread's linked-resource titles so the summary can name the
 		// ticket/doc it is about instead of ignoring it. When the thread is only a
 		// shared link with no discussion, the resource IS the content — include a
 		// short body excerpt too so the summary can describe it.
+		//
+		// Built BEFORE the skip check, not after: its hash is half the cache key.
+		// One cheap SELECT on the skip path buys us never making a needless LLM
+		// call, which is the trade that matters.
 		resBlock := linkedResourceBlock(ctx, deps, p.ChannelID, p.ThreadTs, !hasDiscussion)
+		linkSig := linkSignature(resBlock)
+
+		// Skip when BOTH the messages and the linked-resource titles are unchanged.
+		var existingSig, existingLinkSig string
+		_ = deps.DB.QueryRow(ctx,
+			`SELECT signature, COALESCE(link_signature,'')
+			   FROM graph.thread_summaries WHERE channel_id=$1 AND thread_ts=$2`,
+			p.ChannelID, p.ThreadTs).Scan(&existingSig, &existingLinkSig)
+		if skip, backfill := summarySkip(existingSig, sig, existingLinkSig, linkSig); skip {
+			if backfill {
+				_, _ = deps.DB.Exec(ctx,
+					`UPDATE graph.thread_summaries SET link_signature=$3
+					  WHERE channel_id=$1 AND thread_ts=$2`,
+					p.ChannelID, p.ThreadTs, linkSig)
+			}
+			return nil
+		}
 
 		topic, overview, highlights, kind := genThreadDeepSummary(ctx, deps.Gemini, resBlock+b.String())
 		if topic == "" && overview == "" {
@@ -134,13 +150,14 @@ ORDER BY COALESCE(to_timestamp(NULLIF(n.metadata->>'ts','')::float8), n.first_se
 			hlJSON = []byte("[]")
 		}
 		_, err = deps.DB.Exec(ctx,
-			`INSERT INTO graph.thread_summaries(channel_id,thread_ts,signature,summary,overview,highlights,kind,updated_at)
-			 VALUES($1,$2,$3,$4,$5,$6,$7,NOW())
+			`INSERT INTO graph.thread_summaries(channel_id,thread_ts,signature,link_signature,summary,overview,highlights,kind,updated_at)
+			 VALUES($1,$2,$3,$4,$5,$6,$7,$8,NOW())
 			 ON CONFLICT (channel_id,thread_ts) DO UPDATE SET
-			   signature=excluded.signature, summary=excluded.summary,
+			   signature=excluded.signature, link_signature=excluded.link_signature,
+			   summary=excluded.summary,
 			   overview=excluded.overview, highlights=excluded.highlights,
 			   kind=excluded.kind, updated_at=NOW()`,
-			p.ChannelID, p.ThreadTs, sig, topic, overview, hlJSON, kind)
+			p.ChannelID, p.ThreadTs, sig, linkSig, topic, overview, hlJSON, kind)
 		if err == nil {
 			if _, jErr := jobs.Enqueue(ctx, deps.DB, "index_artifact", map[string]any{
 				"node_id": ids.SlackMessage(p.ChannelID, p.ThreadTs),
@@ -152,6 +169,43 @@ ORDER BY COALESCE(to_timestamp(NULLIF(n.metadata->>'ts','')::float8), n.first_se
 		}
 		return err
 	}
+}
+
+// summarySkip decides whether a cached summary is still current, and whether its
+// link_signature needs backfilling. Both signatures must match for a skip: the
+// message pair (count + newest updated_at) and the linked-resource hash.
+//
+// A row written before link_signature existed stores "". That reads as "unknown",
+// never as "changed" — otherwise the first run after deploy re-summarizes every
+// thread that has links, which is exactly the burn being fixed. Such a row skips
+// and gets its hash backfilled with no LLM call, so the NEXT real title change is
+// caught normally.
+func summarySkip(existingSig, sig, existingLinkSig, linkSig string) (skip, backfill bool) {
+	if existingSig != sig {
+		return false, false
+	}
+	if existingLinkSig == "" && linkSig != "" {
+		return true, true // legacy row: trust it, record the hash for next time
+	}
+	return existingLinkSig == linkSig, false
+}
+
+// linkSignature hashes the linked-resource prompt block, so a referenced
+// ticket/doc whose title finally landed regenerates the summary while an
+// unchanged one skips. Returns "" for a thread with no linked resources.
+//
+// Deliberately a SEPARATE column from `signature` rather than folded into it:
+// channels.go recomputes signature (count + newest updated_at) from graph.nodes
+// on every channel view to spot staleness. It cannot cheaply recompute a link
+// hash for every visible thread, so a combined key would look mismatched on
+// every view and re-enqueue the whole channel — the same amplification through
+// a different door.
+func linkSignature(resBlock string) string {
+	if resBlock == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(resBlock))
+	return hex.EncodeToString(sum[:8])
 }
 
 // reURLToken matches bare and Slack-wrapped (<http…>, <http…|label>) URLs.
@@ -300,7 +354,7 @@ LIMIT $1`, limit)
 	}
 	rows.Close()
 	for _, t := range todo {
-		enqueueSummarizeThread(ctx, db, t.ch, t.tt, false)
+		enqueueSummarizeThread(ctx, db, t.ch, t.tt)
 	}
 	return len(todo)
 }
@@ -309,26 +363,26 @@ LIMIT $1`, limit)
 // queued/running for the same (channel, thread) — cheap dedup so a backfill or a
 // burst of replies doesn't pile up duplicate LLM jobs. Errors are ignored
 // (best-effort; the /topics endpoint re-enqueues on the next miss).
-func enqueueSummarizeThread(ctx context.Context, db *pgxpool.Pool, channelID, threadTs string, force bool) {
+func enqueueSummarizeThread(ctx context.Context, db *pgxpool.Pool, channelID, threadTs string) {
 	if channelID == "" || threadTs == "" {
 		return
 	}
-	// Non-force jobs dedup against a pending job for the same thread. A force job
-	// (a resource link changed) always enqueues, so a pending non-force job that
-	// would signature-skip can't swallow the refresh.
-	if !force {
-		var exists bool
-		_ = db.QueryRow(ctx, `
+	// Always dedup against a pending job for the same thread. Safe now that the
+	// skip check covers link titles as well as messages: whenever that pending
+	// job runs it recomputes both signatures, so it picks up a title that landed
+	// after it was enqueued instead of skipping. There is nothing left for a
+	// second queued job to catch that this one won't.
+	var exists bool
+	_ = db.QueryRow(ctx, `
 SELECT EXISTS(
   SELECT 1 FROM graph.jobs
   WHERE type='summarize_thread' AND status IN ('queued','running')
     AND payload->>'channel_id'=$1 AND payload->>'thread_ts'=$2)`,
-			channelID, threadTs).Scan(&exists)
-		if exists {
-			return
-		}
+		channelID, threadTs).Scan(&exists)
+	if exists {
+		return
 	}
 	_, _ = jobs.Enqueue(ctx, db, "summarize_thread", summarizeThreadPayload{
-		ChannelID: channelID, ThreadTs: threadTs, Force: force,
+		ChannelID: channelID, ThreadTs: threadTs,
 	}, jobs.EnqueueOptions{Priority: 6})
 }

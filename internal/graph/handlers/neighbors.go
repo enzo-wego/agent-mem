@@ -247,7 +247,7 @@ WHERE n.id=$1`, n.NodeID)
 							tt = parts[2]
 						}
 					}
-					enqueueSummarizeThread(ctx, h.db, strings.TrimPrefix(*scope, "slack:"), tt, false)
+					enqueueSummarizeThread(ctx, h.db, strings.TrimPrefix(*scope, "slack:"), tt)
 					lazySummarized++
 					item.Node.PendingSummary = true
 				}
