@@ -233,8 +233,6 @@ export interface Settings {
   llm_provider: string;
   google_api_keys: string;
   llm_key_rotate_hours: number;
-  anthropic_api_key: string;
-  anthropic_model: string;
   context_observations: number;
   context_full_count: number;
   context_session_count: number;

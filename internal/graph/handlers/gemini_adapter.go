@@ -7,15 +7,19 @@ import (
 	"github.com/agent-mem/agent-mem/internal/gemini"
 )
 
-// TextGenerator is the minimal text-generation surface (Claude or Gemini).
+// TextGenerator is the minimal text-generation surface for summaries. It is the
+// seam llm-gateway plugs into: a Claude subscription seat rather than a metered
+// API key. Nothing implements it today, so summaries run on the Gemini client —
+// the previous implementation called the Anthropic API directly and is gone for
+// good, since per-token billing with no cap is how an amplification bug quietly
+// spent ~$11/hour.
 type TextGenerator interface {
 	Generate(ctx context.Context, systemPrompt, userMessage string) (string, error)
 }
 
 // GeminiAdapter wraps *gemini.Client to satisfy the GeminiClient interface.
-// Embed/Describe always use Gemini; Generate is routed to gen, which is Claude
-// when an Anthropic key is configured (better grounding, fewer hallucinated
-// ticket ids/outcomes) and the Gemini client otherwise.
+// Embed/Describe always use Gemini; Generate is routed to gen when one is
+// supplied, and to the Gemini client otherwise.
 //
 // The underlying clients are swappable via Swap so settings changes take
 // effect without a worker restart; all reads go through the mutex.
@@ -38,7 +42,7 @@ func NewGeminiAdapter(c *gemini.Client, gen TextGenerator) GeminiClient {
 }
 
 // Swap replaces the underlying clients so settings changes (graph_gemini_model,
-// llm_provider, anthropic key/model) apply to already-registered job handlers.
+// llm_provider) apply to already-registered job handlers.
 // A nil gen falls back to c, mirroring NewGeminiAdapter. A nil c is ignored:
 // handlers holding a live adapter must never see a nil client, so clearing the
 // LLM key still requires a worker restart to disable graph LLM calls.

@@ -9,7 +9,6 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
-	"github.com/agent-mem/agent-mem/internal/anthropic"
 	"github.com/agent-mem/agent-mem/internal/config"
 	"github.com/agent-mem/agent-mem/internal/database"
 	"github.com/agent-mem/agent-mem/internal/gemini"
@@ -33,8 +32,6 @@ type settingsResponse struct {
 	LLMProvider          string `json:"llm_provider"`
 	GoogleAPIKeys        string `json:"google_api_keys"`
 	LLMKeyRotateHours    int    `json:"llm_key_rotate_hours"`
-	AnthropicAPIKey      string `json:"anthropic_api_key"`
-	AnthropicModel       string `json:"anthropic_model"`
 
 	ContextObservations int    `json:"context_observations"`
 	ContextFullCount    int    `json:"context_full_count"`
@@ -86,8 +83,6 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, _ *http.Request) {
 		LLMProvider:          snap.LLMProviderOrDefault(),
 		GoogleAPIKeys:        maskKeyList(snap.GoogleAPIKeys),
 		LLMKeyRotateHours:    snap.LLMKeyRotateHours,
-		AnthropicAPIKey:      maskKey(snap.AnthropicAPIKey),
-		AnthropicModel:       snap.AnthropicModel,
 		ContextObservations:  snap.ContextObservations,
 		ContextFullCount:     snap.ContextFullCount,
 		ContextSessionCount:  snap.ContextSessionCount,
@@ -255,9 +250,8 @@ func (s *Server) reloadGemini() {
 	log.Info().Str("model", snap.GeminiModel).Msg("Gemini client reloaded")
 
 	// Mirror the startup wiring (NewServer): the graph judge/describe client
-	// runs graph_gemini_model when it differs from gemini_model, and graph
-	// summaries run on Claude when an Anthropic key is set. Swapping in place
-	// updates the adapter captured by registered job handlers.
+	// runs graph_gemini_model when it differs from gemini_model. Swapping in
+	// place updates the adapter captured by registered job handlers.
 	if s.graphAdapter == nil {
 		return // no LLM key at boot; restart required to enable graph LLM calls
 	}
@@ -266,14 +260,10 @@ func (s *Server) reloadGemini() {
 		graphModel = snap.GraphGeminiModel
 		graphClient = newLLMClient(ctx, s.db, snap, graphModel)
 	}
+	// nil summary generator: summaries follow graphClient. See NewServer.
 	var summaryLLM graphhandlers.TextGenerator
-	summaryModel := ""
-	if snap.AnthropicAPIKey != "" {
-		summaryLLM = anthropic.NewClient(snap.AnthropicAPIKey, snap.AnthropicModel)
-		summaryModel = snap.AnthropicModel
-	}
 	s.graphAdapter.Swap(graphClient, summaryLLM)
-	log.Info().Str("model", graphModel).Str("summary_model", summaryModel).Msg("Graph LLM client reloaded")
+	log.Info().Str("model", graphModel).Msg("Graph LLM client reloaded")
 }
 
 func keys(m map[string]any) []string {
