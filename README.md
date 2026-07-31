@@ -44,11 +44,53 @@
              │                       │                │
              ▼                       ▼                ▼
    ┌───────────────────┐    ┌───────────────────┐  ┌──────────────────────┐
-   │  PostgreSQL +     │    │  Gemini API       │  │  External sources     │
-   │  pgvector         │    │  (extract+embed,  │  │  Slack/Jira/GH/CF/PD/  │
-   │  (memory + graph) │    │   media describe) │  │  DD/Sentry/GWS + lit   │
+   │  PostgreSQL +     │    │  LLM providers    │  │  External sources     │
+   │  pgvector         │    │  (see below:      │  │  Slack/Jira/GH/CF/PD/  │
+   │  (memory + graph) │    │   generate+embed) │  │  DD/Sentry/GWS + lit   │
    └───────────────────┘    └───────────────────┘  └──────────────────────┘
 ```
+
+### LLM providers
+
+Two distinct model roles, and they are **not** interchangeable. Generation
+models *write* prose — summaries, judgements, image descriptions — stored in
+`TEXT` columns. The embedding model writes nothing; it converts text into a
+vector so semantic search can find it. They run in sequence: a summary is
+generated, then that summary is embedded, and both land in the same row (see
+`graph.artifact_index.summary` and `.embedding`).
+
+| Path | Model | Provider |
+|---|---|---|
+| Graph summaries (cluster/thread/feature) | `claude-sonnet-5` | Anthropic API |
+| Graph cheap judge (`link_topics`) + `Describe` | `google/gemini-3.6-flash` | OpenRouter |
+| Flat-memory observations + session summaries | `google/gemini-2.5-flash` | OpenRouter |
+| **All embeddings** | `gemini-embedding-001` | OpenRouter |
+
+Embeddings cannot move to Anthropic: there is no Claude model that returns a
+vector. And a query vector is only comparable to stored vectors from the *same*
+model, so changing the embedding model means recomputing every stored vector —
+about 148k across two dimensionalities (768 flat, 3072 graph). Switching it
+silently degrades search rather than erroring, so don't.
+
+Provider selection lives in settings (`gemini_model`, `graph_gemini_model`,
+`gemini_embedding_model`, `gemini_embedding_dims`, `anthropic_api_key`). The
+field named `gemini_api_key` holds the **OpenRouter** key — a historical
+misnomer.
+
+> **Dimension mismatch is the failure mode to watch.** `observations.embedding`
+> is `vector(768)` while the graph uses `halfvec(3072)`. If a client is built
+> with the wrong dims, inserts fail with
+> `expected 768 dimensions, not 3072` and observations stop being written while
+> the graph keeps working — a partial outage that looks like nothing is wrong.
+
+### llm-gateway (separate service, not yet wired in)
+
+[`llm-gateway`](https://github.com/enzo-wego/llm-gateway) fronts Claude (on a
+subscription seat, via the bundled CLI) and OpenRouter behind one HTTP surface,
+so callers request an intent tier rather than a model name. It is deployed on
+the VPS as a native systemd service but **agent-mem does not call it yet** —
+this repo's LLM client is unchanged. Wiring it in is an additive Go client plus
+a settings flag; nothing in `internal/gemini` needs to change.
 
 ### Cloud Sync
 
