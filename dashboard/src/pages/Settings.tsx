@@ -21,6 +21,7 @@ export function SettingsPage() {
   const [showKey, setShowKey] = useState(false)
   const [newKey, setNewKey] = useState('')
   const [newGoogleKeys, setNewGoogleKeys] = useState('')
+  const [newGatewayKey, setNewGatewayKey] = useState('')
 
   useEffect(() => {
     fetchSettings()
@@ -167,10 +168,37 @@ export function SettingsPage() {
         </Field>
       </Section>
 
-      {/* There is deliberately no Claude / Anthropic API key section. Claude is
-          reached only through llm-gateway on a subscription seat; a metered API
-          key has no spend ceiling and one amplification bug spent ~$11/hour
-          through it before anyone noticed. */}
+      {/* Claude via llm-gateway. There is deliberately no Anthropic API key
+          field: a metered key has no spend ceiling and one amplification bug
+          spent ~$11/hour through it. A subscription seat rate-limits instead. */}
+      <Section title="Claude via llm-gateway (graph summaries)">
+        <Field label="Gateway URL" hint="e.g. http://172.18.0.1:8750 — the Docker bridge, NOT localhost (the worker is containerised). When set, graph summaries run on Claude Sonnet 5 via the subscription seat. Leave EMPTY to turn it off and keep summaries on Gemini Flash. Takes effect on save, no restart. The high-volume topic-link judge always stays on Gemini regardless.">
+          <EditableField
+            value={settings.llm_gateway_url}
+            saving={saving}
+            onSave={(v) => save({ llm_gateway_url: v })}
+            placeholder="Empty = off (summaries stay on Gemini)"
+          />
+        </Field>
+        <Field label="Gateway API Key" hint="The gateway's LLM_GATEWAY_API_KEY — its own inbound auth, not an Anthropic key. Without it the gateway 401s and every summary silently stops.">
+          <div className="flex gap-2">
+            <input
+              type="password"
+              placeholder={settings.llm_gateway_api_key || 'Not set'}
+              value={newGatewayKey}
+              onChange={(e) => setNewGatewayKey(e.target.value)}
+              className={inputCls}
+            />
+            <button
+              disabled={saving || !newGatewayKey}
+              onClick={() => { save({ llm_gateway_api_key: newGatewayKey }); setNewGatewayKey('') }}
+              className={btnPrimary}
+            >
+              Update Key
+            </button>
+          </div>
+        </Field>
+      </Section>
 
       {/* Projects */}
       <Section title="Projects">

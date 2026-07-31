@@ -233,6 +233,8 @@ export interface Settings {
   llm_provider: string;
   google_api_keys: string;
   llm_key_rotate_hours: number;
+  llm_gateway_url: string;
+  llm_gateway_api_key: string;
   context_observations: number;
   context_full_count: number;
   context_session_count: number;

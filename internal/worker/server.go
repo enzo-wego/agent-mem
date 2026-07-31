@@ -111,11 +111,14 @@ func NewServer(cfg *config.Config, logBuf *LogBuffer) (*Server, error) {
 		log.Info().Str("provider", llmProvider).Str("model", cfg.GraphGeminiModel).Msg("Graph LLM client initialized (separate from flat memory)")
 	}
 
-	// Graph summaries have no separate generator: nil routes them through the
-	// graph Gemini client. This used to be a direct Anthropic API client, which
-	// is now a standing no — metered per token with no cap. llm-gateway (a
-	// subscription seat, so it cannot run a bill up) plugs in here when wired.
-	var summaryLLM graphhandlers.TextGenerator
+	// Graph summaries route to llm-gateway (Claude on a subscription seat) when a
+	// URL is configured, and to the graph Gemini client otherwise. Never to the
+	// Anthropic API directly: metered per token with no ceiling, which is how an
+	// amplification bug spent ~$11/hour. A seat rate-limits instead of billing.
+	summaryLLM := newSummaryGenerator(snap)
+	if summaryLLM != nil {
+		log.Info().Str("url", snap.LLMGatewayURL).Msg("llm-gateway wired for graph summaries")
+	}
 
 	// Concrete handle kept on the Server so settings reload can Swap the
 	// underlying clients in place (job handlers capture the interface value

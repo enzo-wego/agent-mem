@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
-	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -35,7 +34,7 @@ func NewSummarizeThreadHandler(deps Deps) jobs.Entry {
 		Handler:  summarizeThreadHandler(deps),
 		Systems:  []string{"gemini"},
 		PoolSize: 3,
-		Lease:    60 * time.Second,
+		Lease:    SummaryLease, // must outlast a gateway Claude call; see SummaryLease
 	}
 }
 

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -33,7 +32,7 @@ func NewDeriveFeatureEntityHandler(deps Deps) jobs.Entry {
 		Handler:  deriveFeatureEntityHandler(deps),
 		Systems:  []string{"gemini"},
 		PoolSize: 2,
-		Lease:    60 * time.Second,
+		Lease:    SummaryLease, // reaches TextGenerator; see SummaryLease
 	}
 }
 

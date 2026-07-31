@@ -3,19 +3,31 @@ package handlers
 import (
 	"context"
 	"sync"
+	"time"
 
 	"github.com/agent-mem/agent-mem/internal/gemini"
 )
 
-// TextGenerator is the minimal text-generation surface for summaries. It is the
-// seam llm-gateway plugs into: a Claude subscription seat rather than a metered
-// API key. Nothing implements it today, so summaries run on the Gemini client —
-// the previous implementation called the Anthropic API directly and is gone for
-// good, since per-token billing with no cap is how an amplification bug quietly
-// spent ~$11/hour.
+// TextGenerator is the minimal text-generation surface for summaries.
+// internal/llmgateway implements it, putting summaries on a Claude subscription
+// seat. The previous implementation called the Anthropic API directly and is
+// gone for good: per-token billing with no ceiling is how an amplification bug
+// quietly spent ~$11/hour. A seat rate-limits instead.
 type TextGenerator interface {
 	Generate(ctx context.Context, systemPrompt, userMessage string) (string, error)
 }
+
+// SummaryLease is the job lease for every handler whose work can reach
+// TextGenerator, i.e. the gateway. It must exceed the gateway's own LLM timeout
+// (LLM_GATEWAY_CLAUDE_TIMEOUT_S, 180s) and the client's RequestTimeout (200s):
+//
+//	gateway 180s  <  client 200s  <  lease 240s
+//
+// A shorter lease expires mid-call, the janitor reclaims the job, and a second
+// worker redoes the same summary — duplicate LLM calls, the exact amplification
+// shape this codebase already paid for once. Sonnet on a seat is slower than
+// Gemini Flash, so 60s was survivable before and is not now.
+const SummaryLease = 240 * time.Second
 
 // GeminiAdapter wraps *gemini.Client to satisfy the GeminiClient interface.
 // Embed/Describe always use Gemini; Generate is routed to gen when one is
