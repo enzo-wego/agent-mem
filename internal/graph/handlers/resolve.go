@@ -103,7 +103,8 @@ func (h *Resolve) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// BFS expansion from seeds.
 	frontier := bfs.NewFrontier(200)
-	for _, s := range h.canonicalizeSeeds(ctx, req.Seeds) {
+	canonSeeds := h.canonicalizeSeeds(ctx, req.Seeds)
+	for _, s := range canonSeeds {
 		frontier.Push(bfs.Candidate{NodeID: s, Hop: 0, Score: 1.0})
 	}
 	visited := make(map[string]bfs.Candidate)
@@ -234,6 +235,37 @@ WHERE n.id = ANY($1)`, ids); aErr == nil {
 			Body: body, Hop: hop,
 		})
 		resp.ContextTokens += hyd.Tokens
+	}
+	// The seed must stay identifiable even when its own body blows the budget
+	// and hydration skips it (a 16KB Slack thread root does). The dashboard
+	// reads hop 0 to learn the canonical node id to open, so emit a body-less
+	// row rather than returning a list the caller cannot anchor.
+	for _, s := range canonSeeds {
+		present := false
+		for _, a := range resp.Artifacts {
+			if a.NodeID == s {
+				present = true
+				break
+			}
+		}
+		if present {
+			continue
+		}
+		seed := resolveArtifact{NodeID: s, Hop: 0, Score: 1.0}
+		if err := h.db.QueryRow(ctx, `
+SELECT COALESCE(NULLIF(n.title,''),
+                CASE WHEN n.type IN ('slack','slack_thread') THEN NULLIF(ts.summary,'') END,
+                ''),
+       n.type, COALESCE(n.url,''), COALESCE(n.metadata->>'thread_ts','')
+FROM graph.nodes n
+LEFT JOIN graph.thread_summaries ts
+  ON ts.channel_id = REPLACE(n.scope,'slack:','')
+ AND ts.thread_ts = COALESCE(NULLIF(n.metadata->>'thread_ts',''), split_part(n.id,':',3))
+WHERE n.id = $1 AND n.deleted_at IS NULL`, s).Scan(
+			&seed.Title, &seed.Type, &seed.URL, &seed.ThreadTS); err != nil {
+			continue
+		}
+		resp.Artifacts = append(resp.Artifacts, seed)
 	}
 	// Enqueue fetch_body jobs for misses (so subsequent calls are fast).
 	for _, m := range missed {
