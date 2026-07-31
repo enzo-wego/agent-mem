@@ -68,7 +68,11 @@ WHERE n.id = $1 AND n.deleted_at IS NULL
 		}
 		tokens := len(*body)/4 + 1
 		if used+tokens > budgetTokens {
-			break
+			// Skip, don't stop: candidates are score-ordered, so one oversized
+			// body near the front used to break the loop and return NOTHING.
+			// A 16KB Slack thread root (4032 tokens vs a 4000 budget) emptied
+			// the whole /api/graph/resolve response.
+			continue
 		}
 		out = append(out, Hydrated{
 			NodeID: c.NodeID,
