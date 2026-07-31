@@ -16,7 +16,6 @@ import (
 	"github.com/rs/zerolog/log"
 	"golang.org/x/sync/semaphore"
 
-	"github.com/agent-mem/agent-mem/internal/anthropic"
 	"github.com/agent-mem/agent-mem/internal/config"
 	memctx "github.com/agent-mem/agent-mem/internal/context"
 	"github.com/agent-mem/agent-mem/internal/database"
@@ -112,13 +111,11 @@ func NewServer(cfg *config.Config, logBuf *LogBuffer) (*Server, error) {
 		log.Info().Str("provider", llmProvider).Str("model", cfg.GraphGeminiModel).Msg("Graph LLM client initialized (separate from flat memory)")
 	}
 
-	// When an Anthropic key is set, graph summaries (cluster/thread/feature) run
-	// on Claude instead of Gemini Flash to cut hallucination. Embeddings stay on Gemini.
+	// Graph summaries have no separate generator: nil routes them through the
+	// graph Gemini client. This used to be a direct Anthropic API client, which
+	// is now a standing no — metered per token with no cap. llm-gateway (a
+	// subscription seat, so it cannot run a bill up) plugs in here when wired.
 	var summaryLLM graphhandlers.TextGenerator
-	if cfg.AnthropicAPIKey != "" {
-		summaryLLM = anthropic.NewClient(cfg.AnthropicAPIKey, cfg.AnthropicModel)
-		log.Info().Str("model", cfg.AnthropicModel).Msg("Anthropic client initialized for graph summaries")
-	}
 
 	// Concrete handle kept on the Server so settings reload can Swap the
 	// underlying clients in place (job handlers capture the interface value

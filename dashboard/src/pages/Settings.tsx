@@ -21,8 +21,6 @@ export function SettingsPage() {
   const [showKey, setShowKey] = useState(false)
   const [newKey, setNewKey] = useState('')
   const [newGoogleKeys, setNewGoogleKeys] = useState('')
-  const [showAnthropicKey, setShowAnthropicKey] = useState(false)
-  const [newAnthropicKey, setNewAnthropicKey] = useState('')
 
   useEffect(() => {
     fetchSettings()
@@ -135,7 +133,7 @@ export function SettingsPage() {
           />
         </Field>
         <LLMKeysSection />
-        <Field label="Flat-Memory Model" hint="Model for flat memory (observation extraction, session summaries). Any OpenRouter model id, e.g. google/gemini-2.5-flash, anthropic/claude-haiku-4.5, openai/gpt-5.6-luna. On the google provider use a bare Gemini id (e.g. gemini-2.5-flash).">
+        <Field label="Flat-Memory Model" hint="Model for flat memory (observation extraction, session summaries). Any OpenRouter model id, e.g. google/gemini-2.5-flash, openai/gpt-5.6-luna. On the google provider use a bare Gemini id (e.g. gemini-2.5-flash).">
           <EditableField
             value={settings.gemini_model}
             saving={saving}
@@ -169,38 +167,10 @@ export function SettingsPage() {
         </Field>
       </Section>
 
-      {/* Claude (graph summaries) */}
-      <Section title="Claude (graph summaries)">
-        <Field label="API Key" hint="Anthropic key (sk-ant…). When set, graph summaries (thread / cluster / feature) run on Claude instead of Gemini. Takes effect after a worker restart. NOTE: if AGENT_MEM_ANTHROPIC_API_KEY is set in the VPS env, it overrides this on restart — unset it there to make the dashboard authoritative.">
-          <div className="flex gap-2">
-            <input
-              type={showAnthropicKey ? 'text' : 'password'}
-              placeholder={settings.anthropic_api_key || 'Not set'}
-              value={newAnthropicKey}
-              onChange={(e) => setNewAnthropicKey(e.target.value)}
-              className={inputCls}
-            />
-            <button onClick={() => setShowAnthropicKey(!showAnthropicKey)} className={btnSecondary}>
-              {showAnthropicKey ? 'Hide' : 'Show'}
-            </button>
-            <button
-              disabled={saving || !newAnthropicKey}
-              onClick={() => { save({ anthropic_api_key: newAnthropicKey }); setNewAnthropicKey('') }}
-              className={btnPrimary}
-            >
-              Update Key
-            </button>
-          </div>
-        </Field>
-        <Field label="Model" hint="Claude model for graph summaries. Switch to Haiku for cheaper/faster summaries. Takes effect after a worker restart.">
-          <SelectField
-            value={settings.anthropic_model || 'claude-sonnet-5'}
-            options={ANTHROPIC_MODELS}
-            saving={saving}
-            onSave={(v) => save({ anthropic_model: v })}
-          />
-        </Field>
-      </Section>
+      {/* There is deliberately no Claude / Anthropic API key section. Claude is
+          reached only through llm-gateway on a subscription seat; a metered API
+          key has no spend ceiling and one amplification bug spent ~$11/hour
+          through it before anyone noticed. */}
 
       {/* Projects */}
       <Section title="Projects">
@@ -492,12 +462,6 @@ function ChannelFiltersSection() {
 const PROVIDER_OPTIONS = [
   { value: 'openrouter', label: 'OpenRouter (default)' },
   { value: 'google', label: 'Google Gemini API (fallback)' },
-]
-
-const ANTHROPIC_MODELS = [
-  { value: 'claude-sonnet-5', label: 'Claude Sonnet 5 (default)' },
-  { value: 'claude-haiku-4.5', label: 'Claude Haiku 4.5 (cheaper, faster)' },
-  { value: 'claude-opus-4-8', label: 'Claude Opus 4.8 (highest quality)' },
 ]
 
 // Stored with the google/ namespace; the client strips it automatically on the

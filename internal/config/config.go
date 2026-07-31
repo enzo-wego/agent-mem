@@ -89,11 +89,12 @@ type Config struct {
 	GoogleAPIKeys     string `json:"google_api_keys"`
 	LLMKeyRotateHours int    `json:"llm_key_rotate_hours"`
 
-	// AnthropicAPIKey, when set, routes graph summaries (cluster/thread/feature)
-	// to Claude instead of Gemini Flash. Embeddings always stay on Gemini.
-	AnthropicAPIKey string `json:"anthropic_api_key"`
-	AnthropicModel  string `json:"anthropic_model"`
-
+	// There is deliberately no Anthropic API key setting. Calling the Anthropic
+	// API directly is a standing no: it is billed per token with no cap, and an
+	// amplification bug spent ~$11/hour through it unnoticed. Claude models are
+	// reached only through llm-gateway, which authenticates with a subscription
+	// seat and therefore cannot run a bill up. Do not reintroduce a key field
+	// here — the absence of any reader is what makes the rule hold.
 	ContextObservations int    `json:"context_observations"`
 	ContextFullCount    int    `json:"context_full_count"`
 	ContextSessionCount int    `json:"context_session_count"`
@@ -243,8 +244,6 @@ func (c *Config) RuntimeSettings() map[string]string {
 		"llm_provider":           c.LLMProvider,
 		"google_api_keys":        c.GoogleAPIKeys,
 		"llm_key_rotate_hours":   strconv.Itoa(c.LLMKeyRotateHours),
-		"anthropic_api_key":      c.AnthropicAPIKey,
-		"anthropic_model":        c.AnthropicModel,
 		"context_observations":   strconv.Itoa(c.ContextObservations),
 		"context_full_count":     strconv.Itoa(c.ContextFullCount),
 		"context_session_count":  strconv.Itoa(c.ContextSessionCount),
@@ -290,10 +289,6 @@ func (c *Config) ApplyDBSettings(dbSettings map[string]string) {
 			if n, err := strconv.Atoi(v); err == nil {
 				c.LLMKeyRotateHours = n
 			}
-		case "anthropic_api_key":
-			c.AnthropicAPIKey = v
-		case "anthropic_model":
-			c.AnthropicModel = v
 		case "context_observations":
 			if n, err := strconv.Atoi(v); err == nil {
 				c.ContextObservations = n
@@ -347,8 +342,6 @@ func (c *Config) snapshot() ConfigSnapshot {
 		LLMProvider:          c.LLMProvider,
 		GoogleAPIKeys:        c.GoogleAPIKeys,
 		LLMKeyRotateHours:    c.LLMKeyRotateHours,
-		AnthropicAPIKey:      c.AnthropicAPIKey,
-		AnthropicModel:       c.AnthropicModel,
 		ContextObservations:  c.ContextObservations,
 		ContextFullCount:     c.ContextFullCount,
 		ContextSessionCount:  c.ContextSessionCount,
@@ -384,8 +377,6 @@ type ConfigSnapshot struct {
 	LLMProvider         string      `json:"llm_provider"`
 	GoogleAPIKeys       string      `json:"google_api_keys"`
 	LLMKeyRotateHours   int         `json:"llm_key_rotate_hours"`
-	AnthropicAPIKey     string      `json:"anthropic_api_key"`
-	AnthropicModel      string      `json:"anthropic_model"`
 	ContextObservations int         `json:"context_observations"`
 	ContextFullCount    int         `json:"context_full_count"`
 	ContextSessionCount int         `json:"context_session_count"`
@@ -417,8 +408,6 @@ func (c *Config) Update(partial map[string]any) (geminiChanged bool) {
 	oldProvider := c.LLMProvider
 	oldGoogleKeys := c.GoogleAPIKeys
 	oldRotateHours := c.LLMKeyRotateHours
-	oldAnthropicKey := c.AnthropicAPIKey
-	oldAnthropicModel := c.AnthropicModel
 
 	for k, v := range partial {
 		switch k {
@@ -453,14 +442,6 @@ func (c *Config) Update(partial map[string]any) (geminiChanged bool) {
 		case "llm_key_rotate_hours":
 			if n, ok := toInt(v); ok {
 				c.LLMKeyRotateHours = n
-			}
-		case "anthropic_api_key":
-			if s, ok := v.(string); ok {
-				c.AnthropicAPIKey = s
-			}
-		case "anthropic_model":
-			if s, ok := v.(string); ok {
-				c.AnthropicModel = s
 			}
 		case "allowed_projects":
 			if s, ok := v.(string); ok {
@@ -528,9 +509,7 @@ func (c *Config) Update(partial map[string]any) (geminiChanged bool) {
 		c.GeminiEmbeddingDims != oldEmbDims ||
 		c.LLMProvider != oldProvider ||
 		c.GoogleAPIKeys != oldGoogleKeys ||
-		c.LLMKeyRotateHours != oldRotateHours ||
-		c.AnthropicAPIKey != oldAnthropicKey ||
-		c.AnthropicModel != oldAnthropicModel
+		c.LLMKeyRotateHours != oldRotateHours
 }
 
 func toInt(v any) (int, bool) {
@@ -557,7 +536,6 @@ func defaults() *Config {
 		GeminiEmbeddingModel: "google/gemini-embedding-001",
 		GeminiEmbeddingDims:  768,
 		LLMKeyRotateHours:    6,
-		AnthropicModel:       "claude-sonnet-5",
 		ContextObservations:  50,
 		ContextFullCount:     5,
 		ContextSessionCount:  10,
@@ -629,14 +607,11 @@ func ApplyEnv(cfg *Config) {
 			cfg.LLMKeyRotateHours = n
 		}
 	}
-	if v := os.Getenv("AGENT_MEM_ANTHROPIC_API_KEY"); v != "" {
-		cfg.AnthropicAPIKey = v
-	} else if v := os.Getenv("ANTHROPIC_API_KEY"); v != "" && cfg.AnthropicAPIKey == "" {
-		cfg.AnthropicAPIKey = v
-	}
-	if v := os.Getenv("AGENT_MEM_ANTHROPIC_MODEL"); v != "" {
-		cfg.AnthropicModel = v
-	}
+	// ANTHROPIC_API_KEY, AGENT_MEM_ANTHROPIC_API_KEY and AGENT_MEM_ANTHROPIC_MODEL
+	// are intentionally not read. A pre-existing ANTHROPIC_API_KEY in the worker's
+	// environment used to be picked up here silently, which is exactly how metered
+	// billing started without anyone choosing it. Leaving no reader means the
+	// variable can sit in the environment harmlessly.
 	if v := os.Getenv("AGENT_MEM_GEMINI_MODEL"); v != "" {
 		cfg.GeminiModel = v
 	}

@@ -61,10 +61,28 @@ generated, then that summary is embedded, and both land in the same row (see
 
 | Path | Model | Provider |
 |---|---|---|
-| Graph summaries (cluster/thread/feature) | `claude-sonnet-5` | Anthropic API |
+| Graph summaries (cluster/thread/feature) | `google/gemini-3.6-flash` | OpenRouter |
 | Graph cheap judge (`link_topics`) + `Describe` | `google/gemini-3.6-flash` | OpenRouter |
 | Flat-memory observations + session summaries | `google/gemini-2.5-flash` | OpenRouter |
 | **All embeddings** | `gemini-embedding-001` | OpenRouter |
+
+### The Anthropic API key is gone, on purpose
+
+agent-mem has **no** Anthropic API key setting, and no code that reads
+`ANTHROPIC_API_KEY`. It used to: graph summaries ran on `claude-sonnet-5` billed
+per token. A `summarize_thread` amplification bug then pushed 1,335 calls/hour
+through that key — roughly **$11/hour**, with no spend ceiling to stop it. The
+OpenRouter budget at least failed closed at $50; a raw API key just keeps
+billing.
+
+Claude is reached only through [llm-gateway](https://github.com/enzo-wego/llm-gateway),
+which authenticates with a Claude **subscription seat**. A seat rate-limits
+instead of charging, so the same bug cannot become a bill. Until that gateway is
+wired in, graph summaries run on Gemini Flash — lower grounding quality, and a
+deliberate trade.
+
+`internal/graph/handlers.TextGenerator` is the seam it plugs into. Do not
+reintroduce a key field: having no reader anywhere is what makes the rule hold.
 
 Embeddings cannot move to Anthropic: there is no Claude model that returns a
 vector. And a query vector is only comparable to stored vectors from the *same*
@@ -73,9 +91,8 @@ about 148k across two dimensionalities (768 flat, 3072 graph). Switching it
 silently degrades search rather than erroring, so don't.
 
 Provider selection lives in settings (`gemini_model`, `graph_gemini_model`,
-`gemini_embedding_model`, `gemini_embedding_dims`, `anthropic_api_key`). The
-field named `gemini_api_key` holds the **OpenRouter** key — a historical
-misnomer.
+`gemini_embedding_model`, `gemini_embedding_dims`). The field named
+`gemini_api_key` holds the **OpenRouter** key — a historical misnomer.
 
 > **Dimension mismatch is the failure mode to watch.** `observations.embedding`
 > is `vector(768)` while the graph uses `halfvec(3072)`. If a client is built
