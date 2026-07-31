@@ -89,12 +89,19 @@ type Config struct {
 	GoogleAPIKeys     string `json:"google_api_keys"`
 	LLMKeyRotateHours int    `json:"llm_key_rotate_hours"`
 
+	// LLMGatewayURL points at llm-gateway (e.g. "http://172.18.0.1:8750"), which
+	// fronts a Claude subscription seat. When set, graph summaries run there
+	// instead of on Gemini Flash. Empty is the off switch — no separate boolean,
+	// so there is exactly one place to look to know whether the gateway is live.
+	//
 	// There is deliberately no Anthropic API key setting. Calling the Anthropic
 	// API directly is a standing no: it is billed per token with no cap, and an
-	// amplification bug spent ~$11/hour through it unnoticed. Claude models are
-	// reached only through llm-gateway, which authenticates with a subscription
-	// seat and therefore cannot run a bill up. Do not reintroduce a key field
-	// here — the absence of any reader is what makes the rule hold.
+	// amplification bug spent ~$11/hour through it unnoticed. A seat rate-limits
+	// instead of charging, which is the whole reason this indirection exists. Do
+	// not reintroduce a key field — the absence of any reader is what holds.
+	LLMGatewayURL    string `json:"llm_gateway_url"`
+	LLMGatewayAPIKey string `json:"llm_gateway_api_key"`
+
 	ContextObservations int    `json:"context_observations"`
 	ContextFullCount    int    `json:"context_full_count"`
 	ContextSessionCount int    `json:"context_session_count"`
@@ -244,6 +251,8 @@ func (c *Config) RuntimeSettings() map[string]string {
 		"llm_provider":           c.LLMProvider,
 		"google_api_keys":        c.GoogleAPIKeys,
 		"llm_key_rotate_hours":   strconv.Itoa(c.LLMKeyRotateHours),
+		"llm_gateway_url":        c.LLMGatewayURL,
+		"llm_gateway_api_key":    c.LLMGatewayAPIKey,
 		"context_observations":   strconv.Itoa(c.ContextObservations),
 		"context_full_count":     strconv.Itoa(c.ContextFullCount),
 		"context_session_count":  strconv.Itoa(c.ContextSessionCount),
@@ -289,6 +298,10 @@ func (c *Config) ApplyDBSettings(dbSettings map[string]string) {
 			if n, err := strconv.Atoi(v); err == nil {
 				c.LLMKeyRotateHours = n
 			}
+		case "llm_gateway_url":
+			c.LLMGatewayURL = v
+		case "llm_gateway_api_key":
+			c.LLMGatewayAPIKey = v
 		case "context_observations":
 			if n, err := strconv.Atoi(v); err == nil {
 				c.ContextObservations = n
@@ -342,6 +355,8 @@ func (c *Config) snapshot() ConfigSnapshot {
 		LLMProvider:          c.LLMProvider,
 		GoogleAPIKeys:        c.GoogleAPIKeys,
 		LLMKeyRotateHours:    c.LLMKeyRotateHours,
+		LLMGatewayURL:        c.LLMGatewayURL,
+		LLMGatewayAPIKey:     c.LLMGatewayAPIKey,
 		ContextObservations:  c.ContextObservations,
 		ContextFullCount:     c.ContextFullCount,
 		ContextSessionCount:  c.ContextSessionCount,
@@ -377,6 +392,8 @@ type ConfigSnapshot struct {
 	LLMProvider         string      `json:"llm_provider"`
 	GoogleAPIKeys       string      `json:"google_api_keys"`
 	LLMKeyRotateHours   int         `json:"llm_key_rotate_hours"`
+	LLMGatewayURL       string      `json:"llm_gateway_url"`
+	LLMGatewayAPIKey    string      `json:"llm_gateway_api_key"`
 	ContextObservations int         `json:"context_observations"`
 	ContextFullCount    int         `json:"context_full_count"`
 	ContextSessionCount int         `json:"context_session_count"`
@@ -408,6 +425,8 @@ func (c *Config) Update(partial map[string]any) (geminiChanged bool) {
 	oldProvider := c.LLMProvider
 	oldGoogleKeys := c.GoogleAPIKeys
 	oldRotateHours := c.LLMKeyRotateHours
+	oldGatewayURL := c.LLMGatewayURL
+	oldGatewayKey := c.LLMGatewayAPIKey
 
 	for k, v := range partial {
 		switch k {
@@ -442,6 +461,14 @@ func (c *Config) Update(partial map[string]any) (geminiChanged bool) {
 		case "llm_key_rotate_hours":
 			if n, ok := toInt(v); ok {
 				c.LLMKeyRotateHours = n
+			}
+		case "llm_gateway_url":
+			if s, ok := v.(string); ok {
+				c.LLMGatewayURL = strings.TrimSpace(s)
+			}
+		case "llm_gateway_api_key":
+			if s, ok := v.(string); ok {
+				c.LLMGatewayAPIKey = strings.TrimSpace(s)
 			}
 		case "allowed_projects":
 			if s, ok := v.(string); ok {
@@ -509,7 +536,9 @@ func (c *Config) Update(partial map[string]any) (geminiChanged bool) {
 		c.GeminiEmbeddingDims != oldEmbDims ||
 		c.LLMProvider != oldProvider ||
 		c.GoogleAPIKeys != oldGoogleKeys ||
-		c.LLMKeyRotateHours != oldRotateHours
+		c.LLMKeyRotateHours != oldRotateHours ||
+		c.LLMGatewayURL != oldGatewayURL ||
+		c.LLMGatewayAPIKey != oldGatewayKey
 }
 
 func toInt(v any) (int, bool) {

@@ -13,6 +13,7 @@ import (
 	"github.com/agent-mem/agent-mem/internal/database"
 	"github.com/agent-mem/agent-mem/internal/gemini"
 	graphhandlers "github.com/agent-mem/agent-mem/internal/graph/handlers"
+	"github.com/agent-mem/agent-mem/internal/llmgateway"
 	"github.com/agent-mem/agent-mem/internal/search"
 )
 
@@ -32,6 +33,8 @@ type settingsResponse struct {
 	LLMProvider          string `json:"llm_provider"`
 	GoogleAPIKeys        string `json:"google_api_keys"`
 	LLMKeyRotateHours    int    `json:"llm_key_rotate_hours"`
+	LLMGatewayURL        string `json:"llm_gateway_url"`
+	LLMGatewayAPIKey     string `json:"llm_gateway_api_key"`
 
 	ContextObservations int    `json:"context_observations"`
 	ContextFullCount    int    `json:"context_full_count"`
@@ -83,6 +86,8 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, _ *http.Request) {
 		LLMProvider:          snap.LLMProviderOrDefault(),
 		GoogleAPIKeys:        maskKeyList(snap.GoogleAPIKeys),
 		LLMKeyRotateHours:    snap.LLMKeyRotateHours,
+		LLMGatewayURL:        snap.LLMGatewayURL,
+		LLMGatewayAPIKey:     maskKey(snap.LLMGatewayAPIKey),
 		ContextObservations:  snap.ContextObservations,
 		ContextFullCount:     snap.ContextFullCount,
 		ContextSessionCount:  snap.ContextSessionCount,
@@ -146,6 +151,20 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 
 	// Return the full current settings (including masked keys) as the response.
 	s.handleGetSettings(w, r)
+}
+
+// newSummaryGenerator returns the generator for graph summaries: an llm-gateway
+// client when a URL is configured, else nil so the adapter falls back to the
+// graph Gemini client. Empty URL is the documented off switch.
+//
+// Tier is always "summary" — the gateway maps that to Sonnet 5. The high-volume
+// topic-link judge deliberately does NOT come through here; it calls
+// GenerateCheap, which stays on Gemini Flash regardless.
+func newSummaryGenerator(snap config.ConfigSnapshot) graphhandlers.TextGenerator {
+	if strings.TrimSpace(snap.LLMGatewayURL) == "" {
+		return nil
+	}
+	return llmgateway.New(snap.LLMGatewayURL, snap.LLMGatewayAPIKey, "summary")
 }
 
 // newLLMClient builds a gemini client over the active provider's key pool, with
@@ -260,10 +279,11 @@ func (s *Server) reloadGemini() {
 		graphModel = snap.GraphGeminiModel
 		graphClient = newLLMClient(ctx, s.db, snap, graphModel)
 	}
-	// nil summary generator: summaries follow graphClient. See NewServer.
-	var summaryLLM graphhandlers.TextGenerator
+	// Same helper as NewServer so startup and reload can never disagree about
+	// whether the gateway is live.
+	summaryLLM := newSummaryGenerator(snap)
 	s.graphAdapter.Swap(graphClient, summaryLLM)
-	log.Info().Str("model", graphModel).Msg("Graph LLM client reloaded")
+	log.Info().Str("model", graphModel).Bool("gateway", summaryLLM != nil).Msg("Graph LLM client reloaded")
 }
 
 func keys(m map[string]any) []string {

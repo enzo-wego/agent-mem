@@ -61,28 +61,45 @@ generated, then that summary is embedded, and both land in the same row (see
 
 | Path | Model | Provider |
 |---|---|---|
-| Graph summaries (cluster/thread/feature) | `google/gemini-3.6-flash` | OpenRouter |
+| Graph summaries (thread/cluster/feature/hot-topics) | `claude-sonnet-5` | **llm-gateway** (subscription seat) |
 | Graph cheap judge (`link_topics`) + `Describe` | `google/gemini-3.6-flash` | OpenRouter |
 | Flat-memory observations + session summaries | `google/gemini-2.5-flash` | OpenRouter |
 | **All embeddings** | `gemini-embedding-001` | OpenRouter |
 
-### The Anthropic API key is gone, on purpose
+### Claude comes through llm-gateway, never an API key
 
-agent-mem has **no** Anthropic API key setting, and no code that reads
+agent-mem has **no** Anthropic API key setting and no code that reads
 `ANTHROPIC_API_KEY`. It used to: graph summaries ran on `claude-sonnet-5` billed
 per token. A `summarize_thread` amplification bug then pushed 1,335 calls/hour
 through that key — roughly **$11/hour**, with no spend ceiling to stop it. The
-OpenRouter budget at least failed closed at $50; a raw API key just keeps
-billing.
+OpenRouter budget at least failed closed at $50; a raw API key just keeps billing.
 
-Claude is reached only through [llm-gateway](https://github.com/enzo-wego/llm-gateway),
+Claude now comes from [llm-gateway](https://github.com/enzo-wego/llm-gateway),
 which authenticates with a Claude **subscription seat**. A seat rate-limits
-instead of charging, so the same bug cannot become a bill. Until that gateway is
-wired in, graph summaries run on Gemini Flash — lower grounding quality, and a
-deliberate trade.
+instead of charging, so the same bug degrades rather than bills. Callers ask for
+an intent tier (`summary` / `cheap`), never a model name, so switching models is
+a systemd restart on the gateway rather than a Go deploy here.
 
-`internal/graph/handlers.TextGenerator` is the seam it plugs into. Do not
-reintroduce a key field: having no reader anywhere is what makes the rule hold.
+**On/off is `llm_gateway_url`.** Set it (Settings → *Claude via llm-gateway*) and
+summaries run on Sonnet; leave it empty and they fall back to the graph Gemini
+client. No separate boolean — one place to look. Takes effect on save.
+
+Two things that will bite:
+
+- **Use the Docker bridge, not localhost.** The worker is containerised; the
+  gateway binds `172.18.0.1` (the `agent-mem_default` bridge, *not* `docker0`).
+  ufw must allow that subnet to the gateway port — it drops container→host
+  traffic **with no error logged anywhere**.
+- **Leases must outlast a Claude call.** Sonnet on a seat is slower than Gemini
+  Flash, so every handler that can reach the gateway uses
+  `handlers.SummaryLease` (240s), sitting above the gateway's 180s LLM timeout
+  and the client's 200s request timeout. A shorter lease expires mid-call, the
+  janitor reclaims the job, and a second worker redoes the same summary — the
+  duplicate-call shape this repo already paid for once. Change one of the three,
+  check all three.
+
+The high-volume topic-link judge deliberately stays on Gemini Flash: it calls
+`GenerateCheap`, which never routes to the gateway.
 
 Embeddings cannot move to Anthropic: there is no Claude model that returns a
 vector. And a query vector is only comparable to stored vectors from the *same*
