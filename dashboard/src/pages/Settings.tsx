@@ -8,12 +8,14 @@ import {
   fetchGatewayHealth,
   fetchGatewayConfig,
   updateGatewayConfig,
+  getOpenRouterUsage,
   type Settings,
   type ChannelCount,
   type ChannelFilters,
   type GatewayHealth,
   type GatewayConfig,
   type GatewayConfigResponse,
+  type OpenRouterUsage,
 } from '../api'
 
 export function SettingsPage() {
@@ -172,6 +174,7 @@ export function SettingsPage() {
 function GatewayPanel() {
   const [healthData, setHealthData] = useState<GatewayHealth | null>(null)
   const [configData, setConfigData] = useState<GatewayConfigResponse | null>(null)
+  const [openRouterUsage, setOpenRouterUsage] = useState<OpenRouterUsage | null>(null)
   const [draft, setDraft] = useState<GatewayConfig | null>(null)
   const [loadError, setLoadError] = useState('')
   const [saving, setSaving] = useState(false)
@@ -180,12 +183,14 @@ function GatewayPanel() {
   const load = async () => {
     setLoadError('')
     try {
-      const [health, gatewayConfig] = await Promise.all([
+      const [health, gatewayConfig, usage] = await Promise.all([
         fetchGatewayHealth(),
         fetchGatewayConfig(),
+        getOpenRouterUsage().catch(() => null),
       ])
       setHealthData(health)
       setConfigData(gatewayConfig)
+      setOpenRouterUsage(usage)
       setDraft(gatewayConfig.available && gatewayConfig.config ? { ...gatewayConfig.config } : null)
     } catch {
       setLoadError('Failed to load gateway status and configuration')
@@ -222,6 +227,13 @@ function GatewayPanel() {
 
   const h = healthData?.health || {}
   const seat = h.seat || {}
+  const openRouterRemaining = openRouterUsage?.available
+    ? openRouterUsage.limit_remaining ?? (
+      typeof openRouterUsage.limit === 'number' && typeof openRouterUsage.usage === 'number'
+        ? openRouterUsage.limit - openRouterUsage.usage
+        : null
+    )
+    : null
   const unavailable = loadError || (configData && !configData.available ? configData.error || 'gateway not reachable' : '')
   const controlsDisabled = saving || !configData?.available || !draft
   const dirty = !!draft && !!configData?.config
@@ -248,6 +260,12 @@ function GatewayPanel() {
             <div className="flex flex-wrap items-center gap-2">
               <span className={seat.available ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}>●</span>
               <span>Claude seat {seat.available ? 'available' : 'blocked'}</span>
+              {openRouterRemaining !== null && Number.isFinite(openRouterRemaining) && typeof openRouterUsage?.limit === 'number' && (
+                <>
+                  <span className="text-gray-400">·</span>
+                  <span>OpenRouter ${openRouterRemaining.toFixed(2)} left of ${openRouterUsage.limit}</span>
+                </>
+              )}
               {seat.blocked_until && <span className="text-gray-400">until {new Date(seat.blocked_until).toLocaleString()}</span>}
             </div>
             {h.backends && (
@@ -295,9 +313,17 @@ function GatewayPanel() {
                     {!draft && <option value="">Unavailable</option>}
                     {GATEWAY_BACKENDS.map((value) => <option key={value} value={value}>{value}</option>)}
                   </select>
+                  {key === 'BACKEND_DESCRIBE' && (
+                    <span className="block mt-1 text-xs text-gray-400 dark:text-gray-500">
+                      On Claude, describe uses MODEL_CHEAP + EFFORT_CHEAP; on OpenRouter, it uses OR_MODEL_SUMMARY. There is no separate describe model.
+                    </span>
+                  )}
                 </label>
               ))}
             </div>
+            <p className="text-xs text-gray-400 dark:text-gray-500">
+              summary serves thread and cluster summaries, hot-topic detection, scope refresh, feature-entity derivation, and flat-memory observation extraction; cheap serves only the high-volume topic-link confirm gate (one yes/no per candidate — flat memory is not cheap); describe serves multimodal image and PDF attachments (a different request shape, not a quality level).
+            </p>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               {([
@@ -327,15 +353,24 @@ function GatewayPanel() {
                 </label>
               ))}
             </div>
+            <p className="text-xs text-gray-400 dark:text-gray-500">
+              Reasoning effort is passed to the Claude Agent SDK only; OpenRouter never receives it, so changing it has no effect when that tier uses openrouter.
+            </p>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               <label className="text-xs text-gray-500 dark:text-gray-400">
                 Max Claude budget (USD per call)
                 <input type="number" min="0.01" step="0.01" value={draft?.MAX_BUDGET_USD ?? ''} disabled={controlsDisabled} onChange={(e) => updateDraft('MAX_BUDGET_USD', Number(e.target.value))} className={`${inputCls} mt-1 w-full`} />
+                <span className="block mt-1 text-xs text-gray-400 dark:text-gray-500">
+                  Per-call ceiling passed to the Claude Agent SDK as max_budget_usd; it aborts one runaway call, not daily, monthly, or total spend.
+                </span>
               </label>
               <label className="text-xs text-gray-500 dark:text-gray-400">
                 Claude timeout (seconds, must be below 200)
                 <input type="number" min="1" max="199" step="1" value={draft?.CLAUDE_TIMEOUT_S ?? ''} disabled={controlsDisabled} onChange={(e) => updateDraft('CLAUDE_TIMEOUT_S', Number(e.target.value))} className={`${inputCls} mt-1 w-full`} />
+                <span className="block mt-1 text-xs text-gray-400 dark:text-gray-500">
+                  Wall clock for one call and the HTTP timeout for OpenRouter; it must stay under agent-mem's 200s client timeout, which stays under the 240s job lease, or the janitor can reclaim the expired job into a duplicate LLM call.
+                </span>
               </label>
             </div>
 
