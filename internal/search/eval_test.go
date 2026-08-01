@@ -9,7 +9,7 @@ import (
 
 	"github.com/agent-mem/agent-mem/internal/config"
 	"github.com/agent-mem/agent-mem/internal/database"
-	"github.com/agent-mem/agent-mem/internal/gemini"
+	"github.com/agent-mem/agent-mem/internal/llmgateway"
 	"github.com/agent-mem/agent-mem/internal/search"
 )
 
@@ -54,8 +54,8 @@ func TestRetrievalRecall(t *testing.T) {
 	if cfg.DatabaseURL == "" {
 		t.Fatal("DATABASE_URL not set")
 	}
-	if cfg.ActiveLLMKey() == "" {
-		t.Fatal("no LLM API key configured")
+	if cfg.LLMGatewayURL == "" || cfg.LLMGatewayAPIKey == "" {
+		t.Fatal("llm_gateway_url / llm_gateway_api_key not configured — agent-mem holds no provider keys")
 	}
 
 	ctx := context.Background()
@@ -65,8 +65,9 @@ func TestRetrievalRecall(t *testing.T) {
 	}
 	defer pool.Close()
 
-	gc := gemini.NewClient(cfg.LLMProviderOrDefault(), cfg.ActiveLLMKey(),
-		cfg.GeminiModel, cfg.GeminiEmbeddingModel, cfg.GeminiEmbeddingDims)
+	// Query embeddings must come through the same path the corpus was embedded
+	// with, so the eval measures retrieval rather than a vector-space mismatch.
+	gc := llmgateway.New(cfg.LLMGatewayURL, cfg.LLMGatewayAPIKey, cfg.GeminiEmbeddingDims)
 	searcher := search.NewSearcher(database.NewDB(pool), gc)
 
 	defaultProject := os.Getenv("AGENT_MEM_EVAL_PROJECT")

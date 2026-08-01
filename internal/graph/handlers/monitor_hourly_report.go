@@ -30,7 +30,6 @@ const (
 	monitorActivatedKey = "monitor.activated_at"
 	monitorThreadKey    = "monitor.thread_ts"
 	monitorDoneKey      = "monitor.done"
-	openRouterKeyURL    = "https://openrouter.ai/api/v1/key"
 )
 
 // monitorTZ is the display timezone for report labels (subscriber is UTC+7).
@@ -255,38 +254,46 @@ func (f *compiledChannelFilters) ignoreList() []string {
 	return out
 }
 
-// fetchOpenRouterSpend reads the OpenRouter key (from settings gemini_api_key) and
-// returns today's spend, the limit, and remaining budget. ok=false on any failure.
+// fetchOpenRouterSpend reports today's OpenRouter spend, the budget limit and
+// remaining, via llm-gateway's GET /usage. agent-mem holds no OpenRouter key —
+// the gateway does — so the figures come from there, never a direct provider
+// call. ok=false on any failure (including no gateway configured).
 func fetchOpenRouterSpend(ctx context.Context, db *pgxpool.Pool) (daily, limit, remaining float64, ok bool) {
-	key := loadSetting(ctx, db, "gemini_api_key")
-	if key == "" {
+	base := strings.TrimSpace(loadSetting(ctx, db, "llm_gateway_url"))
+	if base == "" {
 		return 0, 0, 0, false
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, openRouterKeyURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(base, "/")+"/usage", nil)
 	if err != nil {
 		return 0, 0, 0, false
 	}
-	req.Header.Set("Authorization", "Bearer "+key)
+	if k := strings.TrimSpace(loadSetting(ctx, db, "llm_gateway_api_key")); k != "" {
+		req.Header.Set("X-API-Key", k)
+	}
 	res, err := monitorHTTP.Do(req)
 	if err != nil {
 		return 0, 0, 0, false
 	}
 	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		return 0, 0, 0, false
+	}
 	var env struct {
-		Data struct {
+		OpenRouter struct {
 			Limit          *float64 `json:"limit"`
 			LimitRemaining *float64 `json:"limit_remaining"`
 			UsageDaily     *float64 `json:"usage_daily"`
-		} `json:"data"`
+			Error          string   `json:"error"`
+		} `json:"openrouter"`
 	}
 	if json.NewDecoder(res.Body).Decode(&env) != nil {
 		return 0, 0, 0, false
 	}
-	d := env.Data
-	daily = derefF(d.UsageDaily)
-	limit = derefF(d.Limit)
-	remaining = derefF(d.LimitRemaining)
-	return daily, limit, remaining, true
+	if env.OpenRouter.Error != "" {
+		return 0, 0, 0, false
+	}
+	o := env.OpenRouter
+	return derefF(o.UsageDaily), derefF(o.Limit), derefF(o.LimitRemaining), true
 }
 
 func derefF(p *float64) float64 {

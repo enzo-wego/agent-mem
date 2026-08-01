@@ -7,7 +7,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 )
 
 // GraphRateConfig holds per-source concurrency caps for the graph job dispatcher.
@@ -72,22 +71,14 @@ type Config struct {
 	LogLevel    string `json:"log_level"`
 	DatabaseURL string `json:"database_url"`
 
-	GeminiAPIKey         string `json:"gemini_api_key"`
-	GeminiModel          string `json:"gemini_model"`
-	GraphGeminiModel     string `json:"graph_gemini_model"` // graph judge/describe model; empty = use GeminiModel (flat memory keeps its tuned model)
-	GeminiEmbeddingModel string `json:"gemini_embedding_model"`
-	GeminiEmbeddingDims  int    `json:"gemini_embedding_dims"`
-
-	// LLMProvider picks the gemini-client backend: "openrouter" (default; uses
-	// GeminiAPIKey/sk-or) or "google" (direct Gemini API; uses GoogleAPIKeys/AIza).
-	// Flip + restart the worker to fail over when OpenRouter is out of quota.
-	LLMProvider string `json:"llm_provider"`
-
-	// GoogleAPIKeys is the pool of AIza… keys (comma- or newline-separated) used
-	// on the google provider — one key is enough, a pool spreads per-key quota.
-	// The active key switches every LLMKeyRotateHours.
-	GoogleAPIKeys     string `json:"google_api_keys"`
-	LLMKeyRotateHours int    `json:"llm_key_rotate_hours"`
+	// GeminiEmbeddingDims is the width of observations.embedding, vector(768).
+	// agent-mem keeps this even though it holds no provider config, because the
+	// width is a property of ITS schema — the gateway is told what to produce.
+	//
+	// There are deliberately no provider keys or model names here. Every LLM call
+	// goes through llm-gateway; model choice, failover and credentials live there
+	// so they can be shared and changed without redeploying this service.
+	GeminiEmbeddingDims int `json:"gemini_embedding_dims"`
 
 	// LLMGatewayURL points at llm-gateway (e.g. "http://172.18.0.1:8750"), which
 	// fronts a Claude subscription seat. When set, graph summaries run there
@@ -146,127 +137,28 @@ func (c *Config) Save() error {
 	return nil
 }
 
-// normalizeProvider maps any value to a valid provider, defaulting to openrouter.
-func normalizeProvider(p string) string {
-	if p == "google" {
-		return "google"
-	}
-	return "openrouter"
-}
-
-// LLMProviderOrDefault returns the configured LLM provider, defaulting to openrouter.
-func (c *Config) LLMProviderOrDefault() string {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return normalizeProvider(c.LLMProvider)
-}
-
-// ActiveLLMKey returns the first API key for the active provider (see
-// ActiveLLMKeys); callers that only need "is a key configured" use this.
-func (c *Config) ActiveLLMKey() string { return c.Snapshot().ActiveLLMKey() }
-
-// ActiveLLMKeys returns the key pool for the active provider.
-func (c *Config) ActiveLLMKeys() []string { return c.Snapshot().ActiveLLMKeys() }
-
-// LLMKeyRotateInterval returns the key-rotation window for the active provider.
-func (c *Config) LLMKeyRotateInterval() time.Duration { return c.Snapshot().LLMKeyRotateInterval() }
-
-// LLMProviderOrDefault returns the snapshot's provider, defaulting to openrouter.
-func (s ConfigSnapshot) LLMProviderOrDefault() string { return normalizeProvider(s.LLMProvider) }
-
-// ActiveLLMKeys returns the key pool for the active provider: the
-// google_api_keys list when provider is google, else the OpenRouter key. A
-// single google key is just a pool of one. Never contains empty strings.
-func (s ConfigSnapshot) ActiveLLMKeys() []string {
-	if normalizeProvider(s.LLMProvider) == "google" {
-		return SplitKeys(s.GoogleAPIKeys)
-	}
-	return SplitKeys(s.GeminiAPIKey)
-}
-
-// ActiveLLMKey returns the snapshot's first key for the active provider.
-func (s ConfigSnapshot) ActiveLLMKey() string {
-	keys := s.ActiveLLMKeys()
-	if len(keys) == 0 {
-		return ""
-	}
-	return keys[0]
-}
-
-// LLMKeyRotateInterval is how long one key stays active before the client
-// switches to another key in the pool. 0 = no rotation (single key pinned).
-func (s ConfigSnapshot) LLMKeyRotateInterval() time.Duration {
-	if s.LLMKeyRotateHours <= 0 {
-		return 0
-	}
-	return time.Duration(s.LLMKeyRotateHours) * time.Hour
-}
-
-// SplitKeys parses a key list written with commas, newlines, or spaces between
-// entries — whatever the operator pasted into the dashboard. Key pools are
-// usually kept labelled ("-- n8n key" above each key), so `#`, `--` and `//`
-// comments are dropped: a label parsed as a key would be blocked on first use.
-func SplitKeys(s string) []string {
-	out := []string{}
-	seen := map[string]bool{}
-	for line := range strings.SplitSeq(s, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || isComment(line) {
-			continue
-		}
-		// Trailing comment on a key line ("AIza… # personal"). The leading space
-		// keeps a "-" inside a key from being mistaken for a comment marker.
-		for _, marker := range []string{" #", " --", " //"} {
-			if i := strings.Index(line, marker); i >= 0 {
-				line = line[:i]
-			}
-		}
-		fields := strings.FieldsFunc(line, func(r rune) bool {
-			return r == ',' || r == '\r' || r == '\t' || r == ' ' || r == ';'
-		})
-		for _, f := range fields {
-			if f != "" && !isComment(f) && !seen[f] {
-				seen[f] = true
-				out = append(out, f)
-			}
-		}
-	}
-	return out
-}
-
-func isComment(s string) bool {
-	return strings.HasPrefix(s, "#") || strings.HasPrefix(s, "--") || strings.HasPrefix(s, "//")
-}
-
 // RuntimeSettings returns the runtime settings as a string map for DB storage.
 func (c *Config) RuntimeSettings() map[string]string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return map[string]string{
-		"gemini_api_key":         c.GeminiAPIKey,
-		"gemini_model":           c.GeminiModel,
-		"graph_gemini_model":     c.GraphGeminiModel,
-		"gemini_embedding_model": c.GeminiEmbeddingModel,
-		"gemini_embedding_dims":  strconv.Itoa(c.GeminiEmbeddingDims),
-		"llm_provider":           c.LLMProvider,
-		"google_api_keys":        c.GoogleAPIKeys,
-		"llm_key_rotate_hours":   strconv.Itoa(c.LLMKeyRotateHours),
-		"llm_gateway_url":        c.LLMGatewayURL,
-		"llm_gateway_api_key":    c.LLMGatewayAPIKey,
-		"context_observations":   strconv.Itoa(c.ContextObservations),
-		"context_full_count":     strconv.Itoa(c.ContextFullCount),
-		"context_session_count":  strconv.Itoa(c.ContextSessionCount),
-		"skip_tools":             c.SkipTools,
-		"allowed_projects":       c.AllowedProjects,
-		"ignored_projects":       c.IgnoredProjects,
-		"log_level":              c.LogLevel,
-		"processing_paused":      strconv.FormatBool(c.ProcessingPaused),
-		"sync_enabled":           strconv.FormatBool(c.SyncEnabled),
-		"sync_url":               c.SyncURL,
-		"public_base_url":        c.PublicBaseURL,
-		"sync_interval":          c.SyncInterval,
-		"api_key":                c.APIKey,
-		"machine_id":             c.MachineID,
+		"gemini_embedding_dims": strconv.Itoa(c.GeminiEmbeddingDims),
+		"llm_gateway_url":       c.LLMGatewayURL,
+		"llm_gateway_api_key":   c.LLMGatewayAPIKey,
+		"context_observations":  strconv.Itoa(c.ContextObservations),
+		"context_full_count":    strconv.Itoa(c.ContextFullCount),
+		"context_session_count": strconv.Itoa(c.ContextSessionCount),
+		"skip_tools":            c.SkipTools,
+		"allowed_projects":      c.AllowedProjects,
+		"ignored_projects":      c.IgnoredProjects,
+		"log_level":             c.LogLevel,
+		"processing_paused":     strconv.FormatBool(c.ProcessingPaused),
+		"sync_enabled":          strconv.FormatBool(c.SyncEnabled),
+		"sync_url":              c.SyncURL,
+		"public_base_url":       c.PublicBaseURL,
+		"sync_interval":         c.SyncInterval,
+		"api_key":               c.APIKey,
+		"machine_id":            c.MachineID,
 	}
 }
 
@@ -278,25 +170,9 @@ func (c *Config) ApplyDBSettings(dbSettings map[string]string) {
 
 	for k, v := range dbSettings {
 		switch k {
-		case "gemini_api_key":
-			c.GeminiAPIKey = v
-		case "gemini_model":
-			c.GeminiModel = v
-		case "graph_gemini_model":
-			c.GraphGeminiModel = v
-		case "gemini_embedding_model":
-			c.GeminiEmbeddingModel = v
 		case "gemini_embedding_dims":
 			if n, err := strconv.Atoi(v); err == nil {
 				c.GeminiEmbeddingDims = n
-			}
-		case "llm_provider":
-			c.LLMProvider = v
-		case "google_api_keys":
-			c.GoogleAPIKeys = v
-		case "llm_key_rotate_hours":
-			if n, err := strconv.Atoi(v); err == nil {
-				c.LLMKeyRotateHours = n
 			}
 		case "llm_gateway_url":
 			c.LLMGatewayURL = v
@@ -343,55 +219,38 @@ func (c *Config) ApplyDBSettings(dbSettings map[string]string) {
 // snapshot returns a mutex-free copy for safe marshaling. Must be called under lock.
 func (c *Config) snapshot() ConfigSnapshot {
 	return ConfigSnapshot{
-		WorkerPort:           c.WorkerPort,
-		DataDir:              c.DataDir,
-		LogLevel:             c.LogLevel,
-		DatabaseURL:          c.DatabaseURL,
-		GeminiAPIKey:         c.GeminiAPIKey,
-		GeminiModel:          c.GeminiModel,
-		GraphGeminiModel:     c.GraphGeminiModel,
-		GeminiEmbeddingModel: c.GeminiEmbeddingModel,
-		GeminiEmbeddingDims:  c.GeminiEmbeddingDims,
-		LLMProvider:          c.LLMProvider,
-		GoogleAPIKeys:        c.GoogleAPIKeys,
-		LLMKeyRotateHours:    c.LLMKeyRotateHours,
-		LLMGatewayURL:        c.LLMGatewayURL,
-		LLMGatewayAPIKey:     c.LLMGatewayAPIKey,
-		ContextObservations:  c.ContextObservations,
-		ContextFullCount:     c.ContextFullCount,
-		ContextSessionCount:  c.ContextSessionCount,
-		SkipTools:            c.SkipTools,
-		AllowedProjects:      c.AllowedProjects,
-		IgnoredProjects:      c.IgnoredProjects,
-		ProcessingPaused:     c.ProcessingPaused,
-		SyncEnabled:          c.SyncEnabled,
-		SyncURL:              c.SyncURL,
-		PublicBaseURL:        c.PublicBaseURL,
-		SyncInterval:         c.SyncInterval,
-		APIKey:               c.APIKey,
-		MachineID:            c.MachineID,
-		Graph:                c.Graph,
+		WorkerPort:          c.WorkerPort,
+		DataDir:             c.DataDir,
+		LogLevel:            c.LogLevel,
+		DatabaseURL:         c.DatabaseURL,
+		GeminiEmbeddingDims: c.GeminiEmbeddingDims,
+		LLMGatewayURL:       c.LLMGatewayURL,
+		LLMGatewayAPIKey:    c.LLMGatewayAPIKey,
+		ContextObservations: c.ContextObservations,
+		ContextFullCount:    c.ContextFullCount,
+		ContextSessionCount: c.ContextSessionCount,
+		SkipTools:           c.SkipTools,
+		AllowedProjects:     c.AllowedProjects,
+		IgnoredProjects:     c.IgnoredProjects,
+		ProcessingPaused:    c.ProcessingPaused,
+		SyncEnabled:         c.SyncEnabled,
+		SyncURL:             c.SyncURL,
+		PublicBaseURL:       c.PublicBaseURL,
+		SyncInterval:        c.SyncInterval,
+		APIKey:              c.APIKey,
+		MachineID:           c.MachineID,
+		Graph:               c.Graph,
 	}
 }
 
 // ConfigSnapshot is a plain struct without mutex for safe JSON marshaling and reading.
 type ConfigSnapshot struct {
-	WorkerPort           int    `json:"worker_port"`
-	DataDir              string `json:"data_dir"`
-	LogLevel             string `json:"log_level"`
-	DatabaseURL          string `json:"database_url"`
-	GeminiAPIKey         string `json:"gemini_api_key"`
-	GeminiModel          string `json:"gemini_model"`
-	GraphGeminiModel     string `json:"graph_gemini_model"` // graph judge/describe model; empty = use GeminiModel (flat memory keeps its tuned model)
-	GeminiEmbeddingModel string `json:"gemini_embedding_model"`
-	GeminiEmbeddingDims  int    `json:"gemini_embedding_dims"`
+	WorkerPort          int    `json:"worker_port"`
+	DataDir             string `json:"data_dir"`
+	LogLevel            string `json:"log_level"`
+	DatabaseURL         string `json:"database_url"`
+	GeminiEmbeddingDims int    `json:"gemini_embedding_dims"`
 
-	// LLMProvider picks the gemini-client backend: "openrouter" (default; uses
-	// GeminiAPIKey/sk-or) or "google" (direct Gemini API; uses GoogleAPIKeys/AIza).
-	// Flip + restart the worker to fail over when OpenRouter is out of quota.
-	LLMProvider         string      `json:"llm_provider"`
-	GoogleAPIKeys       string      `json:"google_api_keys"`
-	LLMKeyRotateHours   int         `json:"llm_key_rotate_hours"`
 	LLMGatewayURL       string      `json:"llm_gateway_url"`
 	LLMGatewayAPIKey    string      `json:"llm_gateway_api_key"`
 	ContextObservations int         `json:"context_observations"`
@@ -412,55 +271,21 @@ type ConfigSnapshot struct {
 
 // Update applies partial updates from a JSON object to the config.
 // Only mutable fields are updated; restart-required fields are ignored.
-// Returns true if any LLM key/model/provider changed (caller should reinit clients).
-func (c *Config) Update(partial map[string]any) (geminiChanged bool) {
+// Returns true when something the LLM clients are built from changed — the
+// gateway URL, its key, or the embedding width — so the caller rebuilds them.
+func (c *Config) Update(partial map[string]any) (llmChanged bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	oldKey := c.GeminiAPIKey
-	oldModel := c.GeminiModel
-	oldGraphModel := c.GraphGeminiModel
-	oldEmbModel := c.GeminiEmbeddingModel
 	oldEmbDims := c.GeminiEmbeddingDims
-	oldProvider := c.LLMProvider
-	oldGoogleKeys := c.GoogleAPIKeys
-	oldRotateHours := c.LLMKeyRotateHours
 	oldGatewayURL := c.LLMGatewayURL
 	oldGatewayKey := c.LLMGatewayAPIKey
 
 	for k, v := range partial {
 		switch k {
-		case "gemini_api_key":
-			if s, ok := v.(string); ok {
-				c.GeminiAPIKey = s
-			}
-		case "gemini_model":
-			if s, ok := v.(string); ok {
-				c.GeminiModel = s
-			}
-		case "graph_gemini_model":
-			if s, ok := v.(string); ok {
-				c.GraphGeminiModel = s
-			}
-		case "gemini_embedding_model":
-			if s, ok := v.(string); ok {
-				c.GeminiEmbeddingModel = s
-			}
 		case "gemini_embedding_dims":
 			if n, ok := toInt(v); ok {
 				c.GeminiEmbeddingDims = n
-			}
-		case "llm_provider":
-			if s, ok := v.(string); ok {
-				c.LLMProvider = s
-			}
-		case "google_api_keys":
-			if s, ok := v.(string); ok {
-				c.GoogleAPIKeys = s
-			}
-		case "llm_key_rotate_hours":
-			if n, ok := toInt(v); ok {
-				c.LLMKeyRotateHours = n
 			}
 		case "llm_gateway_url":
 			if s, ok := v.(string); ok {
@@ -529,14 +354,7 @@ func (c *Config) Update(partial map[string]any) (geminiChanged bool) {
 		}
 	}
 
-	return c.GeminiAPIKey != oldKey ||
-		c.GeminiModel != oldModel ||
-		c.GraphGeminiModel != oldGraphModel ||
-		c.GeminiEmbeddingModel != oldEmbModel ||
-		c.GeminiEmbeddingDims != oldEmbDims ||
-		c.LLMProvider != oldProvider ||
-		c.GoogleAPIKeys != oldGoogleKeys ||
-		c.LLMKeyRotateHours != oldRotateHours ||
+	return c.GeminiEmbeddingDims != oldEmbDims ||
 		c.LLMGatewayURL != oldGatewayURL ||
 		c.LLMGatewayAPIKey != oldGatewayKey
 }
@@ -557,19 +375,16 @@ func toInt(v any) (int, bool) {
 func defaults() *Config {
 	home, _ := os.UserHomeDir()
 	return &Config{
-		WorkerPort:           34567,
-		DataDir:              filepath.Join(home, ".agent-mem"),
-		LogLevel:             "info",
-		DatabaseURL:          "postgresql://agentmem:agentmem@localhost:5433/agentmem",
-		GeminiModel:          "google/gemini-2.5-flash",
-		GeminiEmbeddingModel: "google/gemini-embedding-001",
-		GeminiEmbeddingDims:  768,
-		LLMKeyRotateHours:    6,
-		ContextObservations:  50,
-		ContextFullCount:     5,
-		ContextSessionCount:  10,
-		SkipTools:            "ListMcpResourcesTool,SlashCommand",
-		SyncInterval:         "60s",
+		WorkerPort:          34567,
+		DataDir:             filepath.Join(home, ".agent-mem"),
+		LogLevel:            "info",
+		DatabaseURL:         "postgresql://agentmem:agentmem@localhost:5433/agentmem",
+		GeminiEmbeddingDims: 768,
+		ContextObservations: 50,
+		ContextFullCount:    5,
+		ContextSessionCount: 10,
+		SkipTools:           "ListMcpResourcesTool,SlashCommand",
+		SyncInterval:        "60s",
 		Graph: GraphConfig{
 			Runner:           "any",
 			GHBaseURL:        "https://api.github.com",
@@ -616,36 +431,17 @@ func ApplyEnv(cfg *Config) {
 	if v := os.Getenv("DATABASE_URL"); v != "" {
 		cfg.DatabaseURL = v
 	}
-	if v := os.Getenv("AGENT_MEM_GEMINI_API_KEY"); v != "" {
-		cfg.GeminiAPIKey = v
-	} else if v := os.Getenv("GEMINI_API_KEY"); v != "" && cfg.GeminiAPIKey == "" {
-		cfg.GeminiAPIKey = v
+	// No provider API keys, provider switch or model names are read from the
+	// environment — agent-mem holds none of those. ANTHROPIC_API_KEY,
+	// GEMINI_API_KEY, AGENT_MEM_GOOGLE_API_KEY* and the model vars are all
+	// deliberately ignored: a key sitting in the worker's environment used to be
+	// picked up silently, which is exactly how metered billing started without
+	// anyone choosing it. With no reader, a stray key is harmless.
+	if v := os.Getenv("AGENT_MEM_LLM_GATEWAY_URL"); v != "" {
+		cfg.LLMGatewayURL = v
 	}
-	if v := os.Getenv("AGENT_MEM_LLM_PROVIDER"); v != "" {
-		cfg.LLMProvider = v
-	}
-	if v := os.Getenv("AGENT_MEM_GOOGLE_API_KEYS"); v != "" {
-		cfg.GoogleAPIKeys = v
-	}
-	// Legacy single-key var: joins the pool (SplitKeys dedupes).
-	if v := os.Getenv("AGENT_MEM_GOOGLE_API_KEY"); v != "" {
-		cfg.GoogleAPIKeys = strings.TrimSpace(cfg.GoogleAPIKeys + "\n" + v)
-	}
-	if v := os.Getenv("AGENT_MEM_LLM_KEY_ROTATE_HOURS"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			cfg.LLMKeyRotateHours = n
-		}
-	}
-	// ANTHROPIC_API_KEY, AGENT_MEM_ANTHROPIC_API_KEY and AGENT_MEM_ANTHROPIC_MODEL
-	// are intentionally not read. A pre-existing ANTHROPIC_API_KEY in the worker's
-	// environment used to be picked up here silently, which is exactly how metered
-	// billing started without anyone choosing it. Leaving no reader means the
-	// variable can sit in the environment harmlessly.
-	if v := os.Getenv("AGENT_MEM_GEMINI_MODEL"); v != "" {
-		cfg.GeminiModel = v
-	}
-	if v := os.Getenv("AGENT_MEM_GEMINI_EMBEDDING_MODEL"); v != "" {
-		cfg.GeminiEmbeddingModel = v
+	if v := os.Getenv("AGENT_MEM_LLM_GATEWAY_API_KEY"); v != "" {
+		cfg.LLMGatewayAPIKey = v
 	}
 	if v := os.Getenv("AGENT_MEM_GEMINI_EMBEDDING_DIMS"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {

@@ -5,18 +5,25 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/pgvector/pgvector-go"
 	"github.com/rs/zerolog/log"
 
-	"github.com/agent-mem/agent-mem/internal/gemini"
+	"github.com/agent-mem/agent-mem/internal/llmgateway"
 
 	_ "modernc.org/sqlite"
 )
 
-func runBackfillEmbeddings(databaseURL, geminiAPIKey, embeddingModel string, embeddingDims int) error {
+// batchEmbedder is all the backfill needs. agent-mem holds no provider
+// credentials, so this is always an llm-gateway client.
+type batchEmbedder interface {
+	EmbedBatch(ctx context.Context, texts []string) ([][]float32, error)
+}
+
+func runBackfillEmbeddings(databaseURL, gatewayKey, embeddingModel string, embeddingDims int) error {
 	ctx := context.Background()
 
 	pool, err := pgxpool.New(ctx, databaseURL)
@@ -25,11 +32,13 @@ func runBackfillEmbeddings(databaseURL, geminiAPIKey, embeddingModel string, emb
 	}
 	defer pool.Close()
 
-	client := gemini.NewClient(gemini.ProviderOpenRouter, geminiAPIKey, "", embeddingModel, embeddingDims)
+	// embeddingModel is ignored: the gateway owns model choice. The width still
+	// comes from the caller because it must match the destination column.
+	client := llmgateway.New(os.Getenv("LLM_GATEWAY_URL"), gatewayKey, embeddingDims)
 	return backfillEmbeddings(ctx, pool, client)
 }
 
-func runMigrate(sqlitePath, databaseURL, geminiAPIKey string) error {
+func runMigrate(sqlitePath, databaseURL, gatewayKey string) error {
 	ctx := context.Background()
 
 	// Open SQLite
@@ -69,14 +78,15 @@ func runMigrate(sqlitePath, databaseURL, geminiAPIKey string) error {
 		return fmt.Errorf("migrate prompts: %w", err)
 	}
 
-	// Backfill embeddings if Gemini key provided
-	if geminiAPIKey != "" {
-		client := gemini.NewClient(gemini.ProviderOpenRouter, geminiAPIKey, "", "gemini-embedding-001", 768)
+	// Backfill embeddings when a gateway is reachable. 768 dims: this path writes
+	// observations/summaries/prompts, all vector(768).
+	if gwURL := os.Getenv("LLM_GATEWAY_URL"); gwURL != "" && gatewayKey != "" {
+		client := llmgateway.New(gwURL, gatewayKey, 768)
 		if err := backfillEmbeddings(ctx, pool, client); err != nil {
 			log.Warn().Err(err).Msg("Embedding backfill had errors")
 		}
 	} else {
-		log.Warn().Msg("No Gemini API key, skipping embedding backfill")
+		log.Warn().Msg("LLM_GATEWAY_URL/API_KEY not set, skipping embedding backfill")
 	}
 
 	// Verify
@@ -387,7 +397,7 @@ func migratePrompts(ctx context.Context, sqlite *sql.DB, pg *pgxpool.Pool) error
 	return nil
 }
 
-func backfillEmbeddings(ctx context.Context, pg *pgxpool.Pool, client *gemini.Client) error {
+func backfillEmbeddings(ctx context.Context, pg *pgxpool.Pool, client batchEmbedder) error {
 	log.Info().Msg("Starting embedding backfill...")
 
 	// Observations
@@ -426,7 +436,7 @@ func backfillEmbeddings(ctx context.Context, pg *pgxpool.Pool, client *gemini.Cl
 	return nil
 }
 
-func backfillTable(ctx context.Context, pg *pgxpool.Pool, client *gemini.Client, table, query string, buildText func(int64, []string) string) error {
+func backfillTable(ctx context.Context, pg *pgxpool.Pool, client batchEmbedder, table, query string, buildText func(int64, []string) string) error {
 	rows, err := pg.Query(ctx, query)
 	if err != nil {
 		return fmt.Errorf("query %s: %w", table, err)

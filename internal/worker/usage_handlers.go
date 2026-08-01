@@ -13,10 +13,6 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// openRouterKeyEndpoint is OpenRouter's key-introspection endpoint. It
-// reports the remaining quota/usage for the configured API key.
-const openRouterKeyEndpoint = "https://openrouter.ai/api/v1/key"
-
 // openRouterUsageCacheTTL controls how long a successful upstream lookup is
 // reused before the dashboard's polling triggers another OpenRouter call.
 const openRouterUsageCacheTTL = 60 * time.Second
@@ -35,74 +31,6 @@ type openRouterUsageResponse struct {
 	UsageDaily     *float64 `json:"usage_daily,omitempty"`
 	UsageMonthly   *float64 `json:"usage_monthly,omitempty"`
 	IsFreeTier     *bool    `json:"is_free_tier,omitempty"`
-}
-
-// openRouterKeyData mirrors the "data" object of OpenRouter's
-// GET /api/v1/key response.
-type openRouterKeyData struct {
-	Label          string   `json:"label"`
-	Limit          *float64 `json:"limit"`
-	LimitReset     string   `json:"limit_reset"`
-	LimitRemaining *float64 `json:"limit_remaining"`
-	Usage          *float64 `json:"usage"`
-	UsageDaily     *float64 `json:"usage_daily"`
-	UsageWeekly    *float64 `json:"usage_weekly"`
-	UsageMonthly   *float64 `json:"usage_monthly"`
-	IsFreeTier     *bool    `json:"is_free_tier"`
-}
-
-type openRouterKeyEnvelope struct {
-	Data openRouterKeyData `json:"data"`
-}
-
-// fetchOpenRouterUsage fetches and normalizes OpenRouter key usage. It has
-// no dependency on Server so it can be unit tested directly against an
-// httptest server.
-func fetchOpenRouterUsage(ctx context.Context, client *http.Client, baseURL, key string) openRouterUsageResponse {
-	if key == "" || !strings.HasPrefix(key, "sk-or-") {
-		return openRouterUsageResponse{Available: false, Error: "OpenRouter key not configured"}
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL, nil)
-	if err != nil {
-		return openRouterUsageResponse{Available: false, Error: err.Error()}
-	}
-	req.Header.Set("Authorization", "Bearer "+key)
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return openRouterUsageResponse{Available: false, Error: err.Error()}
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return openRouterUsageResponse{Available: false, Error: err.Error()}
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return openRouterUsageResponse{
-			Available: false,
-			Error:     fmt.Sprintf("upstream returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body))),
-		}
-	}
-
-	var envelope openRouterKeyEnvelope
-	if err := json.Unmarshal(body, &envelope); err != nil {
-		return openRouterUsageResponse{Available: false, Error: err.Error()}
-	}
-
-	return openRouterUsageResponse{
-		Available:      true,
-		Label:          envelope.Data.Label,
-		Usage:          envelope.Data.Usage,
-		Limit:          envelope.Data.Limit,
-		LimitRemaining: envelope.Data.LimitRemaining,
-		LimitReset:     envelope.Data.LimitReset,
-		UsageDaily:     envelope.Data.UsageDaily,
-		UsageMonthly:   envelope.Data.UsageMonthly,
-		IsFreeTier:     envelope.Data.IsFreeTier,
-	}
 }
 
 // openRouterUsageCache holds the last successful upstream lookup so repeated
@@ -135,14 +63,16 @@ func (c *openRouterUsageCache) set(resp openRouterUsageResponse) {
 // openRouterCache is the package-level 60s cache shared across requests.
 var openRouterCache openRouterUsageCache
 
-// handleOpenRouterUsage proxies OpenRouter's key-usage endpoint so the
-// dashboard can show quota/usage without exposing the raw API key.
+// handleOpenRouterUsage reports OpenRouter budget for the dashboard.
+//
+// It asks llm-gateway rather than OpenRouter: the gateway holds the key, and
+// agent-mem deliberately holds no provider credentials. Read-only status about
+// a service this one depends on is fair to surface here; configuring that
+// service is not, and stays in the gateway.
 func (s *Server) handleOpenRouterUsage(w http.ResponseWriter, r *http.Request) {
 	snap := s.config.Snapshot()
-	key := snap.GeminiAPIKey
-
-	if key == "" || !strings.HasPrefix(key, "sk-or-") {
-		writeOpenRouterUsage(w, openRouterUsageResponse{Available: false, Error: "OpenRouter key not configured"})
+	if strings.TrimSpace(snap.LLMGatewayURL) == "" {
+		writeOpenRouterUsage(w, openRouterUsageResponse{Available: false, Error: "llm_gateway_url not configured"})
 		return
 	}
 
@@ -151,13 +81,62 @@ func (s *Server) handleOpenRouterUsage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
 
-	result := fetchOpenRouterUsage(ctx, http.DefaultClient, openRouterKeyEndpoint, key)
+	result := fetchGatewayUsage(ctx, http.DefaultClient,
+		strings.TrimRight(snap.LLMGatewayURL, "/")+"/usage", snap.LLMGatewayAPIKey)
 	openRouterCache.set(result)
 
 	writeOpenRouterUsage(w, result)
+}
+
+// gatewayUsage mirrors llm-gateway's GET /usage. Only the OpenRouter half is
+// mapped here; the seat half is surfaced by the gateway status panel.
+type gatewayUsage struct {
+	OpenRouter struct {
+		Limit          *float64 `json:"limit"`
+		Usage          *float64 `json:"usage"`
+		LimitRemaining *float64 `json:"limit_remaining"`
+		UsageDaily     *float64 `json:"usage_daily"`
+		UsageMonthly   *float64 `json:"usage_monthly"`
+		Error          string   `json:"error"`
+	} `json:"openrouter"`
+}
+
+func fetchGatewayUsage(ctx context.Context, hc *http.Client, url, apiKey string) openRouterUsageResponse {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return openRouterUsageResponse{Available: false, Error: err.Error()}
+	}
+	req.Header.Set("X-API-Key", apiKey)
+
+	resp, err := hc.Do(req)
+	if err != nil {
+		return openRouterUsageResponse{Available: false, Error: "llm-gateway unreachable: " + err.Error()}
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return openRouterUsageResponse{Available: false,
+			Error: fmt.Sprintf("llm-gateway /usage returned %d", resp.StatusCode)}
+	}
+
+	var g gatewayUsage
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&g); err != nil {
+		return openRouterUsageResponse{Available: false, Error: "decode /usage: " + err.Error()}
+	}
+	if g.OpenRouter.Error != "" {
+		return openRouterUsageResponse{Available: false, Error: g.OpenRouter.Error}
+	}
+	return openRouterUsageResponse{
+		Available:      true,
+		Limit:          g.OpenRouter.Limit,
+		Usage:          g.OpenRouter.Usage,
+		LimitRemaining: g.OpenRouter.LimitRemaining,
+		UsageDaily:     g.OpenRouter.UsageDaily,
+		UsageMonthly:   g.OpenRouter.UsageMonthly,
+		LimitReset:     "monthly",
+	}
 }
 
 func writeOpenRouterUsage(w http.ResponseWriter, resp openRouterUsageResponse) {

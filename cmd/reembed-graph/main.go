@@ -5,7 +5,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/agent-mem/agent-mem/internal/gemini"
+	"github.com/agent-mem/agent-mem/internal/llmgateway"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/pgvector/pgvector-go"
 	"github.com/rs/zerolog"
@@ -17,12 +17,10 @@ func main() {
 	ctx := context.Background()
 
 	dsn := os.Getenv("DATABASE_URL")
-	apiKey := os.Getenv("AGENT_MEM_GEMINI_API_KEY")
-	if apiKey == "" {
-		apiKey = os.Getenv("GEMINI_API_KEY")
-	}
-	if dsn == "" || apiKey == "" {
-		log.Fatal().Msg("DATABASE_URL and AGENT_MEM_GEMINI_API_KEY (OpenRouter key) are required")
+	gwURL := os.Getenv("LLM_GATEWAY_URL")
+	gwKey := os.Getenv("LLM_GATEWAY_API_KEY")
+	if dsn == "" || gwURL == "" || gwKey == "" {
+		log.Fatal().Msg("DATABASE_URL, LLM_GATEWAY_URL and LLM_GATEWAY_API_KEY are required")
 	}
 
 	pg, err := pgxpool.New(ctx, dsn)
@@ -31,10 +29,11 @@ func main() {
 	}
 	defer pg.Close()
 
-	// 3072-dim client, no task_type — matches the worker's graph query embeddings.
-	// Provider follows AGENT_MEM_LLM_PROVIDER (default openrouter) so a re-embed can
-	// run against either backend; vectors are compatible either way.
-	client := gemini.NewClient(os.Getenv("AGENT_MEM_LLM_PROVIDER"), apiKey, "", "google/gemini-embedding-001", 3072)
+	// 3072 dims to match graph.artifact_index.embedding, halfvec(3072). Goes
+	// through llm-gateway like every other LLM call — this tool holds no provider
+	// credentials of its own. The gateway serves embeddings from OpenRouter, so
+	// the vectors stay in the same space as the ones already stored.
+	client := llmgateway.New(gwURL, gwKey, 3072)
 
 	rows, err := pg.Query(ctx, `SELECT node_id, summary FROM graph.artifact_index WHERE summary <> '' ORDER BY node_id`)
 	if err != nil {
@@ -51,7 +50,7 @@ func main() {
 	}
 	rows.Close()
 
-	log.Info().Int("count", len(texts)).Msg("Re-embedding graph.artifact_index via OpenRouter")
+	log.Info().Int("count", len(texts)).Msg("Re-embedding graph.artifact_index via llm-gateway")
 
 	for i := 0; i < len(texts); i += 100 {
 		end := i + 100

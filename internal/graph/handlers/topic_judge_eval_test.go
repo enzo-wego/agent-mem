@@ -12,7 +12,7 @@ import (
 
 	"github.com/agent-mem/agent-mem/internal/config"
 	"github.com/agent-mem/agent-mem/internal/database"
-	"github.com/agent-mem/agent-mem/internal/gemini"
+	"github.com/agent-mem/agent-mem/internal/llmgateway"
 )
 
 // goldenPair is one hand-labelled artifact pair: what the rules judge SHOULD
@@ -59,8 +59,8 @@ func TestTopicJudgeGolden(t *testing.T) {
 	if cfg.DatabaseURL == "" {
 		t.Fatal("DATABASE_URL not set")
 	}
-	if cfg.ActiveLLMKey() == "" {
-		t.Fatal("no LLM API key configured")
+	if cfg.LLMGatewayURL == "" || cfg.LLMGatewayAPIKey == "" {
+		t.Fatal("llm_gateway_url / llm_gateway_api_key not configured — agent-mem holds no provider keys")
 	}
 
 	ctx := context.Background()
@@ -73,8 +73,7 @@ func TestTopicJudgeGolden(t *testing.T) {
 	deps := Deps{
 		DB:     pool,
 		Logger: zerolog.Nop(),
-		Gemini: NewGeminiAdapter(gemini.NewClient(cfg.LLMProviderOrDefault(), cfg.ActiveLLMKey(),
-			cfg.GeminiModel, cfg.GeminiEmbeddingModel, cfg.GeminiEmbeddingDims), nil),
+		Gemini: NewGeminiAdapter(llmgateway.New(cfg.LLMGatewayURL, cfg.LLMGatewayAPIKey, GraphEmbeddingDims)),
 	}
 
 	// The judge is a sampled LLM: a single run mistakes sampling noise for a

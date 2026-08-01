@@ -257,6 +257,32 @@ func (c *Client) EmbedWithOptions(ctx context.Context, text string, opts gemini.
 	return v, nil
 }
 
+// EmbedBatch returns one vector per input, in the same order.
+//
+// The gateway's /embed takes a list natively, so a batch is one round trip
+// rather than N. Order is guaranteed by the gateway, which reorders OpenRouter's
+// response by its index field before returning — silently misaligned vectors
+// would attach each summary to the wrong node, which no error would reveal.
+func (c *Client) EmbedBatch(ctx context.Context, texts []string) ([][]float32, error) {
+	if len(texts) == 0 {
+		return nil, nil
+	}
+	var out embedResponse
+	if err := c.post(ctx, "/embed", embedRequest{Texts: texts, Dims: c.dims}, &out); err != nil {
+		return nil, err
+	}
+	if len(out.Embeddings) != len(texts) {
+		return nil, fmt.Errorf("llm-gateway: /embed returned %d vectors for %d texts",
+			len(out.Embeddings), len(texts))
+	}
+	for i, v := range out.Embeddings {
+		if len(v) != c.dims {
+			return nil, fmt.Errorf("llm-gateway: /embed vector %d has %d dims, want %d", i, len(v), c.dims)
+		}
+	}
+	return out.Embeddings, nil
+}
+
 type describeRequest struct {
 	Prompt  string `json:"prompt"`
 	Mime    string `json:"mime"`

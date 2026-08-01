@@ -225,14 +225,7 @@ export interface Settings {
   data_dir: string;
   log_level: string;
   database_url: string;
-  gemini_api_key: string;
-  gemini_model: string;
-  graph_gemini_model: string;
-  gemini_embedding_model: string;
   gemini_embedding_dims: number;
-  llm_provider: string;
-  google_api_keys: string;
-  llm_key_rotate_hours: number;
   llm_gateway_url: string;
   llm_gateway_api_key: string;
   context_observations: number;
@@ -266,41 +259,6 @@ export async function updateSettings(partial: Partial<Settings>): Promise<Settin
   return res.json();
 }
 
-// ── LLM key pool ─────────────────────────────────────────────────────────────
-
-export interface LLMKeyBlock {
-  fingerprint: string;
-  key_tail: string;
-  provider: string;
-  reason: string;
-  blocked_at: string;
-  expires_at: string | null; // null = permanent until unblocked
-}
-
-export interface LLMKeys {
-  provider: string;
-  rotate_hours: number;
-  keys: { fingerprint: string; key_tail: string }[];
-  blocked: LLMKeyBlock[];
-  active_now: string;
-}
-
-export async function fetchLLMKeys(): Promise<LLMKeys> {
-  const res = await authFetch(`${BASE}/api/llm-keys`);
-  return res.json();
-}
-
-export async function unblockLLMKey(fingerprint: string): Promise<void> {
-  const res = await authFetch(`${BASE}/api/llm-keys/block?fingerprint=${encodeURIComponent(fingerprint)}`, {
-    method: 'DELETE',
-    headers: authHeaders(),
-  });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: 'Unknown error' }));
-    throw new Error(err.error || `HTTP ${res.status}`);
-  }
-}
-
 // ── OpenRouter usage ─────────────────────────────────────────────────────────
 
 export interface OpenRouterUsage {
@@ -318,6 +276,33 @@ export interface OpenRouterUsage {
 
 export async function getOpenRouterUsage(): Promise<OpenRouterUsage> {
   const res = await authFetch(`${BASE}/api/openrouter/usage`);
+  return res.json();
+}
+
+// ── llm-gateway status ───────────────────────────────────────────────────────
+
+// GatewayHealth is the worker's read-only proxy of llm-gateway's GET /health.
+// `health` is the gateway's body verbatim (fields optional — the gateway owns
+// its own shape); agent-mem only surfaces it, never edits gateway config.
+export interface GatewayHealth {
+  available: boolean;
+  error?: string;
+  health?: {
+    ok?: boolean;
+    backends?: Record<string, string>;
+    models?: Record<string, string>;
+    seat?: {
+      available?: boolean;
+      blocked_until?: string | null;
+      last_rate_limit?: string | null;
+    };
+    fallback_on_quota?: boolean;
+    alerts_enabled?: boolean;
+  };
+}
+
+export async function fetchGatewayHealth(): Promise<GatewayHealth> {
+  const res = await authFetch(`${BASE}/api/llm-gateway/health`);
   return res.json();
 }
 

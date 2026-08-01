@@ -386,20 +386,20 @@ func (s *Server) handleGetObservation(w http.ResponseWriter, r *http.Request) {
 	json.Unmarshal(obs.FilesModified, &filesModified)
 
 	resp := map[string]any{
-		"id":               obs.ID,
+		"id":                obs.ID,
 		"memory_session_id": obs.MemorySessionID,
-		"project":          obs.Project,
-		"type":             obs.Type,
-		"title":            obs.Title,
-		"subtitle":         obs.Subtitle,
-		"narrative":        obs.Narrative,
-		"text":             obs.Text,
-		"facts":            facts,
-		"concepts":         concepts,
-		"files_read":       filesRead,
-		"files_modified":   filesModified,
-		"discovery_tokens": obs.DiscoveryTokens,
-		"created_at":       obs.CreatedAt.Format(time.RFC3339),
+		"project":           obs.Project,
+		"type":              obs.Type,
+		"title":             obs.Title,
+		"subtitle":          obs.Subtitle,
+		"narrative":         obs.Narrative,
+		"text":              obs.Text,
+		"facts":             facts,
+		"concepts":          concepts,
+		"files_read":        filesRead,
+		"files_modified":    filesModified,
+		"discovery_tokens":  obs.DiscoveryTokens,
+		"created_at":        obs.CreatedAt.Format(time.RFC3339),
 	}
 
 	w.Header().Set("Content-Type", "application/json")

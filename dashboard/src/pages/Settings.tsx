@@ -5,12 +5,11 @@ import {
   fetchChannels,
   fetchChannelFilters,
   saveChannelFilters,
-  fetchLLMKeys,
-  unblockLLMKey,
+  fetchGatewayHealth,
   type Settings,
   type ChannelCount,
   type ChannelFilters,
-  type LLMKeys,
+  type GatewayHealth,
 } from '../api'
 
 export function SettingsPage() {
@@ -18,9 +17,6 @@ export function SettingsPage() {
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
   const [toast, setToast] = useState<{ type: 'ok' | 'err'; msg: string } | null>(null)
-  const [showKey, setShowKey] = useState(false)
-  const [newKey, setNewKey] = useState('')
-  const [newGoogleKeys, setNewGoogleKeys] = useState('')
   const [newGatewayKey, setNewGatewayKey] = useState('')
 
   useEffect(() => {
@@ -76,108 +72,19 @@ export function SettingsPage() {
         </Field>
       </Section>
 
-      {/* Gemini */}
-      <Section title="Gemini">
-        <Field label="Provider" hint="LLM backend for generation, describe, and embeddings. 'openrouter' (default) uses the OpenRouter key; 'google' uses the Google key pool below — the fallback when OpenRouter is out of quota. Observation extraction switches immediately; the graph pipeline picks up the new provider after a worker restart.">
-          <SelectField
-            value={settings.llm_provider || 'openrouter'}
-            options={PROVIDER_OPTIONS}
-            saving={saving}
-            onSave={(v) => save({ llm_provider: v })}
-          />
-        </Field>
-        <Field label="OpenRouter API Key" hint="OpenRouter key (sk-or…) from openrouter.ai/keys. Used when provider is 'openrouter'.">
-          <div className="flex gap-2">
-            <input
-              type={showKey ? 'text' : 'password'}
-              placeholder={settings.gemini_api_key || 'Not set'}
-              value={newKey}
-              onChange={(e) => setNewKey(e.target.value)}
-              className={inputCls}
-            />
-            <button onClick={() => setShowKey(!showKey)} className={btnSecondary}>
-              {showKey ? 'Hide' : 'Show'}
-            </button>
-            <button
-              disabled={saving || !newKey}
-              onClick={() => { save({ gemini_api_key: newKey }); setNewKey('') }}
-              className={btnPrimary}
-            >
-              Update Key
-            </button>
-          </div>
-        </Field>
-        <Field label="Google API Key Pool" hint="One AIza… key per line (commas also work). Used when provider is 'google'. One key is fine; with several, the client uses one key per rotation window to spread per-key quota, and a key that returns quota-exhausted / rejected is blocked in the DB and retried on the next key immediately. Saving replaces the whole pool.">
-          <div className="space-y-2">
-            <textarea
-              rows={4}
-              value={newGoogleKeys}
-              onChange={(e) => setNewGoogleKeys(e.target.value)}
-              placeholder={settings.google_api_keys || 'Not set'}
-              className={`${inputCls} w-full font-mono text-xs`}
-            />
-            <button
-              disabled={saving || !newGoogleKeys.trim()}
-              onClick={() => { save({ google_api_keys: newGoogleKeys.trim() }); setNewGoogleKeys('') }}
-              className={btnPrimary}
-            >
-              Replace pool
-            </button>
-          </div>
-        </Field>
-        <Field label="Key Rotation (hours)" hint="How long one key serves before the client switches to another key in the pool. 0 = pin the first key (no rotation). Every process derives the same key from the clock, so no coordination is needed.">
-          <EditableField
-            value={String(settings.llm_key_rotate_hours)}
-            saving={saving}
-            onSave={(v) => save({ llm_key_rotate_hours: Number(v) })}
-            placeholder="6"
-          />
-        </Field>
-        <LLMKeysSection />
-        <Field label="Flat-Memory Model" hint="Model for flat memory (observation extraction, session summaries). Any OpenRouter model id, e.g. google/gemini-2.5-flash, openai/gpt-5.6-luna. On the google provider use a bare Gemini id (e.g. gemini-2.5-flash).">
-          <EditableField
-            value={settings.gemini_model}
-            saving={saving}
-            onSave={(v) => save({ gemini_model: v })}
-            placeholder="google/gemini-2.5-flash"
-          />
-        </Field>
-        <Field label="Graph-Memory Model" hint="Model for graph memory (attachment describe, topic linking). Empty = use the flat-memory model. Same id rules as above; a non-Google id here only works on the openrouter provider.">
-          <EditableField
-            value={settings.graph_gemini_model}
-            saving={saving}
-            onSave={(v) => save({ graph_gemini_model: v })}
-            placeholder="google/gemini-3.5-flash"
-          />
-        </Field>
-        <Field label="Embedding Model" hint="Used for semantic search embeddings. gemini-embedding-001 is the same model on both providers — the google/ prefix is added/stripped automatically per provider, so you don't change this when switching provider. Changing to a different model requires re-embedding all data.">
-          <SelectField
-            value={settings.gemini_embedding_model}
-            options={EMBEDDING_MODELS}
-            saving={saving}
-            onSave={(v) => save({ gemini_embedding_model: v })}
-          />
-        </Field>
-        <Field label="Embedding Dimensions" hint="Vector size. Must match your database column. Changing this requires re-embedding all data.">
-          <SelectField
-            value={String(settings.gemini_embedding_dims)}
-            options={EMBEDDING_DIMS}
-            saving={saving}
-            onSave={(v) => save({ gemini_embedding_dims: Number(v) })}
-          />
-        </Field>
-      </Section>
-
-      {/* Claude via llm-gateway. There is deliberately no Anthropic API key
-          field: a metered key has no spend ceiling and one amplification bug
-          spent ~$11/hour through it. A subscription seat rate-limits instead. */}
+      {/* Claude via llm-gateway — the sole LLM egress. agent-mem holds no
+          provider keys or model names: which backend serves each tier, model
+          choice and failover all live in llm-gateway. There is deliberately no
+          Anthropic API key field — a metered key has no spend ceiling and one
+          amplification bug spent ~$11/hour through it; a subscription seat
+          rate-limits instead. */}
       <Section title="llm-gateway (all LLM calls)">
-        <Field label="Gateway URL" hint="e.g. http://172.18.0.1:8750 — the Docker bridge, NOT localhost (the worker is containerised). When set, EVERY LLM call goes through the gateway: graph summaries and the topic judge, flat-memory observations and session summaries, attachment descriptions, and all embeddings. Generation runs on the Claude subscription seat; embeddings still reach OpenRouter underneath, since Anthropic has no embeddings API. Leave EMPTY to turn it off and send everything direct to OpenRouter. Takes effect on save, no restart.">
+        <Field label="Gateway URL" hint="e.g. http://172.18.0.1:8750 — the Docker bridge, NOT localhost (the worker is containerised). Every LLM call goes through the gateway: graph summaries and the topic judge, flat-memory observations and session summaries, attachment descriptions, and all embeddings. Leave EMPTY to turn LLM processing off entirely — there is no direct-provider fallback in agent-mem, so observation extraction and summaries are simply skipped. Takes effect on save, no restart.">
           <EditableField
             value={settings.llm_gateway_url}
             saving={saving}
             onSave={(v) => save({ llm_gateway_url: v })}
-            placeholder="Empty = off (everything goes direct to OpenRouter)"
+            placeholder="Empty = off (no LLM processing)"
           />
         </Field>
         <Field label="Gateway API Key" hint="The gateway's LLM_GATEWAY_API_KEY — its own inbound auth, not an Anthropic key. Without it the gateway 401s and every summary silently stops.">
@@ -198,6 +105,15 @@ export function SettingsPage() {
             </button>
           </div>
         </Field>
+        <Field label="Embedding Dimensions" hint="Vector width of this service's observations.embedding column. The gateway is told to produce this width, so it must match the database column; changing it requires re-embedding all data. This is a property of agent-mem's own schema — the one embedding setting that stays here.">
+          <SelectField
+            value={String(settings.gemini_embedding_dims)}
+            options={EMBEDDING_DIMS}
+            saving={saving}
+            onSave={(v) => save({ gemini_embedding_dims: Number(v) })}
+          />
+        </Field>
+        <GatewayStatusSection />
       </Section>
 
       {/* Projects */}
@@ -250,83 +166,57 @@ export function SettingsPage() {
   )
 }
 
-// --- LLM key pool status ---
+// --- llm-gateway status ---
 
-// LLMKeysSection shows which pooled key is serving this rotation window and
-// which keys are blocked (quota exhausted / rejected). Unblock puts a key back
-// in rotation right away — use it when quota reset early or the key was replaced.
-function LLMKeysSection() {
-  const [data, setData] = useState<LLMKeys | null>(null)
+// GatewayStatusSection is a read-only view of llm-gateway's /health: which
+// backend serves each tier, the models in use, and whether the Claude seat is
+// available. Configuring any of this lives in llm-gateway itself — agent-mem
+// only surfaces its sole LLM egress here so an operator can see it at a glance.
+function GatewayStatusSection() {
+  const [data, setData] = useState<GatewayHealth | null>(null)
   const [err, setErr] = useState('')
-  const [busy, setBusy] = useState('')
 
-  const load = () => fetchLLMKeys().then(setData).catch(() => setErr('Failed to load key status'))
+  const load = () => fetchGatewayHealth().then(setData).catch(() => setErr('Failed to load gateway status'))
   useEffect(() => { load() }, [])
-
-  const unblock = async (fp: string) => {
-    setBusy(fp)
-    try {
-      await unblockLLMKey(fp)
-      await load()
-    } catch (e: any) {
-      setErr(e.message || 'Unblock failed')
-    } finally {
-      setBusy('')
-    }
-  }
 
   if (err) return <p className="text-xs text-red-500">{err}</p>
   if (!data) return null
 
-  const blockedFps = new Set(
-    data.blocked.filter((b) => !b.expires_at || new Date(b.expires_at) > new Date()).map((b) => b.fingerprint),
-  )
+  if (!data.available) {
+    return (
+      <Field label="Gateway Status" hint="Read-only view of llm-gateway /health. Set the Gateway URL above to point at a running gateway; configure the gateway itself in llm-gateway.">
+        <div className="flex flex-wrap items-center gap-2 text-xs">
+          <span className="px-1.5 py-0.5 rounded bg-amber-50 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300">unavailable</span>
+          <span className="text-gray-500">{data.error || 'gateway not reachable'}</span>
+          <button onClick={load} className={btnSecondary}>Refresh</button>
+        </div>
+      </Field>
+    )
+  }
 
+  const h = data.health || {}
+  const seat = h.seat || {}
   return (
-    <Field label="Key Pool Status" hint="Live view of the pool: ● = serving this rotation window, blocked keys are skipped until their block expires or you unblock them.">
-      <div className="space-y-2">
-        {data.keys.length === 0 && <p className="text-xs text-gray-400">No keys configured for this provider.</p>}
-        {data.keys.map((k) => {
-          const isBlocked = blockedFps.has(k.fingerprint)
-          const block = data.blocked.find((b) => b.fingerprint === k.fingerprint)
-          return (
-            <div key={k.fingerprint} className="flex flex-wrap items-center gap-2 text-xs">
-              <span className={k.fingerprint === data.active_now && !isBlocked ? 'text-green-600 dark:text-green-400' : 'text-gray-300 dark:text-gray-600'}>●</span>
-              <span className="font-mono">…{k.key_tail.slice(-4)}</span>
-              {isBlocked ? (
-                <>
-                  <span className="px-1.5 py-0.5 rounded bg-red-50 dark:bg-red-900/30 text-red-700 dark:text-red-300">blocked</span>
-                  <span className="text-gray-500">{block?.reason}</span>
-                  <span className="text-gray-400">
-                    {block?.expires_at ? `until ${new Date(block.expires_at).toLocaleString()}` : 'permanent'}
-                  </span>
-                  <button disabled={busy === k.fingerprint} onClick={() => unblock(k.fingerprint)} className={btnSecondary}>
-                    {busy === k.fingerprint ? '…' : 'Unblock'}
-                  </button>
-                </>
-              ) : (
-                <span className="text-gray-400">live</span>
-              )}
-            </div>
-          )
-        })}
-
-        {/* Blocks whose key is no longer in the pool — history worth seeing. */}
-        {data.blocked
-          .filter((b) => !data.keys.some((k) => k.fingerprint === b.fingerprint))
-          .map((b) => (
-            <div key={b.fingerprint} className="flex flex-wrap items-center gap-2 text-xs text-gray-400">
-              <span>·</span>
-              <span className="font-mono">…{b.key_tail}</span>
-              <span>{b.provider}</span>
-              <span>{b.reason}</span>
-              <span>(not in current pool)</span>
-              <button disabled={busy === b.fingerprint} onClick={() => unblock(b.fingerprint)} className={btnSecondary}>
-                Clear
-              </button>
-            </div>
-          ))}
-
+    <Field label="Gateway Status" hint="Read-only view of llm-gateway /health — backend per tier, models in use, and Claude-seat availability. Changing any of it lives in llm-gateway, not here.">
+      <div className="space-y-1 text-xs">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className={seat.available ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}>●</span>
+          <span>Claude seat {seat.available ? 'available' : 'blocked'}</span>
+          {seat.blocked_until && <span className="text-gray-400">until {new Date(seat.blocked_until).toLocaleString()}</span>}
+        </div>
+        {h.backends && (
+          <div className="text-gray-500">
+            Backends: {Object.entries(h.backends).map(([tier, b]) => `${tier}→${b}`).join(', ')}
+          </div>
+        )}
+        {h.models && (
+          <div className="text-gray-500 font-mono break-all">
+            Models: {Object.entries(h.models).map(([tier, m]) => `${tier}=${m}`).join(', ')}
+          </div>
+        )}
+        {typeof h.fallback_on_quota === 'boolean' && (
+          <div className="text-gray-400">Fallback to OpenRouter on quota: {h.fallback_on_quota ? 'on' : 'off'}</div>
+        )}
         <button onClick={load} className={btnSecondary}>Refresh</button>
       </div>
     </Field>
@@ -486,18 +376,6 @@ function ChannelFiltersSection() {
 }
 
 // --- Constants ---
-
-const PROVIDER_OPTIONS = [
-  { value: 'openrouter', label: 'OpenRouter (default)' },
-  { value: 'google', label: 'Google Gemini API (fallback)' },
-]
-
-// Stored with the google/ namespace; the client strips it automatically on the
-// google provider, so one value works for both providers.
-const EMBEDDING_MODELS = [
-  { value: 'google/gemini-embedding-001', label: 'gemini-embedding-001 (recommended)' },
-  { value: 'google/text-embedding-004', label: 'text-embedding-004 (legacy, 768-dim)' },
-]
 
 const EMBEDDING_DIMS = [
   { value: '256', label: '256' },
