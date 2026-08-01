@@ -15,7 +15,7 @@ import (
 )
 
 // settingsResponse is the JSON shape returned by GET /api/settings.
-// GeminiAPIKey and DatabaseURL are masked for security.
+// DatabaseURL and LLMGatewayAPIKey are masked for security.
 type settingsResponse struct {
 	WorkerPort  int    `json:"worker_port"`
 	DataDir     string `json:"data_dir"`
