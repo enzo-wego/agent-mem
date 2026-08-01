@@ -14,6 +14,7 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/agent-mem/agent-mem/internal/graph/jobs"
+	"github.com/agent-mem/agent-mem/internal/llmjson"
 )
 
 const (
@@ -728,7 +729,7 @@ Return JSON only: {"tag":"one tag from the list","same_topic":true|false,"confid
 		Topic      string  `json:"topic"`
 		Why        string  `json:"why"`
 	}
-	if json.Unmarshal([]byte(out), &parsed) != nil {
+	if json.Unmarshal(llmjson.ExtractJSON(out), &parsed) != nil {
 		return topicLinkJudgment{}, fmt.Errorf("%w: link_topics confirm: invalid JSON", jobs.ErrTransient)
 	}
 	return topicLinkJudgment{

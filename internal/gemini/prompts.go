@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"github.com/agent-mem/agent-mem/internal/llmjson"
 )
 
 // --- Observation Extraction ---
@@ -62,7 +64,7 @@ Output:
 // ParseObservation parses the JSON response from Gemini into an ObservationResult.
 func ParseObservation(response string) (*ObservationResult, error) {
 	var obs ObservationResult
-	if err := json.Unmarshal([]byte(response), &obs); err != nil {
+	if err := json.Unmarshal(llmjson.ExtractJSON(response), &obs); err != nil {
 		return nil, fmt.Errorf("parse observation: %w", err)
 	}
 	return &obs, nil
@@ -100,7 +102,7 @@ func BuildSummaryPrompt(lastAssistantMessage, project string) string {
 // ParseSummary parses the JSON response from Gemini into a SummaryResult.
 func ParseSummary(response string) (*SummaryResult, error) {
 	var summary SummaryResult
-	if err := json.Unmarshal([]byte(response), &summary); err != nil {
+	if err := json.Unmarshal(llmjson.ExtractJSON(response), &summary); err != nil {
 		return nil, fmt.Errorf("parse summary: %w", err)
 	}
 	return &summary, nil

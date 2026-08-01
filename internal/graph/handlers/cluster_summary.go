@@ -15,6 +15,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/agent-mem/agent-mem/internal/graph/bfs"
+	"github.com/agent-mem/agent-mem/internal/llmjson"
 )
 
 // clusterSummaryHandler answers GET /api/graph/cluster/summary?node=<id>&depth=N.
@@ -652,7 +653,7 @@ No markdown, no quotes around the whole thing.`
 		Overview   string   `json:"overview"`
 		Highlights []string `json:"highlights"`
 	}
-	if uerr := json.Unmarshal([]byte(out), &parsed); uerr != nil {
+	if uerr := json.Unmarshal(llmjson.ExtractJSON(out), &parsed); uerr != nil {
 		// Claude (unlike Gemini's responseMimeType) sometimes ignores "respond as
 		// JSON" and answers in plain prose — a valid summary the old code threw
 		// away, leaving the popup blank and re-calling the LLM on every open. When

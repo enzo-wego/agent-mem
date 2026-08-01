@@ -10,6 +10,7 @@ import (
 
 	"github.com/agent-mem/agent-mem/internal/graph/ids"
 	"github.com/agent-mem/agent-mem/internal/graph/jobs"
+	"github.com/agent-mem/agent-mem/internal/llmjson"
 )
 
 var (
@@ -229,7 +230,7 @@ Ground everything in the provided material; do not invent areas not implied by i
 		ScopeDefinition string `json:"scope_definition"`
 		Summary         string `json:"summary"`
 	}
-	if json.Unmarshal([]byte(out), &parsed) != nil {
+	if json.Unmarshal(llmjson.ExtractJSON(out), &parsed) != nil {
 		return "", ""
 	}
 	return strings.TrimSpace(parsed.ScopeDefinition), strings.TrimSpace(parsed.Summary)

@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/agent-mem/agent-mem/internal/gemini"
+	"github.com/agent-mem/agent-mem/internal/llmjson"
 )
 
 // RequestTimeout must sit ABOVE the gateway's own LLM_GATEWAY_CLAUDE_TIMEOUT_S
@@ -314,7 +315,7 @@ func (c *Client) Describe(ctx context.Context, mimeType string, data []byte, pro
 		OCR         string   `json:"ocr"`
 		Entities    []string `json:"entities"`
 	}
-	if err := json.Unmarshal([]byte(out.Text), &parsed); err != nil {
+	if err := json.Unmarshal(llmjson.ExtractJSON(out.Text), &parsed); err != nil {
 		return "", "", nil, fmt.Errorf("llm-gateway: describe: parse JSON: %w", err)
 	}
 	return parsed.Description, parsed.OCR, parsed.Entities, nil

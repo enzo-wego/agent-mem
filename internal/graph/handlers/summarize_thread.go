@@ -13,6 +13,7 @@ import (
 
 	"github.com/agent-mem/agent-mem/internal/graph/ids"
 	"github.com/agent-mem/agent-mem/internal/graph/jobs"
+	"github.com/agent-mem/agent-mem/internal/llmjson"
 )
 
 // summarizeThreadPayload is the JSON payload for the summarize_thread job type.
@@ -303,7 +304,7 @@ No markdown, no quotes around the whole thing.`
 		Highlights []string `json:"highlights"`
 		Kind       string   `json:"kind"`
 	}
-	if json.Unmarshal([]byte(out), &parsed) != nil {
+	if json.Unmarshal(llmjson.ExtractJSON(out), &parsed) != nil {
 		// Non-JSON prose reply (see prose() in cluster_summary.go): keep it as the
 		// overview so the thread still summarizes and caches instead of retrying
 		// forever. Topic label stays empty; callers fall back to the thread's title.

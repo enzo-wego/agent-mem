@@ -16,6 +16,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/agent-mem/agent-mem/internal/graph/jobs"
+	"github.com/agent-mem/agent-mem/internal/llmjson"
 )
 
 // Hot-topic detection cadence and lookback. The detect job re-enqueues itself
@@ -366,7 +367,7 @@ the discussion, not isolated keywords.`
 	var parsed struct {
 		Relevant bool `json:"relevant"`
 	}
-	if json.Unmarshal([]byte(out), &parsed) != nil {
+	if json.Unmarshal(llmjson.ExtractJSON(out), &parsed) != nil {
 		return false, false
 	}
 	deps.Logger.Info().Str("node", h.RootNodeID).Str("topic", topic).

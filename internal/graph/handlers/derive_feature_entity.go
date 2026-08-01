@@ -9,6 +9,7 @@ import (
 
 	"github.com/agent-mem/agent-mem/internal/graph/ids"
 	"github.com/agent-mem/agent-mem/internal/graph/jobs"
+	"github.com/agent-mem/agent-mem/internal/llmjson"
 )
 
 // deriveFeatureEntityPayload is the JSON payload for the derive_feature_entity job type.
@@ -68,7 +69,7 @@ WHERE id=$1 AND type='jira' AND deleted_at IS NULL`,
 			return genErr // transient: retry later
 		}
 		var res deriveFeatureResult
-		if json.Unmarshal([]byte(out), &res) != nil {
+		if json.Unmarshal(llmjson.ExtractJSON(out), &res) != nil {
 			return nil // unparseable LLM output; nothing to do
 		}
 		if !res.IsFeature || res.Name == "" {
