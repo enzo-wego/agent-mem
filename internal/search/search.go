@@ -6,27 +6,38 @@ import (
 	"sort"
 
 	"github.com/agent-mem/agent-mem/internal/database"
-	"github.com/agent-mem/agent-mem/internal/gemini"
 )
+
+// Embedder is the one thing search needs from an LLM client: turn the query
+// into a vector. Taking an interface rather than *gemini.Client lets the query
+// go through llm-gateway when it is configured.
+//
+// This must be the SAME client that embedded the stored rows. A query vector is
+// only comparable to vectors from the same model, so a searcher pointed at a
+// different provider than the writer returns quietly worse results instead of
+// an error — the hardest kind of regression to notice.
+type Embedder interface {
+	Embed(ctx context.Context, text string) ([]float32, error)
+}
 
 // Searcher performs hybrid search across observations and summaries.
 type Searcher struct {
-	db     *database.DB
-	gemini *gemini.Client
+	db       *database.DB
+	embedder Embedder
 }
 
 // NewSearcher creates a new hybrid searcher.
-func NewSearcher(db *database.DB, gemini *gemini.Client) *Searcher {
-	return &Searcher{db: db, gemini: gemini}
+func NewSearcher(db *database.DB, embedder Embedder) *Searcher {
+	return &Searcher{db: db, embedder: embedder}
 }
 
 // Search performs hybrid FTS + semantic search across observations and summaries.
 func (s *Searcher) Search(ctx context.Context, query, project string, limit int) ([]database.SearchResult, error) {
-	if s.gemini == nil {
-		return nil, fmt.Errorf("gemini client not configured")
+	if s.embedder == nil {
+		return nil, fmt.Errorf("LLM client not configured")
 	}
 
-	queryEmbedding, err := s.gemini.Embed(ctx, query)
+	queryEmbedding, err := s.embedder.Embed(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("embed query: %w", err)
 	}

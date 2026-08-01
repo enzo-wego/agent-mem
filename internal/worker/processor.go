@@ -10,7 +10,14 @@ import (
 
 	"github.com/agent-mem/agent-mem/internal/database"
 	"github.com/agent-mem/agent-mem/internal/gemini"
+	"github.com/agent-mem/agent-mem/internal/llmgateway"
 )
+
+// llmBackoff is how long the flat-memory loop pauses after a transient LLM
+// failure. Without it the 1s ticker would re-claim the requeued message
+// immediately and spin against a dead gateway, filling the log and hammering a
+// service that is already struggling.
+const llmBackoff = 30 * time.Second
 
 // processLoop runs a background loop that picks up pending messages for processing.
 func (s *Server) processLoop(ctx context.Context) {
@@ -34,6 +41,18 @@ func (s *Server) processLoop(ctx context.Context) {
 	}
 }
 
+// backoffLLM pauses the flat-memory loop after a transient LLM failure,
+// returning early if the server is shutting down — a bare 30s sleep would hold
+// up every shutdown that happens to land during an LLM outage.
+func (s *Server) backoffLLM(ctx context.Context) {
+	t := time.NewTimer(llmBackoff)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+	case <-t.C:
+	}
+}
+
 func (s *Server) processPendingMessages(ctx context.Context) {
 	msg, err := s.db.ClaimPendingMessage(ctx)
 	if err != nil {
@@ -52,6 +71,18 @@ func (s *Server) processPendingMessages(ctx context.Context) {
 
 	err = s.processMessage(ctx, msg)
 	if err != nil {
+		// A transient fault must NOT be marked failed: that status is terminal
+		// and nothing re-claims it, so an LLM outage would silently discard every
+		// observation that arrived during it. Requeue instead and back the loop
+		// off, so the backlog simply waits for the LLM to come back.
+		if llmgateway.IsRetryable(err) {
+			log.Warn().Err(err).Int("id", msg.ID).Msg("LLM unavailable, requeueing message")
+			if reqErr := s.db.RequeuePendingMessage(ctx, msg.ID, err.Error()); reqErr != nil {
+				log.Error().Err(reqErr).Int("id", msg.ID).Msg("Failed to requeue message")
+			}
+			s.backoffLLM(ctx)
+			return
+		}
 		log.Error().Err(err).Int("id", msg.ID).Msg("Failed to process message")
 		if markErr := s.db.MarkMessageFailed(ctx, msg.ID, err.Error()); markErr != nil {
 			log.Error().Err(markErr).Int("id", msg.ID).Msg("Failed to mark message as failed")
@@ -64,10 +95,10 @@ func (s *Server) processPendingMessages(ctx context.Context) {
 	}
 }
 
-// processMessage handles a single pending message by sending it to Gemini.
+// processMessage handles a single pending message by sending it to the LLM.
 func (s *Server) processMessage(ctx context.Context, msg *database.PendingMessage) error {
-	if s.getGemini() == nil {
-		log.Debug().Int("id", msg.ID).Msg("Gemini not configured, skipping")
+	if s.getFlatLLM() == nil {
+		log.Debug().Int("id", msg.ID).Msg("No LLM configured, skipping")
 		return nil
 	}
 
@@ -84,7 +115,7 @@ func (s *Server) processMessage(ctx context.Context, msg *database.PendingMessag
 
 // processObservation extracts a structured observation via Gemini and stores it with an embedding.
 func (s *Server) processObservation(ctx context.Context, msg *database.PendingMessage) error {
-	gc := s.getGemini()
+	gc := s.getFlatLLM()
 	if gc == nil {
 		return nil
 	}
@@ -160,7 +191,7 @@ func (s *Server) processObservation(ctx context.Context, msg *database.PendingMe
 
 // processSummary extracts a session summary via Gemini and stores it with an embedding.
 func (s *Server) processSummary(ctx context.Context, msg *database.PendingMessage) error {
-	gc := s.getGemini()
+	gc := s.getFlatLLM()
 	if gc == nil {
 		return nil
 	}

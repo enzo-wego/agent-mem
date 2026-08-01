@@ -41,8 +41,14 @@ type Server struct {
 	http       *http.Server
 	cancel     context.CancelFunc
 
-	mu       sync.RWMutex // protects gemini and searcher
-	gemini   *gemini.Client
+	mu     sync.RWMutex // protects gemini, flatLLM and searcher
+	gemini *gemini.Client
+	// flatLLM serves every flat-memory LLM call: observation extraction, session
+	// summaries and their embeddings. It is the llm-gateway client when one is
+	// configured, else the direct provider client. Kept separate from gemini
+	// because that field is still the provider client the key-rotation UI
+	// inspects (ActiveFingerprint), which the gateway cannot answer for.
+	flatLLM  flatLLM
 	searcher *search.Searcher
 
 	// graphAdapter is the graph handlers' LLM adapter; swapped in place on
@@ -53,11 +59,28 @@ type Server struct {
 	logBuffer *LogBuffer
 }
 
-// getGemini returns the current Gemini client (may be nil).
+// flatLLM is the flat-memory LLM surface: extract an observation, summarise a
+// session, embed the result. Both *gemini.Client and *llmgateway.Client satisfy
+// it, which is what lets the gateway stand in without touching call sites.
+type flatLLM interface {
+	Generate(ctx context.Context, systemPrompt, userMessage string) (string, error)
+	Embed(ctx context.Context, text string) ([]float32, error)
+}
+
+// getGemini returns the direct provider client (may be nil). Use this ONLY for
+// provider-specific concerns such as key rotation; anything that makes an LLM
+// call must use getFlatLLM so it honours the gateway setting.
 func (s *Server) getGemini() *gemini.Client {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.gemini
+}
+
+// getFlatLLM returns the client flat memory should call (may be nil).
+func (s *Server) getFlatLLM() flatLLM {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.flatLLM
 }
 
 // getSearcher returns the current searcher (may be nil).
@@ -111,13 +134,16 @@ func NewServer(cfg *config.Config, logBuf *LogBuffer) (*Server, error) {
 		log.Info().Str("provider", llmProvider).Str("model", cfg.GraphGeminiModel).Msg("Graph LLM client initialized (separate from flat memory)")
 	}
 
-	// Graph summaries route to llm-gateway (Claude on a subscription seat) when a
-	// URL is configured, and to the graph Gemini client otherwise. Never to the
-	// Anthropic API directly: metered per token with no ceiling, which is how an
-	// amplification bug spent ~$11/hour. A seat rate-limits instead of billing.
-	summaryLLM := newSummaryGenerator(snap)
-	if summaryLLM != nil {
-		log.Info().Str("url", snap.LLMGatewayURL).Msg("llm-gateway wired for graph summaries")
+	// When llm-gateway is configured it serves EVERY graph LLM call — generate,
+	// cheap judge, embed and describe — so metering, alerting and failover have a
+	// single place to live. Never the Anthropic API directly: metered per token
+	// with no ceiling, which is how an amplification bug spent ~$11/hour.
+	//
+	// 3072 dims: the graph writes halfvec(3072). Flat memory builds its own
+	// client at 768 below.
+	graphGateway := newGraphGateway(snap, graphhandlers.GraphEmbeddingDims)
+	if graphGateway != nil {
+		log.Info().Str("url", snap.LLMGatewayURL).Msg("llm-gateway wired for all graph LLM calls")
 	}
 
 	// Concrete handle kept on the Server so settings reload can Swap the
@@ -125,12 +151,21 @@ func NewServer(cfg *config.Config, logBuf *LogBuffer) (*Server, error) {
 	// at RegisterAll time and never see a rebuilt Deps). Deps.Gemini must be
 	// assigned the interface value, not the typed pointer — a nil *GeminiAdapter
 	// in the interface would defeat handlers' nil checks.
-	graphGemini := graphhandlers.NewGeminiAdapter(graphGeminiClient, summaryLLM)
+	graphGemini := graphhandlers.NewGeminiAdapter(graphGeminiClient, graphGateway)
 	graphAdapter, _ := graphGemini.(*graphhandlers.GeminiAdapter)
 
+	// Flat memory: gateway when configured, else the provider client. 768 dims —
+	// observations.embedding is vector(768), unlike the graph's 3072.
+	flat := flatLLMFor(snap, geminiClient)
+	if flat != nil && graphGateway != nil {
+		log.Info().Msg("llm-gateway wired for flat-memory generation and embeddings")
+	}
+
+	// The searcher must embed queries through the same client that embedded the
+	// stored rows, or query vectors land in a different space than the corpus.
 	var searcher *search.Searcher
-	if geminiClient != nil {
-		searcher = search.NewSearcher(db, geminiClient)
+	if flat != nil {
+		searcher = search.NewSearcher(db, flat)
 	}
 
 	var syncEng *memsync.Engine
@@ -296,6 +331,7 @@ func NewServer(cfg *config.Config, logBuf *LogBuffer) (*Server, error) {
 		config:       cfg,
 		db:           db,
 		gemini:       geminiClient,
+		flatLLM:      flat,
 		contextBld:   memctx.NewBuilder(db, cfg),
 		searcher:     searcher,
 		syncEngine:   syncEng,
