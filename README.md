@@ -76,7 +76,10 @@ the gateway rather than a Go deploy here. The gateway also has a per-tier backen
 switch (`LLM_GATEWAY_BACKEND_CHEAP=openrouter`), which is the escape hatch if the
 judge's volume starts straining the seat's five-hour window.
 
-Clear `llm_gateway_url` and everything falls back to calling OpenRouter directly.
+Clear `llm_gateway_url` and LLM processing turns **off** — there is no
+direct-provider fallback in agent-mem. Observation extraction, session
+summaries, graph summaries, the topic judge and attachment describe are simply
+skipped until it is set again; ingest still accepts webhooks and queues the work.
 
 ### Claude comes through llm-gateway, never an API key
 
@@ -93,8 +96,10 @@ an intent tier (`summary` / `cheap`), never a model name, so switching models is
 a systemd restart on the gateway rather than a Go deploy here.
 
 **On/off is `llm_gateway_url`.** Set it (Settings → *llm-gateway*) and every call
-routes through the gateway; leave it empty and every call goes direct to
-OpenRouter. No separate boolean — one place to look. Takes effect on save.
+routes through the gateway; leave it empty and LLM processing is off — nothing is
+sent anywhere and extraction/summaries are skipped, since there is no
+direct-provider path to fall back to. No separate boolean — one place to look.
+Takes effect on save.
 
 **Embeddings are the honest exception.** Anthropic has no embeddings API, so the
 gateway proxies `/embed` straight to OpenRouter with the same key. Routing them
@@ -135,9 +140,13 @@ model, so changing the embedding model means recomputing every stored vector —
 about 148k across two dimensionalities (768 flat, 3072 graph). Switching it
 silently degrades search rather than erroring, so don't.
 
-Provider selection lives in settings (`gemini_model`, `graph_gemini_model`,
-`gemini_embedding_model`, `gemini_embedding_dims`). The field named
-`gemini_api_key` holds the **OpenRouter** key — a historical misnomer.
+agent-mem holds **no** provider keys and **no** model names: model choice,
+per-tier backends, failover and the OpenRouter key all live in llm-gateway. The
+one LLM-adjacent setting that stays here is `gemini_embedding_dims` — the width
+of this service's own `observations.embedding` column, which the gateway is told
+to produce. (The old `gemini_api_key`/`gemini_model`/`llm_provider`/
+`google_api_keys` settings and their env vars were removed; a stray key in the
+worker's environment is now inert because nothing reads it.)
 
 > **Dimension mismatch is the failure mode to watch.** `observations.embedding`
 > is `vector(768)` while the graph uses `halfvec(3072)`. If a client is built
@@ -167,15 +176,6 @@ Anything other than `"true"` in the DB reads as running — a malformed row fail
 safe toward processing rather than toward a silent indefinite pause. Jobs are
 never failed or dropped by a pause; they simply stay claimable. The janitor
 keeps running so expired leases are still reclaimed.
-
-### llm-gateway (separate service, not yet wired in)
-
-[`llm-gateway`](https://github.com/enzo-wego/llm-gateway) fronts Claude (on a
-subscription seat, via the bundled CLI) and OpenRouter behind one HTTP surface,
-so callers request an intent tier rather than a model name. It is deployed on
-the VPS as a native systemd service but **agent-mem does not call it yet** —
-this repo's LLM client is unchanged. Wiring it in is an additive Go client plus
-a settings flag; nothing in `internal/gemini` needs to change.
 
 ### Cloud Sync
 
@@ -609,9 +609,8 @@ Core environment variables:
 - `DATABASE_URL`
 - `AGENT_MEM_WORKER_PORT`
 - `AGENT_MEM_LOG_LEVEL`
-- `AGENT_MEM_GEMINI_API_KEY` or `GEMINI_API_KEY`
-- `AGENT_MEM_GEMINI_MODEL`
-- `AGENT_MEM_GEMINI_EMBEDDING_MODEL`
+- `AGENT_MEM_LLM_GATEWAY_URL`
+- `AGENT_MEM_LLM_GATEWAY_API_KEY`
 - `AGENT_MEM_GEMINI_EMBEDDING_DIMS`
 - `AGENT_MEM_CONTEXT_OBSERVATIONS`
 - `AGENT_MEM_CONTEXT_FULL_COUNT`

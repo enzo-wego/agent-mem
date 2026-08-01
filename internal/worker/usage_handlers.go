@@ -13,10 +13,6 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// openRouterKeyEndpoint is OpenRouter's key-introspection endpoint. It
-// reports the remaining quota/usage for the configured API key.
-const openRouterKeyEndpoint = "https://openrouter.ai/api/v1/key"
-
 // openRouterUsageCacheTTL controls how long a successful upstream lookup is
 // reused before the dashboard's polling triggers another OpenRouter call.
 const openRouterUsageCacheTTL = 60 * time.Second
@@ -35,74 +31,6 @@ type openRouterUsageResponse struct {
 	UsageDaily     *float64 `json:"usage_daily,omitempty"`
 	UsageMonthly   *float64 `json:"usage_monthly,omitempty"`
 	IsFreeTier     *bool    `json:"is_free_tier,omitempty"`
-}
-
-// openRouterKeyData mirrors the "data" object of OpenRouter's
-// GET /api/v1/key response.
-type openRouterKeyData struct {
-	Label          string   `json:"label"`
-	Limit          *float64 `json:"limit"`
-	LimitReset     string   `json:"limit_reset"`
-	LimitRemaining *float64 `json:"limit_remaining"`
-	Usage          *float64 `json:"usage"`
-	UsageDaily     *float64 `json:"usage_daily"`
-	UsageWeekly    *float64 `json:"usage_weekly"`
-	UsageMonthly   *float64 `json:"usage_monthly"`
-	IsFreeTier     *bool    `json:"is_free_tier"`
-}
-
-type openRouterKeyEnvelope struct {
-	Data openRouterKeyData `json:"data"`
-}
-
-// fetchOpenRouterUsage fetches and normalizes OpenRouter key usage. It has
-// no dependency on Server so it can be unit tested directly against an
-// httptest server.
-func fetchOpenRouterUsage(ctx context.Context, client *http.Client, baseURL, key string) openRouterUsageResponse {
-	if key == "" || !strings.HasPrefix(key, "sk-or-") {
-		return openRouterUsageResponse{Available: false, Error: "OpenRouter key not configured"}
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL, nil)
-	if err != nil {
-		return openRouterUsageResponse{Available: false, Error: err.Error()}
-	}
-	req.Header.Set("Authorization", "Bearer "+key)
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return openRouterUsageResponse{Available: false, Error: err.Error()}
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return openRouterUsageResponse{Available: false, Error: err.Error()}
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return openRouterUsageResponse{
-			Available: false,
-			Error:     fmt.Sprintf("upstream returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body))),
-		}
-	}
-
-	var envelope openRouterKeyEnvelope
-	if err := json.Unmarshal(body, &envelope); err != nil {
-		return openRouterUsageResponse{Available: false, Error: err.Error()}
-	}
-
-	return openRouterUsageResponse{
-		Available:      true,
-		Label:          envelope.Data.Label,
-		Usage:          envelope.Data.Usage,
-		Limit:          envelope.Data.Limit,
-		LimitRemaining: envelope.Data.LimitRemaining,
-		LimitReset:     envelope.Data.LimitReset,
-		UsageDaily:     envelope.Data.UsageDaily,
-		UsageMonthly:   envelope.Data.UsageMonthly,
-		IsFreeTier:     envelope.Data.IsFreeTier,
-	}
 }
 
 // openRouterUsageCache holds the last successful upstream lookup so repeated

@@ -137,11 +137,6 @@ func (c *Config) Save() error {
 	return nil
 }
 
-// isComment reports whether a line is a pasted label rather than a value.
-func isComment(s string) bool {
-	return strings.HasPrefix(s, "#") || strings.HasPrefix(s, "--") || strings.HasPrefix(s, "//")
-}
-
 // RuntimeSettings returns the runtime settings as a string map for DB storage.
 func (c *Config) RuntimeSettings() map[string]string {
 	c.mu.RLock()
@@ -254,7 +249,6 @@ type ConfigSnapshot struct {
 	DataDir             string `json:"data_dir"`
 	LogLevel            string `json:"log_level"`
 	DatabaseURL         string `json:"database_url"`
-	GraphGeminiModel    string `json:"graph_gemini_model"` // graph judge/describe model; empty = use GeminiModel (flat memory keeps its tuned model)
 	GeminiEmbeddingDims int    `json:"gemini_embedding_dims"`
 
 	LLMGatewayURL       string      `json:"llm_gateway_url"`
