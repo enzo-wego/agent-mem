@@ -94,6 +94,20 @@ func pendingMessageState(t *testing.T, db *database.DB, id int64) (string, int) 
 	return status, attempts
 }
 
+func pendingMessageAvailable(t *testing.T, db *database.DB, id int64) bool {
+	t.Helper()
+	var available bool
+	err := db.Pool.QueryRow(context.Background(), `
+		SELECT available_at > NOW()
+		FROM pending_messages
+		WHERE id = $1
+	`, id).Scan(&available)
+	if err != nil {
+		t.Fatalf("query pending message availability: %v", err)
+	}
+	return available
+}
+
 func TestProcessPendingMessages_FirstNonRetryableFailureRequeues(t *testing.T) {
 	db := openProcessorTestDB(t)
 	id, err := db.QueuePendingMessage(context.Background(), "missing-session", "observation", []byte(`{}`))
@@ -111,6 +125,36 @@ func TestProcessPendingMessages_FirstNonRetryableFailureRequeues(t *testing.T) {
 	if attempts != 1 {
 		t.Errorf("attempts = %d, want 1", attempts)
 	}
+	if !pendingMessageAvailable(t, db, id) {
+		t.Error("available_at is not in the future")
+	}
+}
+
+func TestProcessPendingMessages_FutureMessageIsNotClaimed(t *testing.T) {
+	db := openProcessorTestDB(t)
+	ctx := context.Background()
+	id, err := db.QueuePendingMessage(ctx, "missing-session", "observation", []byte(`{}`))
+	if err != nil {
+		t.Fatalf("queue pending message: %v", err)
+	}
+	if _, err := db.Pool.Exec(ctx, `
+		UPDATE pending_messages
+		SET available_at = NOW() + INTERVAL '1 minute'
+		WHERE id = $1
+	`, id); err != nil {
+		t.Fatalf("delay pending message: %v", err)
+	}
+
+	s := &Server{db: db, flatLLM: failingFlatLLM{}}
+	s.processPendingMessages(ctx)
+
+	status, attempts := pendingMessageState(t, db, id)
+	if status != "pending" {
+		t.Errorf("status = %q, want pending", status)
+	}
+	if attempts != 0 {
+		t.Errorf("attempts = %d, want 0", attempts)
+	}
 }
 
 func TestProcessPendingMessages_ThirdNonRetryableFailureIsTerminal(t *testing.T) {
@@ -122,6 +166,13 @@ func TestProcessPendingMessages_ThirdNonRetryableFailureIsTerminal(t *testing.T)
 
 	s := &Server{db: db, flatLLM: failingFlatLLM{}}
 	for range 3 {
+		// Requeued failures are deliberately delayed; make each retry due so this
+		// test can exhaust the budget without waiting for the backoff.
+		if _, err := db.Pool.Exec(context.Background(), `
+			UPDATE pending_messages SET available_at = NOW() WHERE id = $1
+		`, id); err != nil {
+			t.Fatalf("make pending message available: %v", err)
+		}
 		s.processPendingMessages(context.Background())
 	}
 

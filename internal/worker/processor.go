@@ -10,6 +10,7 @@ import (
 
 	"github.com/agent-mem/agent-mem/internal/database"
 	"github.com/agent-mem/agent-mem/internal/gemini"
+	"github.com/agent-mem/agent-mem/internal/graph/jobs"
 	"github.com/agent-mem/agent-mem/internal/llmgateway"
 )
 
@@ -86,12 +87,14 @@ func (s *Server) processPendingMessages(ctx context.Context) {
 			return
 		}
 		if msg.Attempts < maxMessageAttempts {
+			delay := jobs.Backoff(int16(msg.Attempts), 30*time.Second, 10*time.Minute)
 			log.Warn().Err(err).
 				Int("id", msg.ID).
 				Int("attempt", msg.Attempts).
+				Dur("retry_delay", delay).
 				Int("max_attempts", maxMessageAttempts).
 				Msg("Failed to process message, requeueing")
-			if reqErr := s.db.RequeuePendingMessage(ctx, msg.ID, err.Error()); reqErr != nil {
+			if reqErr := s.db.RequeuePendingMessage(ctx, msg.ID, err.Error(), delay); reqErr != nil {
 				log.Error().Err(reqErr).Int("id", msg.ID).Msg("Failed to requeue message")
 			}
 			return

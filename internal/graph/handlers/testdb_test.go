@@ -3,10 +3,21 @@ package handlers
 import (
 	"context"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// databaseName extracts the database name from a postgres DSN. A DSN that does
+// not parse returns "", which fails the test-database guard closed.
+func databaseName(dsn string) string {
+	config, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		return ""
+	}
+	return config.ConnConfig.Database
+}
 
 // openTestDB connects to the Postgres instance identified by DATABASE_URL.
 // If DATABASE_URL is not set the test is skipped.
@@ -15,6 +26,14 @@ func openTestDB(t *testing.T) *pgxpool.Pool {
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {
 		t.Skip("DATABASE_URL not set; skipping integration test")
+	}
+	// This helper DELETEs every row in the graph tables. On 2026-07-14 an
+	// integration test run against the live dev database hard-deleted the graph
+	// and synced the damage to prod. Refuse anything whose database name does
+	// not say "test" — use agentmem_test, not agentmem. See agent-mem-z14.
+	if !strings.Contains(databaseName(dsn), "test") {
+		t.Fatalf("refusing to run: DATABASE_URL database name %q does not contain \"test\"; "+
+			"handler tests delete all rows in the graph tables", databaseName(dsn))
 	}
 
 	ctx := context.Background()

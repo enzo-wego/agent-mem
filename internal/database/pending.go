@@ -30,7 +30,8 @@ func (db *DB) ClaimPendingMessage(ctx context.Context) (*PendingMessage, error) 
 		WHERE id = (
 			SELECT id FROM pending_messages
 			WHERE status = 'pending'
-			ORDER BY created_at ASC
+			AND available_at <= NOW()
+			ORDER BY available_at ASC, created_at ASC
 			LIMIT 1
 			FOR UPDATE SKIP LOCKED
 		)
@@ -73,12 +74,14 @@ func (db *DB) MarkMessageProcessed(ctx context.Context, id int) error {
 //
 // Requeueing here deliberately preserves attempts: message-specific failures
 // consume the budget incremented atomically by ClaimPendingMessage.
-func (db *DB) RequeuePendingMessage(ctx context.Context, id int, errMsg string) error {
+func (db *DB) RequeuePendingMessage(ctx context.Context, id int, errMsg string, delay time.Duration) error {
 	_, err := db.Pool.Exec(ctx, `
 		UPDATE pending_messages
-		SET status = 'pending', error = $2
+		SET status = 'pending',
+		    error = $2,
+		    available_at = NOW() + ($3 || ' seconds')::interval
 		WHERE id = $1
-	`, id, errMsg)
+	`, id, errMsg, fmt.Sprintf("%d", int(delay/time.Second)))
 	if err != nil {
 		return fmt.Errorf("requeue pending message: %w", err)
 	}
@@ -88,6 +91,8 @@ func (db *DB) RequeuePendingMessage(ctx context.Context, id int, errMsg string) 
 // RequeueRetryablePendingMessage returns a claimed message to 'pending' and
 // refunds the claim attempt. Infrastructure failures are not caused by the
 // message and therefore must not consume its retry budget.
+// Leaving available_at unchanged is deliberate: the caller already sleeps via
+// backoffLLM, so a gateway outage must not additionally park the message.
 func (db *DB) RequeueRetryablePendingMessage(ctx context.Context, id int, errMsg string) error {
 	_, err := db.Pool.Exec(ctx, `
 		UPDATE pending_messages
@@ -115,7 +120,8 @@ func (db *DB) MarkMessageFailed(ctx context.Context, id int, errMsg string) erro
 	return nil
 }
 
-// PendingMessageCount returns the number of pending messages.
+// PendingMessageCount returns the total queue depth, including pending messages
+// whose available_at time has not arrived yet.
 func (db *DB) PendingMessageCount(ctx context.Context) (int, error) {
 	var count int
 	err := db.Pool.QueryRow(ctx, `
