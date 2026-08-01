@@ -68,7 +68,8 @@ var openRouterCache openRouterUsageCache
 // It asks llm-gateway rather than OpenRouter: the gateway holds the key, and
 // agent-mem deliberately holds no provider credentials. Read-only status about
 // a service this one depends on is fair to surface here; configuring that
-// service is not, and stays in the gateway.
+// service remains owned and persisted by the gateway, even though the worker
+// now exposes a separate pure proxy for its editable config.
 func (s *Server) handleOpenRouterUsage(w http.ResponseWriter, r *http.Request) {
 	snap := s.config.Snapshot()
 	if strings.TrimSpace(snap.LLMGatewayURL) == "" {
@@ -84,7 +85,7 @@ func (s *Server) handleOpenRouterUsage(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
 
-	result := fetchGatewayUsage(ctx, http.DefaultClient,
+	result := fetchGatewayUsage(ctx, gatewayHTTPClient,
 		strings.TrimRight(snap.LLMGatewayURL, "/")+"/usage", snap.LLMGatewayAPIKey)
 	openRouterCache.set(result)
 

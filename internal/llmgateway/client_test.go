@@ -82,6 +82,52 @@ func TestGenerateTiers(t *testing.T) {
 	}
 }
 
+func TestClientBypassesAmbientProxy(t *testing.T) {
+	var proxyHits int
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		proxyHits++
+		http.Error(w, "gateway traffic must not reach the ambient proxy", http.StatusBadGateway)
+	}))
+	defer proxy.Close()
+
+	gatewayHits := 0
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gatewayHits++
+		if r.URL.Path != "/generate" {
+			t.Errorf("path = %q, want /generate", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"backend":"claude","text":"direct"}`))
+	}))
+	defer gateway.Close()
+
+	t.Setenv("HTTP_PROXY", proxy.URL)
+	t.Setenv("NO_PROXY", "")
+
+	c := New(gateway.URL, "secret", 3072)
+	transport, ok := c.http.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("gateway client transport = %T, want *http.Transport", c.http.Transport)
+	}
+	if transport.Proxy != nil {
+		t.Fatal("gateway client inherits ambient proxy configuration")
+	}
+
+	got, err := c.Generate(context.Background(), "system", "user")
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	if got != "direct" {
+		t.Fatalf("Generate = %q, want direct", got)
+	}
+	if gatewayHits != 1 {
+		t.Fatalf("gateway hits = %d, want 1", gatewayHits)
+	}
+	if proxyHits != 0 {
+		t.Fatalf("proxy hits = %d, want 0", proxyHits)
+	}
+}
+
 func TestEmbedSendsDimsAndValidatesWidth(t *testing.T) {
 	// A 768-dim client must ask for 768 — observations.embedding is vector(768)
 	// and a 3072 vector fails the insert far from the cause.

@@ -120,11 +120,16 @@ func New(baseURL, apiKey string, dims int) *Client {
 	if dims <= 0 {
 		dims = 3072
 	}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	// The gateway is a same-host bridge address. Ambient HTTP_PROXY settings
+	// are for external egress and can route this internal hop through a relay
+	// that cannot reach it, so gateway traffic must always connect directly.
+	transport.Proxy = nil
 	return &Client{
 		baseURL: strings.TrimRight(baseURL, "/"),
 		apiKey:  apiKey,
 		dims:    dims,
-		http:    &http.Client{Timeout: RequestTimeout},
+		http:    &http.Client{Transport: transport, Timeout: RequestTimeout},
 	}
 }
 

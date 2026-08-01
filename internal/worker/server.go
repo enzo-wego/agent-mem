@@ -345,8 +345,10 @@ func NewServer(cfg *config.Config, logBuf *LogBuffer) (*Server, error) {
 		// OpenRouter usage endpoint
 		r.Get("/api/openrouter/usage", s.handleOpenRouterUsage)
 
-		// llm-gateway status (read-only proxy of the gateway's /health)
+		// llm-gateway status and configuration (pure proxies; stored by gateway)
 		r.Get("/api/llm-gateway/health", s.handleGatewayHealth)
+		r.Get("/api/llm-gateway/config", s.handleGetGatewayConfig)
+		r.Put("/api/llm-gateway/config", s.handlePutGatewayConfig)
 
 		// Sync endpoints
 		r.Post("/api/sync/push", s.handleSyncPush)
