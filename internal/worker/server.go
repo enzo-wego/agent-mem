@@ -19,7 +19,6 @@ import (
 	"github.com/agent-mem/agent-mem/internal/config"
 	memctx "github.com/agent-mem/agent-mem/internal/context"
 	"github.com/agent-mem/agent-mem/internal/database"
-	"github.com/agent-mem/agent-mem/internal/gemini"
 	"github.com/agent-mem/agent-mem/internal/graph/extractor"
 	"github.com/agent-mem/agent-mem/internal/graph/fetchers"
 	graphhandlers "github.com/agent-mem/agent-mem/internal/graph/handlers"
@@ -41,13 +40,10 @@ type Server struct {
 	http       *http.Server
 	cancel     context.CancelFunc
 
-	mu     sync.RWMutex // protects gemini, flatLLM and searcher
-	gemini *gemini.Client
+	mu sync.RWMutex // protects flatLLM and searcher
 	// flatLLM serves every flat-memory LLM call: observation extraction, session
-	// summaries and their embeddings. It is the llm-gateway client when one is
-	// configured, else the direct provider client. Kept separate from gemini
-	// because that field is still the provider client the key-rotation UI
-	// inspects (ActiveFingerprint), which the gateway cannot answer for.
+	// summaries and their embeddings. Nil when no gateway is configured, in which
+	// case that work is skipped rather than sent anywhere else.
 	flatLLM  flatLLM
 	searcher *search.Searcher
 
@@ -65,15 +61,6 @@ type Server struct {
 type flatLLM interface {
 	Generate(ctx context.Context, systemPrompt, userMessage string) (string, error)
 	Embed(ctx context.Context, text string) ([]float32, error)
-}
-
-// getGemini returns the direct provider client (may be nil). Use this ONLY for
-// provider-specific concerns such as key rotation; anything that makes an LLM
-// call must use getFlatLLM so it honours the gateway setting.
-func (s *Server) getGemini() *gemini.Client {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.gemini
 }
 
 // getFlatLLM returns the client flat memory should call (may be nil).
@@ -114,52 +101,32 @@ func NewServer(cfg *config.Config, logBuf *LogBuffer) (*Server, error) {
 	}
 
 	snap := cfg.Snapshot()
-	llmProvider := snap.LLMProviderOrDefault()
 
-	geminiClient := newLLMClient(ctx, db, snap, cfg.GeminiModel)
-	if geminiClient != nil {
-		log.Info().Str("provider", llmProvider).Str("model", cfg.GeminiModel).
-			Int("keys", len(snap.ActiveLLMKeys())).Dur("key_rotate", snap.LLMKeyRotateInterval()).
-			Msg("LLM client initialized")
-	} else {
-		log.Warn().Str("provider", llmProvider).Msg("No API key configured for LLM provider, observation extraction disabled")
-	}
-
-	// Graph judge/describe can run a different Gemini model than flat memory —
-	// flat memory's prompts (observation extraction, session summaries) are
-	// tuned against gemini_model and must not silently change with it.
-	graphGeminiClient := geminiClient
-	if geminiClient != nil && cfg.GraphGeminiModel != "" && cfg.GraphGeminiModel != cfg.GeminiModel {
-		graphGeminiClient = newLLMClient(ctx, db, snap, cfg.GraphGeminiModel)
-		log.Info().Str("provider", llmProvider).Str("model", cfg.GraphGeminiModel).Msg("Graph LLM client initialized (separate from flat memory)")
-	}
-
-	// When llm-gateway is configured it serves EVERY graph LLM call — generate,
-	// cheap judge, embed and describe — so metering, alerting and failover have a
-	// single place to live. Never the Anthropic API directly: metered per token
-	// with no ceiling, which is how an amplification bug spent ~$11/hour.
+	// llm-gateway is the ONLY way agent-mem reaches a language model. This
+	// project holds memory logic — prompts, parsing, graph shape, persistence —
+	// and owns no provider credentials, no model names and no failover. All of
+	// that lives behind one HTTP endpoint that other services share.
 	//
-	// 3072 dims: the graph writes halfvec(3072). Flat memory builds its own
-	// client at 768 below.
+	// Two clients because the embedding widths differ and are not
+	// interchangeable: observations.embedding is vector(768) while
+	// graph.artifact_index.embedding is halfvec(3072).
 	graphGateway := newGraphGateway(snap, graphhandlers.GraphEmbeddingDims)
-	if graphGateway != nil {
-		log.Info().Str("url", snap.LLMGatewayURL).Msg("llm-gateway wired for all graph LLM calls")
+	flat := flatLLMFor(snap)
+	if graphGateway == nil {
+		log.Warn().Msg("llm_gateway_url is empty — all LLM work is disabled; set it in Settings")
+	} else {
+		log.Info().Str("url", snap.LLMGatewayURL).
+			Int("graph_dims", graphhandlers.GraphEmbeddingDims).Int("flat_dims", snap.GeminiEmbeddingDims).
+			Msg("llm-gateway wired for all LLM calls")
 	}
 
-	// Concrete handle kept on the Server so settings reload can Swap the
-	// underlying clients in place (job handlers capture the interface value
-	// at RegisterAll time and never see a rebuilt Deps). Deps.Gemini must be
-	// assigned the interface value, not the typed pointer — a nil *GeminiAdapter
-	// in the interface would defeat handlers' nil checks.
-	graphGemini := graphhandlers.NewGeminiAdapter(graphGeminiClient, graphGateway)
+	// Concrete handle kept on the Server so a settings reload can Swap the
+	// client in place — job handlers capture the interface value at RegisterAll
+	// time and never see a rebuilt Deps. Deps.Gemini must be the interface value,
+	// not a typed pointer: a typed nil inside a non-nil interface would defeat
+	// handlers' nil checks and panic on first use.
+	graphGemini := graphhandlers.NewGeminiAdapter(graphGateway)
 	graphAdapter, _ := graphGemini.(*graphhandlers.GeminiAdapter)
-
-	// Flat memory: gateway when configured, else the provider client. 768 dims —
-	// observations.embedding is vector(768), unlike the graph's 3072.
-	flat := flatLLMFor(snap, geminiClient)
-	if flat != nil && graphGateway != nil {
-		log.Info().Msg("llm-gateway wired for flat-memory generation and embeddings")
-	}
 
 	// The searcher must embed queries through the same client that embedded the
 	// stored rows, or query vectors land in a different space than the corpus.
@@ -330,7 +297,6 @@ func NewServer(cfg *config.Config, logBuf *LogBuffer) (*Server, error) {
 	s := &Server{
 		config:       cfg,
 		db:           db,
-		gemini:       geminiClient,
 		flatLLM:      flat,
 		contextBld:   memctx.NewBuilder(db, cfg),
 		searcher:     searcher,
@@ -372,8 +338,6 @@ func NewServer(cfg *config.Config, logBuf *LogBuffer) (*Server, error) {
 		// Settings endpoints
 		r.Get("/api/settings", s.handleGetSettings)
 		r.Put("/api/settings", s.handleUpdateSettings)
-		r.Get("/api/llm-keys", s.handleGetLLMKeys)
-		r.Delete("/api/llm-keys/block", s.handleUnblockLLMKey)
 
 		// Logs endpoint
 		r.Get("/api/logs", s.handleGetLogs)

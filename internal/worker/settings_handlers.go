@@ -1,7 +1,6 @@
 package worker
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -10,8 +9,6 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/agent-mem/agent-mem/internal/config"
-	"github.com/agent-mem/agent-mem/internal/database"
-	"github.com/agent-mem/agent-mem/internal/gemini"
 	graphhandlers "github.com/agent-mem/agent-mem/internal/graph/handlers"
 	"github.com/agent-mem/agent-mem/internal/llmgateway"
 	"github.com/agent-mem/agent-mem/internal/search"
@@ -25,16 +22,13 @@ type settingsResponse struct {
 	LogLevel    string `json:"log_level"`
 	DatabaseURL string `json:"database_url"`
 
-	GeminiAPIKey         string `json:"gemini_api_key"`
-	GeminiModel          string `json:"gemini_model"`
-	GraphGeminiModel     string `json:"graph_gemini_model"`
-	GeminiEmbeddingModel string `json:"gemini_embedding_model"`
-	GeminiEmbeddingDims  int    `json:"gemini_embedding_dims"`
-	LLMProvider          string `json:"llm_provider"`
-	GoogleAPIKeys        string `json:"google_api_keys"`
-	LLMKeyRotateHours    int    `json:"llm_key_rotate_hours"`
-	LLMGatewayURL        string `json:"llm_gateway_url"`
-	LLMGatewayAPIKey     string `json:"llm_gateway_api_key"`
+	// No provider keys or model names: agent-mem holds neither. Model choice
+	// belongs to llm-gateway, which every LLM call goes through. What remains is
+	// this service's own client config — which gateway to call, and how wide its
+	// embedding columns are.
+	GeminiEmbeddingDims int    `json:"gemini_embedding_dims"`
+	LLMGatewayURL       string `json:"llm_gateway_url"`
+	LLMGatewayAPIKey    string `json:"llm_gateway_api_key"`
 
 	ContextObservations int    `json:"context_observations"`
 	ContextFullCount    int    `json:"context_full_count"`
@@ -60,44 +54,26 @@ func maskKey(key string) string {
 	return strings.Repeat("*", len(key)-4) + key[len(key)-4:]
 }
 
-// maskKeyList masks each key in a pool, one per line — the shape the dashboard
-// shows as a placeholder for the keys textarea.
-func maskKeyList(keys string) string {
-	parsed := config.SplitKeys(keys)
-	masked := make([]string, 0, len(parsed))
-	for _, k := range parsed {
-		masked = append(masked, maskKey(k))
-	}
-	return strings.Join(masked, "\n")
-}
-
 func (s *Server) handleGetSettings(w http.ResponseWriter, _ *http.Request) {
 	snap := s.config.Snapshot()
 	resp := settingsResponse{
-		WorkerPort:           snap.WorkerPort,
-		DataDir:              snap.DataDir,
-		LogLevel:             snap.LogLevel,
-		DatabaseURL:          maskKey(snap.DatabaseURL),
-		GeminiAPIKey:         maskKey(snap.GeminiAPIKey),
-		GeminiModel:          snap.GeminiModel,
-		GraphGeminiModel:     snap.GraphGeminiModel,
-		GeminiEmbeddingModel: snap.GeminiEmbeddingModel,
-		GeminiEmbeddingDims:  snap.GeminiEmbeddingDims,
-		LLMProvider:          snap.LLMProviderOrDefault(),
-		GoogleAPIKeys:        maskKeyList(snap.GoogleAPIKeys),
-		LLMKeyRotateHours:    snap.LLMKeyRotateHours,
-		LLMGatewayURL:        snap.LLMGatewayURL,
-		LLMGatewayAPIKey:     maskKey(snap.LLMGatewayAPIKey),
-		ContextObservations:  snap.ContextObservations,
-		ContextFullCount:     snap.ContextFullCount,
-		ContextSessionCount:  snap.ContextSessionCount,
-		SkipTools:            snap.SkipTools,
-		AllowedProjects:      snap.AllowedProjects,
-		IgnoredProjects:      snap.IgnoredProjects,
-		SyncEnabled:          snap.SyncEnabled,
-		SyncURL:              snap.SyncURL,
-		SyncInterval:         snap.SyncInterval,
-		MachineID:            snap.MachineID,
+		WorkerPort:          snap.WorkerPort,
+		DataDir:             snap.DataDir,
+		LogLevel:            snap.LogLevel,
+		DatabaseURL:         maskKey(snap.DatabaseURL),
+		GeminiEmbeddingDims: snap.GeminiEmbeddingDims,
+		LLMGatewayURL:       snap.LLMGatewayURL,
+		LLMGatewayAPIKey:    maskKey(snap.LLMGatewayAPIKey),
+		ContextObservations: snap.ContextObservations,
+		ContextFullCount:    snap.ContextFullCount,
+		ContextSessionCount: snap.ContextSessionCount,
+		SkipTools:           snap.SkipTools,
+		AllowedProjects:     snap.AllowedProjects,
+		IgnoredProjects:     snap.IgnoredProjects,
+		SyncEnabled:         snap.SyncEnabled,
+		SyncURL:             snap.SyncURL,
+		SyncInterval:        snap.SyncInterval,
+		MachineID:           snap.MachineID,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -125,7 +101,7 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	geminiChanged := s.config.Update(partial)
+	llmChanged := s.config.Update(partial)
 
 	// Persist runtime settings to PostgreSQL.
 	if err := s.db.SaveSettings(r.Context(), s.config.RuntimeSettings()); err != nil {
@@ -135,8 +111,8 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Apply side-effects.
-	if geminiChanged {
-		s.reloadGemini()
+	if llmChanged {
+		s.reloadLLM()
 	}
 	if _, ok := partial["log_level"]; ok {
 		snap := s.config.Snapshot()
@@ -168,21 +144,21 @@ func newGatewayClient(snap config.ConfigSnapshot, dims int) *llmgateway.Client {
 	return llmgateway.New(snap.LLMGatewayURL, snap.LLMGatewayAPIKey, dims)
 }
 
-// flatLLMFor picks the client flat memory should call: the gateway when one is
-// configured, else the direct provider client.
+// flatLLMFor returns the client flat memory should call, or nil when no gateway
+// is configured — in which case observation extraction and session summaries are
+// simply skipped, the same as having no LLM at all. There is no direct-provider
+// path to fall back to by design.
 //
 // dims comes from gemini_embedding_dims (768) because observations.embedding is
-// vector(768) — NOT the graph's 3072. Both nil cases return a nil INTERFACE, not
-// a typed nil: a (*gemini.Client)(nil) inside a non-nil interface would sail
-// past every `!= nil` guard and panic on first use.
-func flatLLMFor(snap config.ConfigSnapshot, direct *gemini.Client) flatLLM {
+// vector(768) — NOT the graph's 3072.
+//
+// The nil case must be a nil INTERFACE, not a typed nil inside one, or every
+// `!= nil` guard passes and the first call panics.
+func flatLLMFor(snap config.ConfigSnapshot) flatLLM {
 	if gw := newGatewayClient(snap, snap.GeminiEmbeddingDims); gw != nil {
 		return gw
 	}
-	if direct == nil {
-		return nil
-	}
-	return direct
+	return nil
 }
 
 // newGraphGateway returns the gateway as a graph GeminiClient, or a nil
@@ -198,129 +174,42 @@ func newGraphGateway(snap config.ConfigSnapshot, dims int) graphhandlers.GeminiC
 	return nil
 }
 
-// newLLMClient builds a gemini client over the active provider's key pool, with
-// DB-backed key blocks wired in: blocked keys are skipped, and a key that dies
-// mid-call is persisted as blocked so it stays out of rotation after a restart.
-// Returns nil when no key is configured.
-func newLLMClient(ctx context.Context, db *database.DB, snap config.ConfigSnapshot, model string) *gemini.Client {
-	keys := snap.ActiveLLMKeys()
-	if len(keys) == 0 {
-		return nil
-	}
-	blocked, err := db.ActiveLLMKeyBlocks(ctx)
-	if err != nil {
-		log.Warn().Err(err).Msg("Failed to load LLM key blocks, starting with all keys live")
-	}
-	return gemini.NewRotatingClient(
-		snap.LLMProviderOrDefault(), keys, snap.LLMKeyRotateInterval(),
-		model, snap.GeminiEmbeddingModel, snap.GeminiEmbeddingDims,
-	).WithKeyBlocks(db, blocked)
-}
-
-// handleGetLLMKeys reports the key pool and its block list for the dashboard.
-// Keys themselves are never returned — only tails and fingerprints.
-func (s *Server) handleGetLLMKeys(w http.ResponseWriter, r *http.Request) {
+// reloadLLM rebuilds the LLM clients after a settings change, so editing the
+// gateway URL or key takes effect without a worker restart.
+//
+// Named for what it does now: there is no Gemini client to reload, only the
+// gateway one. Both graph and flat memory are rebuilt from the same snapshot so
+// they cannot drift apart.
+func (s *Server) reloadLLM() {
 	snap := s.config.Snapshot()
-	blocks, err := s.db.ListLLMKeyBlocks(r.Context())
-	if err != nil {
-		log.Error().Err(err).Msg("Failed to list LLM key blocks")
-		http.Error(w, `{"error":"failed to list key blocks"}`, http.StatusInternalServerError)
-		return
-	}
 
-	type poolKey struct {
-		Fingerprint string `json:"fingerprint"`
-		KeyTail     string `json:"key_tail"`
+	// Flat memory reads flatLLM per call, so replacing it IS the reload. The
+	// searcher must embed queries through the same client that embedded the
+	// stored rows, or query vectors land in a different space than the corpus.
+	newFlat := flatLLMFor(snap)
+	var newSearcher *search.Searcher
+	if newFlat != nil {
+		newSearcher = search.NewSearcher(s.db, newFlat)
 	}
-	pool := make([]poolKey, 0)
-	for _, k := range snap.ActiveLLMKeys() {
-		pool = append(pool, poolKey{Fingerprint: gemini.Fingerprint(k), KeyTail: maskKey(k)})
-	}
-
-	// Which key is serving this rotation window — ask the live client, not the
-	// config, so the answer reflects blocks too.
-	activeNow := ""
-	if gc := s.getGemini(); gc != nil {
-		activeNow = gc.ActiveFingerprint()
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(map[string]any{
-		"provider":     snap.LLMProviderOrDefault(),
-		"rotate_hours": snap.LLMKeyRotateHours,
-		"keys":         pool,
-		"blocked":      blocks,
-		"active_now":   activeNow,
-	}); err != nil {
-		log.Error().Err(err).Msg("Failed to encode LLM keys response")
-	}
-}
-
-// handleUnblockLLMKey clears a block so the key rejoins rotation immediately
-// (quota reset early, key replaced upstream).
-func (s *Server) handleUnblockLLMKey(w http.ResponseWriter, r *http.Request) {
-	fp := r.URL.Query().Get("fingerprint")
-	if fp == "" {
-		http.Error(w, `{"error":"fingerprint required"}`, http.StatusBadRequest)
-		return
-	}
-	if err := s.db.UnblockLLMKey(r.Context(), fp); err != nil {
-		log.Error().Err(err).Str("fingerprint", fp).Msg("Failed to unblock LLM key")
-		http.Error(w, `{"error":"failed to unblock key"}`, http.StatusInternalServerError)
-		return
-	}
-	// Rebuild the clients so the in-memory blocked set drops it too.
-	s.reloadGemini()
-	log.Info().Str("fingerprint", fp).Msg("LLM key unblocked")
-	w.Header().Set("Content-Type", "application/json")
-	_, _ = w.Write([]byte(`{"ok":true}`))
-}
-
-func (s *Server) reloadGemini() {
-	snap := s.config.Snapshot()
-	ctx := context.Background()
-
-	newClient := newLLMClient(ctx, s.db, snap, snap.GeminiModel)
-	if newClient == nil {
-		s.mu.Lock()
-		s.gemini, s.flatLLM, s.searcher = nil, nil, nil
-		s.mu.Unlock()
-		log.Warn().Str("provider", snap.LLMProviderOrDefault()).Msg("LLM API key cleared, observation extraction disabled")
-		return
-	}
-
-	// Flat memory reads flatLLM per call, so replacing it IS the reload — there
-	// is no adapter to swap as there is for the graph. The searcher embeds
-	// queries and must use the same path as the writer, or query vectors would
-	// come from a different provider than the stored corpus.
-	newFlat := flatLLMFor(snap, newClient)
-	newSearcher := search.NewSearcher(s.db, newFlat)
 
 	s.mu.Lock()
-	s.gemini = newClient
 	s.flatLLM = newFlat
 	s.searcher = newSearcher
 	s.mu.Unlock()
 
-	log.Info().Str("model", snap.GeminiModel).Msg("Gemini client reloaded")
+	if newFlat == nil {
+		log.Warn().Msg("llm_gateway_url cleared — flat-memory extraction and search disabled")
+	}
 
-	// Mirror the startup wiring (NewServer): the graph judge/describe client
-	// runs graph_gemini_model when it differs from gemini_model. Swapping in
-	// place updates the adapter captured by registered job handlers.
+	// The graph adapter is swapped rather than replaced: job handlers captured
+	// the interface value at RegisterAll time and never see a rebuilt Deps.
 	if s.graphAdapter == nil {
-		return // no LLM key at boot; restart required to enable graph LLM calls
+		return // no gateway at boot; a restart is required to enable graph LLM calls
 	}
-	graphClient, graphModel := newClient, snap.GeminiModel
-	if snap.GraphGeminiModel != "" && snap.GraphGeminiModel != snap.GeminiModel {
-		graphModel = snap.GraphGeminiModel
-		graphClient = newLLMClient(ctx, s.db, snap, graphModel)
+	if gw := newGraphGateway(snap, graphhandlers.GraphEmbeddingDims); gw != nil {
+		s.graphAdapter.Swap(gw)
+		log.Info().Str("url", snap.LLMGatewayURL).Msg("LLM gateway client reloaded")
 	}
-	// Same helpers as NewServer so startup and reload can never disagree about
-	// whether the gateway is live. Setting or clearing llm_gateway_url takes
-	// effect here, with no restart.
-	graphGateway := newGraphGateway(snap, graphhandlers.GraphEmbeddingDims)
-	s.graphAdapter.Swap(graphClient, graphGateway)
-	log.Info().Str("model", graphModel).Bool("gateway", graphGateway != nil).Msg("Graph LLM client reloaded")
 }
 
 func keys(m map[string]any) []string {

@@ -310,7 +310,7 @@ func main() {
 				home, _ := os.UserHomeDir()
 				sqlitePath = home + "/.claude-mem/claude-mem.db"
 			}
-			return runMigrate(sqlitePath, cfg.DatabaseURL, cfg.GeminiAPIKey)
+			return runMigrate(sqlitePath, cfg.DatabaseURL, cfg.LLMGatewayAPIKey)
 		},
 	}
 	migrateSqliteCmd.Flags().StringVar(&sqlitePath, "sqlite-path", "", "Path to claude-mem SQLite database (default: ~/.claude-mem/claude-mem.db)")
@@ -318,12 +318,15 @@ func main() {
 	// backfill-embeddings - generate Gemini embeddings for rows missing them
 	backfillCmd := &cobra.Command{
 		Use:   "backfill-embeddings",
-		Short: "Generate Gemini embeddings for all rows without them",
+		Short: "Generate embeddings for all rows without them (via llm-gateway)",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if cfg.GeminiAPIKey == "" {
-				return fmt.Errorf("Gemini API key required (set GEMINI_API_KEY or AGENT_MEM_GEMINI_API_KEY)")
+			if cfg.LLMGatewayURL == "" || cfg.LLMGatewayAPIKey == "" {
+				return fmt.Errorf("llm_gateway_url and llm_gateway_api_key required: agent-mem holds no provider keys")
 			}
-			return runBackfillEmbeddings(cfg.DatabaseURL, cfg.GeminiAPIKey, cfg.GeminiEmbeddingModel, cfg.GeminiEmbeddingDims)
+			// LLM_GATEWAY_URL is read from the environment by runBackfillEmbeddings;
+			// mirror the configured value so the CLI works without extra exports.
+			_ = os.Setenv("LLM_GATEWAY_URL", cfg.LLMGatewayURL)
+			return runBackfillEmbeddings(cfg.DatabaseURL, cfg.LLMGatewayAPIKey, "", cfg.GeminiEmbeddingDims)
 		},
 	}
 

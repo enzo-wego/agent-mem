@@ -8,7 +8,7 @@ import (
 )
 
 // fakeGateway stands in for llm-gateway and records which method was called, so
-// tests can prove routing rather than just that a string came back.
+// tests prove routing rather than just that a value came back.
 type fakeGateway struct {
 	out    string
 	called string
@@ -39,22 +39,22 @@ func (f *fakeGateway) Describe(context.Context, string, []byte, string) (string,
 	return f.out, "", nil, nil
 }
 
-func TestNewGeminiAdapterNilClient(t *testing.T) {
-	// The provider client is the fallback, so an adapter without one could hand
-	// handlers a nil client the moment the gateway is cleared.
-	if got := NewGeminiAdapter(nil, &fakeGateway{out: "x"}); got != nil {
-		t.Fatalf("NewGeminiAdapter(nil, gw) = %v, want nil interface", got)
+// A nil client must produce a nil INTERFACE. Handlers gate on
+// `deps.Gemini == nil` to skip LLM work when no gateway is configured; a typed
+// nil inside a non-nil interface passes that check and panics on first call.
+func TestNewGeminiAdapterNilIsNilInterface(t *testing.T) {
+	if got := NewGeminiAdapter(nil); got != nil {
+		t.Fatalf("NewGeminiAdapter(nil) = %v, want a nil interface", got)
 	}
 }
 
-// With a gateway configured, EVERY method must go through it. A method quietly
-// bypassing the gateway is invisible in behaviour but defeats the single-egress
-// property the gateway exists for — metering and alerting would miss it.
-func TestAllMethodsRouteThroughGatewayWhenConfigured(t *testing.T) {
+// Every method must reach the single configured client. One quietly bypassing
+// it is invisible in behaviour but would escape the gateway's metering — the
+// whole reason agent-mem has exactly one LLM egress.
+func TestAllMethodsReachTheClient(t *testing.T) {
 	ctx := context.Background()
-	c := gemini.NewClient(gemini.ProviderOpenRouter, "k", "m", "e", 1)
 	gw := &fakeGateway{out: "gw"}
-	ad := NewGeminiAdapter(c, gw)
+	ad := NewGeminiAdapter(gw)
 
 	for _, tc := range []struct {
 		want string
@@ -69,15 +69,14 @@ func TestAllMethodsRouteThroughGatewayWhenConfigured(t *testing.T) {
 		gw.called = ""
 		tc.call()
 		if gw.called != tc.want {
-			t.Errorf("%s did not reach the gateway (called=%q) — it would bypass metering", tc.want, gw.called)
+			t.Errorf("%s did not reach the client (called=%q) — it would bypass the gateway", tc.want, gw.called)
 		}
 	}
 }
 
 func TestGeminiAdapterSwap(t *testing.T) {
 	ctx := context.Background()
-	c1 := gemini.NewClient(gemini.ProviderOpenRouter, "k1", "m1", "e", 1)
-	ad, ok := NewGeminiAdapter(c1, &fakeGateway{out: "one"}).(*GeminiAdapter)
+	ad, ok := NewGeminiAdapter(&fakeGateway{out: "one"}).(*GeminiAdapter)
 	if !ok {
 		t.Fatal("NewGeminiAdapter did not return *GeminiAdapter")
 	}
@@ -85,33 +84,16 @@ func TestGeminiAdapterSwap(t *testing.T) {
 		t.Fatalf("Generate before swap = %q, want one", out)
 	}
 
-	c2 := gemini.NewClient(gemini.ProviderOpenRouter, "k2", "m2", "e", 1)
-	ad.Swap(c2, &fakeGateway{out: "two"})
+	ad.Swap(&fakeGateway{out: "two"})
 	if out, _ := ad.Generate(ctx, "s", "u"); out != "two" {
 		t.Fatalf("Generate after swap = %q, want two", out)
 	}
 
-	// A nil client is ignored: handlers must never observe a nil client.
-	ad.Swap(nil, &fakeGateway{out: "three"})
+	// A nil swap is ignored. Handlers hold this adapter for the life of the
+	// process, so accepting nil would turn a cleared setting into a panic on the
+	// next job rather than a config change.
+	ad.Swap(nil)
 	if out, _ := ad.Generate(ctx, "s", "u"); out != "two" {
-		t.Fatalf("Generate after nil-client swap = %q, want two (swap ignored)", out)
+		t.Fatalf("Generate after nil swap = %q, want two (swap ignored)", out)
 	}
-
-	// A nil gateway IS applied — that is how clearing llm_gateway_url turns the
-	// gateway off without a restart. Routing must fall back to the provider
-	// client rather than panicking on a nil interface.
-	c3 := gemini.NewClient(gemini.ProviderOpenRouter, "k3", "m3", "e", 1)
-	ad.Swap(c3, nil)
-	if _, ok := ad.route().(geminiDirect); !ok {
-		t.Fatal("clearing the gateway must route back to the direct client")
-	}
-	if got := ad.route().(geminiDirect).c; got != c3 {
-		t.Fatal("Swap did not replace the gemini client")
-	}
-}
-
-// The provider client has no GenerateCheap; the wrapper maps it onto Generate.
-// If that mapping is lost, the cheap tier silently stops existing off-gateway.
-func TestGeminiDirectMapsCheapOntoGenerate(t *testing.T) {
-	var _ GeminiClient = geminiDirect{gemini.NewClient(gemini.ProviderOpenRouter, "k", "m", "e", 1)}
 }
