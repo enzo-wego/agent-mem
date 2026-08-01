@@ -153,18 +153,49 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	s.handleGetSettings(w, r)
 }
 
-// newSummaryGenerator returns the generator for graph summaries: an llm-gateway
-// client when a URL is configured, else nil so the adapter falls back to the
-// graph Gemini client. Empty URL is the documented off switch.
+// newGatewayClient returns an llm-gateway client at the given embedding width,
+// or nil when no URL is configured. Empty URL is the documented off switch.
 //
-// Tier is always "summary" — the gateway maps that to Sonnet 5. The high-volume
-// topic-link judge deliberately does NOT come through here; it calls
-// GenerateCheap, which stays on Gemini Flash regardless.
-func newSummaryGenerator(snap config.ConfigSnapshot) graphhandlers.TextGenerator {
+// dims must match the destination column, and the two callers differ:
+// observations.embedding is vector(768) while the graph uses halfvec(3072).
+// Passing the wrong one fails every insert with "expected 768 dimensions, not
+// 3072", which reads like a schema fault rather than a config one — hence two
+// clients rather than one shared default.
+func newGatewayClient(snap config.ConfigSnapshot, dims int) *llmgateway.Client {
 	if strings.TrimSpace(snap.LLMGatewayURL) == "" {
 		return nil
 	}
-	return llmgateway.New(snap.LLMGatewayURL, snap.LLMGatewayAPIKey, "summary")
+	return llmgateway.New(snap.LLMGatewayURL, snap.LLMGatewayAPIKey, dims)
+}
+
+// flatLLMFor picks the client flat memory should call: the gateway when one is
+// configured, else the direct provider client.
+//
+// dims comes from gemini_embedding_dims (768) because observations.embedding is
+// vector(768) — NOT the graph's 3072. Both nil cases return a nil INTERFACE, not
+// a typed nil: a (*gemini.Client)(nil) inside a non-nil interface would sail
+// past every `!= nil` guard and panic on first use.
+func flatLLMFor(snap config.ConfigSnapshot, direct *gemini.Client) flatLLM {
+	if gw := newGatewayClient(snap, snap.GeminiEmbeddingDims); gw != nil {
+		return gw
+	}
+	if direct == nil {
+		return nil
+	}
+	return direct
+}
+
+// newGraphGateway returns the gateway as a graph GeminiClient, or a nil
+// interface when unconfigured.
+//
+// The nil-interface dance matters: returning a typed (*llmgateway.Client)(nil)
+// inside a non-nil interface would make the adapter's `gw != nil` check pass and
+// every call would panic. Build the interface only when there is a real client.
+func newGraphGateway(snap config.ConfigSnapshot, dims int) graphhandlers.GeminiClient {
+	if c := newGatewayClient(snap, dims); c != nil {
+		return c
+	}
+	return nil
 }
 
 // newLLMClient builds a gemini client over the active provider's key pool, with
@@ -252,17 +283,22 @@ func (s *Server) reloadGemini() {
 	newClient := newLLMClient(ctx, s.db, snap, snap.GeminiModel)
 	if newClient == nil {
 		s.mu.Lock()
-		s.gemini = nil
-		s.searcher = nil
+		s.gemini, s.flatLLM, s.searcher = nil, nil, nil
 		s.mu.Unlock()
 		log.Warn().Str("provider", snap.LLMProviderOrDefault()).Msg("LLM API key cleared, observation extraction disabled")
 		return
 	}
 
-	newSearcher := search.NewSearcher(s.db, newClient)
+	// Flat memory reads flatLLM per call, so replacing it IS the reload — there
+	// is no adapter to swap as there is for the graph. The searcher embeds
+	// queries and must use the same path as the writer, or query vectors would
+	// come from a different provider than the stored corpus.
+	newFlat := flatLLMFor(snap, newClient)
+	newSearcher := search.NewSearcher(s.db, newFlat)
 
 	s.mu.Lock()
 	s.gemini = newClient
+	s.flatLLM = newFlat
 	s.searcher = newSearcher
 	s.mu.Unlock()
 
@@ -279,11 +315,12 @@ func (s *Server) reloadGemini() {
 		graphModel = snap.GraphGeminiModel
 		graphClient = newLLMClient(ctx, s.db, snap, graphModel)
 	}
-	// Same helper as NewServer so startup and reload can never disagree about
-	// whether the gateway is live.
-	summaryLLM := newSummaryGenerator(snap)
-	s.graphAdapter.Swap(graphClient, summaryLLM)
-	log.Info().Str("model", graphModel).Bool("gateway", summaryLLM != nil).Msg("Graph LLM client reloaded")
+	// Same helpers as NewServer so startup and reload can never disagree about
+	// whether the gateway is live. Setting or clearing llm_gateway_url takes
+	// effect here, with no restart.
+	graphGateway := newGraphGateway(snap, graphhandlers.GraphEmbeddingDims)
+	s.graphAdapter.Swap(graphClient, graphGateway)
+	log.Info().Str("model", graphModel).Bool("gateway", graphGateway != nil).Msg("Graph LLM client reloaded")
 }
 
 func keys(m map[string]any) []string {

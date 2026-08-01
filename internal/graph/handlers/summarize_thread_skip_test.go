@@ -56,8 +56,11 @@ func TestLinkSignature(t *testing.T) {
 	if got, want := linkSignature(""), ""; got != want {
 		t.Errorf("no linked resources: got %q, want %q", got, want)
 	}
-	if linkSignature(block) != linkSignature(block) {
-		t.Error("not stable across calls; unchanged links would re-summarize every time")
+	// Hash content, not string identity: two equal blocks built separately must
+	// agree, or an unchanged thread would re-summarize on every fetch.
+	rebuilt := "Linked resources:\n- Jira: PAY-2111 tax rounding\n" + "\nThread (oldest first):\n"
+	if linkSignature(block) != linkSignature(rebuilt) {
+		t.Error("equal content hashed differently; unchanged links would re-summarize every time")
 	}
 	// The exact case fetch_body triggers on: an untitled resource gets its title.
 	untitled := "Linked resources:\n- Jira: PAY-2111\n\nThread (oldest first):\n"

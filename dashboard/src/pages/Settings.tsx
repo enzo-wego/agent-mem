@@ -171,13 +171,13 @@ export function SettingsPage() {
       {/* Claude via llm-gateway. There is deliberately no Anthropic API key
           field: a metered key has no spend ceiling and one amplification bug
           spent ~$11/hour through it. A subscription seat rate-limits instead. */}
-      <Section title="Claude via llm-gateway (graph summaries)">
-        <Field label="Gateway URL" hint="e.g. http://172.18.0.1:8750 — the Docker bridge, NOT localhost (the worker is containerised). When set, graph summaries run on Claude Sonnet 5 via the subscription seat. Leave EMPTY to turn it off and keep summaries on Gemini Flash. Takes effect on save, no restart. The high-volume topic-link judge always stays on Gemini regardless.">
+      <Section title="llm-gateway (all LLM calls)">
+        <Field label="Gateway URL" hint="e.g. http://172.18.0.1:8750 — the Docker bridge, NOT localhost (the worker is containerised). When set, EVERY LLM call goes through the gateway: graph summaries and the topic judge, flat-memory observations and session summaries, attachment descriptions, and all embeddings. Generation runs on the Claude subscription seat; embeddings still reach OpenRouter underneath, since Anthropic has no embeddings API. Leave EMPTY to turn it off and send everything direct to OpenRouter. Takes effect on save, no restart.">
           <EditableField
             value={settings.llm_gateway_url}
             saving={saving}
             onSave={(v) => save({ llm_gateway_url: v })}
-            placeholder="Empty = off (summaries stay on Gemini)"
+            placeholder="Empty = off (everything goes direct to OpenRouter)"
           />
         </Field>
         <Field label="Gateway API Key" hint="The gateway's LLM_GATEWAY_API_KEY — its own inbound auth, not an Anthropic key. Without it the gateway 401s and every summary silently stops.">

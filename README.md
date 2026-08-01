@@ -59,12 +59,24 @@ vector so semantic search can find it. They run in sequence: a summary is
 generated, then that summary is embedded, and both land in the same row (see
 `graph.artifact_index.summary` and `.embedding`).
 
-| Path | Model | Provider |
+**Every LLM call goes through [llm-gateway](https://github.com/enzo-wego/llm-gateway)**
+when `llm_gateway_url` is set. One egress point means metering, alerting and
+failover have a single place to live.
+
+| Path | Tier | Ultimately served by |
 |---|---|---|
-| Graph summaries (thread/cluster/feature/hot-topics) | `claude-sonnet-5` | **llm-gateway** (subscription seat) |
-| Graph cheap judge (`link_topics`) + `Describe` | `google/gemini-3.6-flash` | OpenRouter |
-| Flat-memory observations + session summaries | `google/gemini-2.5-flash` | OpenRouter |
-| **All embeddings** | `gemini-embedding-001` | OpenRouter |
+| Graph summaries (thread/cluster/feature/hot-topics) | `summary` | `claude-sonnet-5`, subscription seat |
+| Graph judge (`link_topics`) | `cheap` | `claude-haiku-4-5`, subscription seat |
+| Flat-memory observations + session summaries | `cheap` | `claude-haiku-4-5`, subscription seat |
+| Attachment `Describe` | `cheap` | Haiku vision, subscription seat |
+| **All embeddings** (flat 768 + graph 3072) | — | `gemini-embedding-001`, **OpenRouter** |
+
+Callers name a *tier*, never a model, so changing models is a systemd restart on
+the gateway rather than a Go deploy here. The gateway also has a per-tier backend
+switch (`LLM_GATEWAY_BACKEND_CHEAP=openrouter`), which is the escape hatch if the
+judge's volume starts straining the seat's five-hour window.
+
+Clear `llm_gateway_url` and everything falls back to calling OpenRouter directly.
 
 ### Claude comes through llm-gateway, never an API key
 
@@ -80,11 +92,16 @@ instead of charging, so the same bug degrades rather than bills. Callers ask for
 an intent tier (`summary` / `cheap`), never a model name, so switching models is
 a systemd restart on the gateway rather than a Go deploy here.
 
-**On/off is `llm_gateway_url`.** Set it (Settings → *Claude via llm-gateway*) and
-summaries run on Sonnet; leave it empty and they fall back to the graph Gemini
-client. No separate boolean — one place to look. Takes effect on save.
+**On/off is `llm_gateway_url`.** Set it (Settings → *llm-gateway*) and every call
+routes through the gateway; leave it empty and every call goes direct to
+OpenRouter. No separate boolean — one place to look. Takes effect on save.
 
-Two things that will bite:
+**Embeddings are the honest exception.** Anthropic has no embeddings API, so the
+gateway proxies `/embed` straight to OpenRouter with the same key. Routing them
+through it buys one key, one retry policy and one alerting path — not a cheaper
+provider and not less OpenRouter spend.
+
+Three things that will bite:
 
 - **Use the Docker bridge, not localhost.** The worker is containerised; the
   gateway binds `172.18.0.1` (the `agent-mem_default` bridge, *not* `docker0`).
@@ -98,8 +115,19 @@ Two things that will bite:
   duplicate-call shape this repo already paid for once. Change one of the three,
   check all three.
 
-The high-volume topic-link judge deliberately stays on Gemini Flash: it calls
-`GenerateCheap`, which never routes to the gateway.
+- **Transient LLM failures must requeue, not fail.** `pending_messages` has no
+  retry path: `MarkMessageFailed` is terminal and `ClaimPendingMessage` only ever
+  selects `status='pending'`. So a gateway outage treated as a permanent failure
+  would silently discard every observation that arrived during it. The processor
+  asks `llmgateway.IsRetryable` and calls `RequeuePendingMessage` instead, then
+  backs off 30s so it does not spin. Anything added here that can fail
+  transiently must follow the same rule.
+
+The embedding width differs by caller and is not interchangeable:
+`observations.embedding` is `vector(768)` while the graph is `halfvec(3072)`, so
+the worker builds two gateway clients. A client at the wrong width fails every
+insert with `expected 768 dimensions, not 3072`, which reads like a schema fault
+rather than the config mistake it is.
 
 Embeddings cannot move to Anthropic: there is no Claude model that returns a
 vector. And a query vector is only comparable to stored vectors from the *same*

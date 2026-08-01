@@ -9,20 +9,18 @@ import (
 	"strings"
 
 	"github.com/rs/zerolog/log"
-
-	"github.com/agent-mem/agent-mem/internal/gemini"
 )
 
 // hookPayload represents the JSON received from hook CLI subcommands.
 type hookPayload struct {
-	SessionID           string          `json:"session_id"`
-	CWD                 string          `json:"cwd"`
-	Prompt              string          `json:"prompt"`
-	ToolName            string          `json:"tool_name"`
-	ToolInput           json.RawMessage `json:"tool_input"`
-	ToolResponse        json.RawMessage `json:"tool_response"`
-	TranscriptPath      string          `json:"transcript_path"`
-	LastAssistantMessage string         `json:"last_assistant_message"`
+	SessionID            string          `json:"session_id"`
+	CWD                  string          `json:"cwd"`
+	Prompt               string          `json:"prompt"`
+	ToolName             string          `json:"tool_name"`
+	ToolInput            json.RawMessage `json:"tool_input"`
+	ToolResponse         json.RawMessage `json:"tool_response"`
+	TranscriptPath       string          `json:"transcript_path"`
+	LastAssistantMessage string          `json:"last_assistant_message"`
 }
 
 // handleHealth returns worker health status.
@@ -124,8 +122,8 @@ func (s *Server) handlePromptSubmit(w http.ResponseWriter, r *http.Request) {
 		log.Info().Int64("id", id).Int("prompt_number", num).Str("project", project).Msg("Prompt stored")
 
 		// Async: generate and store prompt embedding
-		if gc := s.getGemini(); gc != nil {
-			go func(promptID int64, promptText string, gc *gemini.Client) {
+		if gc := s.getFlatLLM(); gc != nil {
+			go func(promptID int64, promptText string, gc flatLLM) {
 				embedding, err := gc.Embed(context.Background(), promptText)
 				if err != nil {
 					log.Warn().Err(err).Int64("prompt_id", promptID).Msg("Failed to generate prompt embedding")
@@ -236,7 +234,7 @@ func (s *Server) handleStop(w http.ResponseWriter, r *http.Request) {
 	if lastMessage != "" {
 		msgPayload, _ := json.Marshal(map[string]any{
 			"last_assistant_message": lastMessage,
-			"project":               project,
+			"project":                project,
 		})
 
 		_, err := s.db.QueuePendingMessage(r.Context(), payload.SessionID, "summary", msgPayload)
