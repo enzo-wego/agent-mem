@@ -19,6 +19,8 @@ import (
 // service that is already struggling.
 const llmBackoff = 30 * time.Second
 
+const maxMessageAttempts = 3
+
 // processLoop runs a background loop that picks up pending messages for processing.
 func (s *Server) processLoop(ctx context.Context) {
 	ticker := time.NewTicker(1 * time.Second)
@@ -77,13 +79,28 @@ func (s *Server) processPendingMessages(ctx context.Context) {
 		// off, so the backlog simply waits for the LLM to come back.
 		if llmgateway.IsRetryable(err) {
 			log.Warn().Err(err).Int("id", msg.ID).Msg("LLM unavailable, requeueing message")
-			if reqErr := s.db.RequeuePendingMessage(ctx, msg.ID, err.Error()); reqErr != nil {
+			if reqErr := s.db.RequeueRetryablePendingMessage(ctx, msg.ID, err.Error()); reqErr != nil {
 				log.Error().Err(reqErr).Int("id", msg.ID).Msg("Failed to requeue message")
 			}
 			s.backoffLLM(ctx)
 			return
 		}
-		log.Error().Err(err).Int("id", msg.ID).Msg("Failed to process message")
+		if msg.Attempts < maxMessageAttempts {
+			log.Warn().Err(err).
+				Int("id", msg.ID).
+				Int("attempt", msg.Attempts).
+				Int("max_attempts", maxMessageAttempts).
+				Msg("Failed to process message, requeueing")
+			if reqErr := s.db.RequeuePendingMessage(ctx, msg.ID, err.Error()); reqErr != nil {
+				log.Error().Err(reqErr).Int("id", msg.ID).Msg("Failed to requeue message")
+			}
+			return
+		}
+		log.Error().Err(err).
+			Int("id", msg.ID).
+			Int("attempt", msg.Attempts).
+			Int("max_attempts", maxMessageAttempts).
+			Msg("Failed to process message, retry budget exhausted")
 		if markErr := s.db.MarkMessageFailed(ctx, msg.ID, err.Error()); markErr != nil {
 			log.Error().Err(markErr).Int("id", msg.ID).Msg("Failed to mark message as failed")
 		}

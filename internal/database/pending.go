@@ -26,7 +26,7 @@ func (db *DB) ClaimPendingMessage(ctx context.Context) (*PendingMessage, error) 
 	var msg PendingMessage
 	err := db.Pool.QueryRow(ctx, `
 		UPDATE pending_messages
-		SET status = 'processing'
+		SET status = 'processing', attempts = attempts + 1
 		WHERE id = (
 			SELECT id FROM pending_messages
 			WHERE status = 'pending'
@@ -34,10 +34,10 @@ func (db *DB) ClaimPendingMessage(ctx context.Context) (*PendingMessage, error) 
 			LIMIT 1
 			FOR UPDATE SKIP LOCKED
 		)
-		RETURNING id, content_session_id, message_type, payload, status, created_at, processed_at, error
+		RETURNING id, content_session_id, message_type, payload, status, attempts, created_at, processed_at, error
 	`).Scan(
 		&msg.ID, &msg.ContentSessionID, &msg.MessageType, &msg.Payload,
-		&msg.Status, &msg.CreatedAt, &msg.ProcessedAt, &msg.Error,
+		&msg.Status, &msg.Attempts, &msg.CreatedAt, &msg.ProcessedAt, &msg.Error,
 	)
 	if err != nil {
 		if err.Error() == "no rows in result set" {
@@ -71,10 +71,8 @@ func (db *DB) MarkMessageProcessed(ctx context.Context, id int) error {
 // blip) silently discards the observation. Callers must therefore distinguish
 // "will never work" from "try later"; see llmgateway.IsRetryable.
 //
-// There is deliberately no attempt counter: a message that keeps bouncing means
-// the LLM is down, and the queue growing until it returns is the behaviour we
-// want — the same trade as processing_paused. The caller backs the loop off so
-// retries do not spin.
+// Requeueing here deliberately preserves attempts: message-specific failures
+// consume the budget incremented atomically by ClaimPendingMessage.
 func (db *DB) RequeuePendingMessage(ctx context.Context, id int, errMsg string) error {
 	_, err := db.Pool.Exec(ctx, `
 		UPDATE pending_messages
@@ -87,9 +85,23 @@ func (db *DB) RequeuePendingMessage(ctx context.Context, id int, errMsg string) 
 	return nil
 }
 
-// MarkMessageFailed marks a pending message as failed with an error. This is
-// TERMINAL: nothing re-claims a failed row. Use RequeuePendingMessage for
-// anything that might succeed later.
+// RequeueRetryablePendingMessage returns a claimed message to 'pending' and
+// refunds the claim attempt. Infrastructure failures are not caused by the
+// message and therefore must not consume its retry budget.
+func (db *DB) RequeueRetryablePendingMessage(ctx context.Context, id int, errMsg string) error {
+	_, err := db.Pool.Exec(ctx, `
+		UPDATE pending_messages
+		SET status = 'pending', error = $2, attempts = GREATEST(attempts - 1, 0)
+		WHERE id = $1
+	`, id, errMsg)
+	if err != nil {
+		return fmt.Errorf("requeue retryable pending message: %w", err)
+	}
+	return nil
+}
+
+// MarkMessageFailed marks a pending message as failed after its retry budget is
+// spent. This is terminal: nothing re-claims a failed row.
 func (db *DB) MarkMessageFailed(ctx context.Context, id int, errMsg string) error {
 	now := time.Now()
 	_, err := db.Pool.Exec(ctx, `
