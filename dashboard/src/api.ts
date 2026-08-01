@@ -283,7 +283,7 @@ export async function getOpenRouterUsage(): Promise<OpenRouterUsage> {
 
 // GatewayHealth is the worker's read-only proxy of llm-gateway's GET /health.
 // `health` is the gateway's body verbatim (fields optional — the gateway owns
-// its own shape); agent-mem only surfaces it, never edits gateway config.
+// its own shape).
 export interface GatewayHealth {
   available: boolean;
   error?: string;
@@ -303,6 +303,50 @@ export interface GatewayHealth {
 
 export async function fetchGatewayHealth(): Promise<GatewayHealth> {
   const res = await authFetch(`${BASE}/api/llm-gateway/health`);
+  return res.json();
+}
+
+export type GatewayBackend = 'claude' | 'openrouter';
+export type GatewayEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+
+export interface GatewayConfig {
+  BACKEND_SUMMARY: GatewayBackend;
+  BACKEND_CHEAP: GatewayBackend;
+  BACKEND_DESCRIBE: GatewayBackend;
+  MODEL_SUMMARY: string;
+  MODEL_CHEAP: string;
+  OR_MODEL_SUMMARY: string;
+  OR_MODEL_CHEAP: string;
+  EFFORT_SUMMARY: GatewayEffort;
+  EFFORT_CHEAP: GatewayEffort;
+  FALLBACK_ON_QUOTA: boolean;
+  MAX_BUDGET_USD: number;
+  CLAUDE_TIMEOUT_S: number;
+}
+
+export interface GatewayConfigResponse {
+  available: boolean;
+  error?: string;
+  config?: GatewayConfig;
+}
+
+export async function fetchGatewayConfig(): Promise<GatewayConfigResponse> {
+  const res = await authFetch(`${BASE}/api/llm-gateway/config`);
+  return res.json();
+}
+
+export async function updateGatewayConfig(
+  partial: Partial<GatewayConfig>,
+): Promise<GatewayConfigResponse> {
+  const res = await authFetch(`${BASE}/api/llm-gateway/config`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify(partial),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Unknown error' }));
+    throw new Error(err.error || `HTTP ${res.status}`);
+  }
   return res.json();
 }
 
