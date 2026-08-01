@@ -322,7 +322,7 @@ function GatewayPanel() {
               ))}
             </div>
             <p className="text-xs text-gray-400 dark:text-gray-500">
-              summary serves thread and cluster summaries, hot-topic detection, scope refresh, feature-entity derivation, and flat-memory observation extraction; cheap serves only the high-volume topic-link confirm gate (one yes/no per candidate — flat memory is not cheap); describe serves multimodal image and PDF attachments (a different request shape, not a quality level).
+              summary serves thread and cluster summaries, hot-topic detection, scope refresh, and feature-entity derivation; cheap serves flat-memory observation extraction and session summaries plus the high-volume topic-link confirm gate (one yes/no per candidate); describe serves multimodal image and PDF attachments (a different request shape, not a quality level).
             </p>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">

@@ -143,7 +143,10 @@ func (s *Server) processObservation(ctx context.Context, msg *database.PendingMe
 
 	// Build prompt and call Gemini
 	userMsg := gemini.BuildObservationPrompt(payload.ToolName, payload.ToolInput, payload.ToolResponse, payload.CWD, payload.Project)
-	response, err := gc.Generate(ctx, gemini.ObservationSystemPrompt, userMsg)
+	// Cheap tier: this runs once per inbound message, the highest-volume LLM path
+	// in the service. It ran on gemini-2.5-flash before the gateway migration
+	// silently moved it to Sonnet; haiku restores the original class.
+	response, err := gc.GenerateCheap(ctx, gemini.ObservationSystemPrompt, userMsg)
 	if err != nil {
 		return fmt.Errorf("gemini generate: %w", err)
 	}
@@ -216,7 +219,9 @@ func (s *Server) processSummary(ctx context.Context, msg *database.PendingMessag
 
 	// Build prompt and call Gemini
 	userMsg := gemini.BuildSummaryPrompt(payload.LastAssistantMessage, payload.Project)
-	response, err := gc.Generate(ctx, gemini.SummarySystemPrompt, userMsg)
+	// Cheap tier, same reasoning as processObservation: session summaries are
+	// routine flat-memory volume, not graph analysis.
+	response, err := gc.GenerateCheap(ctx, gemini.SummarySystemPrompt, userMsg)
 	if err != nil {
 		return fmt.Errorf("gemini generate: %w", err)
 	}

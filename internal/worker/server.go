@@ -55,11 +55,16 @@ type Server struct {
 	logBuffer *LogBuffer
 }
 
-// flatLLM is the flat-memory LLM surface: extract an observation, summarise a
-// session, embed the result. Both *gemini.Client and *llmgateway.Client satisfy
-// it, which is what lets the gateway stand in without touching call sites.
+// flatLLM is the flat-memory LLM surface: extract an observation and summarise
+// a session on the cheap tier, then embed the result.
+//
+// Generate (the summary tier) is deliberately absent. Flat memory is one call
+// per inbound message and belongs on haiku; when the gateway migration collapsed
+// both ends onto the summary tier it put that volume on Sonnet without anyone
+// choosing to. Leaving Sonnet unreachable from this interface is what stops that
+// recurring — widen it only with a reason.
 type flatLLM interface {
-	Generate(ctx context.Context, systemPrompt, userMessage string) (string, error)
+	GenerateCheap(ctx context.Context, systemPrompt, userMessage string) (string, error)
 	Embed(ctx context.Context, text string) ([]float32, error)
 }
 
