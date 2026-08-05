@@ -64,6 +64,25 @@ WHERE n.id = $1 AND n.deleted_at IS NULL
 		}
 		if body == nil {
 			missed = append(missed, c.NodeID)
+			// ponytail: slack_file and jira_attachment have no body by nature —
+			// they are a title + URL, not content awaiting fetch. Emit a
+			// zero-token artifact so they surface in resolve (a title + URL costs
+			// nothing worth budgeting), while STILL appending to missed above so
+			// the fetch_body enqueue path stays byte-for-byte unchanged. Every
+			// other bodyless type is genuinely waiting on a body, so it keeps
+			// today's behaviour (missed, no artifact) — nothing leaks empty
+			// artifacts.
+			if typ == "slack_file" || typ == "jira_attachment" {
+				out = append(out, Hydrated{
+					NodeID: c.NodeID,
+					Title:  title,
+					Type:   typ,
+					URL:    url,
+					Score:  c.Score,
+					Body:   "",
+					Tokens: 0,
+				})
+			}
 			continue
 		}
 		tokens := len(*body)/4 + 1

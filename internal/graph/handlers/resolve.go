@@ -281,13 +281,26 @@ func (h *Resolve) canonicalizeSeeds(ctx context.Context, seeds []string) []strin
 	copy(resolved, seeds)
 	for i, seed := range seeds {
 		if strings.Contains(seed, "://") {
-			_ = h.db.QueryRow(ctx, `
+			// A pasted Slack permalink resolves to its canonical node id from the
+			// path alone, so ?thread_ts=…&cid=… and #fragments don't defeat the
+			// match; the reply→thread-root promotion below then puts the root's
+			// files at hop 1. Falling through to the url lookup would leave the raw
+			// URL as resolved[i], which silently fails the slack: prefix check and
+			// enters the BFS as a garbage node id.
+			if sid := slackNodeIDFromURL(seed); sid != "" {
+				resolved[i] = sid
+			} else {
+				// Non-Slack: match the bare stored url too (tracking params like
+				// ?utm_source=… must not break the lookup); the raw url is compared
+				// as well, so a stored url with a legitimate query still matches.
+				_ = h.db.QueryRow(ctx, `
 SELECT id
 FROM graph.nodes
-WHERE url = $1 AND deleted_at IS NULL
+WHERE url IN ($1, $2) AND deleted_at IS NULL
 ORDER BY updated_at DESC
 LIMIT 1
-`, seed).Scan(&resolved[i])
+`, seed, stripQueryFragment(seed)).Scan(&resolved[i])
+			}
 		}
 
 		if !strings.HasPrefix(resolved[i], "slack:") {

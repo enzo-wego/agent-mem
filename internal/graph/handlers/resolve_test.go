@@ -228,3 +228,89 @@ WHERE id = ANY($4)`,
 		t.Fatalf("expected reply artifact thread_ts %q in %+v", rootTS, resp.Artifacts)
 	}
 }
+
+// TestResolve_SlackPermalinkSeedSurfacesThreadFiles reproduces the prod case: a
+// pasted Slack "Copy link" URL (a reply, with ?thread_ts&cid) seeds resolve, the
+// reply promotes to its thread root, and the root's bodyless slack_file
+// neighbors surface as zero-token artifacts (and as cache misses).
+func TestResolve_SlackPermalinkSeedSurfacesThreadFiles(t *testing.T) {
+	pool := testDB(t)
+
+	const (
+		channelID = "C0AV14LGPMG"
+		rootTS    = "1781081424.346499"
+		replyTS   = "1782118242.921599"
+		rootID    = "slack:" + channelID + ":" + rootTS
+		replyID   = "slack:" + channelID + ":" + replyTS
+		file1     = "slack_file:F0B90RTPEPK"
+		file2     = "slack_file:F0B6RMXUKSA"
+		fullURL   = "https://wego.slack.com/archives/" + channelID + "/p1782118242921599?thread_ts=" + rootTS + "&cid=" + channelID
+	)
+
+	seedNode(t, pool, rootID, "slack", "Saudi Rail tax thread")
+	seedBody(t, pool, rootID, "Discussion of Saudi Rail tax filing")
+	seedNode(t, pool, replyID, "slack", "reply")
+	seedBody(t, pool, replyID, "here are the sheets")
+	// Files are bodyless by nature — a title + URL only, no artifact_bodies row.
+	seedNode(t, pool, file1, "slack_file", "Saudi Rail - Tax Analysis")
+	seedNodeURL(t, pool, file1, "https://docs.google.com/spreadsheets/d/tax")
+	seedNode(t, pool, file2, "slack_file", "Saudi_Rail(HHR)_GoLive_Checklist")
+	seedNodeURL(t, pool, file2, "https://docs.google.com/spreadsheets/d/golive")
+	seedEdge(t, pool, rootID, file1, "REFERENCES")
+	seedEdge(t, pool, rootID, file2, "REFERENCES")
+
+	// The reply carries thread_ts so canonicalizeSeeds promotes it to the root.
+	if _, err := pool.Exec(context.Background(),
+		`UPDATE graph.nodes SET metadata = jsonb_build_object('thread_ts', $2::text) WHERE id = $1`,
+		replyID, rootTS); err != nil {
+		t.Fatal(err)
+	}
+
+	body := strings.NewReader(`{
+		"seeds": ["` + fullURL + `"],
+		"query": "Saudi Rail tax",
+		"depth": 1,
+		"budget_tokens": 16000,
+		"include_bodies": true
+	}`)
+	r := httptest.NewRequest(http.MethodPost, "/api/graph/resolve", body)
+	w := httptest.NewRecorder()
+
+	h, err := handlers.NewResolve(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.ServeHTTP(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d body %s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Artifacts []struct {
+			NodeID string `json:"node_id"`
+			Type   string `json:"type"`
+		} `json:"artifacts"`
+		CacheMisses []string `json:"cache_misses"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Artifacts) == 0 {
+		t.Fatal("want >0 artifacts, got 0")
+	}
+	inArtifacts := map[string]bool{}
+	for _, a := range resp.Artifacts {
+		inArtifacts[a.NodeID] = true
+	}
+	if !inArtifacts[file1] || !inArtifacts[file2] {
+		t.Errorf("want both files in artifacts; got %+v", resp.Artifacts)
+	}
+	// Files still report as cache misses (fetch_body enqueue unchanged).
+	inMisses := map[string]bool{}
+	for _, m := range resp.CacheMisses {
+		inMisses[m] = true
+	}
+	if !inMisses[file1] || !inMisses[file2] {
+		t.Errorf("want both files in cache_misses; got %v", resp.CacheMisses)
+	}
+}

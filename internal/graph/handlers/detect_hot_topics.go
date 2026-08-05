@@ -553,6 +553,56 @@ func slackPermalink(rootNodeID string) string {
 	return fmt.Sprintf("https://wego.slack.com/archives/%s/p%s", parts[1], digits)
 }
 
+// slackNodeIDFromURL is the inverse of slackPermalink: it turns a Slack archive
+// permalink into a canonical node id slack:<chan>:<ts>, or "" when the URL is
+// not a Slack archive link. It reads only the URL *path*, so the
+// ?thread_ts=…&cid=… query and any #fragment that Slack's "Copy link" appends
+// are irrelevant by construction. Path shape: /archives/<CHANNEL>/p<digits>;
+// the ts is the digits with a "." inserted 6 from the end
+// (1782118242921599 -> 1782118242.921599). Returns "" on any shape mismatch, a
+// non-numeric p<...> segment, or fewer than 7 digits.
+func slackNodeIDFromURL(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return ""
+	}
+	parts := strings.Split(strings.Trim(u.Path, "/"), "/")
+	if len(parts) != 3 || parts[0] != "archives" {
+		return ""
+	}
+	channel, seg := parts[1], parts[2]
+	if channel == "" || !strings.HasPrefix(seg, "p") {
+		return ""
+	}
+	digits := seg[1:]
+	if len(digits) < 7 { // need >=1 digit before the "." inserted 6 from the end
+		return ""
+	}
+	for _, r := range digits {
+		if r < '0' || r > '9' {
+			return ""
+		}
+	}
+	ts := digits[:len(digits)-6] + "." + digits[len(digits)-6:]
+	return "slack:" + channel + ":" + ts
+}
+
+// stripQueryFragment returns rawURL without its ?query or #fragment, so a link
+// carrying tracking params (?utm_source=…) still matches the bare url stored on
+// the node. Returns the input unchanged when it isn't a URL or doesn't parse.
+func stripQueryFragment(rawURL string) string {
+	if !strings.Contains(rawURL, "://") {
+		return rawURL
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return rawURL
+	}
+	u.RawQuery = ""
+	u.Fragment = ""
+	return u.String()
+}
+
 // Slack stores mentions/links in an encoded form (<@U…>, <#C…|name>, <!here>,
 // <url|text>). These regexes turn them back into readable text for the DM.
 var (

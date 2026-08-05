@@ -51,6 +51,20 @@ func (h *Node) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "url or id required", http.StatusBadRequest)
 		return
 	}
+	// A pasted Slack permalink resolves to its canonical node id from the path
+	// alone, so ?thread_ts=…&cid=… and #fragments (which Slack's "Copy link"
+	// always appends) don't defeat the match. Looking up by id drops the
+	// dependence on the stored url column for Slack entirely.
+	if id == "" {
+		if sid := slackNodeIDFromURL(url); sid != "" {
+			id, url = sid, ""
+		}
+	}
+	// Non-Slack fallback: also match the url with its ?query/#fragment stripped,
+	// so a Jira/Confluence/GitHub link with tracking params resolves. The raw url
+	// is compared too, so a stored url that legitimately carries a query still
+	// matches.
+	urlStripped := stripQueryFragment(url)
 	// Slack thread titles live in graph.thread_summaries, not n.title (often
 	// empty); fall back to the summary so the node detail shows readable text,
 	// never a raw slack:CHANNEL:TS id. Same join the neighbor rows use.
@@ -72,10 +86,10 @@ LEFT JOIN graph.people p ON p.id = n.author_person_id
 LEFT JOIN graph.thread_summaries ts
   ON ts.channel_id = REPLACE(n.scope,'slack:','')
   AND ts.thread_ts = COALESCE(NULLIF(n.metadata->>'thread_ts',''), split_part(n.id,':',3))
-WHERE ($1 = '' OR n.url = $1) AND ($2 = '' OR n.id = $2)
+WHERE ($1 = '' OR n.url = $1 OR n.url = $3) AND ($2 = '' OR n.id = $2)
   AND n.deleted_at IS NULL
 LIMIT 1
-`, url, id)
+`, url, id, urlStripped)
 	var resp nodeResponse
 	var updatedAt time.Time
 	var scope *string

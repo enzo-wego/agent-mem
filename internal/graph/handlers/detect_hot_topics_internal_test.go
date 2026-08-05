@@ -107,6 +107,53 @@ func TestSourceParsers(t *testing.T) {
 	}
 }
 
+// TestSlackNodeIDFromURL checks the inverse of slackPermalink parses only the
+// path, so Slack's "Copy link" query/fragment is ignored, and rejects malformed
+// shapes.
+func TestSlackNodeIDFromURL(t *testing.T) {
+	const wantID = "slack:C0AV14LGPMG:1782118242.921599"
+	cases := []struct {
+		name, url, want string
+	}{
+		{"full url with query", "https://wego.slack.com/archives/C0AV14LGPMG/p1782118242921599?thread_ts=1781081424.346499&cid=C0AV14LGPMG", wantID},
+		{"bare", "https://wego.slack.com/archives/C0AV14LGPMG/p1782118242921599", wantID},
+		{"trailing slash", "https://wego.slack.com/archives/C0AV14LGPMG/p1782118242921599/", wantID},
+		{"fragment", "https://wego.slack.com/archives/C0AV14LGPMG/p1782118242921599#thread-anchor", wantID},
+		{"non-slack", "https://github.com/wego/payments/pull/2198", ""},
+		{"missing p prefix", "https://wego.slack.com/archives/C0AV14LGPMG/1782118242921599", ""},
+		{"non-numeric p segment", "https://wego.slack.com/archives/C0AV14LGPMG/pXYZ1234567", ""},
+		{"too few digits", "https://wego.slack.com/archives/C0AV14LGPMG/p123456", ""},
+		{"wrong path root", "https://wego.slack.com/team/C0AV14LGPMG", ""},
+		{"empty", "", ""},
+	}
+	for _, tc := range cases {
+		if got := slackNodeIDFromURL(tc.url); got != tc.want {
+			t.Errorf("%s: slackNodeIDFromURL(%q) = %q, want %q", tc.name, tc.url, got, tc.want)
+		}
+	}
+	// Round-trips with slackPermalink, the function it inverts.
+	if got := slackNodeIDFromURL(slackPermalink(wantID)); got != wantID {
+		t.Errorf("round-trip via slackPermalink: got %q, want %q", got, wantID)
+	}
+}
+
+// TestStripQueryFragment checks tracking params and fragments are removed while
+// non-URL inputs and query-less URLs pass through unchanged.
+func TestStripQueryFragment(t *testing.T) {
+	cases := map[string]string{
+		"https://wegomushi.atlassian.net/browse/PAY-2128?utm_source=slack": "https://wegomushi.atlassian.net/browse/PAY-2128",
+		"https://github.com/wego/payments/pull/2198#issuecomment-1":        "https://github.com/wego/payments/pull/2198",
+		"https://example.com/a/b":                                          "https://example.com/a/b",
+		"slack:C:1":                                                        "slack:C:1",
+		"":                                                                 "",
+	}
+	for in, want := range cases {
+		if got := stripQueryFragment(in); got != want {
+			t.Errorf("stripQueryFragment(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 // TestWhyFlagged checks the plain-language reason is jargon-free and names an
 // important sender when present.
 func TestWhyFlagged(t *testing.T) {

@@ -141,3 +141,53 @@ func TestHydrate_ReportsCacheMisses(t *testing.T) {
 		t.Errorf("missed=%v want [a]", missed)
 	}
 }
+
+// A bodyless slack_file/jira_attachment is a title + URL by nature: it must
+// surface as a zero-token artifact AND still be reported as a cache miss (so
+// fetch_body is enqueued). A bodyless slack/cf, which is genuinely waiting on a
+// body, must NOT produce an artifact — the narrow-scoping regression guard.
+func TestHydrate_BodylessFileBecomesZeroTokenArtifact(t *testing.T) {
+	ctx := context.Background()
+	pool := testDB(t)
+	if _, err := pool.Exec(ctx, `
+INSERT INTO graph.nodes (id, type, natural_key, title, url, machine_id)
+VALUES ('slack_file:F1', 'slack_file', 'slack_file:F1', 'Saudi Rail - Tax Analysis',
+        'https://docs.google.com/spreadsheets/d/abc', 'test')`); err != nil {
+		t.Fatalf("seed slack_file: %v", err)
+	}
+	seedNode(t, pool, "slack:C:1", "slack", "a thread with no cached body") // bodyless, no artifact
+
+	out, missed, err := hydrate.Greedy(ctx, pool, []hydrate.Candidate{
+		{NodeID: "slack_file:F1", Score: 0.9},
+		{NodeID: "slack:C:1", Score: 0.8},
+	}, 4000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out) != 1 {
+		t.Fatalf("want exactly 1 artifact (the file), got %d: %+v", len(out), out)
+	}
+	a := out[0]
+	if a.NodeID != "slack_file:F1" || a.Type != "slack_file" {
+		t.Errorf("artifact = %+v, want the slack_file", a)
+	}
+	if a.Tokens != 0 {
+		t.Errorf("file artifact Tokens = %d, want 0", a.Tokens)
+	}
+	if a.Body != "" {
+		t.Errorf("file artifact Body = %q, want empty", a.Body)
+	}
+	if a.Title != "Saudi Rail - Tax Analysis" {
+		t.Errorf("file title = %q", a.Title)
+	}
+	if a.URL != "https://docs.google.com/spreadsheets/d/abc" {
+		t.Errorf("file url = %q", a.URL)
+	}
+	gotMissed := map[string]bool{}
+	for _, m := range missed {
+		gotMissed[m] = true
+	}
+	if !gotMissed["slack_file:F1"] || !gotMissed["slack:C:1"] {
+		t.Errorf("missed = %v, want both bodyless ids", missed)
+	}
+}
