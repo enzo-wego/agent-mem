@@ -150,17 +150,19 @@ func (s *Server) handleSyncPull(w http.ResponseWriter, r *http.Request) {
 	promptAfter, _ := strconv.Atoi(r.URL.Query().Get("prompt_after"))
 	sessAfter, _ := strconv.Atoi(r.URL.Query().Get("sess_after"))
 
-	// Graph cursors: int keyset for people/edges/jobs/affinity, string keyset for
-	// the TEXT-PK tables (nodes, artifact_index/bodies, slack_groups, entities).
+	// Graph cursors: int keyset for people/edges/jobs (monotonic BIGSERIAL id).
+	// The other six paginate on (timestamp, pk), transported as "<RFC3339Nano>|<pk>"
+	// in one query param and decoded here (empty/unparseable => from the beginning).
 	gPeopleAfter, _ := strconv.Atoi(r.URL.Query().Get("g_people_after"))
-	gNodesAfter := r.URL.Query().Get("g_nodes_after")
+	gNodesTS, gNodesPK := sync.DecodeCursor(r.URL.Query().Get("g_nodes_after"))
 	gEdgesAfter, _ := strconv.Atoi(r.URL.Query().Get("g_edges_after"))
-	gArtIdxAfter := r.URL.Query().Get("g_artidx_after")
-	gArtBodyAfter := r.URL.Query().Get("g_artbody_after")
-	gSlackGrpAfter := r.URL.Query().Get("g_slackgrp_after")
-	gEntitiesAfter := r.URL.Query().Get("g_entities_after")
+	gArtIdxTS, gArtIdxPK := sync.DecodeCursor(r.URL.Query().Get("g_artidx_after"))
+	gArtBodyTS, gArtBodyPK := sync.DecodeCursor(r.URL.Query().Get("g_artbody_after"))
+	gSlackGrpTS, gSlackGrpPK := sync.DecodeCursor(r.URL.Query().Get("g_slackgrp_after"))
+	gEntitiesTS, gEntitiesPK := sync.DecodeCursor(r.URL.Query().Get("g_entities_after"))
 	gJobsAfter, _ := strconv.Atoi(r.URL.Query().Get("g_jobs_after"))
-	gAffinityAfter, _ := strconv.Atoi(r.URL.Query().Get("g_affinity_after"))
+	gAffinityTS, gAffinityPKStr := sync.DecodeCursor(r.URL.Query().Get("g_affinity_after"))
+	gAffinityAfter, _ := strconv.Atoi(gAffinityPKStr) // eeid; 0 (empty/unparseable) starts from the beginning
 
 	ctx := r.Context()
 
@@ -171,14 +173,14 @@ func (s *Server) handleSyncPull(w http.ResponseWriter, r *http.Request) {
 
 	// Graph tables
 	graphPeople, _ := s.db.GetGraphPeopleForPull(ctx, machineID, gPeopleAfter, limit)
-	graphNodes, _ := s.db.GetGraphNodesForPull(ctx, machineID, gNodesAfter, limit)
+	graphNodes, _ := s.db.GetGraphNodesForPull(ctx, machineID, gNodesTS, gNodesPK, limit)
 	graphEdges, _ := s.db.GetGraphEdgesForPull(ctx, machineID, gEdgesAfter, limit)
-	graphArtIdx, _ := s.db.GetGraphArtifactIndexForPull(ctx, machineID, gArtIdxAfter, limit/2)
-	graphArtBody, _ := s.db.GetGraphArtifactBodiesForPull(ctx, machineID, gArtBodyAfter, limit/2)
-	graphSlackGrp, _ := s.db.GetGraphSlackGroupsForPull(ctx, machineID, gSlackGrpAfter, limit)
-	graphEntities, _ := s.db.GetGraphEntitiesForPull(ctx, machineID, gEntitiesAfter, limit)
+	graphArtIdx, _ := s.db.GetGraphArtifactIndexForPull(ctx, machineID, gArtIdxTS, gArtIdxPK, limit/2)
+	graphArtBody, _ := s.db.GetGraphArtifactBodiesForPull(ctx, machineID, gArtBodyTS, gArtBodyPK, limit/2)
+	graphSlackGrp, _ := s.db.GetGraphSlackGroupsForPull(ctx, machineID, gSlackGrpTS, gSlackGrpPK, limit)
+	graphEntities, _ := s.db.GetGraphEntitiesForPull(ctx, machineID, gEntitiesTS, gEntitiesPK, limit)
 	graphJobs, _ := s.db.GetGraphJobsForPull(ctx, machineID, gJobsAfter, limit)
-	graphAffinity, _ := s.db.GetGraphUserAffinityConfigForPull(ctx, machineID, gAffinityAfter, limit)
+	graphAffinity, _ := s.db.GetGraphUserAffinityConfigForPull(ctx, machineID, gAffinityTS, gAffinityAfter, limit)
 
 	// Compute cursors: max ID per table
 	cursors := sync.PullCursors{}
@@ -205,24 +207,31 @@ func (s *Server) handleSyncPull(w http.ResponseWriter, r *http.Request) {
 	if len(graphJobs) > 0 {
 		cursors.GraphJobs = int(graphJobs[len(graphJobs)-1].ID)
 	}
-	// Keyset cursors: the last returned row's own key (never offset + len).
+	// Keyset cursors: the last returned row's (timestamp, pk), encoded as one
+	// string. ORDER BY guarantees the last row holds the max pair in the batch.
 	if len(graphNodes) > 0 {
-		cursors.GraphNodes = graphNodes[len(graphNodes)-1].ID
+		last := graphNodes[len(graphNodes)-1]
+		cursors.GraphNodes = sync.EncodeCursor(last.UpdatedAt, last.ID)
 	}
 	if len(graphArtIdx) > 0 {
-		cursors.GraphArtifactIndex = graphArtIdx[len(graphArtIdx)-1].NodeID
+		last := graphArtIdx[len(graphArtIdx)-1]
+		cursors.GraphArtifactIndex = sync.EncodeCursor(last.RefreshedAt, last.NodeID)
 	}
 	if len(graphArtBody) > 0 {
-		cursors.GraphArtifactBodies = graphArtBody[len(graphArtBody)-1].NodeID
+		last := graphArtBody[len(graphArtBody)-1]
+		cursors.GraphArtifactBodies = sync.EncodeCursor(last.FetchedAt, last.NodeID)
 	}
 	if len(graphSlackGrp) > 0 {
-		cursors.GraphSlackGroups = graphSlackGrp[len(graphSlackGrp)-1].ID
+		last := graphSlackGrp[len(graphSlackGrp)-1]
+		cursors.GraphSlackGroups = sync.EncodeCursor(last.RefreshedAt, last.ID)
 	}
 	if len(graphEntities) > 0 {
-		cursors.GraphEntities = graphEntities[len(graphEntities)-1].ID
+		last := graphEntities[len(graphEntities)-1]
+		cursors.GraphEntities = sync.EncodeCursor(last.FirstSeenAt, last.ID)
 	}
 	if len(graphAffinity) > 0 {
-		cursors.GraphUserAffinityConfig = graphAffinity[len(graphAffinity)-1].EEID
+		last := graphAffinity[len(graphAffinity)-1]
+		cursors.GraphUserAffinityConfig = sync.EncodeCursor(last.UpdatedAt, strconv.Itoa(last.EEID))
 	}
 
 	resp := sync.SyncPullResponse{

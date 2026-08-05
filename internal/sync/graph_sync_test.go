@@ -142,7 +142,7 @@ func TestGraphSync_PushPull(t *testing.T) {
 	}
 
 	// Verify: machine B (excludeSource=machineB) can pull the row authored by machine A.
-	pulled, err := dbB.GetGraphNodesForPull(ctx, machineB, "", 100)
+	pulled, err := dbB.GetGraphNodesForPull(ctx, machineB, time.Time{}, "", 100)
 	if err != nil {
 		t.Fatalf("GetGraphNodesForPull: %v", err)
 	}
@@ -197,7 +197,7 @@ func TestGraphSync_ArtifactIndexEmbedding(t *testing.T) {
 		t.Fatalf("insert artifact_index: %v", err)
 	}
 
-	pulled, err := dbA.GetGraphArtifactIndexForPull(ctx, "local-test", "", 10)
+	pulled, err := dbA.GetGraphArtifactIndexForPull(ctx, "local-test", time.Time{}, "", 10)
 	if err != nil {
 		t.Fatalf("GetGraphArtifactIndexForPull: %v", err)
 	}
@@ -226,13 +226,14 @@ func TestGraphSync_ArtifactIndexEmbedding(t *testing.T) {
 	}
 }
 
-// TestGraphSync_PaginationUnderConcurrentInsert is the regression that pins the
-// data-loss bug. It pages graph.nodes with a small limit and, between pages,
-// re-sorts an already-returned row (a body refresh bumps updated_at) and inserts
-// a brand-new row — exactly the concurrent activity the cloud produces. Keyset
-// pagination on the immutable id delivers every pre-existing row exactly once.
-// The old OFFSET-over-`ORDER BY updated_at` implementation skipped a row here
-// (verified against the pre-fix code).
+// TestGraphSync_PaginationUnderConcurrentInsert pages graph.nodes with a small
+// limit and, between pages, re-sorts an already-returned row (a body refresh
+// bumps updated_at) and inserts a brand-new row — the concurrent activity the
+// cloud produces. The (updated_at, id) keyset must never LOSE a row and must
+// terminate. A row whose updated_at is bumped past a cursor we already passed is
+// re-delivered; that is expected and harmless (Import* uses ON CONFLICT DO
+// NOTHING), and is the correctness trade the composite cursor makes to guarantee
+// new/updated rows are always delivered.
 func TestGraphSync_PaginationUnderConcurrentInsert(t *testing.T) {
 	pool := openTestPool(t)
 	truncateGraphSyncTables(t, pool)
@@ -256,12 +257,13 @@ func TestGraphSync_PaginationUnderConcurrentInsert(t *testing.T) {
 	}
 
 	seen := map[string]int{}
-	cursor := ""
+	var afterTS time.Time
+	var afterPK string
 	for iter := 0; ; iter++ {
 		if iter > 50 {
 			t.Fatalf("pagination did not terminate")
 		}
-		batch, err := db.GetGraphNodesForPull(ctx, local, cursor, 2)
+		batch, err := db.GetGraphNodesForPull(ctx, local, afterTS, afterPK, 2)
 		if err != nil {
 			t.Fatalf("pull: %v", err)
 		}
@@ -271,11 +273,12 @@ func TestGraphSync_PaginationUnderConcurrentInsert(t *testing.T) {
 		for _, n := range batch {
 			seen[n.ID]++
 		}
-		cursor = batch[len(batch)-1].ID
+		last := batch[len(batch)-1]
+		afterTS, afterPK = last.UpdatedAt, last.ID
 		if iter == 0 {
-			// Concurrent activity: node 01's body is refreshed (updated_at moves to
-			// the tail) and a new node arrives. This re-sort is what made the old
-			// offset+updated_at walk skip an unread row.
+			// Concurrent activity: node 01's body is refreshed (updated_at jumps to
+			// the tail) and a new node arrives. Under (updated_at, id), node 01 now
+			// sorts after the cursor and is delivered a second time.
 			if _, err := pool.Exec(ctx, `UPDATE graph.nodes SET updated_at = $1 WHERE id = 'test:node:01'`, base.Add(100*time.Second)); err != nil {
 				t.Fatalf("bump: %v", err)
 			}
@@ -283,11 +286,17 @@ func TestGraphSync_PaginationUnderConcurrentInsert(t *testing.T) {
 		}
 	}
 
-	for i := 1; i <= 5; i++ {
+	// No pre-existing row is lost, and the never-re-sorted ones arrive once.
+	for i := 2; i <= 5; i++ {
 		id := fmt.Sprintf("test:node:%02d", i)
 		if seen[id] != 1 {
-			t.Errorf("pre-existing row %s delivered %d times, want exactly 1", id, seen[id])
+			t.Errorf("row %s delivered %d times, want exactly 1", id, seen[id])
 		}
+	}
+	// node 01's updated_at was bumped past the cursor mid-walk, so it is delivered
+	// twice — the expected, harmless re-delivery (dropped by ON CONFLICT DO NOTHING).
+	if seen["test:node:01"] != 2 {
+		t.Errorf("re-sorted row test:node:01 delivered %d times, want 2 (re-delivery)", seen["test:node:01"])
 	}
 	if seen["test:node:09"] != 1 {
 		t.Errorf("concurrently-inserted row test:node:09 delivered %d times, want exactly 1", seen["test:node:09"])
@@ -333,25 +342,27 @@ func TestGraphSync_ImportAbsorbsNaturalKeyCollision(t *testing.T) {
 	}
 }
 
-// TestGraphSync_EmptyCursorReturnsLowest confirms a "" cursor means "from the
-// beginning": id > '' matches every non-empty TEXT id, so the lowest-keyed row
-// is returned first.
+// TestGraphSync_EmptyCursorReturnsLowest confirms a zero-time cursor means "from
+// the beginning": every real updated_at exceeds the zero time, so all rows come
+// back ordered by (updated_at, id). With equal timestamps the id tiebreaker
+// orders them, so the lowest id arrives first.
 func TestGraphSync_EmptyCursorReturnsLowest(t *testing.T) {
 	pool := openTestPool(t)
 	truncateGraphSyncTables(t, pool)
 	ctx := context.Background()
 	db := database.NewDB(pool)
 
+	ts := time.Date(2024, 6, 1, 12, 0, 0, 0, time.UTC)
 	for _, id := range []string{"test:node:b", "test:node:a", "test:node:c"} {
 		if _, err := pool.Exec(ctx, `
 			INSERT INTO graph.nodes
 				(id, type, natural_key, body, body_revision, body_ts, updated_at, machine_id)
-			VALUES ($1, 'jira', $1, 'b', 1, NOW(), NOW(), 'cloud-test')`, id); err != nil {
+			VALUES ($1, 'jira', $1, 'b', 1, $2, $2, 'cloud-test')`, id, ts); err != nil {
 			t.Fatalf("insert %s: %v", id, err)
 		}
 	}
 
-	pulled, err := db.GetGraphNodesForPull(ctx, "local-test", "", 10)
+	pulled, err := db.GetGraphNodesForPull(ctx, "local-test", time.Time{}, "", 10)
 	if err != nil {
 		t.Fatalf("pull: %v", err)
 	}
@@ -359,6 +370,175 @@ func TestGraphSync_EmptyCursorReturnsLowest(t *testing.T) {
 		t.Fatalf("want 3 rows, got %d", len(pulled))
 	}
 	if pulled[0].ID != "test:node:a" {
-		t.Errorf("empty cursor should return the lowest-keyed row first, got %q", pulled[0].ID)
+		t.Errorf("zero cursor should return the lowest (updated_at, id) row first, got %q", pulled[0].ID)
+	}
+}
+
+// TestCursorEncodeDecodeRoundTrip covers the cursor codec directly (no DB): a
+// real pair round-trips, and empty / unparseable values (a bare parked id, a
+// pair with a bad timestamp) all decode to the zero time + empty pk = "from the
+// beginning".
+func TestCursorEncodeDecodeRoundTrip(t *testing.T) {
+	ts := time.Date(2026, 8, 5, 9, 30, 15, 123456789, time.UTC)
+	pk := "slack:C011RFSBLP3:1709557592.431279"
+
+	gotTS, gotPK := DecodeCursor(EncodeCursor(ts, pk))
+	if !gotTS.Equal(ts) || gotPK != pk {
+		t.Errorf("round-trip mismatch: got (%s, %q), want (%s, %q)", gotTS, gotPK, ts, pk)
+	}
+
+	for _, bad := range []string{"", "wego_order:WF-ABC", "slack:C011RFSBLP3:1709557592.431279", "not-a-timestamp|slack:x"} {
+		gotTS, gotPK := DecodeCursor(bad)
+		if !gotTS.IsZero() || gotPK != "" {
+			t.Errorf("DecodeCursor(%q) = (%s, %q), want zero time and empty pk", bad, gotTS, gotPK)
+		}
+	}
+}
+
+// TestGraphSync_LowerSortingNodeStillDelivered is the regression that pins this
+// bug. After walking graph.nodes to exhaustion, a node whose id sorts BEFORE
+// every id already seen — but carrying a fresh updated_at — must still be
+// delivered. The e394fa3 id-only keyset drops it (its id is below the cursor id);
+// the (updated_at, id) keyset delivers it because its updated_at exceeds the
+// cursor's timestamp.
+func TestGraphSync_LowerSortingNodeStillDelivered(t *testing.T) {
+	pool := openTestPool(t)
+	truncateGraphSyncTables(t, pool)
+	ctx := context.Background()
+	db := database.NewDB(pool)
+
+	const cloud = "cloud-test"
+	const local = "local-test"
+	base := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	insert := func(id string, updated time.Time) {
+		if _, err := pool.Exec(ctx, `
+			INSERT INTO graph.nodes
+				(id, type, natural_key, body, body_revision, body_ts, updated_at, machine_id)
+			VALUES ($1, 'jira', $1, 'b', 1, $2, $2, $3)`, id, updated, cloud); err != nil {
+			t.Fatalf("insert %s: %v", id, err)
+		}
+	}
+	insert("mmm:1", base.Add(1*time.Second))
+	insert("nnn:2", base.Add(2*time.Second))
+	insert("zzz:3", base.Add(3*time.Second))
+
+	// Walk to exhaustion, tracking the (updated_at, id) cursor.
+	var afterTS time.Time
+	var afterPK string
+	for iter := 0; ; iter++ {
+		if iter > 50 {
+			t.Fatalf("walk did not terminate")
+		}
+		batch, err := db.GetGraphNodesForPull(ctx, local, afterTS, afterPK, 2)
+		if err != nil {
+			t.Fatalf("pull: %v", err)
+		}
+		if len(batch) == 0 {
+			break
+		}
+		last := batch[len(batch)-1]
+		afterTS, afterPK = last.UpdatedAt, last.ID
+	}
+
+	// A new node whose id sorts before every seen id, with a fresh updated_at.
+	insert("aaa:new", base.Add(100*time.Second))
+
+	batch, err := db.GetGraphNodesForPull(ctx, local, afterTS, afterPK, 100)
+	if err != nil {
+		t.Fatalf("pull after insert: %v", err)
+	}
+	delivered := false
+	for _, n := range batch {
+		if n.ID == "aaa:new" {
+			delivered = true
+		}
+	}
+	if !delivered {
+		t.Errorf("new lower-sorting node aaa:new was not delivered after the cursor advanced")
+	}
+}
+
+// TestGraphSync_SameTimestampAllDelivered proves the id tiebreaker: rows sharing
+// one updated_at, paged one at a time, each arrive exactly once and the walk
+// terminates. Without the pk tiebreaker a same-timestamp cursor would loop on
+// one row or skip the rest.
+func TestGraphSync_SameTimestampAllDelivered(t *testing.T) {
+	pool := openTestPool(t)
+	truncateGraphSyncTables(t, pool)
+	ctx := context.Background()
+	db := database.NewDB(pool)
+
+	const local = "local-test"
+	ts := time.Date(2025, 3, 3, 8, 0, 0, 0, time.UTC)
+	ids := []string{"test:same:a", "test:same:b", "test:same:c", "test:same:d"}
+	for _, id := range ids {
+		if _, err := pool.Exec(ctx, `
+			INSERT INTO graph.nodes
+				(id, type, natural_key, body, body_revision, body_ts, updated_at, machine_id)
+			VALUES ($1, 'jira', $1, 'b', 1, $2, $2, 'cloud-test')`, id, ts); err != nil {
+			t.Fatalf("insert %s: %v", id, err)
+		}
+	}
+
+	seen := map[string]int{}
+	var afterTS time.Time
+	var afterPK string
+	for iter := 0; ; iter++ {
+		if iter > 50 {
+			t.Fatalf("pagination did not terminate (pk tiebreaker not advancing)")
+		}
+		batch, err := db.GetGraphNodesForPull(ctx, local, afterTS, afterPK, 1)
+		if err != nil {
+			t.Fatalf("pull: %v", err)
+		}
+		if len(batch) == 0 {
+			break
+		}
+		for _, n := range batch {
+			seen[n.ID]++
+		}
+		last := batch[len(batch)-1]
+		afterTS, afterPK = last.UpdatedAt, last.ID
+	}
+
+	for _, id := range ids {
+		if seen[id] != 1 {
+			t.Errorf("same-timestamp row %s delivered %d times, want exactly 1", id, seen[id])
+		}
+	}
+}
+
+// TestGraphSync_UnparseableCursorWalksFromStart confirms the deliberate
+// fail-open: a parked bare-id cursor ("wego_order:WF-ABC") does not parse as a
+// pair, so it decodes to the zero time and the walk restarts from the lowest row
+// rather than returning nothing.
+func TestGraphSync_UnparseableCursorWalksFromStart(t *testing.T) {
+	pool := openTestPool(t)
+	truncateGraphSyncTables(t, pool)
+	ctx := context.Background()
+	db := database.NewDB(pool)
+
+	base := time.Date(2024, 5, 1, 0, 0, 0, 0, time.UTC)
+	for i, id := range []string{"test:walk:1", "test:walk:2", "test:walk:3"} {
+		if _, err := pool.Exec(ctx, `
+			INSERT INTO graph.nodes
+				(id, type, natural_key, body, body_revision, body_ts, updated_at, machine_id)
+			VALUES ($1, 'jira', $1, 'b', 1, $2, $2, 'cloud-test')`,
+			id, base.Add(time.Duration(i)*time.Second)); err != nil {
+			t.Fatalf("insert %s: %v", id, err)
+		}
+	}
+
+	afterTS, afterPK := DecodeCursor("wego_order:WF-ABC")
+	pulled, err := db.GetGraphNodesForPull(ctx, "local-test", afterTS, afterPK, 10)
+	if err != nil {
+		t.Fatalf("pull: %v", err)
+	}
+	if len(pulled) != 3 {
+		t.Fatalf("unparseable cursor should walk from the start; want 3 rows, got %d", len(pulled))
+	}
+	if pulled[0].ID != "test:walk:1" {
+		t.Errorf("want lowest (updated_at, id) row first, got %q", pulled[0].ID)
 	}
 }

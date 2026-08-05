@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -45,15 +46,18 @@ type SyncPushResponse struct {
 	Rejected int `json:"rejected"`
 }
 
-// PullCursors holds per-table cloud-side IDs for cursor-based pull pagination.
+// PullCursors holds per-table cloud-side cursors for pull pagination.
 type PullCursors struct {
 	Observations int `json:"observations"`
 	Summaries    int `json:"summaries"`
 	Prompts      int `json:"prompts"`
 	Sessions     int `json:"sessions"`
 
-	// Graph table cursors. Int-PK tables (people, edges, jobs, affinity) carry the
-	// last row's numeric key; TEXT-PK tables carry the last row's key as a string.
+	// Graph table cursors. people/edges/jobs key on a monotonic BIGSERIAL id and
+	// carry the last row's numeric key. The other six key on (timestamp, pk) and
+	// carry that pair encoded as "<RFC3339Nano>|<pk>" (see EncodeCursor). That
+	// includes user_affinity_config: its eeid is not monotonic with write time,
+	// so it too rides a composite string cursor with the eeid rendered as text.
 	GraphPeople             int    `json:"graph_people"`
 	GraphNodes              string `json:"graph_nodes"`
 	GraphEdges              int    `json:"graph_edges"`
@@ -62,7 +66,7 @@ type PullCursors struct {
 	GraphSlackGroups        string `json:"graph_slack_groups"`
 	GraphEntities           string `json:"graph_entities"`
 	GraphJobs               int    `json:"graph_jobs"`
-	GraphUserAffinityConfig int    `json:"graph_user_affinity_config"`
+	GraphUserAffinityConfig string `json:"graph_user_affinity_config"`
 }
 
 // SyncPullResponse is the data received from cloud during pull.
@@ -296,19 +300,19 @@ func (e *Engine) pull(ctx context.Context) error {
 		gSlackGrpCursor := e.getPullCursorStr(ctx, "graph.slack_groups")
 		gEntitiesCursor := e.getPullCursorStr(ctx, "graph.entities")
 		gJobsCursor := e.getPullCursor(ctx, "graph.jobs")
-		gAffinityCursor := e.getPullCursor(ctx, "graph.user_affinity_config")
+		gAffinityCursor := e.getPullCursorStr(ctx, "graph.user_affinity_config")
 
 		pullURL := fmt.Sprintf(
 			"%s/api/sync/pull?machine_id=%s&limit=%d"+
 				"&obs_after=%d&sum_after=%d&prompt_after=%d&sess_after=%d"+
 				"&g_people_after=%d&g_nodes_after=%s&g_edges_after=%d"+
 				"&g_artidx_after=%s&g_artbody_after=%s&g_slackgrp_after=%s"+
-				"&g_entities_after=%s&g_jobs_after=%d&g_affinity_after=%d",
+				"&g_entities_after=%s&g_jobs_after=%d&g_affinity_after=%s",
 			e.config.SyncURL, e.config.MachineID, batchSize,
 			obsCursor, sumCursor, promptCursor, sessCursor,
 			gPeopleCursor, url.QueryEscape(gNodesCursor), gEdgesCursor,
 			url.QueryEscape(gArtIdxCursor), url.QueryEscape(gArtBodyCursor), url.QueryEscape(gSlackGrpCursor),
-			url.QueryEscape(gEntitiesCursor), gJobsCursor, gAffinityCursor,
+			url.QueryEscape(gEntitiesCursor), gJobsCursor, url.QueryEscape(gAffinityCursor),
 		)
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, pullURL, nil)
 		if err != nil {
@@ -426,8 +430,8 @@ func (e *Engine) pull(ctx context.Context) error {
 		if pullResp.Cursors.GraphJobs > 0 {
 			e.setPullCursor(ctx, "graph.jobs", pullResp.Cursors.GraphJobs)
 		}
-		if pullResp.Cursors.GraphUserAffinityConfig > 0 {
-			e.setPullCursor(ctx, "graph.user_affinity_config", pullResp.Cursors.GraphUserAffinityConfig)
+		if pullResp.Cursors.GraphUserAffinityConfig != "" {
+			e.setPullCursorStr(ctx, "graph.user_affinity_config", pullResp.Cursors.GraphUserAffinityConfig)
 		}
 	}
 
@@ -472,6 +476,42 @@ func (e *Engine) setPullCursorStr(ctx context.Context, table, key string) {
 		INSERT INTO settings (key, value) VALUES ($1, $2)
 		ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
 	`, "pull_cursor:"+table, key)
+}
+
+// EncodeCursor packs a pull cursor's (timestamp, primary-key) pair into the
+// single string carried in PullCursors, formatted "<RFC3339Nano>|<pk>". The six
+// keyset-paginated graph tables order by (timestamp, pk), so the cursor carries
+// both halves inside one string value — no PullCursors shape change.
+func EncodeCursor(ts time.Time, pk string) string {
+	return ts.UTC().Format(time.RFC3339Nano) + "|" + pk
+}
+
+// DecodeCursor unpacks a cursor produced by EncodeCursor. An empty string OR any
+// string that does not parse as "<RFC3339Nano>|<pk>" means "from the beginning":
+// it returns the zero time and an empty pk, and the query's (ts, pk) > ($2, $3)
+// then matches every row.
+//
+// This fail-open is DELIBERATE — do NOT "fix" it to surface an error. The pull
+// cursors parked before this change hold bare natural ids like "wego_order:WF-…"
+// that cannot parse as a pair, so the first pull after deploy walks each table
+// from the start and self-heals into one full walk.
+//
+// Re-delivering a row whose timestamp advanced past a cursor we already passed is
+// expected and harmless: every Import* uses ON CONFLICT DO NOTHING, so a row that
+// already exists locally is skipped, not overwritten. Do not turn that into
+// DO UPDATE here — content overwrite is a separate decision (agent-mem-zqt).
+func DecodeCursor(s string) (time.Time, string) {
+	// RFC3339Nano never contains '|', so the first '|' separates the timestamp
+	// from the pk; splitting there leaves any '|' inside a natural-key pk intact.
+	sep := strings.IndexByte(s, '|')
+	if sep < 0 {
+		return time.Time{}, ""
+	}
+	ts, err := time.Parse(time.RFC3339Nano, s[:sep])
+	if err != nil {
+		return time.Time{}, ""
+	}
+	return ts, s[sep+1:]
 }
 
 func (e *Engine) postJSON(ctx context.Context, url string, payload any) (*http.Response, error) {

@@ -676,20 +676,23 @@ func (db *DB) GetGraphPeopleForPull(ctx context.Context, excludeSource string, a
 	return out, rows.Err()
 }
 
-// GetGraphNodesForPull returns graph.nodes rows with id > afterKey from other machines.
-func (db *DB) GetGraphNodesForPull(ctx context.Context, excludeSource, afterKey string, limit int) ([]SyncableGraphNode, error) {
-	// Keyset on the immutable TEXT primary key (id): unique, total and stable, so
-	// the walk cannot skip or repeat under concurrent insert/update. Empty afterKey
-	// means from the beginning, since id > '' is true for every non-empty TEXT id.
+// GetGraphNodesForPull returns graph.nodes rows after the (updated_at, id)
+// cursor from other machines.
+func (db *DB) GetGraphNodesForPull(ctx context.Context, excludeSource string, afterTS time.Time, afterPK string, limit int) ([]SyncableGraphNode, error) {
+	// Keyset on (updated_at, id): updated_at increases with write time so new and
+	// updated rows always sort after the cursor and get delivered; id breaks ties
+	// so same-timestamp rows are neither skipped nor repeated. A zero afterTS
+	// (empty/unparseable cursor) starts from the beginning — every real row's
+	// updated_at exceeds the zero time.
 	rows, err := db.Pool.Query(ctx, `
 		SELECT id, type, natural_key, url, title, body, body_revision, body_ts,
 		       mime_type, size_bytes, external_url, thumb_url,
 		       author_person_id, scope, metadata, first_seen_at, updated_at, deleted_at,
 		       sync_id::text, sync_version, machine_id
 		FROM graph.nodes
-		WHERE machine_id IS DISTINCT FROM $1 AND id > $2
-		ORDER BY id ASC LIMIT $3
-	`, excludeSource, afterKey, limit)
+		WHERE machine_id IS DISTINCT FROM $1 AND (updated_at, id) > ($2, $3)
+		ORDER BY updated_at ASC, id ASC LIMIT $4
+	`, excludeSource, afterTS, afterPK, limit)
 	if err != nil {
 		return nil, fmt.Errorf("get graph nodes for pull: %w", err)
 	}
@@ -739,32 +742,34 @@ func (db *DB) GetGraphEdgesForPull(ctx context.Context, excludeSource string, af
 	return out, rows.Err()
 }
 
-// GetGraphArtifactIndexForPull returns graph.artifact_index rows with node_id > afterKey from other machines.
-func (db *DB) GetGraphArtifactIndexForPull(ctx context.Context, excludeSource, afterKey string, limit int) ([]SyncableGraphArtifactIndex, error) {
-	// Keyset on the TEXT PK node_id; empty afterKey starts from the beginning (node_id > '' matches all).
+// GetGraphArtifactIndexForPull returns graph.artifact_index rows after the
+// (refreshed_at, node_id) cursor from other machines.
+func (db *DB) GetGraphArtifactIndexForPull(ctx context.Context, excludeSource string, afterTS time.Time, afterPK string, limit int) ([]SyncableGraphArtifactIndex, error) {
+	// Keyset on (refreshed_at, node_id); a zero afterTS starts from the beginning.
 	rows, err := db.Pool.Query(ctx, `
 		SELECT node_id, summary, summary_kind, embedding, refreshed_at,
 		       sync_id::text, sync_version, machine_id
 		FROM graph.artifact_index
-		WHERE machine_id IS DISTINCT FROM $1 AND node_id > $2
-		ORDER BY node_id ASC LIMIT $3
-	`, excludeSource, afterKey, limit)
+		WHERE machine_id IS DISTINCT FROM $1 AND (refreshed_at, node_id) > ($2, $3)
+		ORDER BY refreshed_at ASC, node_id ASC LIMIT $4
+	`, excludeSource, afterTS, afterPK, limit)
 	if err != nil {
 		return nil, fmt.Errorf("get graph artifact_index for pull: %w", err)
 	}
 	return scanArtifactIndexRows(rows)
 }
 
-// GetGraphArtifactBodiesForPull returns graph.artifact_bodies rows with node_id > afterKey from other machines.
-func (db *DB) GetGraphArtifactBodiesForPull(ctx context.Context, excludeSource, afterKey string, limit int) ([]SyncableGraphArtifactBody, error) {
-	// Keyset on the TEXT PK node_id; empty afterKey starts from the beginning (node_id > '' matches all).
+// GetGraphArtifactBodiesForPull returns graph.artifact_bodies rows after the
+// (fetched_at, node_id) cursor from other machines.
+func (db *DB) GetGraphArtifactBodiesForPull(ctx context.Context, excludeSource string, afterTS time.Time, afterPK string, limit int) ([]SyncableGraphArtifactBody, error) {
+	// Keyset on (fetched_at, node_id); a zero afterTS starts from the beginning.
 	rows, err := db.Pool.Query(ctx, `
 		SELECT node_id, body_full, ocr_text, description, fetched_at, expires_at,
 		       sync_id::text, sync_version, machine_id
 		FROM graph.artifact_bodies
-		WHERE machine_id IS DISTINCT FROM $1 AND node_id > $2
-		ORDER BY node_id ASC LIMIT $3
-	`, excludeSource, afterKey, limit)
+		WHERE machine_id IS DISTINCT FROM $1 AND (fetched_at, node_id) > ($2, $3)
+		ORDER BY fetched_at ASC, node_id ASC LIMIT $4
+	`, excludeSource, afterTS, afterPK, limit)
 	if err != nil {
 		return nil, fmt.Errorf("get graph artifact_bodies for pull: %w", err)
 	}
@@ -784,16 +789,17 @@ func (db *DB) GetGraphArtifactBodiesForPull(ctx context.Context, excludeSource, 
 	return out, rows.Err()
 }
 
-// GetGraphSlackGroupsForPull returns graph.slack_groups rows with id > afterKey from other machines.
-func (db *DB) GetGraphSlackGroupsForPull(ctx context.Context, excludeSource, afterKey string, limit int) ([]SyncableGraphSlackGroup, error) {
-	// Keyset on the TEXT PK id; empty afterKey starts from the beginning (id > '' matches all).
+// GetGraphSlackGroupsForPull returns graph.slack_groups rows after the
+// (refreshed_at, id) cursor from other machines.
+func (db *DB) GetGraphSlackGroupsForPull(ctx context.Context, excludeSource string, afterTS time.Time, afterPK string, limit int) ([]SyncableGraphSlackGroup, error) {
+	// Keyset on (refreshed_at, id); a zero afterTS starts from the beginning.
 	rows, err := db.Pool.Query(ctx, `
 		SELECT id, handle, name, description, member_user_ids, user_count, refreshed_at,
 		       sync_id::text, sync_version, machine_id
 		FROM graph.slack_groups
-		WHERE machine_id IS DISTINCT FROM $1 AND id > $2
-		ORDER BY id ASC LIMIT $3
-	`, excludeSource, afterKey, limit)
+		WHERE machine_id IS DISTINCT FROM $1 AND (refreshed_at, id) > ($2, $3)
+		ORDER BY refreshed_at ASC, id ASC LIMIT $4
+	`, excludeSource, afterTS, afterPK, limit)
 	if err != nil {
 		return nil, fmt.Errorf("get graph slack_groups for pull: %w", err)
 	}
@@ -813,16 +819,17 @@ func (db *DB) GetGraphSlackGroupsForPull(ctx context.Context, excludeSource, aft
 	return out, rows.Err()
 }
 
-// GetGraphEntitiesForPull returns graph.entities rows with id > afterKey from other machines.
-func (db *DB) GetGraphEntitiesForPull(ctx context.Context, excludeSource, afterKey string, limit int) ([]SyncableGraphEntity, error) {
-	// Keyset on the TEXT PK id; empty afterKey starts from the beginning (id > '' matches all).
+// GetGraphEntitiesForPull returns graph.entities rows after the
+// (first_seen_at, id) cursor from other machines.
+func (db *DB) GetGraphEntitiesForPull(ctx context.Context, excludeSource string, afterTS time.Time, afterPK string, limit int) ([]SyncableGraphEntity, error) {
+	// Keyset on (first_seen_at, id); a zero afterTS starts from the beginning.
 	rows, err := db.Pool.Query(ctx, `
 		SELECT id, kind, display_name, aliases, metadata, source, first_seen_at,
 		       sync_id::text, sync_version, machine_id
 		FROM graph.entities
-		WHERE machine_id IS DISTINCT FROM $1 AND id > $2
-		ORDER BY id ASC LIMIT $3
-	`, excludeSource, afterKey, limit)
+		WHERE machine_id IS DISTINCT FROM $1 AND (first_seen_at, id) > ($2, $3)
+		ORDER BY first_seen_at ASC, id ASC LIMIT $4
+	`, excludeSource, afterTS, afterPK, limit)
 	if err != nil {
 		return nil, fmt.Errorf("get graph entities for pull: %w", err)
 	}
@@ -872,17 +879,20 @@ func (db *DB) GetGraphJobsForPull(ctx context.Context, excludeSource string, aft
 	return out, rows.Err()
 }
 
-// GetGraphUserAffinityConfigForPull returns graph.user_affinity_config rows with eeid > afterEEID from other machines.
-func (db *DB) GetGraphUserAffinityConfigForPull(ctx context.Context, excludeSource string, afterEEID, limit int) ([]SyncableGraphUserAffinityConfig, error) {
-	// Keyset on the INTEGER PK eeid; employee ids are positive so a 0 cursor starts from the beginning.
+// GetGraphUserAffinityConfigForPull returns graph.user_affinity_config rows
+// after the (updated_at, eeid) cursor from other machines.
+func (db *DB) GetGraphUserAffinityConfigForPull(ctx context.Context, excludeSource string, afterTS time.Time, afterEEID, limit int) ([]SyncableGraphUserAffinityConfig, error) {
+	// Keyset on (updated_at, eeid): eeid is an employee id, not monotonic with
+	// write time, so it cannot be the ordering key on its own. updated_at drives
+	// delivery; eeid breaks ties. A zero afterTS starts from the beginning.
 	rows, err := db.Pool.Query(ctx, `
 		SELECT eeid, team_group_ids, dept_group_ids, team_subtree_root_eeid,
 		       autodetected, updated_at,
 		       sync_id::text, sync_version, machine_id
 		FROM graph.user_affinity_config
-		WHERE machine_id IS DISTINCT FROM $1 AND eeid > $2
-		ORDER BY eeid ASC LIMIT $3
-	`, excludeSource, afterEEID, limit)
+		WHERE machine_id IS DISTINCT FROM $1 AND (updated_at, eeid) > ($2, $3)
+		ORDER BY updated_at ASC, eeid ASC LIMIT $4
+	`, excludeSource, afterTS, afterEEID, limit)
 	if err != nil {
 		return nil, fmt.Errorf("get graph user_affinity_config for pull: %w", err)
 	}
