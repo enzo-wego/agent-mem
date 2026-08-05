@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"time"
 
@@ -51,16 +52,17 @@ type PullCursors struct {
 	Prompts      int `json:"prompts"`
 	Sessions     int `json:"sessions"`
 
-	// Graph table cursors (ID-based for tables with int PKs; offset-based for text-PK tables)
-	GraphPeople             int `json:"graph_people"`
-	GraphNodes              int `json:"graph_nodes"`
-	GraphEdges              int `json:"graph_edges"`
-	GraphArtifactIndex      int `json:"graph_artifact_index"`
-	GraphArtifactBodies     int `json:"graph_artifact_bodies"`
-	GraphSlackGroups        int `json:"graph_slack_groups"`
-	GraphEntities           int `json:"graph_entities"`
-	GraphJobs               int `json:"graph_jobs"`
-	GraphUserAffinityConfig int `json:"graph_user_affinity_config"`
+	// Graph table cursors. Int-PK tables (people, edges, jobs, affinity) carry the
+	// last row's numeric key; TEXT-PK tables carry the last row's key as a string.
+	GraphPeople             int    `json:"graph_people"`
+	GraphNodes              string `json:"graph_nodes"`
+	GraphEdges              int    `json:"graph_edges"`
+	GraphArtifactIndex      string `json:"graph_artifact_index"`
+	GraphArtifactBodies     string `json:"graph_artifact_bodies"`
+	GraphSlackGroups        string `json:"graph_slack_groups"`
+	GraphEntities           string `json:"graph_entities"`
+	GraphJobs               int    `json:"graph_jobs"`
+	GraphUserAffinityConfig int    `json:"graph_user_affinity_config"`
 }
 
 // SyncPullResponse is the data received from cloud during pull.
@@ -260,6 +262,23 @@ func (e *Engine) push(ctx context.Context) error {
 
 func (e *Engine) pull(ctx context.Context) error {
 	totalImported := 0
+	importFailed := 0
+
+	// record tallies an import result. On failure we log and count but never stop:
+	// the cursor must still advance past a failed row. Blocking on failure would
+	// deadlock the pull loop — an edge whose node has not yet arrived fails its FK,
+	// and if the cursor could not move past it the same batch would be re-requested
+	// forever inside one cycle (see the `for { ... if batchTotal == 0 { break } }`
+	// loop below). Log the failure and let a later walk pick the row up once its
+	// parent row exists.
+	record := func(err error, table, key string) {
+		if err != nil {
+			importFailed++
+			log.Warn().Err(err).Str("table", table).Str("key", key).Msg("Sync import failed")
+			return
+		}
+		totalImported++
+	}
 
 	for {
 		// Load per-table cursors from settings
@@ -270,26 +289,26 @@ func (e *Engine) pull(ctx context.Context) error {
 
 		// Graph cursors
 		gPeopleCursor := e.getPullCursor(ctx, "graph.people")
-		gNodesCursor := e.getPullCursor(ctx, "graph.nodes")
+		gNodesCursor := e.getPullCursorStr(ctx, "graph.nodes")
 		gEdgesCursor := e.getPullCursor(ctx, "graph.edges")
-		gArtIdxCursor := e.getPullCursor(ctx, "graph.artifact_index")
-		gArtBodyCursor := e.getPullCursor(ctx, "graph.artifact_bodies")
-		gSlackGrpCursor := e.getPullCursor(ctx, "graph.slack_groups")
-		gEntitiesCursor := e.getPullCursor(ctx, "graph.entities")
+		gArtIdxCursor := e.getPullCursorStr(ctx, "graph.artifact_index")
+		gArtBodyCursor := e.getPullCursorStr(ctx, "graph.artifact_bodies")
+		gSlackGrpCursor := e.getPullCursorStr(ctx, "graph.slack_groups")
+		gEntitiesCursor := e.getPullCursorStr(ctx, "graph.entities")
 		gJobsCursor := e.getPullCursor(ctx, "graph.jobs")
 		gAffinityCursor := e.getPullCursor(ctx, "graph.user_affinity_config")
 
 		pullURL := fmt.Sprintf(
 			"%s/api/sync/pull?machine_id=%s&limit=%d"+
 				"&obs_after=%d&sum_after=%d&prompt_after=%d&sess_after=%d"+
-				"&g_people_after=%d&g_nodes_after=%d&g_edges_after=%d"+
-				"&g_artidx_after=%d&g_artbody_after=%d&g_slackgrp_after=%d"+
-				"&g_entities_after=%d&g_jobs_after=%d&g_affinity_after=%d",
+				"&g_people_after=%d&g_nodes_after=%s&g_edges_after=%d"+
+				"&g_artidx_after=%s&g_artbody_after=%s&g_slackgrp_after=%s"+
+				"&g_entities_after=%s&g_jobs_after=%d&g_affinity_after=%d",
 			e.config.SyncURL, e.config.MachineID, batchSize,
 			obsCursor, sumCursor, promptCursor, sessCursor,
-			gPeopleCursor, gNodesCursor, gEdgesCursor,
-			gArtIdxCursor, gArtBodyCursor, gSlackGrpCursor,
-			gEntitiesCursor, gJobsCursor, gAffinityCursor,
+			gPeopleCursor, url.QueryEscape(gNodesCursor), gEdgesCursor,
+			url.QueryEscape(gArtIdxCursor), url.QueryEscape(gArtBodyCursor), url.QueryEscape(gSlackGrpCursor),
+			url.QueryEscape(gEntitiesCursor), gJobsCursor, gAffinityCursor,
 		)
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, pullURL, nil)
 		if err != nil {
@@ -325,73 +344,47 @@ func (e *Engine) pull(ctx context.Context) error {
 			break // fully caught up
 		}
 
-		// Import original tables
+		// Import original tables, then graph tables in FK order (people -> nodes ->
+		// edges, then the rest). record() logs+counts failures and always advances.
 		for i := range pullResp.Sessions {
-			if err := e.db.ImportSession(ctx, &pullResp.Sessions[i]); err == nil {
-				totalImported++
-			}
+			record(e.db.ImportSession(ctx, &pullResp.Sessions[i]), "sessions", strconv.Itoa(pullResp.Sessions[i].ID))
 		}
 		for i := range pullResp.Observations {
-			if err := e.db.ImportObservation(ctx, &pullResp.Observations[i]); err == nil {
-				totalImported++
-			}
+			record(e.db.ImportObservation(ctx, &pullResp.Observations[i]), "observations", strconv.Itoa(pullResp.Observations[i].ID))
 		}
 		for i := range pullResp.Summaries {
-			if err := e.db.ImportSummary(ctx, &pullResp.Summaries[i]); err == nil {
-				totalImported++
-			}
+			record(e.db.ImportSummary(ctx, &pullResp.Summaries[i]), "summaries", strconv.Itoa(pullResp.Summaries[i].ID))
 		}
 		for i := range pullResp.Prompts {
-			if err := e.db.ImportPrompt(ctx, &pullResp.Prompts[i]); err == nil {
-				totalImported++
-			}
+			record(e.db.ImportPrompt(ctx, &pullResp.Prompts[i]), "prompts", strconv.Itoa(pullResp.Prompts[i].ID))
 		}
 
-		// Import graph tables (FK-ordered)
 		for i := range pullResp.GraphPeople {
-			if err := e.db.ImportGraphPerson(ctx, &pullResp.GraphPeople[i]); err == nil {
-				totalImported++
-			}
+			record(e.db.ImportGraphPerson(ctx, &pullResp.GraphPeople[i]), "graph.people", strconv.FormatInt(pullResp.GraphPeople[i].ID, 10))
 		}
 		for i := range pullResp.GraphNodes {
-			if err := e.db.ImportGraphNode(ctx, &pullResp.GraphNodes[i]); err == nil {
-				totalImported++
-			}
+			record(e.db.ImportGraphNode(ctx, &pullResp.GraphNodes[i]), "graph.nodes", pullResp.GraphNodes[i].ID)
 		}
 		for i := range pullResp.GraphEdges {
-			if err := e.db.ImportGraphEdge(ctx, &pullResp.GraphEdges[i]); err == nil {
-				totalImported++
-			}
+			record(e.db.ImportGraphEdge(ctx, &pullResp.GraphEdges[i]), "graph.edges", strconv.FormatInt(pullResp.GraphEdges[i].ID, 10))
 		}
 		for i := range pullResp.GraphArtifactIndex {
-			if err := e.db.ImportGraphArtifactIndex(ctx, &pullResp.GraphArtifactIndex[i]); err == nil {
-				totalImported++
-			}
+			record(e.db.ImportGraphArtifactIndex(ctx, &pullResp.GraphArtifactIndex[i]), "graph.artifact_index", pullResp.GraphArtifactIndex[i].NodeID)
 		}
 		for i := range pullResp.GraphArtifactBodies {
-			if err := e.db.ImportGraphArtifactBody(ctx, &pullResp.GraphArtifactBodies[i]); err == nil {
-				totalImported++
-			}
+			record(e.db.ImportGraphArtifactBody(ctx, &pullResp.GraphArtifactBodies[i]), "graph.artifact_bodies", pullResp.GraphArtifactBodies[i].NodeID)
 		}
 		for i := range pullResp.GraphSlackGroups {
-			if err := e.db.ImportGraphSlackGroup(ctx, &pullResp.GraphSlackGroups[i]); err == nil {
-				totalImported++
-			}
+			record(e.db.ImportGraphSlackGroup(ctx, &pullResp.GraphSlackGroups[i]), "graph.slack_groups", pullResp.GraphSlackGroups[i].ID)
 		}
 		for i := range pullResp.GraphEntities {
-			if err := e.db.ImportGraphEntity(ctx, &pullResp.GraphEntities[i]); err == nil {
-				totalImported++
-			}
+			record(e.db.ImportGraphEntity(ctx, &pullResp.GraphEntities[i]), "graph.entities", pullResp.GraphEntities[i].ID)
 		}
 		for i := range pullResp.GraphJobs {
-			if err := e.db.ImportGraphJob(ctx, &pullResp.GraphJobs[i]); err == nil {
-				totalImported++
-			}
+			record(e.db.ImportGraphJob(ctx, &pullResp.GraphJobs[i]), "graph.jobs", strconv.FormatInt(pullResp.GraphJobs[i].ID, 10))
 		}
 		for i := range pullResp.GraphUserAffinityConfig {
-			if err := e.db.ImportGraphUserAffinityConfig(ctx, &pullResp.GraphUserAffinityConfig[i]); err == nil {
-				totalImported++
-			}
+			record(e.db.ImportGraphUserAffinityConfig(ctx, &pullResp.GraphUserAffinityConfig[i]), "graph.user_affinity_config", strconv.Itoa(pullResp.GraphUserAffinityConfig[i].EEID))
 		}
 
 		// Update cursors from response — original tables
@@ -412,23 +405,23 @@ func (e *Engine) pull(ctx context.Context) error {
 		if pullResp.Cursors.GraphPeople > 0 {
 			e.setPullCursor(ctx, "graph.people", pullResp.Cursors.GraphPeople)
 		}
-		if pullResp.Cursors.GraphNodes > 0 {
-			e.setPullCursor(ctx, "graph.nodes", pullResp.Cursors.GraphNodes)
+		if pullResp.Cursors.GraphNodes != "" {
+			e.setPullCursorStr(ctx, "graph.nodes", pullResp.Cursors.GraphNodes)
 		}
 		if pullResp.Cursors.GraphEdges > 0 {
 			e.setPullCursor(ctx, "graph.edges", pullResp.Cursors.GraphEdges)
 		}
-		if pullResp.Cursors.GraphArtifactIndex > 0 {
-			e.setPullCursor(ctx, "graph.artifact_index", pullResp.Cursors.GraphArtifactIndex)
+		if pullResp.Cursors.GraphArtifactIndex != "" {
+			e.setPullCursorStr(ctx, "graph.artifact_index", pullResp.Cursors.GraphArtifactIndex)
 		}
-		if pullResp.Cursors.GraphArtifactBodies > 0 {
-			e.setPullCursor(ctx, "graph.artifact_bodies", pullResp.Cursors.GraphArtifactBodies)
+		if pullResp.Cursors.GraphArtifactBodies != "" {
+			e.setPullCursorStr(ctx, "graph.artifact_bodies", pullResp.Cursors.GraphArtifactBodies)
 		}
-		if pullResp.Cursors.GraphSlackGroups > 0 {
-			e.setPullCursor(ctx, "graph.slack_groups", pullResp.Cursors.GraphSlackGroups)
+		if pullResp.Cursors.GraphSlackGroups != "" {
+			e.setPullCursorStr(ctx, "graph.slack_groups", pullResp.Cursors.GraphSlackGroups)
 		}
-		if pullResp.Cursors.GraphEntities > 0 {
-			e.setPullCursor(ctx, "graph.entities", pullResp.Cursors.GraphEntities)
+		if pullResp.Cursors.GraphEntities != "" {
+			e.setPullCursorStr(ctx, "graph.entities", pullResp.Cursors.GraphEntities)
 		}
 		if pullResp.Cursors.GraphJobs > 0 {
 			e.setPullCursor(ctx, "graph.jobs", pullResp.Cursors.GraphJobs)
@@ -439,8 +432,8 @@ func (e *Engine) pull(ctx context.Context) error {
 	}
 
 	e.db.SetLastSyncTime(ctx, "last_pull")
-	if totalImported > 0 {
-		log.Info().Int("imported", totalImported).Msg("Sync pull complete")
+	if totalImported > 0 || importFailed > 0 {
+		log.Info().Int("imported", totalImported).Int("failed", importFailed).Msg("Sync pull complete")
 	}
 	return nil
 }
@@ -460,6 +453,25 @@ func (e *Engine) setPullCursor(ctx context.Context, table string, id int) {
 		INSERT INTO settings (key, value) VALUES ($1, $2)
 		ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
 	`, "pull_cursor:"+table, strconv.Itoa(id))
+}
+
+// getPullCursorStr / setPullCursorStr are the TEXT-key variants used by the
+// keyset cursors on TEXT-PK graph tables (nodes, artifact_index/bodies,
+// slack_groups, entities). The settings.value column is already TEXT.
+func (e *Engine) getPullCursorStr(ctx context.Context, table string) string {
+	var v string
+	err := e.db.Pool.QueryRow(ctx, `SELECT value FROM settings WHERE key = $1`, "pull_cursor:"+table).Scan(&v)
+	if err != nil {
+		return ""
+	}
+	return v
+}
+
+func (e *Engine) setPullCursorStr(ctx context.Context, table, key string) {
+	e.db.Pool.Exec(ctx, `
+		INSERT INTO settings (key, value) VALUES ($1, $2)
+		ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+	`, "pull_cursor:"+table, key)
 }
 
 func (e *Engine) postJSON(ctx context.Context, url string, payload any) (*http.Response, error) {

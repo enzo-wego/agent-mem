@@ -2,7 +2,9 @@ package sync
 
 import (
 	"context"
+	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -12,6 +14,16 @@ import (
 	"github.com/agent-mem/agent-mem/internal/database"
 )
 
+// databaseName extracts the database name from a postgres DSN. A DSN that does
+// not parse returns "", which fails the test-database guard closed.
+func databaseName(dsn string) string {
+	config, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		return ""
+	}
+	return config.ConnConfig.Database
+}
+
 // openTestPool connects to the DATABASE_URL Postgres instance.
 // Skips if DATABASE_URL is not set.
 func openTestPool(t *testing.T) *pgxpool.Pool {
@@ -19,6 +31,14 @@ func openTestPool(t *testing.T) *pgxpool.Pool {
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {
 		t.Skip("DATABASE_URL not set; skipping integration test")
+	}
+	// This helper DELETEs every row in the graph tables. On 2026-07-14 an
+	// integration test run against the live dev database hard-deleted the graph
+	// and synced the damage to prod. Refuse anything whose database name does
+	// not say "test" — use agentmem_test, not agentmem. See agent-mem-z14.
+	if !strings.Contains(databaseName(dsn), "test") {
+		t.Fatalf("refusing to run: DATABASE_URL database name %q does not contain \"test\"; "+
+			"these tests delete all rows in the graph tables", databaseName(dsn))
 	}
 	ctx := context.Background()
 	pool, err := pgxpool.New(ctx, dsn)
@@ -122,7 +142,7 @@ func TestGraphSync_PushPull(t *testing.T) {
 	}
 
 	// Verify: machine B (excludeSource=machineB) can pull the row authored by machine A.
-	pulled, err := dbB.GetGraphNodesForPull(ctx, machineB, 0, 100)
+	pulled, err := dbB.GetGraphNodesForPull(ctx, machineB, "", 100)
 	if err != nil {
 		t.Fatalf("GetGraphNodesForPull: %v", err)
 	}
@@ -177,7 +197,7 @@ func TestGraphSync_ArtifactIndexEmbedding(t *testing.T) {
 		t.Fatalf("insert artifact_index: %v", err)
 	}
 
-	pulled, err := dbA.GetGraphArtifactIndexForPull(ctx, "local-test", 0, 10)
+	pulled, err := dbA.GetGraphArtifactIndexForPull(ctx, "local-test", "", 10)
 	if err != nil {
 		t.Fatalf("GetGraphArtifactIndexForPull: %v", err)
 	}
@@ -203,5 +223,142 @@ func TestGraphSync_ArtifactIndexEmbedding(t *testing.T) {
 	}
 	if n != 1 {
 		t.Fatalf("imported row has NULL embedding")
+	}
+}
+
+// TestGraphSync_PaginationUnderConcurrentInsert is the regression that pins the
+// data-loss bug. It pages graph.nodes with a small limit and, between pages,
+// re-sorts an already-returned row (a body refresh bumps updated_at) and inserts
+// a brand-new row — exactly the concurrent activity the cloud produces. Keyset
+// pagination on the immutable id delivers every pre-existing row exactly once.
+// The old OFFSET-over-`ORDER BY updated_at` implementation skipped a row here
+// (verified against the pre-fix code).
+func TestGraphSync_PaginationUnderConcurrentInsert(t *testing.T) {
+	pool := openTestPool(t)
+	truncateGraphSyncTables(t, pool)
+	ctx := context.Background()
+	db := database.NewDB(pool)
+
+	const cloud = "cloud-test"
+	const local = "local-test"
+	base := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	insert := func(id string, updated time.Time) {
+		if _, err := pool.Exec(ctx, `
+			INSERT INTO graph.nodes
+				(id, type, natural_key, body, body_revision, body_ts, updated_at, machine_id)
+			VALUES ($1, 'jira', $1, 'b', 1, $2, $2, $3)`, id, updated, cloud); err != nil {
+			t.Fatalf("insert %s: %v", id, err)
+		}
+	}
+	for i := 1; i <= 5; i++ {
+		insert(fmt.Sprintf("test:node:%02d", i), base.Add(time.Duration(i)*time.Second))
+	}
+
+	seen := map[string]int{}
+	cursor := ""
+	for iter := 0; ; iter++ {
+		if iter > 50 {
+			t.Fatalf("pagination did not terminate")
+		}
+		batch, err := db.GetGraphNodesForPull(ctx, local, cursor, 2)
+		if err != nil {
+			t.Fatalf("pull: %v", err)
+		}
+		if len(batch) == 0 {
+			break
+		}
+		for _, n := range batch {
+			seen[n.ID]++
+		}
+		cursor = batch[len(batch)-1].ID
+		if iter == 0 {
+			// Concurrent activity: node 01's body is refreshed (updated_at moves to
+			// the tail) and a new node arrives. This re-sort is what made the old
+			// offset+updated_at walk skip an unread row.
+			if _, err := pool.Exec(ctx, `UPDATE graph.nodes SET updated_at = $1 WHERE id = 'test:node:01'`, base.Add(100*time.Second)); err != nil {
+				t.Fatalf("bump: %v", err)
+			}
+			insert("test:node:09", base.Add(200*time.Second))
+		}
+	}
+
+	for i := 1; i <= 5; i++ {
+		id := fmt.Sprintf("test:node:%02d", i)
+		if seen[id] != 1 {
+			t.Errorf("pre-existing row %s delivered %d times, want exactly 1", id, seen[id])
+		}
+	}
+	if seen["test:node:09"] != 1 {
+		t.Errorf("concurrently-inserted row test:node:09 delivered %d times, want exactly 1", seen["test:node:09"])
+	}
+}
+
+// TestGraphSync_ImportAbsorbsNaturalKeyCollision verifies the bare
+// ON CONFLICT DO NOTHING absorbs a collision on the row's natural key (nodes.id)
+// even when the incoming row carries a different sync_id — the routine
+// cross-machine case where both sides derive the same id.
+func TestGraphSync_ImportAbsorbsNaturalKeyCollision(t *testing.T) {
+	pool := openTestPool(t)
+	truncateGraphSyncTables(t, pool)
+	ctx := context.Background()
+	db := database.NewDB(pool)
+
+	base := time.Now().UTC().Truncate(time.Second)
+	mk := func(syncID string) *database.SyncableGraphNode {
+		return &database.SyncableGraphNode{
+			ID:          "jira:COLLIDE-1",
+			Type:        "jira",
+			NaturalKey:  "COLLIDE-1",
+			Metadata:    []byte("{}"),
+			FirstSeenAt: base,
+			UpdatedAt:   base,
+			SyncID:      syncID,
+			MachineID:   "cloud-test",
+		}
+	}
+	if err := db.ImportGraphNode(ctx, mk("11111111-1111-1111-1111-111111111111")); err != nil {
+		t.Fatalf("first import: %v", err)
+	}
+	// Same natural id, different sync_id — must be absorbed, not error.
+	if err := db.ImportGraphNode(ctx, mk("22222222-2222-2222-2222-222222222222")); err != nil {
+		t.Fatalf("collision import should be absorbed, got: %v", err)
+	}
+	var n int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM graph.nodes WHERE id = 'jira:COLLIDE-1'`).Scan(&n); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("want exactly 1 row for id after collision, got %d", n)
+	}
+}
+
+// TestGraphSync_EmptyCursorReturnsLowest confirms a "" cursor means "from the
+// beginning": id > '' matches every non-empty TEXT id, so the lowest-keyed row
+// is returned first.
+func TestGraphSync_EmptyCursorReturnsLowest(t *testing.T) {
+	pool := openTestPool(t)
+	truncateGraphSyncTables(t, pool)
+	ctx := context.Background()
+	db := database.NewDB(pool)
+
+	for _, id := range []string{"test:node:b", "test:node:a", "test:node:c"} {
+		if _, err := pool.Exec(ctx, `
+			INSERT INTO graph.nodes
+				(id, type, natural_key, body, body_revision, body_ts, updated_at, machine_id)
+			VALUES ($1, 'jira', $1, 'b', 1, NOW(), NOW(), 'cloud-test')`, id); err != nil {
+			t.Fatalf("insert %s: %v", id, err)
+		}
+	}
+
+	pulled, err := db.GetGraphNodesForPull(ctx, "local-test", "", 10)
+	if err != nil {
+		t.Fatalf("pull: %v", err)
+	}
+	if len(pulled) != 3 {
+		t.Fatalf("want 3 rows, got %d", len(pulled))
+	}
+	if pulled[0].ID != "test:node:a" {
+		t.Errorf("empty cursor should return the lowest-keyed row first, got %q", pulled[0].ID)
 	}
 }
