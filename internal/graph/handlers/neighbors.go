@@ -337,6 +337,112 @@ WHERE source_node_id=$1 AND target_node_id=$2`, from, to).Scan(&same, &why, &tag
 	if len(needJudge) > 0 && strings.HasPrefix(id, "slack:C") {
 		enqueueLinkTopicsWithCandidates(ctx, h.db, id, needJudge)
 	}
+
+	// Attachment leaves ride in on their parent's hop. A file a thread posted
+	// lives at hop-2 in the raw BFS (the thread is hop-1, the file hangs off it
+	// via REFERENCES), so at the default depth=1 neither the /live timeline nor
+	// MCP graph_neighbors ever saw a thread's files. After the BFS settles, pull
+	// every REFERENCES-linked slack_file / jira_attachment of the opened root and
+	// each surfaced node in as a leaf — without walking THROUGH it
+	// (expandableThrough keeps files as dead ends; this pass only pulls them IN).
+	// Skipped for kind-filtered queries: an explicit edge-kind query stays literal.
+	if len(kindFilter) == 0 {
+		// Parents = the opened root plus every surfaced node. Each carries a hop
+		// (leaf hop = parent hop + 1) and a display title the leaf reports as its
+		// Via, so the UI can say which thread the file came from.
+		type parentMeta struct {
+			hop   int
+			title string
+		}
+		parents := make(map[string]parentMeta, len(out)+1)
+		var rootTitle, rootBody string
+		if err := h.db.QueryRow(ctx,
+			`SELECT COALESCE(title,''), LEFT(COALESCE(body,''),200) FROM graph.nodes WHERE id=$1`,
+			id).Scan(&rootTitle, &rootBody); err == nil {
+			if strings.TrimSpace(rootTitle) == "" {
+				rootTitle = firstLine(rootBody, 80)
+			}
+		}
+		parents[id] = parentMeta{hop: 0, title: rootTitle}
+		parentIDs := []string{id}
+		for _, it := range out {
+			if _, ok := parents[it.Node.NodeID]; ok {
+				continue
+			}
+			parents[it.Node.NodeID] = parentMeta{hop: it.Hop, title: it.Node.Title}
+			parentIDs = append(parentIDs, it.Node.NodeID)
+		}
+
+		rows, ferr := h.db.Query(ctx, `
+SELECT e.parent, f.id, f.type, COALESCE(f.url,''), COALESCE(f.title,''),
+       LEFT(COALESCE(f.body,''),200), f.scope
+FROM (
+  SELECT from_node_id AS parent, to_node_id AS child FROM graph.edges
+    WHERE kind = 'REFERENCES' AND from_node_id = ANY($1)
+  UNION
+  SELECT to_node_id AS parent, from_node_id AS child FROM graph.edges
+    WHERE kind = 'REFERENCES' AND to_node_id = ANY($1)
+) e
+JOIN graph.nodes f ON f.id = e.child
+WHERE f.type IN ('slack_file','jira_attachment')
+ORDER BY f.id`, parentIDs)
+		if ferr == nil {
+			type fileRow struct {
+				parent, id, typ, url, title, body string
+				scope                             *string
+			}
+			var files []fileRow
+			for rows.Next() {
+				var fr fileRow
+				if err := rows.Scan(&fr.parent, &fr.id, &fr.typ, &fr.url, &fr.title, &fr.body, &fr.scope); err != nil {
+					break
+				}
+				files = append(files, fr)
+			}
+			rows.Close()
+			// ponytail: cap 20 file rows per request so a thread with a photo dump
+			// can't flood the payload; count emitted (post-dedup, post-ACL) rows.
+			const maxFileLeaves = 20
+			added := 0
+			for _, fr := range files {
+				if added >= maxFileLeaves {
+					break
+				}
+				if seen[fr.id] {
+					continue
+				}
+				// Never attach a leaf whose parent was filtered out, and run the
+				// same scope check on the file itself.
+				pm, ok := parents[fr.parent]
+				if !ok {
+					continue
+				}
+				if !scopeVisible(fr.scope, scopeSet, noFilter) {
+					continue
+				}
+				title := fr.title
+				if strings.TrimSpace(title) == "" {
+					title = firstLine(fr.body, 120)
+				}
+				// Drop un-enriched stubs (no title, no url): an unopenable id row.
+				// Empty-url file nodes are a separate issue (non-goal).
+				if strings.TrimSpace(title) == "" && fr.url == "" {
+					continue
+				}
+				seen[fr.id] = true
+				var item neighborItem
+				item.Hop = pm.hop + 1
+				item.Edge.Kind = "REFERENCES"
+				item.Node.NodeID = fr.id
+				item.Node.Type = fr.typ
+				item.Node.URL = fr.url
+				item.Node.Title = title
+				item.Node.Via = firstLine(pm.title, 80)
+				out = append(out, item)
+				added++
+			}
+		}
+	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{"neighbors": out})
 }

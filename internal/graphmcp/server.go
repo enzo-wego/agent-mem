@@ -87,7 +87,7 @@ func NewServer(client GraphClient, version string) *mcp.Server {
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "graph_neighbors",
-		Description: "Traverse related graph artifacts from a canonical node ID, optionally filtering edge kinds.",
+		Description: "Traverse related graph artifacts from a canonical node ID, optionally filtering edge kinds. Attached files and Jira attachments are always included as leaves, regardless of depth.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input NeighborsInput) (*mcp.CallToolResult, map[string]any, error) {
 		input.ID = strings.TrimSpace(input.ID)
 		if input.ID == "" {

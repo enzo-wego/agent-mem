@@ -18,8 +18,10 @@ const TYPE_COLOR: Record<string, string> = {
 }
 
 // Types worth labelling on the canvas (anchors). Slack messages stay as dots to
-// avoid a 50-label hairball; their text shows on hover.
-const LABELLED = new Set(['jira', 'gh_pr', 'cf', 'cf_page', 'gws_doc', 'gws', 'feature'])
+// avoid a 50-label hairball; their text shows on hover. Files/attachments are
+// labelled and sized like a feature anchor so they are a real click target, not
+// a 3px dot lost in the hairball.
+const LABELLED = new Set(['jira', 'gh_pr', 'cf', 'cf_page', 'gws_doc', 'gws', 'feature', 'slack_file', 'jira_attachment'])
 
 // Friendly legend label per type (groups variants under one entry).
 const LEGEND: { color: string; label: string; match: string[] }[] = [
@@ -92,7 +94,7 @@ export default function ClusterGraph({
           else onDrill(n.id, n.name)
         }}
         nodePointerAreaPaint={(n: any, color: string, ctx: any) => {
-          const r = n.root ? 7 : n.type === 'feature' ? 6 : 4
+          const r = n.root ? 7 : n.type === 'feature' || n.type === 'slack_file' || n.type === 'jira_attachment' ? 6 : 4
           ctx.fillStyle = color
           ctx.beginPath()
           ctx.arc(n.x, n.y, r + 2, 0, 2 * Math.PI)
@@ -100,7 +102,7 @@ export default function ClusterGraph({
         }}
         nodeCanvasObject={(n: any, ctx: any, globalScale: number) => {
           const color = TYPE_COLOR[n.type] ?? '#888888'
-          const r = n.root ? 6 : n.type === 'feature' ? 5 : 3
+          const r = n.root ? 6 : n.type === 'feature' || n.type === 'slack_file' || n.type === 'jira_attachment' ? 5 : 3
           ctx.beginPath()
           ctx.arc(n.x, n.y, r, 0, 2 * Math.PI)
           ctx.fillStyle = color
