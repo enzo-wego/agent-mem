@@ -96,15 +96,47 @@ export function SyncPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {syncInfo.stats.map((s) => (
-                    <tr key={s.table} className="border-b border-gray-100 dark:border-gray-700/50">
-                      <td className="py-2">{s.table}</td>
-                      <td className="text-right py-2">{s.total.toLocaleString()}</td>
-                      {!isCloud && (
-                        <td className="text-right py-2">{s.unsynced}</td>
-                      )}
-                    </tr>
-                  ))}
+                  {/* Group rows by the `graph.` name prefix — Flat Memory vs
+                      Graph Memory. The prefix is the grouping key; no `kind`
+                      field is added to SyncStats / api.ts. Backend order is
+                      preserved within each group. */}
+                  {(() => {
+                    const colSpan = isCloud ? 2 : 3
+                    const flat = syncInfo.stats.filter((s) => !s.table.startsWith('graph.'))
+                    const graph = syncInfo.stats.filter((s) => s.table.startsWith('graph.'))
+                    const renderRow = (s: SyncInfo['stats'][number]) => (
+                      <tr key={s.table} className="border-b border-gray-100 dark:border-gray-700/50">
+                        <td className="py-2 pl-4">{s.table}</td>
+                        <td className="text-right py-2">{s.total.toLocaleString()}</td>
+                        {!isCloud && (
+                          <td className="text-right py-2">{s.unsynced}</td>
+                        )}
+                      </tr>
+                    )
+                    const heading = (label: string) => (
+                      <tr className="border-b border-gray-200 dark:border-gray-700">
+                        <td colSpan={colSpan} className="py-2 font-semibold text-gray-600 dark:text-gray-300">
+                          {label}
+                        </td>
+                      </tr>
+                    )
+                    return (
+                      <>
+                        {flat.length > 0 && (
+                          <>
+                            {heading('Flat Memory')}
+                            {flat.map(renderRow)}
+                          </>
+                        )}
+                        {graph.length > 0 && (
+                          <>
+                            {heading('Graph Memory')}
+                            {graph.map(renderRow)}
+                          </>
+                        )}
+                      </>
+                    )
+                  })()}
                 </tbody>
               </table>
             )}

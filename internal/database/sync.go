@@ -406,7 +406,13 @@ type SyncStats struct {
 
 // GetSyncStats returns sync statistics for all tables.
 func (db *DB) GetSyncStats(ctx context.Context) ([]SyncStats, error) {
-	tables := []string{"observations", "session_summaries", "user_prompts", "sdk_sessions"}
+	tables := []string{
+		"observations", "session_summaries", "user_prompts", "sdk_sessions",
+		"graph.people", "graph.nodes", "graph.edges",
+		"graph.artifact_index", "graph.artifact_bodies",
+		"graph.slack_groups", "graph.entities", "graph.jobs",
+		"graph.user_affinity_config",
+	}
 	var stats []SyncStats
 	for _, t := range tables {
 		var total, unsynced int
