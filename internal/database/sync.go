@@ -410,8 +410,11 @@ func (db *DB) GetSyncStats(ctx context.Context) ([]SyncStats, error) {
 		"observations", "session_summaries", "user_prompts", "sdk_sessions",
 		"graph.people", "graph.nodes", "graph.edges",
 		"graph.artifact_index", "graph.artifact_bodies",
-		"graph.slack_groups", "graph.entities", "graph.jobs",
+		"graph.slack_groups", "graph.entities",
 		"graph.user_affinity_config",
+		// graph.jobs is deliberately absent: it is a per-machine work queue, not
+		// shared memory, so local and cloud are expected to differ. It was also the
+		// largest table on the page, making its COUNT(*) the slowest cell.
 	}
 	var stats []SyncStats
 	for _, t := range tables {
