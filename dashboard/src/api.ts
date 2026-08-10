@@ -584,6 +584,7 @@ export interface TopicSubscription {
   sources?: TopicSource[];
   scope_summary?: string;
   scope_status?: string;
+  scope_definition?: string;
 }
 
 export async function listSubscriptions(): Promise<TopicSubscription[]> {
@@ -598,6 +599,7 @@ export async function createSubscription(body: {
   max_author_depth?: number;
   subscriber_slack_id?: string;
   sources?: TopicSource[];
+  scope_definition?: string;
 }): Promise<TopicSubscription> {
   const res = await authFetch(`${BASE}/api/graph/subscriptions`, {
     method: 'POST',
@@ -628,7 +630,12 @@ export async function refreshSubscription(id: number): Promise<void> {
 // refreshSubscription(id) to re-read + re-distill the scope.
 export async function updateSubscription(
   id: number,
-  body: { sources: TopicSource[] },
+  body: {
+    sources?: TopicSource[];
+    min_participants?: number;
+    scope_definition?: string;
+    active?: boolean;
+  },
 ): Promise<void> {
   const res = await authFetch(`${BASE}/api/graph/subscriptions/${id}`, {
     method: 'PATCH',

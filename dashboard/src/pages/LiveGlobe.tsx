@@ -1016,6 +1016,12 @@ export function LiveGlobePage() {
   const [subError, setSubError] = useState('')
   const [editingSub, setEditingSub] = useState<number | null>(null) // card whose sources are being edited
   const [editSources, setEditSources] = useState<TopicSource[]>([])
+  const [subMinP, setSubMinP] = useState('') // create: min participants (blank = server default)
+  const [subScopeDef, setSubScopeDef] = useState('') // create: optional judge scope guidance
+  const [editingScope, setEditingScope] = useState<number | null>(null) // card whose gate/scope is being edited
+  const [scopeMinP, setScopeMinP] = useState('')
+  const [scopeDef, setScopeDef] = useState('')
+  const [scopeActive, setScopeActive] = useState(true)
 
   function refreshSubs() {
     listSubscriptions()
@@ -1167,20 +1173,54 @@ export function LiveGlobePage() {
       .finally(() => setSubBusy(false))
   }
 
+  // ── Edit an existing subscription's gate + judge scope (min_participants,
+  // scope_definition, active). Separate from source editing: this saves via the
+  // update endpoint WITHOUT re-distilling, so a hand-tuned scope_definition is
+  // not clobbered by the sources refresh.
+  function startScopeEdit(s: TopicSubscription) {
+    setEditingScope(s.id)
+    setEditingSub(null)
+    setScopeMinP(String(s.min_participants))
+    setScopeDef(s.scope_definition ?? '')
+    setScopeActive(s.active)
+    setSubError('')
+  }
+  function saveScopeEdit(id: number) {
+    const mp = parseInt(scopeMinP, 10)
+    setSubBusy(true)
+    setSubError('')
+    updateSubscription(id, {
+      min_participants: Number.isFinite(mp) ? mp : undefined,
+      scope_definition: scopeDef,
+      active: scopeActive,
+    })
+      .then(() => {
+        setEditingScope(null)
+        refreshSubs()
+      })
+      .catch((e: unknown) => setSubError(e instanceof Error ? e.message : 'update failed'))
+      .finally(() => setSubBusy(false))
+  }
+
   function addSub() {
     const topic = subTopic.trim()
     if (!topic) return
     setSubBusy(true)
     setSubError('')
     const sources = buildSources()
+    const mp = parseInt(subMinP, 10)
     createSubscription({
       topic,
       channel_filter: subChannel.trim() ? [subChannel.trim()] : undefined,
+      min_participants: subMinP.trim() && Number.isFinite(mp) ? mp : undefined,
+      scope_definition: subScopeDef.trim() || undefined,
       sources: sources.length ? sources : undefined,
     })
       .then((created) => {
         setSubTopic('')
         setSubChannel('')
+        setSubMinP('')
+        setSubScopeDef('')
         setSubSources([])
         // If sources were given, kick off the read/analyze so the scope summary fills in.
         if (sources.length && created?.id) {
@@ -3281,6 +3321,26 @@ export function LiveGlobePage() {
                   outline: 'none',
                 }}
               />
+              <input
+                type="number"
+                min={1}
+                value={subMinP}
+                onChange={(e) => setSubMinP(e.target.value)}
+                placeholder="min ppl (2)"
+                title="Minimum distinct participants to trigger. 1 = alert on the first message (requires a channel id)."
+                style={{
+                  flex: 1,
+                  minWidth: 90,
+                  background: C.panel,
+                  border: `1px solid ${C.border}`,
+                  color: C.text,
+                  fontFamily: MONO,
+                  fontSize: 11,
+                  padding: '6px 8px',
+                  borderRadius: 2,
+                  outline: 'none',
+                }}
+              />
               {/* Dynamic knowledge sources: type dropdown + URL + add/remove */}
               <div style={{ flex: '1 1 100%', display: 'flex', flexDirection: 'column', gap: 6 }}>
                 <SourceRows
@@ -3290,6 +3350,24 @@ export function LiveGlobePage() {
                   onAdd={addSourceRow}
                 />
               </div>
+              <textarea
+                value={subScopeDef}
+                onChange={(e) => setSubScopeDef(e.target.value)}
+                placeholder="scope definition (optional): what counts as on-topic for the judge"
+                rows={2}
+                style={{
+                  flex: '1 1 100%',
+                  background: C.panel,
+                  border: `1px solid ${C.border}`,
+                  color: C.text,
+                  fontFamily: MONO,
+                  fontSize: 11,
+                  padding: '6px 8px',
+                  borderRadius: 2,
+                  outline: 'none',
+                  resize: 'vertical',
+                }}
+              />
               <button type="submit" disabled={subBusy || !subTopic.trim()} style={segBtn(true)}>
                 {subBusy ? '…' : 'SUBSCRIBE'}
               </button>
@@ -3380,6 +3458,22 @@ export function LiveGlobePage() {
                         }}
                       >
                         {editingSub === s.id ? 'close' : '✎ sources'}
+                      </button>
+                      <button
+                        onClick={() => (editingScope === s.id ? setEditingScope(null) : startScopeEdit(s))}
+                        title="Edit alert gate + judge scope (min participants, scope definition, active)"
+                        style={{
+                          background: 'transparent',
+                          border: `1px solid ${editingScope === s.id ? C.green : C.border}`,
+                          color: editingScope === s.id ? C.green : C.dim,
+                          cursor: 'pointer',
+                          fontFamily: MONO,
+                          fontSize: 10,
+                          borderRadius: 2,
+                          padding: '2px 8px',
+                        }}
+                      >
+                        {editingScope === s.id ? 'close' : '⚙ scope'}
                       </button>
                       <button
                         onClick={() => removeSub(s.id)}
@@ -3473,6 +3567,72 @@ export function LiveGlobePage() {
                           style={segBtn(true)}
                         >
                           {subBusy ? '…' : 'SAVE + ANALYZE'}
+                        </button>
+                      </div>
+                    )}
+                    {editingScope === s.id && (
+                      <div
+                        style={{
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: 6,
+                          paddingTop: 8,
+                          borderTop: `1px solid ${C.border}`,
+                        }}
+                      >
+                        <label style={{ color: C.dim, fontSize: 10, display: 'flex', alignItems: 'center', gap: 6 }}>
+                          min participants
+                          <input
+                            type="number"
+                            min={1}
+                            value={scopeMinP}
+                            onChange={(e) => setScopeMinP(e.target.value)}
+                            style={{
+                              width: 70,
+                              background: C.panel,
+                              border: `1px solid ${C.border}`,
+                              color: C.text,
+                              fontFamily: MONO,
+                              fontSize: 11,
+                              padding: '4px 6px',
+                              borderRadius: 2,
+                              outline: 'none',
+                            }}
+                          />
+                        </label>
+                        <textarea
+                          value={scopeDef}
+                          onChange={(e) => setScopeDef(e.target.value)}
+                          placeholder="scope definition: what counts as on-topic for the judge"
+                          rows={3}
+                          style={{
+                            background: C.panel,
+                            border: `1px solid ${C.border}`,
+                            color: C.text,
+                            fontFamily: MONO,
+                            fontSize: 11,
+                            padding: '6px 8px',
+                            borderRadius: 2,
+                            outline: 'none',
+                            resize: 'vertical',
+                          }}
+                        />
+                        <label style={{ color: C.dim, fontSize: 10, display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <input
+                            type="checkbox"
+                            checked={scopeActive}
+                            onChange={(e) => setScopeActive(e.target.checked)}
+                          />
+                          active
+                        </label>
+                        {subError && <div style={{ color: C.red, fontSize: 10 }}>{subError}</div>}
+                        <button
+                          type="button"
+                          onClick={() => saveScopeEdit(s.id)}
+                          disabled={subBusy}
+                          style={segBtn(true)}
+                        >
+                          {subBusy ? '…' : 'SAVE'}
                         </button>
                       </div>
                     )}

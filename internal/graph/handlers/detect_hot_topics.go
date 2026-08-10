@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/zerolog"
 
@@ -38,8 +40,8 @@ type subscription struct {
 	Active          bool          `json:"active"`
 	CreatedAt       time.Time     `json:"created_at"`
 	Sources         []topicSource `json:"sources"`
-	ScopeDefinition string        `json:"-"`             // judge guidance; not exposed
-	ScopeSummary    string        `json:"scope_summary"` // human-readable, shown in UI
+	ScopeDefinition string        `json:"scope_definition"` // judge guidance; GUI-editable
+	ScopeSummary    string        `json:"scope_summary"`    // human-readable, shown in UI
 	ScopeStatus     string        `json:"scope_status"`
 }
 
@@ -179,6 +181,7 @@ WITH recent AS (
          COALESCE(NULLIF(n.metadata->>'thread_ts',''), '') AS thread_ts,
          n.author_person_id,
          COALESCE(NULLIF(n.title,''), n.body, '') AS text,
+         COALESCE(a.att, '') AS att,
          COALESCE(to_timestamp(NULLIF(n.metadata->>'ts','')::float8), n.first_seen_at) AS ts,
          COALESCE(p.depth_from_root, 99) AS depth,
          COALESCE(p.display_name, '') AS author,
@@ -186,6 +189,27 @@ WITH recent AS (
          COALESCE(p.is_bot, false) AS is_bot
   FROM graph.nodes n
   LEFT JOIN graph.people p ON p.id = n.author_person_id
+  -- Attachment text (Gemini description + OCR) referenced by this message, so a
+  -- screenshot-only bug report is judgeable on its content. describe_attachment
+  -- writes that into artifact_bodies.body_full (= description + "\n\nOCR:\n" +
+  -- ocr); the description/ocr_text columns are populated only on rows synced
+  -- from another machine, so read all three. Capped at 500 chars per attachment
+  -- so a full-page form OCR can't evict real message text from LEFT(blob,2000)
+  -- below. Scoped to attachment node types so referenced URLs/tickets don't leak
+  -- their fetched bodies into the judge blob. The LATERAL aggregates → exactly
+  -- one row, so it never fans out (msg_count/participants unaffected).
+  LEFT JOIN LATERAL (
+    SELECT string_agg(
+             left(trim(
+               COALESCE(NULLIF(ab.description,''),'') || ' ' ||
+               COALESCE(NULLIF(ab.ocr_text,''),'')    || ' ' ||
+               COALESCE(ab.body_full,'')
+             ), 500), ' ') AS att
+    FROM graph.edges e
+    JOIN graph.artifact_bodies ab ON ab.node_id = e.to_node_id
+    WHERE e.from_node_id = n.id AND e.kind = 'REFERENCES'
+      AND (e.to_node_id LIKE 'slack_file:%' OR e.to_node_id LIKE 'jira_attachment:%')
+  ) a ON true
   WHERE n.type IN ('slack','slack_thread')
     AND n.deleted_at IS NULL
     AND n.scope LIKE 'slack:%'
@@ -201,7 +225,7 @@ grp AS (
          (array_agg(author ORDER BY depth ASC, ts ASC))[1] AS top_author,
          (array_agg(text   ORDER BY ts ASC))[1]            AS first_text,
          max(ts)                                           AS last_ts,
-         string_agg(text, ' ')                             AS blob,
+         string_agg(text || COALESCE(' ' || NULLIF(att,''), ''), ' ') AS blob,
          bool_or(COALESCE(is_important,false))             AS has_important,
          (array_agg(author) FILTER (WHERE is_important))[1] AS important_author
   FROM recent
@@ -428,6 +452,29 @@ ORDER BY COALESCE(to_timestamp(NULLIF(n.metadata->>'ts','')::float8), n.first_se
 		rows.Close()
 	}
 
+	// Attachments referenced by the thread (screenshots/docs whose OCR/description
+	// fed the judge). Named in one line so the reader knows the alert leaned on
+	// image content. One extra query — msgs above don't carry their attachments.
+	var attachments []string
+	if rows, err := deps.DB.Query(ctx, `
+SELECT DISTINCT COALESCE(NULLIF(f.title,''), NULLIF(f.body,''), f.natural_key)
+FROM graph.nodes m
+JOIN graph.edges e ON e.from_node_id = m.id AND e.kind = 'REFERENCES'
+  AND (e.to_node_id LIKE 'slack_file:%' OR e.to_node_id LIKE 'jira_attachment:%')
+JOIN graph.nodes f ON f.id = e.to_node_id
+JOIN graph.artifact_bodies ab ON ab.node_id = f.id
+WHERE m.scope = 'slack:' || $1 AND m.deleted_at IS NULL
+  AND ( m.id = $2 OR COALESCE(m.metadata->>'thread_ts','') = $3 )
+ORDER BY 1 LIMIT 5`, h.Channel, h.RootNodeID, threadTS); err == nil {
+		for rows.Next() {
+			var name string
+			if rows.Scan(&name) == nil && strings.TrimSpace(name) != "" {
+				attachments = append(attachments, firstLine(name, 80))
+			}
+		}
+		rows.Close()
+	}
+
 	// Deep summary: prefer the cached one; generate on the fly if it's not ready.
 	var overview string
 	var highlights []string
@@ -484,6 +531,9 @@ ORDER BY COALESCE(to_timestamp(NULLIF(n.metadata->>'ts','')::float8), n.first_se
 		for _, hl := range highlights {
 			fmt.Fprintf(&b, "• %s\n", hl)
 		}
+	}
+	for _, att := range attachments {
+		fmt.Fprintf(&b, "📎 _%s_\n", att)
 	}
 	if len(msgs) > 0 {
 		b.WriteString("\n💬 *Conversation*\n")
@@ -740,6 +790,7 @@ func (h *Subscriptions) create(w http.ResponseWriter, r *http.Request) {
 		MinParticipants *int          `json:"min_participants"`
 		MaxAuthorDepth  *int          `json:"max_author_depth"`
 		Sources         []topicSource `json:"sources"`
+		ScopeDefinition *string       `json:"scope_definition"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "bad json", http.StatusBadRequest)
@@ -770,19 +821,30 @@ func (h *Subscriptions) create(w http.ResponseWriter, r *http.Request) {
 	if filter == nil {
 		filter = []string{}
 	}
+	// A lone-message subscription (min_participants < 2) must be channel-scoped:
+	// min_participants=1 makes the volume gate true for every thread, collapsing
+	// detection onto a per-thread LLM judge call across the whole workspace.
+	if minP < 2 && len(filter) == 0 {
+		http.Error(w, "min_participants < 2 requires a non-empty channel_filter (an unscoped lone-message subscription would run the LLM judge on every thread in the workspace)", http.StatusBadRequest)
+		return
+	}
 	sources := req.Sources
 	if sources == nil {
 		sources = []topicSource{}
 	}
 	srcJSON, _ := json.Marshal(sources)
+	scopeDef := ""
+	if req.ScopeDefinition != nil {
+		scopeDef = strings.TrimSpace(*req.ScopeDefinition)
+	}
 	var s subscription
 	err := h.db.QueryRow(r.Context(), `
 		INSERT INTO graph.topic_subscriptions
-		  (subscriber_slack_id, topic, channel_filter, min_participants, max_author_depth, sources)
-		VALUES ($1,$2,$3,$4,$5,$6)
+		  (subscriber_slack_id, topic, channel_filter, min_participants, max_author_depth, sources, scope_definition)
+		VALUES ($1,$2,$3,$4,$5,$6,$7)
 		RETURNING id, subscriber_slack_id, topic, channel_filter,
 		          min_participants, max_author_depth, active, created_at, COALESCE(scope_status,'')`,
-		subscriber, req.Topic, filter, minP, maxD, srcJSON).
+		subscriber, req.Topic, filter, minP, maxD, srcJSON, scopeDef).
 		Scan(&s.ID, &s.SubscriberSlack, &s.Topic, &s.ChannelFilter,
 			&s.MinParticipants, &s.MaxAuthorDepth, &s.Active, &s.CreatedAt, &s.ScopeStatus)
 	if err != nil {
@@ -821,8 +883,10 @@ func (h *Subscriptions) refresh(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, map[string]string{"status": "refreshing"})
 }
 
-// update replaces a subscription's knowledge sources. The caller then triggers
-// refresh (POST …/refresh) to re-read + re-distill the scope from the new set.
+// update applies a partial change to a subscription: any of sources,
+// min_participants, scope_definition, or active present in the body is updated;
+// omitted fields are left untouched. A sources change is typically followed by
+// refresh (POST …/refresh) to re-read + re-distill the scope.
 func (h *Subscriptions) update(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
 	if err != nil {
@@ -830,18 +894,62 @@ func (h *Subscriptions) update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Sources []topicSource `json:"sources"`
+		Sources         *[]topicSource `json:"sources"`
+		MinParticipants *int           `json:"min_participants"`
+		ScopeDefinition *string        `json:"scope_definition"`
+		Active          *bool          `json:"active"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "bad json", http.StatusBadRequest)
 		return
 	}
-	if req.Sources == nil {
-		req.Sources = []topicSource{}
+
+	// Guard (mirrors create): lowering min_participants below 2 requires the sub
+	// to be channel-scoped. channel_filter isn't editable here, so check the
+	// stored value.
+	if req.MinParticipants != nil && *req.MinParticipants < 2 {
+		var filter []string
+		switch err := h.db.QueryRow(r.Context(),
+			`SELECT channel_filter FROM graph.topic_subscriptions WHERE id=$1`, id).Scan(&filter); {
+		case errors.Is(err, pgx.ErrNoRows):
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		case err != nil:
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if len(filter) == 0 {
+			http.Error(w, "min_participants < 2 requires a non-empty channel_filter (an unscoped lone-message subscription would run the LLM judge on every thread in the workspace)", http.StatusBadRequest)
+			return
+		}
 	}
-	srcJSON, _ := json.Marshal(req.Sources)
+
+	// Partial update: build SET from only the fields present in the body.
+	sets := make([]string, 0, 4)
+	args := []any{id}
+	if req.Sources != nil {
+		srcJSON, _ := json.Marshal(*req.Sources)
+		args = append(args, srcJSON)
+		sets = append(sets, fmt.Sprintf("sources=$%d", len(args)))
+	}
+	if req.MinParticipants != nil {
+		args = append(args, *req.MinParticipants)
+		sets = append(sets, fmt.Sprintf("min_participants=$%d", len(args)))
+	}
+	if req.ScopeDefinition != nil {
+		args = append(args, *req.ScopeDefinition)
+		sets = append(sets, fmt.Sprintf("scope_definition=$%d", len(args)))
+	}
+	if req.Active != nil {
+		args = append(args, *req.Active)
+		sets = append(sets, fmt.Sprintf("active=$%d", len(args)))
+	}
+	if len(sets) == 0 {
+		w.WriteHeader(http.StatusNoContent) // nothing to change
+		return
+	}
 	ct, err := h.db.Exec(r.Context(),
-		`UPDATE graph.topic_subscriptions SET sources=$2 WHERE id=$1`, id, srcJSON)
+		"UPDATE graph.topic_subscriptions SET "+strings.Join(sets, ", ")+" WHERE id=$1", args...)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
