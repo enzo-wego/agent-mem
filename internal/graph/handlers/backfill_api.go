@@ -76,3 +76,48 @@ func NewBackfillSlackHandler(deps Deps) http.Handler {
 		writeJSON(w, http.StatusAccepted, resp)
 	})
 }
+
+// backfillAttachmentsRequest is the request body for POST
+// /api/graph/backfill/attachments. Body is optional; an empty body uses the
+// default cap.
+type backfillAttachmentsRequest struct {
+	Limit int `json:"limit"`
+}
+
+// backfillAttachmentsResponse is the response body for POST
+// /api/graph/backfill/attachments.
+type backfillAttachmentsResponse struct {
+	Status   string `json:"status"`
+	Matched  int    `json:"matched"`
+	Enqueued int    `json:"enqueued"`
+	Limit    int    `json:"limit"`
+}
+
+// NewBackfillAttachmentsHandler returns an http.Handler for POST
+// /api/graph/backfill/attachments. It re-enqueues describe_attachment for the
+// poisoned attachment rows (agent-mem-16e): explicitly triggered, capped, and
+// deduped. Deliberately NOT wired into worker startup.
+func NewBackfillAttachmentsHandler(deps Deps) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req backfillAttachmentsRequest
+		// Optional body: ignore decode errors (empty/absent body -> default cap).
+		_ = json.NewDecoder(r.Body).Decode(&req)
+
+		limit := req.Limit
+		if limit <= 0 {
+			limit = backfillFailedAttachmentsDefaultLimit
+		}
+		if limit > 500 {
+			writeError(w, http.StatusBadRequest, "limit must be between 1 and 500")
+			return
+		}
+
+		matched, enqueued := BackfillFailedAttachments(r.Context(), deps.DB, deps.Logger, limit)
+		writeJSON(w, http.StatusAccepted, backfillAttachmentsResponse{
+			Status:   "ok",
+			Matched:  matched,
+			Enqueued: enqueued,
+			Limit:    limit,
+		})
+	})
+}
