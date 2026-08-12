@@ -100,7 +100,12 @@ func NewDetectHotTopics(deps Deps) jobs.Handler {
 			// Resolve the subscriber's "important people" (their reporting line +
 			// within ~2 hops), so a message from one of them lowers the bar.
 			important := ownerImportantEeids(ctx, deps.DB, s.SubscriberSlack)
-			hot, err := findHotThreads(ctx, deps.DB, s, important)
+			// Whose threads to stay out of: the person this sub DMs.
+			subscriber := s.SubscriberSlack
+			if subscriber == "" {
+				subscriber = deps.SlackDMUserID
+			}
+			hot, err := findHotThreads(ctx, deps.DB, s, important, subscriber)
 			if err != nil {
 				log.Warn().Err(err).Int64("sub", s.ID).Msg("detect_hot_topics: query failed")
 				continue
@@ -173,7 +178,13 @@ func NewDetectHotTopics(deps Deps) jobs.Handler {
 // Topic relevance is NOT applied here — it is decided semantically in the handler,
 // so a thread that never uses the topic word ("Juspay blocked pk" for "payments")
 // can still match.
-func findHotThreads(ctx context.Context, db *pgxpool.Pool, s subscription, important []int32) ([]hotThread, error) {
+//
+// Threads the subscriber has posted in are dropped: Slack already notifies you
+// about replies to your own threads, so a DM is pure echo. Pass "" to disable.
+// ponytail: the check is windowed like everything else here — it sees only the
+// messages inside detectLookback, so a thread you last spoke in >24h ago can
+// still alert. Widen to a per-root EXISTS over graph.nodes if that shows up.
+func findHotThreads(ctx context.Context, db *pgxpool.Pool, s subscription, important []int32, subscriber string) ([]hotThread, error) {
 	const q = `
 WITH recent AS (
   SELECT n.id,
@@ -186,6 +197,11 @@ WITH recent AS (
          COALESCE(p.depth_from_root, 99) AS depth,
          COALESCE(p.display_name, '') AS author,
          (p.eeid = ANY($4::int[])) AS is_important,
+         -- The subscriber authored this message. Duplicate identities merged into
+         -- them (a GitHub/Jira row carrying no slack_user_id) count too, else the
+         -- 60-odd messages attributed to those rows leave the thread unsuppressed.
+         ($5 <> '' AND (p.slack_user_id = $5
+                        OR p.merged_into IN (SELECT id FROM graph.people WHERE slack_user_id = $5))) AS is_subscriber,
          COALESCE(p.is_bot, false) AS is_bot
   FROM graph.nodes n
   LEFT JOIN graph.people p ON p.id = n.author_person_id
@@ -227,6 +243,7 @@ grp AS (
          max(ts)                                           AS last_ts,
          string_agg(text || COALESCE(' ' || NULLIF(att,''), ''), ' ') AS blob,
          bool_or(COALESCE(is_important,false))             AS has_important,
+         bool_or(COALESCE(is_subscriber,false))            AS has_subscriber,
          (array_agg(author) FILTER (WHERE is_important))[1] AS important_author
   FROM recent
   GROUP BY 1, 2
@@ -238,7 +255,8 @@ SELECT g.root_node_id, g.channel, COALESCE(c.name,''),
        COALESCE(g.has_important,false), COALESCE(g.important_author,'')
 FROM grp g
 LEFT JOIN graph.slack_channels c ON c.slack_channel_id = g.channel
-WHERE g.participants >= $3 OR g.has_important
+WHERE (g.participants >= $3 OR g.has_important)
+  AND NOT COALESCE(g.has_subscriber, false)
 ORDER BY g.last_ts DESC
 LIMIT 50`
 	filter := s.ChannelFilter
@@ -248,7 +266,7 @@ LIMIT 50`
 	if important == nil {
 		important = []int32{}
 	}
-	rows, err := db.Query(ctx, q, detectLookback, filter, s.MinParticipants, important)
+	rows, err := db.Query(ctx, q, detectLookback, filter, s.MinParticipants, important, subscriber)
 	if err != nil {
 		return nil, err
 	}

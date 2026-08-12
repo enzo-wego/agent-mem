@@ -57,7 +57,7 @@ func TestFindHotThreads(t *testing.T) {
 
 	// Volume-only gate: ≥ min_participants distinct people.
 	sub := subscription{Topic: "payments", MinParticipants: 4}
-	hot, err := findHotThreads(ctx, pool, sub, nil)
+	hot, err := findHotThreads(ctx, pool, sub, nil, "")
 	if err != nil {
 		t.Fatalf("findHotThreads: %v", err)
 	}
@@ -81,7 +81,7 @@ func TestFindHotThreads(t *testing.T) {
 	}
 
 	// With min_participants=2, a reporter+responder thread (C3) also fires.
-	hot2, _ := findHotThreads(ctx, pool, subscription{Topic: "payments", MinParticipants: 2}, nil)
+	hot2, _ := findHotThreads(ctx, pool, subscription{Topic: "payments", MinParticipants: 2}, nil, "")
 	got2 := map[string]bool{}
 	for _, h := range hot2 {
 		got2[h.Channel] = true
@@ -91,6 +91,81 @@ func TestFindHotThreads(t *testing.T) {
 	}
 	if got2["C1"] || got2["C4"] {
 		t.Errorf("single-message threads must never fire")
+	}
+}
+
+// TestFindHotThreadsSkipsSubscriberThreads verifies that a thread the subscriber
+// has posted in is dropped (Slack already notifies them), while the same thread
+// fires for a subscriber who is not in it.
+func TestFindHotThreadsSkipsSubscriberThreads(t *testing.T) {
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		t.Skip("DATABASE_URL not set; skipping integration test")
+	}
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatalf("pool: %v", err)
+	}
+	defer pool.Close()
+	for _, tbl := range []string{"graph.nodes", "graph.people"} {
+		if _, err := pool.Exec(ctx, "DELETE FROM "+tbl); err != nil {
+			t.Fatalf("clean %s: %v", tbl, err)
+		}
+	}
+
+	me := insPerson(t, pool, "Owner", 5)
+	if _, err := pool.Exec(ctx,
+		`UPDATE graph.people SET slack_user_id='UOWNER' WHERE id=$1`, me); err != nil {
+		t.Fatalf("set slack_user_id: %v", err)
+	}
+	other := insPerson(t, pool, "Colleague", 5)
+
+	now := time.Now()
+	// Thread the owner is in.
+	mine := ts(now, 10)
+	insSlack(t, pool, "C1", ts(now, 11), mine, me, "I am driving this release")
+	insSlack(t, pool, "C1", ts(now, 12), mine, other, "ack, go ahead")
+	// Thread where the owner speaks only under a merged duplicate identity (a
+	// GitHub/Jira person row with no slack_user_id, merged into the owner).
+	dup := insPerson(t, pool, "enzo-gh", 5)
+	if _, err := pool.Exec(ctx, `UPDATE graph.people SET merged_into=$1 WHERE id=$2`, me, dup); err != nil {
+		t.Fatalf("merge dup: %v", err)
+	}
+	merged := ts(now, 15)
+	insSlack(t, pool, "C3", ts(now, 16), merged, dup, "same human, other identity")
+	insSlack(t, pool, "C3", ts(now, 17), merged, other, "reply")
+	// Thread the owner is not in.
+	theirs := ts(now, 20)
+	insSlack(t, pool, "C2", ts(now, 21), theirs, other, "payments question")
+	insSlack(t, pool, "C2", ts(now, 22), theirs, insPerson(t, pool, "Third", 5), "reply")
+
+	sub := subscription{Topic: "payments", MinParticipants: 2}
+	hot, err := findHotThreads(ctx, pool, sub, nil, "UOWNER")
+	if err != nil {
+		t.Fatalf("findHotThreads: %v", err)
+	}
+	got := map[string]bool{}
+	for _, h := range hot {
+		got[h.Channel] = true
+	}
+	if got["C1"] {
+		t.Errorf("C1 has a message from the subscriber and must not fire")
+	}
+	if got["C3"] {
+		t.Errorf("C3 has a message from a merged identity of the subscriber and must not fire")
+	}
+	if !got["C2"] {
+		t.Errorf("C2 has no subscriber message and must still fire; got %v", got)
+	}
+
+	// Empty subscriber disables the filter entirely.
+	all, err := findHotThreads(ctx, pool, sub, nil, "")
+	if err != nil {
+		t.Fatalf("findHotThreads(no subscriber): %v", err)
+	}
+	if len(all) != 3 {
+		t.Errorf("with no subscriber all three threads should fire; got %d", len(all))
 	}
 }
 
@@ -219,7 +294,7 @@ func TestFindHotThreads_ImportantLoneMessage(t *testing.T) {
 	insSlack(t, pool, "CB", ts(now, 0), "", boss, "payments are down in PK")
 
 	// min_participants=4 (volume gate fails for a lone msg); important=[7] must surface it.
-	hot, err := findHotThreads(ctx, pool, subscription{Topic: "payments", MinParticipants: 4}, []int32{7})
+	hot, err := findHotThreads(ctx, pool, subscription{Topic: "payments", MinParticipants: 4}, []int32{7}, "")
 	if err != nil {
 		t.Fatalf("findHotThreads: %v", err)
 	}
@@ -236,7 +311,7 @@ func TestFindHotThreads_ImportantLoneMessage(t *testing.T) {
 		t.Errorf("HasImportant=%v ImportantAuthor=%q, want true/Boss", cb.HasImportant, cb.ImportantAuthor)
 	}
 	// Without the important set, the lone message must NOT surface.
-	hot0, _ := findHotThreads(ctx, pool, subscription{Topic: "payments", MinParticipants: 4}, nil)
+	hot0, _ := findHotThreads(ctx, pool, subscription{Topic: "payments", MinParticipants: 4}, nil, "")
 	for _, h := range hot0 {
 		if h.Channel == "CB" {
 			t.Errorf("lone message must not surface without importance")
@@ -396,7 +471,7 @@ func TestFindHotThreads_AttachmentBlob(t *testing.T) {
 
 	// min_participants=1 surfaces every thread. Topic is unused by findHotThreads
 	// (relevance is judged later in the handler).
-	hot, err := findHotThreads(ctx, pool, subscription{Topic: "", MinParticipants: 1}, nil)
+	hot, err := findHotThreads(ctx, pool, subscription{Topic: "", MinParticipants: 1}, nil, "")
 	if err != nil {
 		t.Fatalf("findHotThreads: %v", err)
 	}
