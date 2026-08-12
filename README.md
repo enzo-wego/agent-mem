@@ -443,14 +443,27 @@ Register it with any supported client:
 
 ```bash
 claude mcp add --scope user agent-mem-graph -- \
-  ssh enzo@enzogo.io.vn sudo docker exec -i agent-mem-worker-1 agent-mem mcp
+  ssh enzo@payments /opt/homebrew/bin/docker exec -i agent-mem-worker-1 agent-mem mcp
 
 codex mcp add agent-mem-graph -- \
-  ssh enzo@enzogo.io.vn sudo docker exec -i agent-mem-worker-1 agent-mem mcp
+  ssh enzo@payments /opt/homebrew/bin/docker exec -i agent-mem-worker-1 agent-mem mcp
 
 gemini mcp add --scope user agent-mem-graph \
-  ssh enzo@enzogo.io.vn sudo docker exec -i agent-mem-worker-1 agent-mem mcp
+  ssh enzo@payments /opt/homebrew/bin/docker exec -i agent-mem-worker-1 agent-mem mcp
 ```
+
+Two differences from the old VPS registration, both of which fail silently if
+missed:
+
+- **No `sudo`.** colima's docker socket is owned by the login user; `sudo
+  docker` on payments would look for a root-owned socket that does not exist.
+- **`/opt/homebrew/bin/docker`, spelled out.** A non-interactive `ssh
+  enzo@payments docker …` does not source the profile that puts Homebrew on
+  `PATH`, so a bare `docker` exits with `command not found` and the MCP server
+  dies at startup with no useful message.
+
+Running *on* payments itself, drop the `ssh` prefix and call `docker exec`
+directly.
 
 Verify with `claude mcp list`, `codex mcp list`, or `gemini mcp list`. Remove
 the registration with:

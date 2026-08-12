@@ -214,14 +214,43 @@ reads from it. Keep the VPS intact for at least a few days after cutover.
 Both of these are required for a machine expected to run a 24/7 worker, and
 neither is on by default:
 
-- **colima must autostart.** `brew services list` shows colima as `none`, so
-  after a reboot the VM — and every container — stays down. `brew services
-  start colima` installs a LaunchAgent, which runs at *login*; a Mac that
-  reboots to a login window will not start it. Enable automatic login, or
-  install a LaunchDaemon, if unattended reboots must recover.
-- **The Mac must not sleep.** `sudo pmset -a sleep 0 disksleep 0` (needs an
-  interactive sudo). `KeepingYouAwake.app` is installed and is a GUI
-  alternative.
+- **colima must autostart — and `brew services` is not enough here.**
+  `brew services list` shows colima as `none`, so after a reboot the VM and
+  every container stay down. The obvious fix, `brew services start colima`,
+  installs a *LaunchAgent*, and a LaunchAgent only runs once its user logs in.
+  On this machine that never happens for the right user:
+
+  | | |
+  |---|---|
+  | owns the colima VM (`/Users/enzo/.colima`) | `enzo` |
+  | GUI console user | `mysqto` |
+  | auto-login user | `payments` |
+
+  `enzo` gets no login session at boot, so the agent would never fire. Use a
+  **LaunchDaemon** instead — it runs at boot with no login, and `UserName`
+  pins it to `enzo`. The plist is staged at `/Users/enzo/io.colima.enzo.plist`:
+
+  ```bash
+  sudo cp /Users/enzo/io.colima.enzo.plist /Library/LaunchDaemons/
+  sudo chown root:wheel /Library/LaunchDaemons/io.colima.enzo.plist
+  sudo chmod 644        /Library/LaunchDaemons/io.colima.enzo.plist
+  sudo launchctl bootstrap system /Library/LaunchDaemons/io.colima.enzo.plist
+  ```
+
+  Both containers already carry `restart: unless-stopped`, so they return by
+  themselves once the VM is up. **This needs a real reboot to prove** — running
+  a VM from a LaunchDaemon is the one part of this migration not yet tested.
+
+- **The Mac must not sleep.** Current state is not durable: `sleep` is 0 only
+  because of a transient `caffeinate -i -w <pid>`, and `disksleep 10` /
+  `autorestart 0` are still set. Needs an interactive sudo:
+
+  ```bash
+  sudo pmset -a sleep 0 disksleep 0 autorestart 1 womp 1
+  ```
+
+  `autorestart 1` brings the machine back after a power cut; `womp 1` (already
+  set) wakes it on network access.
 
 Also worth doing once settled:
 
