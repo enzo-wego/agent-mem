@@ -33,6 +33,18 @@ SERVICE="${SERVICE:-postgres}"
 PGUSER="${PGUSER:-agentmem}"
 PGDATABASE="${PGDATABASE:-agentmem}"
 
+# pg_dump's default is zlib, applied per data block, which leaves a lot of
+# cross-block redundancy on the table — this data is mostly vectors rendered as
+# text, and repeats heavily between rows. Measured on a 200 MB slice of a real
+# archive: re-compressing zlib output with zstd still removed 40% (gzip managed
+# 7%), so zlib is leaving most of it on the floor. Over a 250 ms link that
+# difference is the difference between a 35 and a 20 minute cutover.
+#
+# pg_restore reads this natively, so nothing downstream needs a decompress step.
+# Requires a server built with zstd (PG16's pgvector image is); set
+# COMPRESS=zlib:6 for a target that is not.
+COMPRESS="${COMPRESS:-zstd:9}"
+
 # Used only to verify the finished archive, in a throwaway container. Keep in
 # step with the postgres image in docker-compose.yml.
 PG_IMAGE="${PG_IMAGE:-pgvector/pgvector:pg16}"
@@ -59,7 +71,7 @@ echo ">> dumping $PGDATABASE from service '$SERVICE' -> $out"
 # NOTE the trailing `-T`: without it compose allocates a TTY and mangles the
 # binary stream with CRLF translation, producing an archive pg_restore rejects.
 if ! $COMPOSE exec -T "$SERVICE" \
-      pg_dump -U "$PGUSER" -d "$PGDATABASE" -Fc --verbose > "$out" 2> "$log"; then
+      pg_dump -U "$PGUSER" -d "$PGDATABASE" -Fc --compress="$COMPRESS" --verbose > "$out" 2> "$log"; then
   echo "!! pg_dump failed; see $log" >&2
   tail -5 "$log" >&2 || true
   # A partial archive is worse than no archive: it looks restorable and is not.

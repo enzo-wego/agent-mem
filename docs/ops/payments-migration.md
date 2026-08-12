@@ -132,8 +132,28 @@ window and no part files to reassemble:
     /Users/enzo/backups/agent-mem/agentmem-<ts>.dump 8
 ```
 
-Measured: 8 streams ≈ 610 KB/s, ~4.5× a single stream. It verifies sha256 on
-both ends at the end, and is safe to re-run — ranges are simply rewritten.
+Measured on this pair: 1 stream ≈ 130 KB/s, 8 streams ≈ 760 KB/s, **16 streams
+≈ 1.4 MB/s**. Use 16. It verifies sha256 on both ends at the end, and is safe
+to re-run — ranges are simply rewritten.
+
+### Compress with zstd, not zlib
+
+`pg_dump -Fc` defaults to zlib applied per data block, which leaves most of the
+redundancy in place: this data is largely vectors rendered as text and repeats
+heavily between rows, and zlib never sees across block boundaries. Measured on
+a 200 MB slice of a real archive:
+
+| | size | vs raw |
+|---|---|---|
+| raw (zlib archive) | 209.7 MB | — |
+| re-compressed with `gzip -6` | 194.1 MB | −7% |
+| re-compressed with `zstd -3` | 125.6 MB | **−40%** |
+
+So `db-backup.sh` defaults to `--compress=zstd:9`. On the real database that
+turned a 1.5 GB archive into **892 MB — 41% smaller**, cutting the cutover
+transfer from ~35 min to ~17. `pg_restore` reads it natively, so there is no
+separate decompress step; PG16's pgvector image has zstd built in. Set
+`COMPRESS=zlib:6` for a target that does not.
 
 ## llm-gateway
 
@@ -202,6 +222,42 @@ Order matters:
    is the fallback if step 6 fails.
 
 Downtime is dominated by the transfer, not the restore. Do it in a quiet window.
+
+### What the cutover actually cost (2026-08-12)
+
+| | |
+|---|---|
+| 18:28 | VPS worker stopped — database frozen, dump now authoritative |
+| 18:28–18:37 | fresh `zstd:9` dump, 892 MB |
+| 18:41–18:58 | transfer, 16 streams, sha256 verified |
+| 19:02–19:03 | restore, 82 s, all 60 indexes present first time |
+| 19:04 | worker started — **and immediately failed every outbound call** |
+| 19:07 | proxy removed from `.env`, worker restarted clean |
+
+**39 minutes, zero rows lost** — all 35 tables matched the VPS exactly at
+2,388,185 rows.
+
+### The `.env` proxy trap
+
+The worker came up and every Slack, Jira and GitHub call failed with:
+
+```
+proxyconnect tcp: dial tcp 172.18.0.1:8888: connect: connection refused
+```
+
+`.env` carries `HTTP_PROXY`/`HTTPS_PROXY=http://172.18.0.1:8888`, an SSH tunnel
+that exists only on the VPS — `172.18.0.1` is that host's docker bridge. Copying
+`.env` verbatim carries the setting to a machine where nothing is listening.
+
+payments reaches all four upstreams directly (Slack, Jira, GitHub, OpenRouter
+all verified from inside a container on `agent-mem_default`), so the fix is to
+comment the proxy lines out. Note this is **not** a restart-in-place fix:
+compose snapshots `env_file` at container *create* time, so it needs
+`docker compose up -d --force-recreate worker`.
+
+The failures were all classed transient and retried, so nothing was lost — but
+check `graph.jobs` for `status='failed'` after any such incident before
+assuming that.
 
 ### Rollback
 
