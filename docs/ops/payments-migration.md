@@ -314,6 +314,55 @@ Also worth doing once settled:
 - Rename `docker-compose.vps.yml` in the llm-gateway repo.
 - Schedule `make db-backup` (`KEEP=7`) — there is currently no automated backup.
 
+## Installing the agent hooks on payments
+
+Hooks POST to `http://localhost:<WorkerPort>/api/hook/<event>`, so they must run
+on the machine where the worker runs — which is now payments — and the
+`agent-mem` binary must be on the agents' `PATH`.
+
+There is no Go toolchain on payments, so cross-compile from the VPS. The binary
+is pure Go (`CGO_ENABLED=0`), and the Go linker ad-hoc signs darwin/arm64 even
+when cross-compiling, so it runs on Apple Silicon without a manual `codesign`:
+
+```bash
+CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -mod=mod -o /tmp/agent-mem-darwin-arm64 ./cmd/agent-mem
+scp /tmp/agent-mem-darwin-arm64 enzo@payments:/tmp/agent-mem
+ssh enzo@payments 'chmod +x /tmp/agent-mem && mv /tmp/agent-mem /opt/homebrew/bin/agent-mem'
+```
+
+Note `-mod=mod`: the checked-out `vendor/` is out of sync with `go.mod`
+(`golang.org/x/oauth2` is required but not in `vendor/modules.txt`), so a
+vendored build fails.
+
+**The two agents install differently — `install-hooks` does not cover Claude.**
+It accepts `codex` and `gemini` only; Claude Code integrates through the
+*plugin* in `.claude-plugin/`, which carries `plugin/hooks/hooks.json`.
+
+```bash
+# Claude Code — plugin, matching how the VPS was set up
+claude plugin marketplace add git@github.com:enzo-wego/agent-mem.git
+claude plugin install agent-mem@agent-mem          # scope: user
+
+# Codex — hooks plus the bundled skills
+agent-mem install codex --scope user
+```
+
+Verify by driving the adapter directly; it should return real context, not an
+error:
+
+```bash
+echo '{"session_id":"smoketest","cwd":"/tmp","hook_event_name":"SessionStart","source":"startup"}' \
+  | agent-mem hook session-start          # claude is the default provider
+  | agent-mem hook session-start codex
+```
+
+`session-start` is a read path and writes nothing, so it is safe to run.
+
+**Per-user, and this Mac has three accounts.** The plugin and the Codex hooks
+install into `enzo`'s home. `mysqto` — the GUI console user — has its own
+`~/.claude`, and agent-mem is *not* installed there. Repeat both commands as
+that user if Claude Code gets used from the desktop session.
+
 ## Environment notes
 
 - pgvector is **0.8.6** on payments vs **0.8.2** on the VPS. Newer and
