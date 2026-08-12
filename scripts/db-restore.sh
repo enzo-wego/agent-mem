@@ -112,6 +112,11 @@ pg_cid="$($COMPOSE ps -q "$SERVICE")"
 
 # --no-owner/--no-privileges: object ownership is re-derived from the connecting
 # role, so a dump taken on a host whose roles differ still restores cleanly.
+# Deliberately NOT allowed to abort the script under `set -e`. pg_restore exits
+# non-zero for a single ignored error, and dying here would skip the
+# verification below — which is exactly the moment you most need it to run and
+# tell you what is missing.
+restore_rc=0
 $DOCKER run --rm \
   -v "$dump_dir":/backups:ro \
   --network "container:$pg_cid" \
@@ -119,7 +124,9 @@ $DOCKER run --rm \
   "$PG_IMAGE" \
   pg_restore -h 127.0.0.1 -U "$PGUSER" -d "$PGDATABASE" \
     --no-owner --no-privileges --jobs "$JOBS" --verbose \
-    "/backups/$dump_file"
+    "/backups/$dump_file" || restore_rc=$?
+
+[ "$restore_rc" -eq 0 ] || echo "!! pg_restore exited $restore_rc — verifying what landed before failing" >&2
 
 echo
 echo ">> post-restore verification"
@@ -136,10 +143,35 @@ $COMPOSE exec -T "$SERVICE" psql -U "$PGUSER" -d "$PGDATABASE" -tAc \
 # left invalid rather than trusting the exit code.
 invalid="$($COMPOSE exec -T "$SERVICE" psql -U "$PGUSER" -d "$PGDATABASE" -tAc \
   "SELECT count(*) FROM pg_index WHERE NOT indisvalid" | tr -dc '0-9')"
+
+# An index whose CREATE failed outright does not exist at all, so it is invisible
+# to the check above — it is not invalid, it is absent. This bit the migration:
+# a parallel HNSW build on public.observations exhausted the container's 64 MB
+# /dev/shm, pg_restore logged it as an ignored error, and the primary vector
+# index was silently missing from an otherwise perfect-looking restore.
+# So compare against what the archive actually promised.
+expected="$($DOCKER run --rm -v "$dump_dir":/backups:ro "$PG_IMAGE" \
+  pg_restore --list "/backups/$dump_file" | awk '$4 == "INDEX" { print $6 }' | sort -u)"
+actual="$($COMPOSE exec -T "$SERVICE" psql -U "$PGUSER" -d "$PGDATABASE" -tAc \
+  "SELECT indexname FROM pg_indexes WHERE schemaname NOT IN ('pg_catalog','information_schema')" \
+  | tr -d '\r' | sed '/^$/d' | sort -u)"
+missing="$(comm -23 <(printf '%s\n' "$expected") <(printf '%s\n' "$actual"))"
+
+if [ -n "$missing" ]; then
+  echo "!! indexes in the dump that were NOT created:" >&2
+  printf '   %s\n' $missing >&2
+  echo "   If this is an HNSW build, the usual cause is /dev/shm: set shm_size on" >&2
+  echo "   the postgres service, then re-create the index by hand." >&2
+  exit 1
+fi
+echo "indexes: $(printf '%s\n' "$expected" | grep -c .) expected, all present"
+
 if [ "${invalid:-0}" -gt 0 ]; then
   echo "!! ${invalid} index(es) are INVALID — the restore did not fully succeed" >&2
   exit 1
 fi
+
+[ "$restore_rc" -eq 0 ] || { echo "!! pg_restore reported errors (exit $restore_rc) — review the log above" >&2; exit 1; }
 
 if [ "$start_worker" -eq 1 ]; then
   echo ">> starting '$WORKER_SERVICE'"

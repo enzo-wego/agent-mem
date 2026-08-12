@@ -69,6 +69,55 @@ After restoring it prints the extension list and top tables, counts HNSW
 indexes, and fails if any index is left `indisvalid = false` — `pg_restore`
 exits 0 even when individual objects fail, so the exit code alone is not proof.
 
+### The one that actually bit: /dev/shm and the missing vector index
+
+The first full restore looked fine and was not. `pg_restore` reported
+`errors ignored on restore: 2`, and buried in the log was:
+
+```
+CREATE INDEX idx_observations_embedding ON public.observations
+    USING hnsw (embedding public.vector_cosine_ops);
+ERROR:  could not resize shared memory segment ... No space left on device
+```
+
+Docker gives a container 64 MB of `/dev/shm`; a parallel HNSW build over
+`public.observations` (1.18 GB) needs more. The result is the worst kind of
+failure — the primary vector index was **absent** from a database that
+otherwise restored perfectly, and every memory search would have silently
+fallen back to a sequential scan.
+
+Two fixes, both now in the repo:
+
+- `shm_size: 1gb` on the postgres service in `docker-compose.yml`.
+- `db-restore.sh` compares the index names in the archive's TOC against
+  `pg_indexes` and fails on any that are absent. The earlier `indisvalid`
+  check could not catch this: a `CREATE INDEX` that fails outright leaves no
+  index behind, so there is nothing for it to mark invalid.
+
+Rebuilding by hand, if it ever happens again (14 s on an M4):
+
+```sql
+SET maintenance_work_mem = '1GB';
+SET max_parallel_maintenance_workers = 2;
+CREATE INDEX idx_observations_embedding ON public.observations
+    USING hnsw (embedding vector_cosine_ops);
+```
+
+### Verifying a restore against the source
+
+`n_live_tup` is a stale estimate and will not match — compare real counts:
+
+```sql
+SELECT string_agg(format('SELECT %L AS t, count(*) AS c FROM %I.%I',
+       n.nspname||'.'||c.relname, n.nspname, c.relname), ' UNION ALL ')
+FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE c.relkind = 'r' AND n.nspname IN ('public','graph');
+```
+
+Run the generated query on both hosts and diff. Every table should match
+exactly, except those the source worker wrote to after the dump was taken —
+and those must be *lower* on the target, never higher.
+
 ## Moving the dump between hosts
 
 The two hosts are ~250 ms apart. A single TCP stream over that RTT measured

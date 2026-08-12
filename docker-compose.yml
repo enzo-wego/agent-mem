@@ -8,6 +8,12 @@ services:
       POSTGRES_PASSWORD: ${AGENT_MEM_PG_PASSWORD:-agentmem}
     volumes:
       - pgdata:/var/lib/postgresql/data
+    # Docker's default 64 MB of /dev/shm is not enough for a parallel HNSW index
+    # build over public.observations: it fails with "could not resize shared
+    # memory segment ... No space left on device". During a restore pg_restore
+    # treats that as an ignored error and continues, so the vector index ends up
+    # absent — not invalid, absent — from a restore that otherwise looks clean.
+    shm_size: 1gb
     ports:
       - "5433:5432"
     healthcheck:
