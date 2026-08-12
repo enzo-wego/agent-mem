@@ -10,6 +10,16 @@ IMAGE     ?= ghcr.io/enzo-wego/agent-mem-worker
 VPS       ?= enzo@enzogo.io.vn
 VPS_DIR   ?= /var/go/src/github.com/agent-mem
 
+# payments is an Apple M4 running colima (arm64). Unlike the VPS it is fast
+# enough to build its own images, so `deploy-payments` skips GHCR entirely and
+# builds in place — which also sidesteps cross-building arm64 under QEMU.
+PAYMENTS     ?= enzo@payments
+PAYMENTS_DIR ?= /Users/enzo/src/github.com/agent-mem
+
+# The Linux VPS has a root-owned docker socket; colima's is owned by the login
+# user. Scripts take this rather than guessing per host.
+DOCKER    ?= sudo docker
+
 compose := docker compose
 
 all: help
@@ -80,6 +90,27 @@ deploy: ## Build amd64 image here, push to GHCR, and pull-only deploy on the VPS
 	ssh $(VPS) 'cd $(VPS_DIR) && sudo docker compose pull worker && sudo docker compose up -d --no-build worker'
 	@echo "${GREEN}>> deployed $(IMAGE):$$(git rev-parse --short HEAD)${RESET}"
 
+db-backup: ## Dump the database to ./backups (KEEP=n prunes to n newest). See scripts/db-backup.sh.
+	DOCKER="$(DOCKER)" ./scripts/db-backup.sh
+
+db-restore: ## Restore a dump. Usage: make db-restore DUMP=backups/agentmem-<ts>.dump [FORCE=1]
+ifndef DUMP
+	$(error DUMP is required, e.g. make db-restore DUMP=backups/agentmem-20260812.dump)
+endif
+	DOCKER="$(DOCKER)" ./scripts/db-restore.sh $(if $(FORCE),--force,) $(DUMP)
+
+deploy-payments: ## Sync source to payments and build+restart there natively (arm64, no registry).
+	@echo "${YELLOW}>> syncing source to $(PAYMENTS)${RESET}"
+	rsync -az --delete \
+		--exclude '.git/' --exclude '.omc/' --exclude '.code-review-graph/' \
+		--exclude '.serena/' --exclude '.idea/' --exclude 'bin/' \
+		--exclude 'node_modules/' --exclude 'backups/' --exclude '.env.bak*' \
+		--exclude 'docker-compose.override.yml' \
+		./ $(PAYMENTS):$(PAYMENTS_DIR)/
+	@echo "${YELLOW}>> building + restarting worker on $(PAYMENTS)${RESET}"
+	ssh $(PAYMENTS) 'export PATH=/opt/homebrew/bin:$$PATH && cd $(PAYMENTS_DIR) && docker compose up -d --build worker'
+	@echo "${GREEN}>> deployed to $(PAYMENTS)${RESET}"
+
 db-reset: ## Clear the database and re-run migrations.
 	$(compose) down -v
 	$(compose) up -d
@@ -87,4 +118,4 @@ db-reset: ## Clear the database and re-run migrations.
 	@sleep 5
 	$(compose) exec worker agent-mem migrate
 
-.PHONY: all help build build-cli install-cli install-cli-vps up down status logs migrate migrate-create migrate-status migrate-rollback migrate-up-by-one migrate-fix restart deploy db-reset
+.PHONY: all help build build-cli install-cli install-cli-vps up down status logs migrate migrate-create migrate-status migrate-rollback migrate-up-by-one migrate-fix restart deploy deploy-payments db-backup db-restore db-reset

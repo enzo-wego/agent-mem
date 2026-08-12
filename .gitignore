@@ -44,6 +44,10 @@ go.work.sum
 /vendor
 docker-compose.override.yml
 
+# Database dumps written by scripts/db-backup.sh. Multi-gigabyte binaries that
+# must never reach the repository.
+/backups/
+
 # Beads / Dolt files (added by bd init)
 .dolt/
 *.db
