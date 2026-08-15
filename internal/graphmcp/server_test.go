@@ -56,6 +56,10 @@ func (c *recordingGraphClient) Resolve(_ context.Context, request ResolveRequest
 	return c.record(recordedCall{name: "graph_resolve", resolve: request})
 }
 
+func (c *recordingGraphClient) Person(_ context.Context, query string, limit int) (map[string]any, error) {
+	return c.record(recordedCall{name: "graph_person", query: query, limit: limit})
+}
+
 func connectTestClient(t *testing.T, graphClient GraphClient) *mcp.ClientSession {
 	t.Helper()
 	ctx := context.Background()
@@ -75,7 +79,7 @@ func connectTestClient(t *testing.T, graphClient GraphClient) *mcp.ClientSession
 	return clientSession
 }
 
-func TestServer_ListsExactlyFiveGraphToolsWithSchemas(t *testing.T) {
+func TestServer_ListsExactlySixGraphToolsWithSchemas(t *testing.T) {
 	session := connectTestClient(t, &recordingGraphClient{})
 	result, err := session.ListTools(context.Background(), nil)
 	if err != nil {
@@ -98,6 +102,7 @@ func TestServer_ListsExactlyFiveGraphToolsWithSchemas(t *testing.T) {
 		"graph_cluster_summary",
 		"graph_neighbors",
 		"graph_node",
+		"graph_person",
 		"graph_resolve",
 		"graph_search",
 	}
@@ -120,6 +125,7 @@ func TestServer_AppliesDefaultsAndForwardsEveryTool(t *testing.T) {
 			"seeds": []string{"https://github.com/wego/payments/pull/2198"},
 			"query": "is WithRebateRepo safe to remove?",
 		}},
+		{Name: "graph_person", Arguments: map[string]any{"q": "Lei"}},
 	}
 	for _, call := range calls {
 		result, err := session.CallTool(ctx, call)
@@ -134,8 +140,8 @@ func TestServer_AppliesDefaultsAndForwardsEveryTool(t *testing.T) {
 		}
 	}
 
-	if len(graphClient.calls) != 5 {
-		t.Fatalf("worker calls = %d, want 5", len(graphClient.calls))
+	if len(graphClient.calls) != 6 {
+		t.Fatalf("worker calls = %d, want 6", len(graphClient.calls))
 	}
 	if got := graphClient.calls[0].limit; got != 10 {
 		t.Errorf("search limit = %d, want 10", got)
@@ -149,6 +155,10 @@ func TestServer_AppliesDefaultsAndForwardsEveryTool(t *testing.T) {
 	resolve := graphClient.calls[4].resolve
 	if resolve.Depth != 2 || resolve.BudgetTokens != 4000 || !resolve.IncludeBodies {
 		t.Errorf("resolve defaults = %#v", resolve)
+	}
+	person := graphClient.calls[5]
+	if person.name != "graph_person" || person.query != "Lei" || person.limit != 5 {
+		t.Errorf("person defaults = %#v", person)
 	}
 }
 
@@ -165,6 +175,8 @@ func TestServer_ValidationAndWorkerErrorsBecomeToolErrors(t *testing.T) {
 		{"graph_neighbors", map[string]any{"id": "jira:X", "depth": 4}},
 		{"graph_cluster_summary", map[string]any{"node": "jira:X", "depth": 4}},
 		{"graph_resolve", map[string]any{"seeds": []string{}, "query": "x"}},
+		{"graph_person", map[string]any{"q": " "}},
+		{"graph_person", map[string]any{"q": "Lei", "limit": 21}},
 	}
 	for _, test := range invalid {
 		result, err := session.CallTool(context.Background(), &mcp.CallToolParams{Name: test.name, Arguments: test.args})

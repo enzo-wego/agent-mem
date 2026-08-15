@@ -15,6 +15,7 @@ type GraphClient interface {
 	Neighbors(context.Context, string, int, []string) (map[string]any, error)
 	ClusterSummary(context.Context, string, int) (map[string]any, error)
 	Resolve(context.Context, ResolveRequest) (map[string]any, error)
+	Person(context.Context, string, int) (map[string]any, error)
 }
 
 type SearchInput struct {
@@ -37,6 +38,11 @@ type NeighborsInput struct {
 type ClusterSummaryInput struct {
 	Node  string `json:"node" jsonschema:"Canonical graph node ID at the center of the cluster"`
 	Depth int    `json:"depth,omitempty" jsonschema:"Summary depth from 1 to 3; defaults to 1"`
+}
+
+type PersonInput struct {
+	Q     string `json:"q" jsonschema:"Person name, email, employee id, or Slack user id to look up"`
+	Limit int    `json:"limit,omitempty" jsonschema:"Maximum candidates, from 1 to 20; defaults to 5"`
 }
 
 type ResolveInput struct {
@@ -156,6 +162,25 @@ func NewServer(client GraphClient, version string) *mcp.Server {
 			BudgetTokens:  input.BudgetTokens,
 			IncludeBodies: includeBodies,
 		})
+		return nil, output, err
+	})
+
+	mcp.AddTool(server, &mcp.Tool{
+		Name: "graph_person",
+		Description: "Look up a person at the organization by name, email, employee id, or Slack user id. " +
+			"Returns their profile, manager chain, inferred role with evidence, and recent artifacts they authored.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, input PersonInput) (*mcp.CallToolResult, map[string]any, error) {
+		input.Q = strings.TrimSpace(input.Q)
+		if input.Q == "" {
+			return nil, nil, fmt.Errorf("q must not be empty")
+		}
+		if input.Limit == 0 {
+			input.Limit = 5
+		}
+		if input.Limit < 1 || input.Limit > 20 {
+			return nil, nil, fmt.Errorf("limit must be between 1 and 20")
+		}
+		output, err := client.Person(ctx, input.Q, input.Limit)
 		return nil, output, err
 	})
 

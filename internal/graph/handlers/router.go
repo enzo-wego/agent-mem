@@ -30,6 +30,9 @@ func Mount(r chi.Router, deps Deps) {
 	node := NewNode(deps.DB)
 	r.Method("GET", "/api/graph/node", node)
 
+	person := NewPerson(deps.DB)
+	r.Method("GET", "/api/graph/person", person)
+
 	search, _ := NewSearchWithEmbedder(deps.DB, deps.Gemini)
 	r.Method("GET", "/api/graph/search", search)
 

@@ -497,10 +497,21 @@ Seeds may be canonical node ids (`jira:PAY-2128`, `slack:C…:ts`) or raw URLs.
 **GET /api/graph/node/{id}/neighbors** — adjacency walk; `?depth=1|2|3`,
 `?kind=REFERENCES`, `?direction=in|out|both`.
 
+**GET /api/graph/person** — person lookup by name substring, exact email,
+all-digits employee id, or `U…` Slack id. Returns each candidate's profile,
+manager chain, derived role with evidence, and recent artifacts they authored;
+`q` required, `limit` optional (default 5, max 20).
+
+```bash
+curl -s -H "Authorization: Bearer $AGENT_MEM_API_KEY" \
+  "http://localhost:34567/api/graph/person?q=Lei&limit=5"
+# { "people": [ { "person_id": 42, "display_name": "Lei Zheng", "manager_chain": [...], "derived_role": {...}, ... } ], "total": 1 }
+```
+
 ## Graph MCP server
 
 `agent-mem mcp` serves the graph read API as a stdio MCP server for trusted
-operators. It exposes five tools:
+operators. It exposes six tools:
 
 - `graph_search` discovers candidate Slack threads, Jira issues, pull requests,
   and documents.
@@ -510,6 +521,9 @@ operators. It exposes five tools:
   provenance. It can take roughly 15 seconds and return tens of kilobytes.
 - `graph_resolve` builds a question-focused context bundle from one or more
   IDs or ingested source URLs.
+- `graph_person` looks up a person by name, email, employee id, or Slack user
+  id, returning their profile, manager chain, inferred role, and recent
+  artifacts they authored.
 
 The production registration runs the image-shipped binary inside the worker
 container over SSH. The SSH account and the worker API key are the security

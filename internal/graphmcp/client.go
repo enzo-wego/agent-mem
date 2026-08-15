@@ -100,6 +100,15 @@ func (c *Client) ClusterSummary(ctx context.Context, node string, depth int) (ma
 	return c.doJSON(ctx, http.MethodGet, "/api/graph/cluster/summary", values, nil)
 }
 
+// Person looks up a person profile by name, email, employee id, or Slack id.
+func (c *Client) Person(ctx context.Context, query string, limit int) (map[string]any, error) {
+	values := url.Values{
+		"q":     []string{query},
+		"limit": []string{strconv.Itoa(limit)},
+	}
+	return c.doJSON(ctx, http.MethodGet, "/api/graph/person", values, nil)
+}
+
 // Resolve resolves a set of graph seeds into a bounded context bundle.
 func (c *Client) Resolve(ctx context.Context, request ResolveRequest) (map[string]any, error) {
 	return c.doJSON(ctx, http.MethodPost, "/api/graph/resolve", nil, request)

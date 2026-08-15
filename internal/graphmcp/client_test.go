@@ -82,6 +82,9 @@ func TestClient_ProxiesGraphEndpoints(t *testing.T) {
 			err := client.Probe(ctx)
 			return map[string]any{"ok": err == nil}, err
 		},
+		func() (map[string]any, error) {
+			return client.Person(ctx, "Lei", 5)
+		},
 	}
 	for i, call := range calls {
 		got, err := call()
@@ -101,6 +104,7 @@ func TestClient_ProxiesGraphEndpoints(t *testing.T) {
 		{method: http.MethodGet, escapedPath: "/api/graph/cluster/summary", query: "depth=3&node=jira%3APAY-2223"},
 		{method: http.MethodPost, escapedPath: "/api/graph/resolve", contentType: "application/json"},
 		{method: http.MethodGet, escapedPath: "/api/settings"},
+		{method: http.MethodGet, escapedPath: "/api/graph/person", query: "limit=5&q=Lei"},
 	}
 	if len(observed) != len(expected) {
 		t.Fatalf("observed %d requests, want %d: %#v", len(observed), len(expected), observed)
