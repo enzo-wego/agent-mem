@@ -1,16 +1,37 @@
 # agent-mem
 
-`agent-mem` is a Go service and CLI for persistent coding-agent memory. It captures local hook events, stores prompts/observations/session summaries in PostgreSQL with `pgvector`, uses Gemini for extraction and embeddings, and serves a small dashboard for search and inspection. It also hosts **Graph Memory** — a cross-source knowledge graph that links Slack, Jira, GitHub, Confluence, PagerDuty, Datadog, Sentry, Google Workspace, Wego Hub, and shared Claude artifacts into one queryable store ([jump to section](#graph-memory)).
+`agent-mem` is a Go service and CLI hosting **two memory subsystems** in one worker, one PostgreSQL (+`pgvector`) database, and one dashboard:
+
+- **Flat Memory** — persistent coding-agent memory. Captures local hook events from Claude Code / Codex / Gemini CLI, extracts observations and session summaries via LLM, and injects relevant context back into future sessions ([integration](#claude-code-integration)).
+- **Graph Memory** — a cross-source knowledge graph that links Slack, Jira, GitHub, Confluence, PagerDuty, Datadog, Sentry, Google Workspace, Wego Hub, and shared Claude artifacts into one queryable store ([jump to section](#graph-memory)).
 
 ## What It Does
 
-- Runs a long-lived worker on `:34567`
-- Accepts hook events such as session start, prompt submit, post-tool-use, and stop
+- Runs a long-lived worker on `:34567` with a dashboard and JSON API for search, timelines, sync, settings, logs, graph, jobs, and backfill
+
+**Flat Memory**
+
+- Accepts hook events (session start, prompt submit, post-tool-use, stop) from Claude Code, Codex, and Gemini CLI (one-shot installers)
 - Stores prompts, observations, summaries, and sync metadata in PostgreSQL
-- Builds relevant context for future sessions
-- **Graph Memory**: ingests cross-source artifacts (push, URL, or Slack backfill), processes them through a Postgres-backed job queue (fetch → normalize → extract edges → describe media → embed), and serves search / BFS-resolve / node read endpoints
-- Exposes a dashboard and JSON API for search, timelines, sync, settings, logs, graph, jobs, and backfill
-- Integrates with Claude Code, Codex, and Gemini CLI (one-shot installers)
+- Builds relevant context for future sessions and serves hybrid keyword + semantic search
+
+**Graph Memory**
+
+- Ingests cross-source artifacts (push, URL, or Slack backfill), processes them through a Postgres-backed job queue (fetch → normalize → extract edges → describe media → embed), and serves search / BFS-resolve / node read endpoints
+- Derives higher-level signal from the raw graph: thread & cluster summaries, hot-topic detection with Slack alerts, a live Jira board mirror, people/role inference (see [Derived pipelines](#derived-pipelines))
+- Exposes the read API as a stdio MCP server ([`agent-mem mcp`](#graph-mcp-server)) and a [`/live` board + globe view](#dashboard)
+
+### The two subsystems at a glance
+
+| | Flat Memory | Graph Memory |
+|---|---|---|
+| Captures | Coding-agent hook events (prompts, tool use, transcripts) | Cross-source artifacts (Slack, Jira, GitHub, …) |
+| Work queue | `pending_messages` (retry + backoff, no leases) | `graph.jobs` (leases, janitor, per-source rate caps) |
+| LLM tier | `cheap` (observations, session summaries) | `summary` + `cheap` (summaries, topic judge, describe) |
+| Embeddings | `observations.embedding` `vector(768)` | `graph.artifact_index.embedding` `halfvec(3072)` |
+| Read path | Session-start context injection, `/api/search` | `/api/graph/*` (search / resolve / node), MCP, `/live` |
+
+Both share the worker binary, the database, [cloud sync](#cloud-sync), the `processing_paused` switch, and the llm-gateway egress path.
 
 ## Architecture
 
@@ -239,6 +260,15 @@ Graph Memory builds a cross-source knowledge graph that links Slack messages, Ji
       ▼                            ▼
   graph.people               Confluence page
 ```
+
+### Derived pipelines
+
+Beyond raw nodes and edges, background jobs derive higher-level signal:
+
+- **Thread & cluster summaries** (`summarize_thread`, cluster summarizer) — per-Slack-thread and cross-artifact topic summaries with provenance. Two deliberately separate pipelines: threads re-summarize on a content signature change; clusters synthesize across artifacts.
+- **Hot-topic detection + alerts** (`detect_hot_topics`, `notify_watch_channels`) — an LLM judge (including attachment OCR, so screenshot-only reports count) flags threads that need attention and DMs you, skipping threads you already participate in.
+- **Jira board mirror** (`refresh_jira_board`) — keeps the `/live` board section in step with the active-sprint scrum board, ordered by epic rank.
+- **People & roles** (`import_bamboohr`, `derive_person_roles`, `recompute_person_distance`) — org-chart people nodes with inferred roles and org-distance weighting used in read-path scoring.
 
 ### Ingest endpoints
 
@@ -675,6 +705,8 @@ Tabs: Timeline, Search, Sessions, Sync, Logs, Settings, plus the Graph Memory ta
 - **Graph** — Search (keyword/semantic) and Resolve (paste a seed URL → BFS context) over the artifact graph.
 - **Jobs** — queue inspector: filter by status/type, 5s auto-refresh while active, retry/delete actions.
 - **Backfill** — form to pull a Slack channel's last *N* months into the graph; links straight to the Jobs tab to watch it drain.
+
+A standalone **`/live`** view (not a tab) renders the graph as a globe plus a board section mirroring the active-sprint Jira board, recent thread summaries, and hot topics. Alert rules live at `/live/rules`.
 
 > The worker embeds prebuilt dashboard assets at compile time (`//go:embed`). After changing the frontend, run `npm run build` in `dashboard/` and copy `dashboard/dist/*` into `internal/worker/dashboard/` before rebuilding the worker.
 
