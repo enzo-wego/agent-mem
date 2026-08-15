@@ -208,7 +208,7 @@ func main() {
 	installOMPCmd := &cobra.Command{
 		Use:   "omp",
 		Short: "Install the agent-mem oh-my-pi (omp) hook",
-		Long:  "Drops the embedded agent-mem hook into oh-my-pi's auto-discovered hooks directory (~/.omp/agent/hooks/agent-mem.ts). omp hooks are code modules, so this writes a file rather than merging a JSON config.",
+		Long:  "Drops the embedded agent-mem hook module into oh-my-pi's auto-discovered extensions directory (~/.omp/agent/extensions/agent-mem.ts). omp hooks are code modules, so this writes a file rather than merging a JSON config.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			result, err := hooks.InstallHooksWithOptions(hooks.ProviderOMP, hooks.InstallOptions{
 				HooksPath:  installOMPHooksFile,
@@ -229,7 +229,7 @@ func main() {
 	}
 	installOMPCmd.Flags().StringVar(&installOMPScope, "scope", "user", "Install scope: user or project")
 	installOMPCmd.Flags().StringVar(&installOMPProjectDir, "project-dir", "", "Project root to use with --scope project (defaults to the current working directory)")
-	installOMPCmd.Flags().StringVar(&installOMPHooksFile, "hooks-file", "", "Override the hook destination path (defaults to ~/.omp/agent/hooks/agent-mem.ts)")
+	installOMPCmd.Flags().StringVar(&installOMPHooksFile, "hooks-file", "", "Override the hook destination path (defaults to ~/.omp/agent/extensions/agent-mem.ts)")
 
 	installCmd := &cobra.Command{
 		Use:   "install",

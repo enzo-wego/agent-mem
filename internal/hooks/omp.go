@@ -16,9 +16,9 @@ import (
 // other providers use, rather than merging a hookGroup into a config.
 const ProviderOMP = "omp"
 
-// ompHookFileName is the on-disk name of the dropped hook. omp auto-discovers
-// every module in its hooks directory, so the file name is not load-bearing;
-// keeping it stable makes reinstalls idempotent.
+// ompHookFileName is the on-disk name of the dropped hook module. omp
+// auto-discovers every module in its extensions directory, so the file name is
+// not load-bearing; keeping it stable makes reinstalls idempotent.
 const ompHookFileName = "agent-mem.ts"
 
 //go:embed assets/omp/agent-mem.ts

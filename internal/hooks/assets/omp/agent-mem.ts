@@ -20,10 +20,10 @@
  * the agent-mem worker running (`agent-mem worker`). Any failure is swallowed —
  * memory capture must never break or block a session.
  *
- * Install: drop this file in ~/.omp/agent/hooks/ (auto-discovered) or load with
- *   omp --hook ~/.omp/agent/hooks/agent-mem.ts
+ * Install: drop this file in ~/.omp/agent/extensions/ (auto-discovered) or load
+ * with: omp --hook ~/.omp/agent/extensions/agent-mem.ts
  */
-import type { HookAPI } from "@oh-my-pi/pi-coding-agent";
+import type { HookAPI } from "@oh-my-pi/pi-coding-agent/extensibility/hooks";
 
 const BIN = process.env.AGENT_MEM_BIN?.trim() || "agent-mem";
 const HOOK_TIMEOUT_MS = 25_000;

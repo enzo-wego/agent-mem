@@ -1,10 +1,12 @@
 package hooks
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -221,5 +223,65 @@ func writeHookConfigForTest(t *testing.T, path string, cfg *hookConfigFile) {
 
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatalf("WriteFile(%s): %v", path, err)
+	}
+}
+
+func TestResolveOMPInstallPathTargetsExtensionsDir(t *testing.T) {
+	t.Parallel()
+
+	// User scope must resolve to omp's auto-discovered user extensions dir
+	// (~/.omp/agent/extensions), NOT a hooks/ dir that omp never scans.
+	userPath, err := resolveInstallPath(ProviderOMP, InstallOptions{Scope: "user"})
+	if err != nil {
+		t.Fatalf("resolveInstallPath(user): %v", err)
+	}
+	if want := filepath.Join(".omp", "agent", "extensions", ompHookFileName); !strings.HasSuffix(userPath, want) {
+		t.Fatalf("user path = %q, want suffix %q", userPath, want)
+	}
+
+	// Project scope must resolve to the native project root <cwd>/.omp/extensions.
+	projDir := t.TempDir()
+	projPath, err := resolveInstallPath(ProviderOMP, InstallOptions{Scope: "project", ProjectDir: projDir})
+	if err != nil {
+		t.Fatalf("resolveInstallPath(project): %v", err)
+	}
+	if want := filepath.Join(projDir, ".omp", "extensions", ompHookFileName); projPath != want {
+		t.Fatalf("project path = %q, want %q", projPath, want)
+	}
+}
+
+func TestInstallOMPHookWritesEmbeddedModule(t *testing.T) {
+	t.Parallel()
+
+	dest := filepath.Join(t.TempDir(), "nested", ompHookFileName)
+
+	result, err := InstallHooksWithOptions(ProviderOMP, InstallOptions{HooksPath: dest})
+	if err != nil {
+		t.Fatalf("install omp: %v", err)
+	}
+	if !result.Created || !result.Changed || result.Path != dest {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+
+	got, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatalf("read installed hook: %v", err)
+	}
+	if !bytes.Equal(got, ompHookSource) {
+		t.Fatal("installed hook does not match embedded source")
+	}
+	// HookAPI is not re-exported from the package root; the module must import it
+	// from the hooks subpath or it will not type-check against the omp SDK.
+	if !bytes.Contains(got, []byte("@oh-my-pi/pi-coding-agent/extensibility/hooks")) {
+		t.Fatal("installed hook missing correct HookAPI import subpath")
+	}
+
+	// Reinstalling identical content is a no-op.
+	again, err := InstallHooksWithOptions(ProviderOMP, InstallOptions{HooksPath: dest})
+	if err != nil {
+		t.Fatalf("reinstall omp: %v", err)
+	}
+	if again.Changed {
+		t.Fatalf("expected idempotent reinstall to report no change, got %+v", again)
 	}
 }

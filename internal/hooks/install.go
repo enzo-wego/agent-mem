@@ -173,7 +173,7 @@ func defaultHooksPath(provider string) (string, error) {
 	case ProviderGemini:
 		return filepath.Join(home, ".gemini", "settings.json"), nil
 	case ProviderOMP:
-		return filepath.Join(home, ".omp", "agent", "hooks", ompHookFileName), nil
+		return filepath.Join(home, ".omp", "agent", "extensions", ompHookFileName), nil
 	default:
 		return "", fmt.Errorf("no default hooks path for provider %q", provider)
 	}
@@ -193,7 +193,7 @@ func projectHooksPath(provider, projectDir string) (string, error) {
 	case ProviderGemini:
 		return filepath.Join(base, ".gemini", "settings.json"), nil
 	case ProviderOMP:
-		return filepath.Join(base, ".omp", "agent", "hooks", ompHookFileName), nil
+		return filepath.Join(base, ".omp", "extensions", ompHookFileName), nil
 	default:
 		return filepath.Join(base, ".codex", "hooks.json"), nil
 	}
