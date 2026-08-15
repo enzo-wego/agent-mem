@@ -72,7 +72,7 @@ func main() {
 	installHooksCmd := &cobra.Command{
 		Use:   "install-hooks [provider]",
 		Short: "Install agent-mem hook entries into a supported agent config",
-		Long:  "Safely merges the managed agent-mem hook entries into the selected coding agent's local hooks config. Supports user-global, project-local, or explicit hooks-file targets. Currently supports Codex.",
+		Long:  "Safely installs the managed agent-mem hooks for the selected coding agent. Codex and Gemini get hook entries merged into a shared JSON config; omp gets an embedded hook module dropped into its hooks directory. Supports user-global, project-local, or explicit-path targets.",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			provider := hooks.ProviderCodex
@@ -202,11 +202,40 @@ func main() {
 	installGeminiCmd.Flags().StringVar(&installGeminiHooksFile, "hooks-file", "", "Override the hooks config path")
 	installGeminiCmd.Flags().StringVar(&installGeminiPluginSkillsDir, "plugin-skills-dir", "", "Override the plugin skills directory (defaults to the skills embedded in the agent-mem binary)")
 
+	var installOMPScope string
+	var installOMPProjectDir string
+	var installOMPHooksFile string
+	installOMPCmd := &cobra.Command{
+		Use:   "omp",
+		Short: "Install the agent-mem oh-my-pi (omp) hook",
+		Long:  "Drops the embedded agent-mem hook into oh-my-pi's auto-discovered hooks directory (~/.omp/agent/hooks/agent-mem.ts). omp hooks are code modules, so this writes a file rather than merging a JSON config.",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			result, err := hooks.InstallHooksWithOptions(hooks.ProviderOMP, hooks.InstallOptions{
+				HooksPath:  installOMPHooksFile,
+				ProjectDir: installOMPProjectDir,
+				Scope:      installOMPScope,
+			})
+			if err != nil {
+				return err
+			}
+
+			if result.Changed {
+				fmt.Fprintf(cmd.OutOrStdout(), "installed agent-mem omp hook in %s\n", result.Path)
+			} else {
+				fmt.Fprintf(cmd.OutOrStdout(), "agent-mem omp hook already installed in %s\n", result.Path)
+			}
+			return nil
+		},
+	}
+	installOMPCmd.Flags().StringVar(&installOMPScope, "scope", "user", "Install scope: user or project")
+	installOMPCmd.Flags().StringVar(&installOMPProjectDir, "project-dir", "", "Project root to use with --scope project (defaults to the current working directory)")
+	installOMPCmd.Flags().StringVar(&installOMPHooksFile, "hooks-file", "", "Override the hook destination path (defaults to ~/.omp/agent/hooks/agent-mem.ts)")
+
 	installCmd := &cobra.Command{
 		Use:   "install",
 		Short: "Install agent-mem integration surfaces into supported coding agents",
 	}
-	installCmd.AddCommand(installCodexCmd, installGeminiCmd)
+	installCmd.AddCommand(installCodexCmd, installGeminiCmd, installOMPCmd)
 
 	// hook <event> [provider]
 	hookCmd := &cobra.Command{
