@@ -71,6 +71,53 @@ Both share the worker binary, the database, [cloud sync](#cloud-sync), the `proc
    └───────────────────┘    └───────────────────┘  └──────────────────────┘
 ```
 
+### End-to-end Slack flow: enzobot → agent-mem → llm-gateway
+
+How a Slack message becomes searchable graph memory, across the three services:
+
+```text
+Slack workspace
+   │  Socket Mode websocket (Bolt) — no public webhook endpoint
+   ▼
+┌─ enzobot (p-agent, Node) ──────────────────── separate repo ─┐
+│  graph-ingest subsystem:                                     │
+│    channel allowlist filter → name cache (users/channels)    │
+│    → NDJSON disk buffer with drain loop                      │
+│    → POST /api/graph/ingest/content                          │
+│      (Bearer AGENT_MEM_API_KEY, 2s timeout;                  │
+│       5xx/network → buffered retry, 4xx → drop as malformed) │
+└──────────────────────────────┬────────────────────────────────┘
+                               ▼
+┌─ agent-mem worker (:34567, Docker) ─────────── this repo ────┐
+│  ingest: upsert graph.nodes/edges, enqueue graph.jobs        │
+│  pipeline: fetch_body → describe_attachment → index_artifact │
+│  derived:  summarize_thread / cluster summaries,             │
+│            detect_hot_topics → notify_watch_channels,        │
+│            link_topics judge                                 │
+│  (leases + janitor; processing_paused stops claims,          │
+│   ingest keeps queueing — nothing is lost)                   │
+└──────────────────────────────┬────────────────────────────────┘
+                               ▼
+┌─ llm-gateway (systemd on the VPS host, 172.18.0.1:8750) ─────┐
+│  /generate tier=summary → claude-sonnet-5   (subscription)   │
+│  /generate tier=cheap   → claude-haiku-4-5  (subscription)   │
+│  /describe tier=cheap   → claude-haiku-4-5 vision            │
+│  /embed                 → gemini-embedding-001 (OpenRouter;  │
+│                           3072 graph / 768 flat memory)      │
+└──────────────────────────────┬────────────────────────────────┘
+                               ▼
+Summaries + embeddings + hot topics land back in Postgres
+   → read: /api/graph/search · resolve · node, the MCP server, /live
+   → alerts: hot-topic DMs back into Slack (skips threads you're in)
+```
+
+Each hop fails safe: enzobot buffers to disk and retries on 5xx/network errors;
+agent-mem requeues transient LLM failures with backoff instead of failing jobs;
+and clearing `llm_gateway_url` (or `processing_paused`) stops LLM spend while
+ingest keeps accepting and queueing messages. Default models per tier live in
+the [LLM providers](#llm-providers) table below — agent-mem itself never names
+a model, only a tier.
+
 ### LLM providers
 
 Two distinct model roles, and they are **not** interchangeable. Generation
