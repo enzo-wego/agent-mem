@@ -89,7 +89,7 @@ ORDER BY COALESCE(to_timestamp(NULLIF(n.metadata->>'ts','')::float8), n.first_se
 			if author == "" {
 				author = "someone"
 			}
-			line := withDept(author, dept, jobTitle, domain, role) + ": " + firstLine(body, 280) + "\n"
+			line := withDept(author, dept, jobTitle, domain, role) + ": " + flattenLines(body, 400) + "\n"
 			if b.Len()+len(line) <= 7000 {
 				b.WriteString(line)
 			}
