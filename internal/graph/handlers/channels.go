@@ -3,7 +3,6 @@ package handlers
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"regexp"
@@ -301,6 +300,43 @@ func firstLine(s string, n int) string {
 	return s
 }
 
+// newlineRunRe matches a maximal run of whitespace that contains at least one
+// newline; wsRunRe matches any remaining internal whitespace run. flattenLines
+// uses them to turn a multi-line body into a single transcript line.
+var (
+	newlineRunRe = regexp.MustCompile(`\s*\n\s*`)
+	wsRunRe      = regexp.MustCompile(`\s+`)
+)
+
+// flattenLines collapses a multi-line body into a single transcript line without
+// losing content. firstLine cuts at the first '\n', which is right for the ~20
+// callers that build a title/chip/label/error — but wrong when the string is fed
+// to an LLM as a transcript: the newline cut silently deletes everything after
+// line 1, and the rune cap almost never binds because the newline gets there
+// first. firstLine is deliberately left unchanged (its title/chip callers depend
+// on first-line-only behaviour); this helper is used only at the LLM-transcript
+// call sites.
+//
+// A whitespace run containing a newline becomes the separator " / " so the
+// structural break between lines stays visible to the model instead of running
+// sentences and bullets together; every remaining internal whitespace run
+// collapses to a single space. The result is trimmed to n runes with a trailing
+// "…", matching firstLine's convention exactly. Empty or whitespace-only input
+// returns "".
+func flattenLines(s string, n int) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	s = newlineRunRe.ReplaceAllString(s, " / ")
+	s = wsRunRe.ReplaceAllString(s, " ")
+	r := []rune(s)
+	if len(r) > n {
+		return string(r[:n]) + "…"
+	}
+	return s
+}
+
 // slackIDRe matches an unresolved raw Slack identifier: a user (U…), bot (B…), or
 // workspace (W…) id — an uppercase-alnum run. Real display names carry lowercase
 // or spaces, so this never rejects a genuine name.
@@ -518,8 +554,8 @@ GROUP BY 1`, id, cacheKeys)
 				var cnt int
 				var last int64
 				if lrows.Scan(&tt, &cnt, &last) == nil {
-					// Must match summarize_thread's signature format.
-					liveSig[tt] = fmt.Sprintf("v8:%d:%d", cnt, last)
+					// Signature format comes from threadSummarySignature (summarize_thread.go).
+					liveSig[tt] = threadSummarySignature(cnt, last)
 				}
 			}
 			lrows.Close()

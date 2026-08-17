@@ -519,7 +519,7 @@ ORDER BY 1 LIMIT 5`, h.Channel, h.RootNodeID, threadTS); err == nil {
 			if a == "" {
 				a = "someone"
 			}
-			tb.WriteString(withDept(a, m.dept, m.title, m.domain, m.role) + ": " + firstLine(m.text, 280) + "\n")
+			tb.WriteString(withDept(a, m.dept, m.title, m.domain, m.role) + ": " + flattenLines(m.text, 400) + "\n")
 		}
 		_, overview, highlights, _ = genThreadDeepSummary(ctx, deps.Gemini, tb.String())
 	}

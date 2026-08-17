@@ -121,3 +121,73 @@ func NewBackfillAttachmentsHandler(deps Deps) http.Handler {
 		})
 	})
 }
+
+// backfillStaleSummariesRequest is the request body for POST
+// /api/graph/backfill/stale-summaries. Body is optional; an empty body uses the
+// default cap.
+type backfillStaleSummariesRequest struct {
+	Limit int `json:"limit"`
+}
+
+// backfillStaleSummariesResponse is the response body for POST
+// /api/graph/backfill/stale-summaries.
+type backfillStaleSummariesResponse struct {
+	Status    string `json:"status"`
+	Matched   int    `json:"matched"`
+	Enqueued  int    `json:"enqueued"`
+	Remaining int    `json:"remaining"`
+	Limit     int    `json:"limit"`
+}
+
+// backfillStaleSummariesDefaultLimit is the canary cap for a single sweep. It is
+// deliberately small (20, not the attachments handler's 50): each enqueued
+// thread cascades summarize_thread -> index_artifact (force) -> link_topics, and
+// link_topics is ~15 LLM judge calls per node, so a careless 1000 would be ~15k
+// judge calls.
+const backfillStaleSummariesDefaultLimit = 20
+
+// resolveStaleSummariesLimit resolves an optional request limit to the effective
+// cap: a non-positive value falls back to the default, and a value over the 500
+// ceiling is rejected (ok=false -> 400). Extracted so the clamp is unit-testable
+// without a database pool.
+func resolveStaleSummariesLimit(reqLimit int) (limit int, ok bool) {
+	limit = reqLimit
+	if limit <= 0 {
+		limit = backfillStaleSummariesDefaultLimit
+	}
+	if limit > 500 {
+		return 0, false
+	}
+	return limit, true
+}
+
+// NewBackfillStaleSummariesHandler returns an http.Handler for POST
+// /api/graph/backfill/stale-summaries. It re-enqueues summarize_thread for cached
+// rows whose signature is not on the current threadSummarySigVersion — the rows a
+// version bump strands, because staleness is otherwise only detected lazily on a
+// channel view and BackfillMissingThreadSummaries only covers threads with NO row
+// (agent-mem-8q4). Like NewBackfillAttachmentsHandler this is a bulk LLM re-run:
+// explicitly triggered, capped, and deduped. Deliberately NOT wired into worker
+// startup or any scheduled job.
+func NewBackfillStaleSummariesHandler(deps Deps) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req backfillStaleSummariesRequest
+		// Optional body: ignore decode errors (empty/absent body -> default cap).
+		_ = json.NewDecoder(r.Body).Decode(&req)
+
+		limit, ok := resolveStaleSummariesLimit(req.Limit)
+		if !ok {
+			writeError(w, http.StatusBadRequest, "limit must be between 1 and 500")
+			return
+		}
+
+		matched, enqueued, remaining := BackfillStaleThreadSummaries(r.Context(), deps.DB, limit)
+		writeJSON(w, http.StatusAccepted, backfillStaleSummariesResponse{
+			Status:    "ok",
+			Matched:   matched,
+			Enqueued:  enqueued,
+			Remaining: remaining,
+			Limit:     limit,
+		})
+	})
+}

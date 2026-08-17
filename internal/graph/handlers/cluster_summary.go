@@ -528,9 +528,9 @@ WHERE n.id = ANY($1) AND n.deleted_at IS NULL AND COALESCE(n.body,'') <> ''`, sl
 		}
 		taggedOriginator := false
 		for _, m := range slackMsgs {
-			text := firstLine(m.body, 280)
+			text := flattenLines(m.body, 400)
 			if text == "" {
-				text = firstLine(m.title, 280)
+				text = flattenLines(m.title, 400)
 			}
 			if text == "" {
 				continue
