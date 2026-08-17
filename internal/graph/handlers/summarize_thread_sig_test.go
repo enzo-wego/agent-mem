@@ -52,3 +52,26 @@ func TestBackfillStaleSummariesHandlerRejectsLargeLimit(t *testing.T) {
 		t.Fatalf("limit 501 -> status %d, want %d", w.Code, http.StatusBadRequest)
 	}
 }
+
+// TestStaleSummaryQueriesShareLiveNodeGuard pins the agent-mem-9ll fix: the
+// sweep's capped SELECT and its remaining COUNT(*) must carry the identical
+// live-node predicate, so an orphaned row (Slack nodes gone) is never selected
+// again. They share staleSummaryWhereSQL for exactly that reason. This asserts
+// the fragment still carries the `deleted_at IS NULL` / EXISTS guard, and that
+// both full statements embed it — so a future edit that inlines one query and
+// drops the guard, or weakens the shared fragment, fails here instead of
+// silently reopening the wall.
+func TestStaleSummaryQueriesShareLiveNodeGuard(t *testing.T) {
+	if !strings.Contains(staleSummaryWhereSQL, "deleted_at IS NULL") {
+		t.Fatalf("staleSummaryWhereSQL missing live-node guard \"deleted_at IS NULL\":\n%s", staleSummaryWhereSQL)
+	}
+	if !strings.Contains(staleSummaryWhereSQL, "EXISTS") {
+		t.Fatalf("staleSummaryWhereSQL missing EXISTS live-node guard:\n%s", staleSummaryWhereSQL)
+	}
+	if !strings.Contains(staleSummaryCountSQL, staleSummaryWhereSQL) {
+		t.Fatalf("staleSummaryCountSQL does not embed the shared WHERE fragment:\n%s", staleSummaryCountSQL)
+	}
+	if !strings.Contains(staleSummarySelectSQL, staleSummaryWhereSQL) {
+		t.Fatalf("staleSummarySelectSQL does not embed the shared WHERE fragment:\n%s", staleSummarySelectSQL)
+	}
+}

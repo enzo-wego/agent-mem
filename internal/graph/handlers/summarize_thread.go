@@ -380,6 +380,38 @@ LIMIT $1`, limit)
 	return len(todo)
 }
 
+// staleSummaryWhereSQL is the shared WHERE predicate for the stale-summary
+// sweep, embedded verbatim by BOTH the capped SELECT (staleSummarySelectSQL) and
+// the remaining COUNT(*) (staleSummaryCountSQL) so the two can never carry
+// different filters. $1 is the current-version pattern ("vN:%").
+//
+// The live-node EXISTS guard is the agent-mem-9ll fix. It keeps a row out of the
+// sweep unless the thread still has a non-deleted Slack node, mirroring the node
+// lookup summarizeThreadHandler itself runs. An orphaned row (nodes gone) would
+// otherwise be selected on every run forever: the handler returns at its
+// `count == 0` early check before touching graph.thread_summaries, so the row's
+// updated_at never advances and ORDER BY updated_at ASC keeps re-picking the same
+// oldest orphans, never reaching a real thread. The node join mirrors
+// BackfillMissingThreadSummaries above; keep the two consistent in style.
+const staleSummaryWhereSQL = `ts.signature NOT LIKE $1
+  AND EXISTS (
+    SELECT 1 FROM graph.nodes n
+    WHERE n.scope = 'slack:' || ts.channel_id
+      AND COALESCE(NULLIF(n.metadata->>'thread_ts',''), split_part(n.id,':',3)) = ts.thread_ts
+      AND n.deleted_at IS NULL)`
+
+// staleSummaryCountSQL counts every stale-but-live row, ignoring the cap, so a
+// capped run can report how much real work remains.
+const staleSummaryCountSQL = `SELECT count(*) FROM graph.thread_summaries ts WHERE ` + staleSummaryWhereSQL
+
+// staleSummarySelectSQL returns one capped, oldest-first page of stale-but-live
+// rows to enqueue. $2 is the cap.
+const staleSummarySelectSQL = `SELECT ts.channel_id, ts.thread_ts
+FROM graph.thread_summaries ts
+WHERE ` + staleSummaryWhereSQL + `
+ORDER BY ts.updated_at ASC
+LIMIT $2`
+
 // BackfillStaleThreadSummaries enqueues summarize_thread for cached rows whose
 // signature is not on the current threadSummarySigVersion. It exists because a
 // version bump (agent-mem-8q4) invalidates rows only lazily, when a channel view
@@ -393,6 +425,14 @@ LIMIT $1`, limit)
 // progress instead of re-picking the same rows. enqueueSummarizeThread dedups
 // against a queued/running job for the same (channel, thread), so overlapping
 // runs cannot pile up.
+//
+// The capped SELECT and the remaining COUNT(*) share staleSummaryWhereSQL, whose
+// live-node EXISTS guard (agent-mem-9ll) keeps orphaned rows — those whose Slack
+// nodes are gone — out of the sweep. Without it such a row is re-selected on
+// every run forever, because summarizeThreadHandler returns at its `count == 0`
+// early check before graph.thread_summaries.updated_at can advance, so
+// oldest-first ordering keeps re-picking the same orphans and never reaches a
+// real thread. Sharing the fragment keeps the two predicates from diverging.
 //
 // Returns matched (rows the capped query returned), enqueued, and remaining (the
 // total stale count without the limit, so an operator can see how much work is
@@ -408,16 +448,9 @@ func BackfillStaleThreadSummaries(ctx context.Context, db *pgxpool.Pool, limit i
 
 	// Cheap total-remaining count without the limit, so a capped run can report
 	// how much work is left.
-	_ = db.QueryRow(ctx,
-		`SELECT count(*) FROM graph.thread_summaries WHERE signature NOT LIKE $1`,
-		stalePattern).Scan(&remaining)
+	_ = db.QueryRow(ctx, staleSummaryCountSQL, stalePattern).Scan(&remaining)
 
-	rows, err := db.Query(ctx, `
-SELECT channel_id, thread_ts
-FROM graph.thread_summaries
-WHERE signature NOT LIKE $1
-ORDER BY updated_at ASC
-LIMIT $2`, stalePattern, limit)
+	rows, err := db.Query(ctx, staleSummarySelectSQL, stalePattern, limit)
 	if err != nil {
 		return 0, 0, remaining
 	}
