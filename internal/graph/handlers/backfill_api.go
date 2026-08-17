@@ -139,12 +139,11 @@ type backfillStaleSummariesResponse struct {
 	Limit     int    `json:"limit"`
 }
 
-// backfillStaleSummariesDefaultLimit is the canary cap for a single sweep. It is
-// deliberately small (20, not the attachments handler's 50): each enqueued
-// thread cascades summarize_thread -> index_artifact (force) -> link_topics, and
-// link_topics is ~15 LLM judge calls per node, so a careless 1000 would be ~15k
-// judge calls.
-const backfillStaleSummariesDefaultLimit = 20
+// backfillStaleSummariesDefaultLimit is the bounded batch size for the
+// summary-only sweep. Each row costs one thread-summary generation and one
+// embedding while topic-link LLM judging is skipped, so a 100-row page remains
+// operator-controlled without the former judge-call cascade.
+const backfillStaleSummariesDefaultLimit = 100
 
 // resolveStaleSummariesLimit resolves an optional request limit to the effective
 // cap: a non-positive value falls back to the default, and a value over the 500

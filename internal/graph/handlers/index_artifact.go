@@ -13,8 +13,9 @@ import (
 
 // indexArtifactPayload is the JSON payload for the index_artifact job type.
 type indexArtifactPayload struct {
-	NodeID string `json:"node_id"`
-	Force  bool   `json:"force"`
+	NodeID      string `json:"node_id"`
+	Force       bool   `json:"force"`
+	SkipJudging bool   `json:"skip_judging,omitempty"`
 }
 
 // NewIndexArtifactHandler returns a HandlerInfo for the "index_artifact" job type.
@@ -134,7 +135,7 @@ WHERE channel_id=$1 AND thread_ts=$2`,
 		// Only thread roots (embedding their resource-aware summary) and
 		// non-Slack resources link out — never raw-text Slack messages.
 		if (nodeType != "slack" && nodeType != "slack_thread") || summaryKind == "thread_summary" {
-			enqueueLinkTopics(ctx, deps, p.NodeID, linkTopicsForceFromIndexArtifact(p.Force))
+			enqueueLinkTopics(ctx, deps, p.NodeID, linkTopicsForceFromIndexArtifact(p.Force), p.SkipJudging)
 		}
 		return nil
 	}
