@@ -43,8 +43,9 @@ func threadSummarySignature(count int, newestUpdatedMs int64) string {
 // exist for "only the links changed" and cost 1,335 LLM calls/hour for 3 real
 // updates, because it bypassed the dedup and the skip check together.
 type summarizeThreadPayload struct {
-	ChannelID string `json:"channel_id"`
-	ThreadTs  string `json:"thread_ts"`
+	ChannelID   string `json:"channel_id"`
+	ThreadTs    string `json:"thread_ts"`
+	SkipJudging bool   `json:"skip_judging,omitempty"`
 }
 
 // NewSummarizeThreadHandler returns the job entry for "summarize_thread": it
@@ -181,8 +182,9 @@ ORDER BY COALESCE(to_timestamp(NULLIF(n.metadata->>'ts','')::float8), n.first_se
 			p.ChannelID, p.ThreadTs, sig, linkSig, topic, overview, hlJSON, kind)
 		if err == nil {
 			if _, jErr := jobs.Enqueue(ctx, deps.DB, "index_artifact", map[string]any{
-				"node_id": ids.SlackMessage(p.ChannelID, p.ThreadTs),
-				"force":   true,
+				"node_id":      ids.SlackMessage(p.ChannelID, p.ThreadTs),
+				"force":        true,
+				"skip_judging": p.SkipJudging,
 			}, jobs.EnqueueOptions{Priority: 5, MachineID: deps.MachineID}); jErr != nil {
 				deps.Logger.Warn().Err(jErr).Str("channel_id", p.ChannelID).Str("thread_ts", p.ThreadTs).
 					Msg("summarize_thread: enqueue index_artifact failed")
@@ -375,7 +377,7 @@ LIMIT $1`, limit)
 	}
 	rows.Close()
 	for _, t := range todo {
-		enqueueSummarizeThread(ctx, db, t.ch, t.tt)
+		enqueueSummarizeThread(ctx, db, t.ch, t.tt, false)
 	}
 	return len(todo)
 }
@@ -420,6 +422,8 @@ LIMIT $2`
 // superseded summary. This is a bulk LLM re-run: it is triggered ONLY by an
 // explicit POST (NewBackfillStaleSummariesHandler), never on startup or a
 // schedule.
+// The sweep always skips topic-link LLM judging while preserving deterministic
+// REFERS_TO materialization; this fixed behavior exposes no request knob.
 //
 // Rows are taken oldest-updated_at first so repeated capped runs make monotonic
 // progress instead of re-picking the same rows. enqueueSummarizeThread dedups
@@ -467,7 +471,7 @@ func BackfillStaleThreadSummaries(ctx context.Context, db *pgxpool.Pool, limit i
 	rows.Close()
 	matched = len(todo)
 	for _, t := range todo {
-		enqueueSummarizeThread(ctx, db, t.ch, t.tt)
+		enqueueSummarizeThread(ctx, db, t.ch, t.tt, true)
 		enqueued++
 	}
 	return matched, enqueued, remaining
@@ -477,7 +481,7 @@ func BackfillStaleThreadSummaries(ctx context.Context, db *pgxpool.Pool, limit i
 // queued/running for the same (channel, thread) — cheap dedup so a backfill or a
 // burst of replies doesn't pile up duplicate LLM jobs. Errors are ignored
 // (best-effort; the /topics endpoint re-enqueues on the next miss).
-func enqueueSummarizeThread(ctx context.Context, db *pgxpool.Pool, channelID, threadTs string) {
+func enqueueSummarizeThread(ctx context.Context, db *pgxpool.Pool, channelID, threadTs string, skipJudging bool) {
 	if channelID == "" || threadTs == "" {
 		return
 	}
@@ -497,6 +501,6 @@ SELECT EXISTS(
 		return
 	}
 	_, _ = jobs.Enqueue(ctx, db, "summarize_thread", summarizeThreadPayload{
-		ChannelID: channelID, ThreadTs: threadTs,
+		ChannelID: channelID, ThreadTs: threadTs, SkipJudging: skipJudging,
 	}, jobs.EnqueueOptions{Priority: 6})
 }

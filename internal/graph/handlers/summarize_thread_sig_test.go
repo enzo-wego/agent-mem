@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -22,11 +23,11 @@ func TestThreadSummarySignature(t *testing.T) {
 
 // TestResolveStaleSummariesLimit covers the sweep handler's limit clamp, which
 // is extracted from the handler so it is exercisable without a database pool:
-// an empty/zero limit falls back to the default 20, and anything over the 500
+// an empty/zero limit falls back to the default 100, and anything over the 500
 // ceiling is rejected.
 func TestResolveStaleSummariesLimit(t *testing.T) {
-	if backfillStaleSummariesDefaultLimit != 20 {
-		t.Fatalf("default limit = %d, want 20", backfillStaleSummariesDefaultLimit)
+	if backfillStaleSummariesDefaultLimit != 100 {
+		t.Fatalf("default limit = %d, want 100", backfillStaleSummariesDefaultLimit)
 	}
 	if got, ok := resolveStaleSummariesLimit(0); !ok || got != backfillStaleSummariesDefaultLimit {
 		t.Fatalf("empty body limit = (%d, %v), want (%d, true)", got, ok, backfillStaleSummariesDefaultLimit)
@@ -50,6 +51,58 @@ func TestBackfillStaleSummariesHandlerRejectsLargeLimit(t *testing.T) {
 	h.ServeHTTP(w, req)
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("limit 501 -> status %d, want %d", w.Code, http.StatusBadRequest)
+	}
+}
+
+func TestSkipJudgingPayloadJSONRoundTrip(t *testing.T) {
+	linkTopicsTarget := &linkTopicsPayload{}
+	indexArtifactTarget := &indexArtifactPayload{}
+	summarizeThreadTarget := &summarizeThreadPayload{}
+	tests := []struct {
+		name        string
+		payload     any
+		target      any
+		skipJudging func() bool
+	}{
+		{
+			name:        "link_topics",
+			payload:     linkTopicsPayload{SkipJudging: true},
+			target:      linkTopicsTarget,
+			skipJudging: func() bool { return linkTopicsTarget.SkipJudging },
+		},
+		{
+			name:        "index_artifact",
+			payload:     indexArtifactPayload{SkipJudging: true},
+			target:      indexArtifactTarget,
+			skipJudging: func() bool { return indexArtifactTarget.SkipJudging },
+		},
+		{
+			name:        "summarize_thread",
+			payload:     summarizeThreadPayload{SkipJudging: true},
+			target:      summarizeThreadTarget,
+			skipJudging: func() bool { return summarizeThreadTarget.SkipJudging },
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			data, err := json.Marshal(tt.payload)
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+			var wire map[string]any
+			if err := json.Unmarshal(data, &wire); err != nil {
+				t.Fatalf("unmarshal wire object: %v", err)
+			}
+			if got, ok := wire["skip_judging"].(bool); !ok || !got {
+				t.Fatalf("skip_judging = %#v, want true: %s", wire["skip_judging"], data)
+			}
+			if err := json.Unmarshal(data, tt.target); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			if !tt.skipJudging() {
+				t.Fatalf("SkipJudging lost in JSON round-trip: %s", data)
+			}
+		})
 	}
 }
 

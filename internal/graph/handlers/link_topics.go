@@ -32,8 +32,9 @@ const (
 )
 
 type linkTopicsPayload struct {
-	NodeID string `json:"node_id"`
-	Force  bool   `json:"force,omitempty"`
+	NodeID      string `json:"node_id"`
+	Force       bool   `json:"force,omitempty"`
+	SkipJudging bool   `json:"skip_judging,omitempty"`
 	// ExtraCandidates are node ids to judge in addition to the generated
 	// candidates — the neighbors panel queues threads it displayed without a
 	// verdict, so every visible pair converges to confirmed/refused.
@@ -116,6 +117,10 @@ func linkTopicsHandler(deps Deps) jobs.Handler {
 			if err := materializeThreadReferences(ctx, deps, source.NodeID); err != nil {
 				deps.Logger.Warn().Err(err).Str("node_id", p.NodeID).Msg("link_topics: materialize REFERS_TO failed")
 			}
+		}
+		if p.SkipJudging {
+			deps.Logger.Info().Str("node_id", p.NodeID).Msg("link_topics: skipping LLM judging")
+			return nil
 		}
 
 		embCands, err := shortlistTopicLinks(ctx, deps, p.NodeID)
@@ -802,13 +807,14 @@ func clamp01(v float64) float64 {
 	return v
 }
 
-func enqueueLinkTopics(ctx context.Context, deps Deps, nodeID string, force bool) {
+func enqueueLinkTopics(ctx context.Context, deps Deps, nodeID string, force, skipJudging bool) {
 	if deps.DB == nil || nodeID == "" {
 		return
 	}
 	if _, err := jobs.Enqueue(ctx, deps.DB, "link_topics", map[string]any{
-		"node_id": nodeID,
-		"force":   force,
+		"node_id":      nodeID,
+		"force":        force,
+		"skip_judging": skipJudging,
 	}, jobs.EnqueueOptions{Priority: 7, MachineID: deps.MachineID}); err != nil {
 		deps.Logger.Warn().Err(err).Str("node_id", nodeID).Msg("enqueue link_topics failed")
 	}

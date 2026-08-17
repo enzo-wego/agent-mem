@@ -117,7 +117,7 @@ LEFT JOIN graph.nodes rt ON rt.id = 'slack:' || p.channel_id || ':' || p.thread_
 		}
 		liveSig := fmt.Sprintf("v7:%d:%d", pt.MsgCount, sigMs)
 		if pt.MsgCount > 0 && (pt.Summary == "" || storedSig != liveSig) {
-			enqueueSummarizeThread(ctx, h.db, pt.ChannelID, pt.ThreadTS)
+			enqueueSummarizeThread(ctx, h.db, pt.ChannelID, pt.ThreadTS, false)
 		}
 		out[threadRef{pt.ChannelID, pt.ThreadTS}] = pt
 	}

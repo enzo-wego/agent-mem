@@ -325,7 +325,7 @@ LIMIT $2`, nodeID, refreshThreadsForResourceLinkCap+1) // +1 to detect truncatio
 			Msg("fetch_body: resource-link refresh capped; remaining threads keep their link titles until their messages change")
 	}
 	for _, th := range threads {
-		enqueueSummarizeThread(ctx, deps.DB, th.channel, th.thread)
+		enqueueSummarizeThread(ctx, deps.DB, th.channel, th.thread, false)
 	}
 }
 
