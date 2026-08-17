@@ -16,6 +16,26 @@ import (
 	"github.com/agent-mem/agent-mem/internal/llmjson"
 )
 
+// threadSummarySigVersion is the single source of truth for the thread-summary
+// cache-key version. Bumping it invalidates every cached row in
+// graph.thread_summaries. Every reader and writer of a signature MUST derive it
+// from this constant — it used to be hardcoded in two places kept in sync by
+// comment, and a divergence would make every thread read permanently stale.
+//
+// v2..v8 history: see the comment block in summarizeThreadHandler above the
+// signature computation.
+// v9: the LLM transcript builder no longer truncates each message at its first
+// newline (agent-mem-t8r), so every summary cached under v5..v8 was written from
+// a transcript missing everything after line 1 of every multi-line message.
+const threadSummarySigVersion = "v9"
+
+// threadSummarySignature builds a thread-summary cache key from the version
+// constant, the ingested message count, and the newest message updated_at (ms).
+// It is the only place the "v<N>:count:ms" format is produced.
+func threadSummarySignature(count int, newestUpdatedMs int64) string {
+	return fmt.Sprintf("%s:%d:%d", threadSummarySigVersion, count, newestUpdatedMs)
+}
+
 // summarizeThreadPayload is the JSON payload for the summarize_thread job type.
 // There is deliberately no Force field: the signature pair below covers both
 // what the messages say and what the linked resources are called, so every
@@ -104,15 +124,16 @@ ORDER BY COALESCE(to_timestamp(NULLIF(n.metadata->>'ts','')::float8), n.first_se
 
 		// Signature reflects content state: message count + newest updated_at. A new
 		// reply (count), an edit (updated_at bumps), or a delete (count) all change it,
-		// so the cached summary regenerates instead of going stale. The "v2:" prefix
-		// invalidates rows cached under the old one-line-only logic so they regenerate
-		// with the deep overview+highlights. Keep this prefix in sync with channels.go.
+		// so the cached summary regenerates instead of going stale. The version prefix
+		// is threadSummarySigVersion (see its doc comment) — bumping it there
+		// invalidates every cached row. The "v2:" prefix invalidated rows cached under
+		// the old one-line-only logic so they regenerated with the deep
+		// overview+highlights.
 		// v4: author now falls back to the resolved person's display_name when the
 		// Slack author is empty (bot notifications), so summaries name the real actor
 		// instead of "someone". Bump to regenerate rows cached with anonymous authors.
-		// Keep this prefix in sync with channels.go.
 		// v8: author labels prefer evidence-backed domain roles when available.
-		sig := fmt.Sprintf("v8:%d:%d", count, maxUpdated)
+		sig := threadSummarySignature(count, maxUpdated)
 
 		// Prepend the thread's linked-resource titles so the summary can name the
 		// ticket/doc it is about instead of ignoring it. When the thread is only a
@@ -357,6 +378,66 @@ LIMIT $1`, limit)
 		enqueueSummarizeThread(ctx, db, t.ch, t.tt)
 	}
 	return len(todo)
+}
+
+// BackfillStaleThreadSummaries enqueues summarize_thread for cached rows whose
+// signature is not on the current threadSummarySigVersion. It exists because a
+// version bump (agent-mem-8q4) invalidates rows only lazily, when a channel view
+// renders, and BackfillMissingThreadSummaries covers only threads with NO
+// summary row — so a bump strands every un-reopened channel on the old,
+// superseded summary. This is a bulk LLM re-run: it is triggered ONLY by an
+// explicit POST (NewBackfillStaleSummariesHandler), never on startup or a
+// schedule.
+//
+// Rows are taken oldest-updated_at first so repeated capped runs make monotonic
+// progress instead of re-picking the same rows. enqueueSummarizeThread dedups
+// against a queued/running job for the same (channel, thread), so overlapping
+// runs cannot pile up.
+//
+// Returns matched (rows the capped query returned), enqueued, and remaining (the
+// total stale count without the limit, so an operator can see how much work is
+// left after a capped run). enqueued counts the rows enqueueSummarizeThread was
+// called for: that helper is best-effort and silently skips duplicates, and per
+// the agent-mem-8q4 non-goals must not change to report back, so enqueued is
+// best-effort and can overcount rows a concurrent run already queued.
+func BackfillStaleThreadSummaries(ctx context.Context, db *pgxpool.Pool, limit int) (matched, enqueued, remaining int) {
+	if limit <= 0 {
+		limit = backfillStaleSummariesDefaultLimit
+	}
+	stalePattern := threadSummarySigVersion + ":%"
+
+	// Cheap total-remaining count without the limit, so a capped run can report
+	// how much work is left.
+	_ = db.QueryRow(ctx,
+		`SELECT count(*) FROM graph.thread_summaries WHERE signature NOT LIKE $1`,
+		stalePattern).Scan(&remaining)
+
+	rows, err := db.Query(ctx, `
+SELECT channel_id, thread_ts
+FROM graph.thread_summaries
+WHERE signature NOT LIKE $1
+ORDER BY updated_at ASC
+LIMIT $2`, stalePattern, limit)
+	if err != nil {
+		return 0, 0, remaining
+	}
+	type th struct{ ch, tt string }
+	var todo []th
+	for rows.Next() {
+		var t th
+		if err := rows.Scan(&t.ch, &t.tt); err != nil {
+			rows.Close()
+			return len(todo), enqueued, remaining
+		}
+		todo = append(todo, t)
+	}
+	rows.Close()
+	matched = len(todo)
+	for _, t := range todo {
+		enqueueSummarizeThread(ctx, db, t.ch, t.tt)
+		enqueued++
+	}
+	return matched, enqueued, remaining
 }
 
 // enqueueSummarizeThread enqueues a summarize_thread job unless one is already

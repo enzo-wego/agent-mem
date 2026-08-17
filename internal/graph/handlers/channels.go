@@ -3,7 +3,6 @@ package handlers
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"regexp"
@@ -555,8 +554,8 @@ GROUP BY 1`, id, cacheKeys)
 				var cnt int
 				var last int64
 				if lrows.Scan(&tt, &cnt, &last) == nil {
-					// Must match summarize_thread's signature format.
-					liveSig[tt] = fmt.Sprintf("v8:%d:%d", cnt, last)
+					// Signature format comes from threadSummarySignature (summarize_thread.go).
+					liveSig[tt] = threadSummarySignature(cnt, last)
 				}
 			}
 			lrows.Close()

@@ -7,9 +7,9 @@ import "testing"
 // calls/hour for 3 real updates. Every row below is a case that must NOT call
 // the LLM, or must.
 func TestSummarySkip(t *testing.T) {
+	sigA := threadSummarySignature(3, 1785480000000)
+	sigB := threadSummarySignature(4, 1785480999000) // a reply arrived
 	const (
-		sigA  = "v8:3:1785480000000"
-		sigB  = "v8:4:1785480999000" // a reply arrived
 		linkA = "a1b2c3d4e5f60718"
 		linkB = "0f1e2d3c4b5a6978" // the ticket's title landed
 	)
