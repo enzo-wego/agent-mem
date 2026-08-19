@@ -190,3 +190,84 @@ Order of work on resume: `agent-mem-5k0` (attribution first), then `agent-mem-ri
 Deliberately NOT done: the queue cleanup (529 dead-`vps` rows, 922+334 duplicate
 singletons). It is cosmetic while nothing claims jobs, and not worth another prod write
 during the pause.
+
+---
+
+## Correction — there were TWO gateways, not one (2026-08-19)
+
+The "burn confirmed stopped" claim above was measured against the **hub** gateway only.
+It was wrong as a statement about total spend.
+
+Enzo's **laptop** runs a complete second agent-mem stack: its own `agent-mem-worker-1`
+(container created 2026-08-05), its own postgres, and its own llm-gateway. It had
+`processing_paused=false` the entire time and was making **500-730 `/generate` calls per
+hour, uninterrupted, for at least 12 hours** — right through the hub pause.
+
+Real total was ~1,370 calls/hour. Pausing the hub removed about 60% of it.
+
+### Two gateways on the laptop, and the container is the decoy
+
+```
+llm_gateway_url = http://host.docker.internal:8750
+```
+
+`host.docker.internal` resolves to the **host**, so the laptop worker talks to a
+**native uvicorn**, not the docker container of the same name:
+
+| listener | what it is | used by agent-mem? |
+|---|---|---|
+| `llm-gateway-llm-gateway-1` (docker, 127.0.0.1:8750) | container | **no** |
+| `uvicorn app.main:app --port 8750` (PID, native, up 14d) | real gateway | **yes** |
+
+Stopping the container alone changes nothing. Both must go down.
+
+## Full shutdown state as of 2026-08-19 05:15 UTC
+
+| target | action | verified |
+|---|---|---|
+| hub processing | `processing_paused=true` | 0 calls, 0 jobs / 45s |
+| laptop processing | `processing_paused=true` | partially honored — `detect_hot_topics` still ran |
+| laptop gateway (container) | `docker stop llm-gateway-llm-gateway-1` | `Exited (0)` |
+| laptop gateway (native) | `kill <uvicorn pid>` | nothing on :8750, HTTP 000 |
+
+Note: the laptop's pause flag is set but `detect_hot_topics` continued past it. Root
+cause not investigated (Enzo scoped it out as small). Killing the gateway is what
+actually stopped the laptop.
+
+## Is anything lost? No — verified in code
+
+- **Flat memory: safe, guaranteed.** `RequeueRetryablePendingMessage`
+  (`internal/database/pending.go:96`) sets `attempts = GREATEST(attempts - 1, 0)` — an
+  LLM-unavailable retry *decrements* the counter, so it can never exhaust the retry
+  budget. Messages wait indefinitely and drain on resume.
+- **Graph jobs: durable.** They are rows in `graph.jobs`. On the hub nothing is claimed
+  at all while paused. Where a job does run against a dead gateway, the handlers return
+  `nil` on transient LLM failure (`summarize_thread.go:168`) leaving the cache signature
+  unadvanced, so the work is re-triggered later rather than lost.
+  Exception: `link_topics` judgments are skipped and only re-run when the pair reappears
+  in an embedding shortlist.
+- **Slack: safe.** p-agent's fsync'd NDJSON buffer replays from its offset.
+
+## Resume procedure for 2026-08-22 02:00 UTC (09:00 UTC+7)
+
+Order matters. Do NOT start with `pause off` — a straight resume on the hub spiked it to
+**3,480 calls/hour** as the paused backlog discharged at once.
+
+1. Fix first (`agent-mem-5k0` attribution, then `rik`, `48e`, `0x7`).
+2. Restart the laptop gateway only when needed:
+   ```
+   cd /Users/neocapitelo/go/src/github.com/llm-gateway
+   .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8750
+   ```
+   (the docker container is not the one in use; leave it stopped)
+3. Resume ONE instance at a time, and cap the drain — do not unpause both at once.
+4. Decide whether the laptop should run a worker at all (`agent-mem-l3o`). Two workers
+   on one OAuth token, each with its own gateway, is the condition that made this
+   incident invisible.
+
+## Secret exposure
+
+A `SELECT key||' = '||value FROM settings WHERE key LIKE '%gateway%'` printed
+`llm_gateway_api_key` into the session transcript. Rotate if that transcript is shared.
+The existing guidance — select specific keys, never a LIKE pattern over `settings` — was
+already recorded and was not followed.
