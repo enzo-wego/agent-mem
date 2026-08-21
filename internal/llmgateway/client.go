@@ -26,8 +26,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"runtime"
 	"strings"
+	"sync"
 	"time"
+
+	"github.com/rs/zerolog/log"
 
 	"github.com/agent-mem/agent-mem/internal/gemini"
 	"github.com/agent-mem/agent-mem/internal/llmjson"
@@ -102,14 +106,65 @@ func IsRetryable(err error) bool {
 	return false
 }
 
+// meter tracks LLM calls in a rolling hour window.
+type meter struct {
+	mu    sync.Mutex
+	hour  int // time.Now().Hour()
+	count int
+	// loggedCapHit tracks whether we've logged a cap refusal this hour, so we
+	// only log once per hour instead of flooding on every refused call.
+	loggedCapHit bool
+}
+
+// tickLocked resets the counter when the clock hour changes.
+// Must be called with m.mu held.
+func (m *meter) tickLocked() {
+	h := time.Now().Hour()
+	if m.hour != h {
+		m.hour = h
+		m.count = 0
+		m.loggedCapHit = false
+	}
+}
+
+// incr increments the counter and returns the new count.
+func (m *meter) incr() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.tickLocked()
+	m.count++
+	return m.count
+}
+
+// get returns the current count without changing it.
+func (m *meter) get() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.tickLocked()
+	return m.count
+}
+
+// logCapHit logs a cap warning once per hour.
+func (m *meter) logCapHit(cap, count int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.loggedCapHit {
+		log.Warn().Int("cap", cap).Int("count", count).Msg("LLM hourly cap reached")
+		m.loggedCapHit = true
+	}
+}
+
 // Client talks to one llm-gateway instance. It satisfies the same method set as
 // gemini.Client for the calls agent-mem makes, so it can replace that client
 // rather than sit beside it.
 type Client struct {
-	baseURL string
-	apiKey  string
-	dims    int // default embedding dimensionality: 768 flat, 3072 graph
-	http    *http.Client
+	baseURL    string
+	apiKey     string
+	dims       int // default embedding dimensionality: 768 flat, 3072 graph
+	http       *http.Client
+	cap        int   // hourly generate cap; 0 = unlimited
+	genMeter   meter // counts generate calls
+	embedMeter meter // counts embed calls (attributed but not capped)
 }
 
 // New returns a client for baseURL (e.g. "http://172.18.0.1:8750"). dims is the
@@ -126,12 +181,66 @@ func New(baseURL, apiKey string, dims int) *Client {
 	// are for external egress and can route this internal hop through a relay
 	// that cannot reach it, so gateway traffic must always connect directly.
 	transport.Proxy = nil
+	now := time.Now().Hour()
 	return &Client{
-		baseURL: strings.TrimRight(baseURL, "/"),
-		apiKey:  apiKey,
-		dims:    dims,
-		http:    &http.Client{Transport: transport, Timeout: RequestTimeout},
+		baseURL:    strings.TrimRight(baseURL, "/"),
+		apiKey:     apiKey,
+		dims:       dims,
+		http:       &http.Client{Transport: transport, Timeout: RequestTimeout},
+		genMeter:   meter{hour: now},
+		embedMeter: meter{hour: now},
 	}
+}
+
+// SetCap sets the hourly generate call ceiling. 0 = unlimited.
+// Call this after New when a configured cap is available — the client starts
+// unlimited and the cap can be changed live.
+func (c *Client) SetCap(n int) {
+	c.genMeter.mu.Lock()
+	defer c.genMeter.mu.Unlock()
+	c.cap = n
+}
+
+// CallCount returns (generateCount, embedCount, hourlyCap).
+// Safe for concurrent use. The counts reset at the clock-hour boundary.
+func (c *Client) CallCount() (gen, embed, cap int) {
+	return c.genMeter.get(), c.embedMeter.get(), c.cap
+}
+
+// callerName walks the call stack out of this package and returns a short,
+// greppable name like "handlers.summarizeThreadHandler" or
+// "worker.processObservation". It never returns an llmgateway frame.
+func callerName() string {
+	const (
+		thisPkgPath = "github.com/agent-mem/agent-mem/internal/llmgateway"
+		modulePfx   = "github.com/agent-mem/agent-mem/"
+	)
+	pcs := make([]uintptr, 32)
+	n := runtime.Callers(2, pcs)
+	frames := runtime.CallersFrames(pcs[:n])
+	for {
+		f, more := frames.Next()
+		fn := f.Function
+		// Only consider frames that belong to this module (not runtime, testing, etc.)
+		// and are outside the llmgateway package itself (but llmgateway_test is fine).
+		// fn is like "github.com/agent-mem/agent-mem/internal/handlers.summarizeThreadHandler"
+		// or "github.com/agent-mem/agent-mem/internal/llmgateway_test.TestCallerAttributionExternal".
+		// Require: starts with modulePfx, and does NOT start with thisPkgPath + ".".
+		if strings.HasPrefix(fn, modulePfx) && !strings.HasPrefix(fn, thisPkgPath+".") {
+			// Trim the module path prefix, keep "pkg.Func".
+			fn = fn[len(modulePfx):]
+			// fn is now like "internal/handlers.summarizeThreadHandler";
+			// trim to the last path component: "handlers.summarizeThreadHandler".
+			if idx := strings.LastIndex(fn, "/"); idx >= 0 {
+				fn = fn[idx+1:]
+			}
+			return fn
+		}
+		if !more {
+			break
+		}
+	}
+	return "unknown"
 }
 
 // post sends a JSON body and decodes a JSON response. A transport failure is
@@ -194,6 +303,20 @@ type textResponse struct {
 // "the LLM had nothing to say", so a failure that returned "" would poison the
 // summary cache with blanks that never regenerate.
 func (c *Client) generate(ctx context.Context, tier, systemPrompt, userMessage string) (string, error) {
+	caller := callerName()
+
+	// Check cap before making any HTTP request.
+	if c.cap > 0 {
+		count := c.genMeter.get()
+		if count >= c.cap {
+			c.genMeter.logCapHit(c.cap, count)
+			return "", fmt.Errorf("%w: hourly cap of %d generate calls reached (caller=%s tier=%s)",
+				ErrUnreachable, c.cap, caller, tier)
+		}
+	}
+
+	start := time.Now()
+	n := c.genMeter.incr()
 	var out textResponse
 	if err := c.post(ctx, "/generate",
 		generateRequest{System: systemPrompt, User: userMessage, Tier: tier}, &out); err != nil {
@@ -202,6 +325,12 @@ func (c *Client) generate(ctx context.Context, tier, systemPrompt, userMessage s
 	if strings.TrimSpace(out.Text) == "" {
 		return "", fmt.Errorf("llm-gateway: /generate returned no text (tier=%s backend=%s)", tier, out.Backend)
 	}
+	log.Info().
+		Str("caller", caller).
+		Str("tier", tier).
+		Int64("elapsed_ms", time.Since(start).Milliseconds()).
+		Int("hour_count", n).
+		Msg("llm-gateway generate")
 	return out.Text, nil
 }
 
@@ -242,10 +371,13 @@ func (c *Client) Embed(ctx context.Context, text string) ([]float32, error) {
 // space than the corpus — search would quietly return worse results rather than
 // fail, which is the hardest kind of regression to notice.
 func (c *Client) EmbedWithOptions(ctx context.Context, text string, opts gemini.EmbedOptions) ([]float32, error) {
+	caller := callerName()
 	dims := opts.OutputDimensionality
 	if dims <= 0 {
 		dims = c.dims
 	}
+	start := time.Now()
+	n := c.embedMeter.incr()
 	var out embedResponse
 	if err := c.post(ctx, "/embed", embedRequest{Texts: []string{text}, Dims: dims}, &out); err != nil {
 		return nil, err
@@ -260,6 +392,12 @@ func (c *Client) EmbedWithOptions(ctx context.Context, text string, opts gemini.
 	if len(v) != dims {
 		return nil, fmt.Errorf("llm-gateway: /embed returned %d dims, want %d", len(v), dims)
 	}
+	log.Info().
+		Str("caller", caller).
+		Str("tier", "embed").
+		Int64("elapsed_ms", time.Since(start).Milliseconds()).
+		Int("hour_count", n).
+		Msg("llm-gateway embed")
 	return v, nil
 }
 
@@ -273,6 +411,9 @@ func (c *Client) EmbedBatch(ctx context.Context, texts []string) ([][]float32, e
 	if len(texts) == 0 {
 		return nil, nil
 	}
+	caller := callerName()
+	start := time.Now()
+	n := c.embedMeter.incr()
 	var out embedResponse
 	if err := c.post(ctx, "/embed", embedRequest{Texts: texts, Dims: c.dims}, &out); err != nil {
 		return nil, err
@@ -286,6 +427,13 @@ func (c *Client) EmbedBatch(ctx context.Context, texts []string) ([][]float32, e
 			return nil, fmt.Errorf("llm-gateway: /embed vector %d has %d dims, want %d", i, len(v), c.dims)
 		}
 	}
+	log.Info().
+		Str("caller", caller).
+		Str("tier", "embed-batch").
+		Int("batch_size", len(texts)).
+		Int64("elapsed_ms", time.Since(start).Milliseconds()).
+		Int("hour_count", n).
+		Msg("llm-gateway embed")
 	return out.Embeddings, nil
 }
 

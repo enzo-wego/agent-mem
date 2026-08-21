@@ -141,7 +141,9 @@ func newGatewayClient(snap config.ConfigSnapshot, dims int) *llmgateway.Client {
 	if strings.TrimSpace(snap.LLMGatewayURL) == "" {
 		return nil
 	}
-	return llmgateway.New(snap.LLMGatewayURL, snap.LLMGatewayAPIKey, dims)
+	c := llmgateway.New(snap.LLMGatewayURL, snap.LLMGatewayAPIKey, dims)
+	c.SetCap(snap.LLMHourlyCallCap)
+	return c
 }
 
 // flatLLMFor returns the client flat memory should call, or nil when no gateway
