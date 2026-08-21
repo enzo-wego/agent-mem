@@ -93,6 +93,13 @@ type Config struct {
 	LLMGatewayURL    string `json:"llm_gateway_url"`
 	LLMGatewayAPIKey string `json:"llm_gateway_api_key"`
 
+	// LLMHourlyCallCap is the maximum number of generate calls (Generate,
+	// GenerateCheap) allowed per rolling clock-hour, per process. 0 = unlimited.
+	// Embeddings are excluded — they run on OpenRouter credits, not the Claude
+	// subscription seat this cap protects.
+	// Change live via PUT /api/settings {"llm_hourly_call_cap": N}.
+	LLMHourlyCallCap int `json:"llm_hourly_call_cap"`
+
 	ContextObservations int    `json:"context_observations"`
 	ContextFullCount    int    `json:"context_full_count"`
 	ContextSessionCount int    `json:"context_session_count"`
@@ -145,6 +152,7 @@ func (c *Config) RuntimeSettings() map[string]string {
 		"gemini_embedding_dims": strconv.Itoa(c.GeminiEmbeddingDims),
 		"llm_gateway_url":       c.LLMGatewayURL,
 		"llm_gateway_api_key":   c.LLMGatewayAPIKey,
+		"llm_hourly_call_cap":   strconv.Itoa(c.LLMHourlyCallCap),
 		"context_observations":  strconv.Itoa(c.ContextObservations),
 		"context_full_count":    strconv.Itoa(c.ContextFullCount),
 		"context_session_count": strconv.Itoa(c.ContextSessionCount),
@@ -178,6 +186,10 @@ func (c *Config) ApplyDBSettings(dbSettings map[string]string) {
 			c.LLMGatewayURL = v
 		case "llm_gateway_api_key":
 			c.LLMGatewayAPIKey = v
+		case "llm_hourly_call_cap":
+			if n, err := strconv.Atoi(v); err == nil {
+				c.LLMHourlyCallCap = n
+			}
 		case "context_observations":
 			if n, err := strconv.Atoi(v); err == nil {
 				c.ContextObservations = n
@@ -226,6 +238,7 @@ func (c *Config) snapshot() ConfigSnapshot {
 		GeminiEmbeddingDims: c.GeminiEmbeddingDims,
 		LLMGatewayURL:       c.LLMGatewayURL,
 		LLMGatewayAPIKey:    c.LLMGatewayAPIKey,
+		LLMHourlyCallCap:    c.LLMHourlyCallCap,
 		ContextObservations: c.ContextObservations,
 		ContextFullCount:    c.ContextFullCount,
 		ContextSessionCount: c.ContextSessionCount,
@@ -253,6 +266,7 @@ type ConfigSnapshot struct {
 
 	LLMGatewayURL       string      `json:"llm_gateway_url"`
 	LLMGatewayAPIKey    string      `json:"llm_gateway_api_key"`
+	LLMHourlyCallCap    int         `json:"llm_hourly_call_cap"`
 	ContextObservations int         `json:"context_observations"`
 	ContextFullCount    int         `json:"context_full_count"`
 	ContextSessionCount int         `json:"context_session_count"`
@@ -280,6 +294,7 @@ func (c *Config) Update(partial map[string]any) (llmChanged bool) {
 	oldEmbDims := c.GeminiEmbeddingDims
 	oldGatewayURL := c.LLMGatewayURL
 	oldGatewayKey := c.LLMGatewayAPIKey
+	oldCallCap := c.LLMHourlyCallCap
 
 	for k, v := range partial {
 		switch k {
@@ -294,6 +309,10 @@ func (c *Config) Update(partial map[string]any) (llmChanged bool) {
 		case "llm_gateway_api_key":
 			if s, ok := v.(string); ok {
 				c.LLMGatewayAPIKey = strings.TrimSpace(s)
+			}
+		case "llm_hourly_call_cap":
+			if n, ok := toInt(v); ok {
+				c.LLMHourlyCallCap = n
 			}
 		case "allowed_projects":
 			if s, ok := v.(string); ok {
@@ -356,7 +375,8 @@ func (c *Config) Update(partial map[string]any) (llmChanged bool) {
 
 	return c.GeminiEmbeddingDims != oldEmbDims ||
 		c.LLMGatewayURL != oldGatewayURL ||
-		c.LLMGatewayAPIKey != oldGatewayKey
+		c.LLMGatewayAPIKey != oldGatewayKey ||
+		c.LLMHourlyCallCap != oldCallCap
 }
 
 func toInt(v any) (int, bool) {

@@ -306,3 +306,123 @@ func TestBaseURLTrailingSlashAndDimsDefault(t *testing.T) {
 		t.Errorf("dims default = %d, want 3072", got)
 	}
 }
+
+// --- New tests for meter, cap, and attribution ---
+
+// TestMeterRollover verifies the counter resets at clock-hour boundaries.
+// We inject an impossible stored hour (25) so tickLocked always sees a mismatch
+// with time.Now().Hour() (0–23), triggering a reset deterministically.
+func TestMeterRollover(t *testing.T) {
+	m := &meter{}
+	m.mu.Lock()
+	m.hour = 25 // impossible — always differs from any real hour (0–23)
+	m.count = 50
+	m.mu.Unlock()
+
+	got := m.incr() // tickLocked fires: 25 != real hour → reset to 0, then ++ → 1
+	if got != 1 {
+		t.Errorf("after hour rollover incr() = %d, want 1", got)
+	}
+}
+
+// TestMeterSameHourAccumulates verifies count grows within one hour.
+func TestMeterSameHourAccumulates(t *testing.T) {
+	m := &meter{}
+	m.mu.Lock()
+	m.hour = time.Now().Hour() // same as current — no reset
+	m.count = 5
+	m.mu.Unlock()
+
+	got := m.incr()
+	if got != 6 {
+		t.Errorf("same-hour incr() = %d, want 6", got)
+	}
+}
+
+// TestCapZeroNeverRefuses verifies cap=0 allows unlimited calls.
+func TestCapZeroNeverRefuses(t *testing.T) {
+	srv, _ := serve(t, 200, `{"backend":"test","text":"ok"}`)
+
+	c := New(srv.URL, "secret", 3072)
+	c.SetCap(0) // unlimited
+
+	// Artificially inflate the counter (hour already set to now by New).
+	c.genMeter.mu.Lock()
+	c.genMeter.count = 9999
+	c.genMeter.mu.Unlock()
+
+	ctx := context.Background()
+	_, err := c.Generate(ctx, "sys", "user")
+	if err != nil {
+		t.Errorf("cap=0 with count=9999 returned error: %v", err)
+	}
+}
+
+// TestCapRefusalAtLimit verifies that when count >= cap:
+//   - no HTTP request is made
+//   - the error contains "hourly cap"
+//   - IsRetryable classifies it as retryable
+//   - it wraps ErrUnreachable
+func TestCapRefusalAtLimit(t *testing.T) {
+	httpCalled := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		httpCalled = true
+		t.Error("HTTP request made despite cap being hit")
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	t.Cleanup(srv.Close)
+
+	c := New(srv.URL, "secret", 3072)
+	c.SetCap(10)
+
+	// Set count to exactly the cap; hour is time.Now().Hour() from New,
+	// so tickLocked will not reset.
+	c.genMeter.mu.Lock()
+	c.genMeter.count = 10
+	c.genMeter.mu.Unlock()
+
+	ctx := context.Background()
+	_, err := c.Generate(ctx, "sys", "user")
+	if err == nil {
+		t.Fatal("expected cap refusal error, got nil")
+	}
+	if httpCalled {
+		t.Error("HTTP request was made despite cap being hit")
+	}
+	if !strings.Contains(err.Error(), "hourly cap") {
+		t.Errorf("error does not contain 'hourly cap': %v", err)
+	}
+	// IsRetryable is the same predicate processor.go uses (llmgateway.IsRetryable).
+	if !IsRetryable(err) {
+		t.Errorf("cap error not classified retryable by IsRetryable: %v", err)
+	}
+	if !errors.Is(err, ErrUnreachable) {
+		t.Errorf("cap error does not wrap ErrUnreachable: %v", err)
+	}
+}
+
+// TestCallCountAccessor verifies CallCount returns current gen/embed counts and cap.
+func TestCallCountAccessor(t *testing.T) {
+	c := New("http://127.0.0.1:0", "secret", 3072)
+	c.SetCap(100)
+
+	// hour is already time.Now().Hour() from New — setting count directly is safe.
+	c.genMeter.mu.Lock()
+	c.genMeter.count = 42
+	c.genMeter.mu.Unlock()
+
+	c.embedMeter.mu.Lock()
+	c.embedMeter.count = 13
+	c.embedMeter.mu.Unlock()
+
+	gen, embed, cap := c.CallCount()
+	if gen != 42 {
+		t.Errorf("CallCount gen = %d, want 42", gen)
+	}
+	if embed != 13 {
+		t.Errorf("CallCount embed = %d, want 13", embed)
+	}
+	if cap != 100 {
+		t.Errorf("CallCount cap = %d, want 100", cap)
+	}
+}
