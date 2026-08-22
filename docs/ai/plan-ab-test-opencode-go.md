@@ -238,3 +238,82 @@ The candidate legs do not touch the cap at all; they bypass the gateway.
 4. Write `docs/ai/results-ab-opencode-go.md`.
 
 Steps 2 and 3 are independent — do 2 first, since it carries the decision.
+
+---
+
+## CORRECTION 2026-08-22 — verified against the live API, supersedes the endpoint and model claims above
+
+Everything in this section was measured, not read off a docs page. Where it contradicts
+the text above, **this section wins.**
+
+### The endpoint above is wrong
+
+`https://opencode.ai/zen/v1/...` is the **pay-as-you-go Zen catalogue**, billed against a
+credit balance. That balance is $0, so every paid model there returns
+`HTTP 401 CreditsError "Insufficient balance"`. The Go subscription is a different path:
+
+| shape | endpoint | auth header | models |
+|---|---|---|---|
+| OpenAI-style | `https://opencode.ai/zen/go/v1/chat/completions` | `Authorization: Bearer <key>` | `mimo-v2.5`, `mimo-v2.5-pro`, `deepseek-v4-flash` |
+| Anthropic-style | `https://opencode.ai/zen/go/v1/messages` | `x-api-key` + `anthropic-version: 2023-06-01` | `minimax-m3`, `qwen3.7-plus`, all Claude models |
+
+All five smoke calls returned 200 with `"cost":"0"` — covered by the subscription.
+`mimo-v2.5`, `mimo-v2.5-pro` and `qwen3.7-plus` **do** exist; an earlier report that they
+were absent came from listing the wrong catalogue.
+
+### The cascade needs two clients, not one provider record
+
+The Anthropic-style models reject `Authorization: Bearer` outright, and use a different
+request and response schema (`content[].text` / `input_tokens` / `output_tokens` /
+`cache_read_input_tokens` rather than `choices[].message.content` / `prompt_tokens` /
+`completion_tokens`). The plan above assumed one OpenAI-compatible wrapper reusing
+`app/openrouter.py`; that covers only half the catalogue. Two caches too, one per family.
+
+### Reasoning-token overhead is the real cost risk — measure it
+
+Asked to reply with exactly `ok`, completion tokens spent:
+
+| model | completion tokens for "ok" |
+|---|---|
+| `mimo-v2.5` | **364** (almost all internal deliberation) |
+| `qwen3.7-plus` | 136 |
+| `mimo-v2.5-pro` | 15 |
+| `minimax-m3` | 1 |
+
+`mimo-v2.5` is the only model with the request headroom for the cheap tier's ~117,000
+calls/month, and it is the worst offender by 24x. **If it spends hundreds of reasoning
+tokens per judge call, the ~$46.70/month estimate above is meaningless.** Measuring real
+completion tokens on real judge prompts is therefore the primary objective of Part 1, above
+even agreement rate — an accurate model we cannot afford is not adoptable.
+
+Probe whether the endpoint accepts a `reasoning_effort` (or equivalent) knob to suppress it.
+
+### Error taxonomy, measured — the cascade must key off these
+
+- `401 CreditsError` — balance exhausted. **The plan above assumed 429.** A cascade that
+  treats 401 as a generic auth failure will refuse to fail over at exactly the moment it
+  must, so this shape has to be matched explicitly.
+- `401 AuthError` — missing or malformed key. Must **not** trigger failover.
+- `403 RegionError` — model geo-blocked from this host.
+- Request-rate / dollar-window exhaustion: **still unknown.** Not observed yet.
+- No rate or spend headers are returned on any response — only `cf-*` infra headers. Spend
+  can only be tracked by summing `usage` ourselves.
+
+### Enzo's decisions, 2026-08-22
+
+- **`deepseek-v4-flash` is dropped.** It is `403 RegionError` from the hub, reachable only by
+  opting the workspace into China-hosted inference, which is a data-residency question for
+  Wego internal Slack content. Part 1 therefore runs **single-candidate**: `mimo-v2.5`
+  against the `claude-haiku-4-5` baseline. Accept the consequence: with no third model, a
+  disagreement cannot be attributed to one side without Enzo's adjudication, which makes the
+  adjudication step mandatory rather than advisory.
+- Part 1 bulk run is **approved to proceed**.
+
+### One harness detail that will silently corrupt the results
+
+At `max_tokens=32` the free-tier model returned `content: null` with the text in a
+`reasoning`/`reasoning_content` field. At `max_tokens=1024` all five models produced
+parseable content. A harness that budgets too tightly records reasoning-only truncation as a
+**parse failure**, which is one of the pass/fail thresholds — it would fail the model for a
+harness bug. Budget generously and record `finish_reason` alongside every result so
+truncation is distinguishable from malformed output.
