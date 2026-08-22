@@ -295,8 +295,10 @@ func refreshJiraBoardHandler(deps Deps) jobs.Handler {
 		email := os.Getenv("AGENT_MEM_JIRA_EMAIL")
 		token := os.Getenv("AGENT_MEM_JIRA_TOKEN")
 		if baseURL == "" || email == "" || token == "" {
-			deps.Logger.Info().Msg("refresh_jira_board: jira creds not configured; skipping")
-			return nil
+			// Misconfiguration, not a data condition — silently reporting done
+			// here is how the epic map went stale for 10 days after the
+			// 2026-08-12 migration without anyone noticing (agent-mem-egsf).
+			return fmt.Errorf("%w: refresh_jira_board: AGENT_MEM_JIRA_BASE_URL/EMAIL/TOKEN not set", jobs.ErrFatal)
 		}
 
 		// The graph is the source of which issues matter: only keys some Slack

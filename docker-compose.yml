@@ -27,6 +27,13 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    # Credentials and env-only settings come from a gitignored .env next to
+    # this file (see .env.example). Optional form: an absent .env must not
+    # break local development. Values under `environment:` below still win —
+    # DATABASE_URL must always reach postgres by service name.
+    env_file:
+      - path: .env
+        required: false
     environment:
       DATABASE_URL: postgresql://agentmem:${AGENT_MEM_PG_PASSWORD:-agentmem}@postgres:5432/agentmem
     ports:

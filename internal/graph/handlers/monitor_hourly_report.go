@@ -57,8 +57,13 @@ func NewMonitorHourlyReport(deps Deps) jobs.Handler {
 		}
 
 		to := deps.SlackDMUserID
-		if to == "" || deps.SlackBotToken == "" {
-			return nil // nothing to notify to
+		if deps.SlackBotToken == "" {
+			// Misconfiguration: fail loudly (ErrFatal) instead of silently
+			// reporting done — see agent-mem-egsf.
+			return fmt.Errorf("%w: monitor_hourly_report: SLACK_BOT_TOKEN not set", jobs.ErrFatal)
+		}
+		if to == "" {
+			return nil // nothing to notify to — legitimate data-dependent no-op
 		}
 		channelID, err := slackOpenIM(ctx, deps.SlackBotToken, to)
 		if err != nil {
