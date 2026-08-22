@@ -161,3 +161,80 @@ Enzo's cascade, per tier: **Go → Claude**.
   one provider running dry.
 - Log which provider served each call, alongside the existing `llm_caller` attribution, so a
   quality or cost regression can be attributed to a provider and a caller together.
+
+---
+
+## Execution mechanics — read this before writing any code
+
+### Where this runs
+
+**On the hub**, `ssh enzo@payments`. That is where the API key lives and where the
+real data is. Keep the harness in `/tmp` on the hub; it is throwaway.
+
+Repo checkout there: `~/go/src/github.com/agent-mem`. Gateway compose lives in
+`~/go/src/github.com/llm-gateway`, container `llm-gateway-llm-gateway-1`.
+
+### Do NOT add a `zen` provider to the deployed gateway for this round
+
+The gateway has no OpenCode provider yet, and adding one means editing and
+redeploying the container that currently serves all production traffic. **That is the
+adoption round, not this one.** For the A/B, write a **standalone script** that talks
+to the two sides directly:
+
+- **Candidates (OpenCode Go):** POST straight to
+  `https://opencode.ai/zen/v1/chat/completions`, OpenAI-compatible, `Authorization:
+  Bearer $ZEN_KEY`. No gateway involved.
+- **Baseline (haiku):** the hub's existing gateway `/generate` with `tier=cheap`,
+  which is already `claude-haiku-4-5`. Do not add a new Anthropic path.
+
+Reading the key:
+
+```bash
+ZEN_KEY="$(cat /Users/enzo/opencode-go.key)"   # never echo, never log, never commit
+```
+
+### Verify the model IDs before spending anything
+
+The model identifiers in this plan (`mimo-v2.5`, `deepseek-v4-flash`,
+`mimo-v2.5-pro`, `qwen3.7-plus`, `minimax-m3`) were transcribed from the docs page,
+not from the API. **Fetch the live model list first** (`GET /zen/v1/models`, or
+re-read https://opencode.ai/docs/zen/) and reconcile. A 404 on a guessed model name
+is a wasted afternoon, not a data point.
+
+Then **smoke-test one call per model** and print the full response envelope —
+including the `usage` block and any rate/spend headers. That single call is how we
+learn the token accounting and, if we are lucky, the shape of the
+limit-exhausted error the adoption-round cascade must detect.
+
+### Do not trip the hourly cap
+
+`llm_hourly_call_cap = 300` per client, and the hub is serving live traffic. The
+100-call haiku baseline leg must therefore:
+
+- throttle (a short sleep between calls is enough), and
+- treat a cap refusal as **retry later, not a failed data point** — a capped call
+  that gets recorded as a parse failure corrupts the very metric we are measuring.
+
+The candidate legs do not touch the cap at all; they bypass the gateway.
+
+### Where the outputs go
+
+- **Raw JSONL** (every prompt, every full response, tokens, latency): stays in `/tmp`
+  on the hub. **Do not commit it.** These prompts contain Wego internal Slack
+  content, and the results file is the deliverable, not the corpus.
+- **`docs/ai/results-ab-opencode-go.md`** in the repo: aggregates, the disagreement
+  table, and the recommendation. In the disagreement table, quote at most ~200
+  characters per input — enough for Enzo to adjudicate, not a bulk export.
+- Total spend for the whole test is ~360 calls (~245 of them on Go). Trivial. If the
+  harness looks like it will exceed ~500 calls, stop and say why rather than
+  proceeding.
+
+### Order of work — stop points are deliberate
+
+1. Confirm model IDs + smoke-test each. **Report back before the bulk run.**
+2. Part 1 (cheap, 100 inputs × 3 models). Report agreement + the disagreement table.
+3. Part 2 (summary, 15 threads × 3 candidates + the stored sonnet baseline).
+   Produce the blind comparison page.
+4. Write `docs/ai/results-ab-opencode-go.md`.
+
+Steps 2 and 3 are independent — do 2 first, since it carries the decision.
