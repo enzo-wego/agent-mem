@@ -226,3 +226,117 @@ never burns retry budget; graph jobs are durable rows.
 The attribution histogram, the hourly call rate, the before/after job counts, and a plain
 statement of whether `agent-mem-5k0` is now identified. File a follow-up issue for the
 named path. Do not fix it in this round — that is the next round, with evidence.
+
+---
+
+# OUTCOME — executed 2026-08-22
+
+Steps 1-6 ran. Step 7 was cut short after 9 minutes, deliberately (see "the resume window"
+below). `agent-mem-5k0` is **still unattributed**, for a structural reason the plan did not
+anticipate.
+
+## What shipped
+
+| step | result |
+|---|---|
+| 1. PR + merge | PR #36 merged, `main` at `4de0ce2` |
+| 2. deploy | hub rebuilt arm64 at `4de0ce2` |
+| 3. verify binary | `hourly cap` x2, `caller=` x1 in `/usr/local/bin/agent-mem` |
+| 4. cap = 300 | live via `PUT`, no restart: `LLM gateway client reloaded` + `Settings updated ["llm_hourly_call_cap"]` |
+| 5. prune | `DELETE 97373`; 97,376 queued singleton rows -> 3, guard passed |
+| 6. resume hub | `processing_paused=false` at 00:36 UTC, laptop left paused |
+| 7. watch | **aborted at 00:45 UTC** — paused again to stop permanent job loss |
+
+## The resume window, minute by minute (UTC)
+
+| minute | generate calls |
+|---|---|
+| 00:36 | 51 |
+| 00:37 | 65 |
+| 00:38 | 56 |
+| 00:39 | 32 |
+| 00:40 | 70 |
+| 00:41 | 9  <- cap bound here |
+| 00:42 | 4 |
+
+316 generate calls total. The first five minutes ran at ~55/min (~3,300/hr). **This is backlog
+drain, not the burn** — it cannot be compared with the historic 600-850/hr, which was sustained
+with an empty backlog. The cap then bound and the rate collapsed by ~90%.
+
+## Why the round did not name the burner
+
+`callerName()` walks out of `internal/llmgateway` and lands on the first frame outside it, which
+for every graph job is the shared `GeminiAdapter` shim. The complete observed caller set:
+
+```
+177  handlers.(*GeminiAdapter).GenerateCheap [generate]
+ 60  handlers.(*GeminiAdapter).Generate      [generate]
+ 39  worker.(*Server).processObservation     [generate]
+ 29  worker.(*Server).processObservation     [embed]
+ 27  handlers.(*GeminiAdapter).EmbedWithOptions [embed]
+  4  worker.(*Server).processSummary         [generate]
+```
+
+The flat-memory paths attribute correctly. Every graph handler collapses into two adapter names.
+Filed as `agent-mem-fr6`. Also: `Str("caller", ...)` uses a RESERVED zerolog field name, so the
+console renders it as a message prefix (`name > message`), and **every `grep "caller="` against
+the console log finds nothing** — which is why step 7's suggested command in this plan is wrong.
+
+## What the cap did — it works, and it is dangerous
+
+It bound exactly as designed and refusals requeued rather than failing:
+
+```
+transient: link_topics confirm: llm-gateway unreachable: hourly cap of 300 generate
+calls reached (caller=handlers.(*GeminiAdapter).GenerateCheap tier=cheap)
+attempt=3 delay=109537
+```
+
+But `attempt=3`. `graph.jobs` claiming does `attempts = attempts + 1` on CLAIM
+(`internal/graph/jobs/queue.go:115`), before the handler runs, so **every cap refusal burns an
+attempt**. A cap that binds for an hour walks affected jobs to `max_attempts` and fails them
+permanently. Filed `agent-mem-0d7` (P0). The cap is only safe at 300 while paused.
+
+## The unrelated thing that cut the window short
+
+The hub worker has **no Slack bot token**. Every `fetch_body` returns `not_authed`, which is
+wrapped as `transient:` and retried until the budget is gone.
+
+| metric | before | after 9 min |
+|---|---|---|
+| `graph.jobs` failed | 36,170 | **37,172** (+1,002 permanent) |
+| `graph.jobs` done | 2,486,648 | 2,487,176 (+528) |
+| `fetch_body` queued at `attempts=4` | 632 | 156 |
+
+The resume destroyed roughly twice as many jobs as it completed, and none of it was the burn.
+Filed `agent-mem-7z3` (P0). It was invisible in real time because **`completed_at` is NULL on
+failed rows**, so the obvious `where status='failed' and completed_at > NOW() - INTERVAL ...`
+check returns zero rows while a thousand jobs die (`agent-mem-9vf`).
+
+**Execution lesson for the next round: check the `attempts` distribution of queued jobs BEFORE
+resuming.** This plan's step 7 table listed `fetch_body` as harmless because it makes no LLM
+call; it never asked whether those jobs were one claim from death.
+
+## Deviations from the plan, and why
+
+- **Did not delete all `target_runner='vps'` rows** (criterion 2 not met, by choice). 112 of them
+  (100 `backfill_slack_thread`, 12 `refresh_jira_board`) are real stranded work; deleting them
+  silently decides it never happens. Only the 529 spam rows were removed.
+- **Criterion 1 unmeetable as written**: the cap is settable by `PUT` but absent from
+  `settingsResponse`, so `GET /api/settings` never returns it and the dashboard cannot edit it
+  (`agent-mem-6v1`). Verified from postgres and the worker log instead.
+
+## Also found
+
+`ingest_content.go:400` still hardcodes `TargetRunner: "vps"` while the hub's runner is `any`, so
+Slack thread-root recovery has been enqueueing born-dead jobs daily since the 08-12 move — newest
+one 2026-08-21 (`agent-mem-zn0`). And the laptop gateway is supervised by a `while true` keepalive
+loop, so killing its PID never contained it; only `processing_paused` does (`agent-mem-l3o`).
+
+## Do not resume again until
+
+1. `agent-mem-7z3` — Slack token restored, `not_authed` reclassified permanent.
+2. `agent-mem-0d7` — cap refusals stop consuming the retry budget.
+3. `agent-mem-fr6` — attribution can discriminate handlers.
+
+Without 1 and 2 a resume destroys jobs; without 3 it cannot answer the question it is for.
