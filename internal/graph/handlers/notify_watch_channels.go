@@ -107,8 +107,14 @@ func NewNotifyWatchChannels(deps Deps) jobs.Handler {
 		}()
 
 		to := deps.SlackDMUserID
-		if to == "" || deps.SlackBotToken == "" {
-			return nil // nothing to notify to
+		if deps.SlackBotToken == "" {
+			// Misconfiguration, not a data condition: no amount of retrying
+			// conjures a token, and marking the run done hid the outage for 10
+			// days (see agent-mem-egsf). Fail loudly like refresh_slack_channels.
+			return fmt.Errorf("%w: notify_watch_channels: SLACK_BOT_TOKEN not set", jobs.ErrFatal)
+		}
+		if to == "" {
+			return nil // nothing to notify to — legitimate data-dependent no-op
 		}
 
 		// Which channels are in the watched group? Classify every known channel

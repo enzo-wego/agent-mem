@@ -11,6 +11,10 @@ import (
 
 var slackHTTP = &http.Client{Timeout: 15 * time.Second}
 
+// slackAPIBaseURL is the Slack Web API origin. A var solely so tests can point
+// it at an httptest server; production always leaves the default.
+var slackAPIBaseURL = "https://slack.com"
+
 // slackDM opens (or reuses) a DM channel with userID and posts text as the bot
 // identity behind token (enzobot). Best-effort: the caller logs failures and
 // moves on — a failed DM must not wedge the detect job.
@@ -34,7 +38,7 @@ func slackOpenIM(ctx context.Context, token, userID string) (string, error) {
 			ID string `json:"id"`
 		} `json:"channel"`
 	}
-	if err := slackPostJSON(ctx, token, "https://slack.com/api/conversations.open",
+	if err := slackPostJSON(ctx, token, slackAPIBaseURL+"/api/conversations.open",
 		map[string]any{"users": userID}, &resp); err != nil {
 		return "", err
 	}
@@ -63,7 +67,7 @@ func slackPostMessageTS(ctx context.Context, token, channelID, text, threadTS st
 		Error string `json:"error"`
 		TS    string `json:"ts"`
 	}
-	if err := slackPostJSON(ctx, token, "https://slack.com/api/chat.postMessage", body, &resp); err != nil {
+	if err := slackPostJSON(ctx, token, slackAPIBaseURL+"/api/chat.postMessage", body, &resp); err != nil {
 		return "", err
 	}
 	if !resp.OK {

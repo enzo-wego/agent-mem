@@ -153,6 +153,23 @@ func NewDetectHotTopics(deps Deps) jobs.Handler {
 				if to == "" {
 					to = deps.SlackDMUserID
 				}
+				if to == "" || deps.SlackBotToken == "" {
+					// Release the dedup claim either way, so the alert can still
+					// fire on a later run once the config problem is fixed.
+					_, _ = deps.DB.Exec(ctx,
+						`DELETE FROM graph.topic_notifications WHERE subscription_id=$1 AND root_node_id=$2`,
+						s.ID, h.RootNodeID)
+					if deps.SlackBotToken == "" {
+						// Misconfiguration, not a data condition — a hot topic
+						// matched and was then silently dropped for 10 days
+						// because the token went missing with the 2026-08-12
+						// migration. Fail loudly (agent-mem-egsf).
+						return fmt.Errorf("%w: detect_hot_topics: SLACK_BOT_TOKEN not set", jobs.ErrFatal)
+					}
+					// No recipient resolved anywhere (sub + default):
+					// data-dependent no-op, not an error.
+					continue
+				}
 				if err := slackDM(ctx, deps.SlackBotToken, to, buildAlert(ctx, deps, s, h)); err != nil {
 					log.Warn().Err(err).Str("to", to).Msg("detect_hot_topics: DM failed")
 					// Roll back the dedup claim so a retry can re-send.
