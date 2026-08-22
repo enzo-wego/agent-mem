@@ -3,10 +3,12 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/agent-mem/agent-mem/internal/graph/extractor"
+	"github.com/agent-mem/agent-mem/internal/graph/fetchers"
 	"github.com/agent-mem/agent-mem/internal/graph/identity"
 	"github.com/agent-mem/agent-mem/internal/graph/ids"
 	"github.com/agent-mem/agent-mem/internal/graph/jobs"
@@ -26,7 +28,7 @@ func NewFetchBodyHandler(deps Deps) jobs.Entry {
 		Handler:  fetchBodyHandler(deps),
 		Systems:  []string{}, // source resolved at runtime per-payload
 		PoolSize: 8,
-		Lease:  90 * time.Second,
+		Lease:    90 * time.Second,
 	}
 }
 
@@ -55,7 +57,12 @@ func fetchBodyHandler(deps Deps) jobs.Handler {
 		// Step 2: fetch.
 		body, err := fetcher.Fetch(ctx, ref)
 		if err != nil {
-			return fmt.Errorf("%w: fetch_body fetch: %v", jobs.ErrTransient, err)
+			class := jobs.ErrTransient
+			var permanent *fetchers.PermanentError
+			if errors.As(err, &permanent) {
+				class = jobs.ErrFatal
+			}
+			return fmt.Errorf("%w: fetch_body fetch: %w", class, err)
 		}
 
 		// Step 3: normalise.

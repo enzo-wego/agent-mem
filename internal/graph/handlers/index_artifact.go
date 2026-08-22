@@ -25,6 +25,7 @@ func NewIndexArtifactHandler(deps Deps) jobs.Entry {
 		Systems:  []string{"gemini"},
 		PoolSize: 4,
 		Lease:    60 * time.Second,
+		UsesLLM:  true,
 	}
 }
 

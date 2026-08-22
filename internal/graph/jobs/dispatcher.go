@@ -15,12 +15,12 @@ type DispatcherConfig struct {
 	Type         string
 	Registry     *Registry
 	DB           *pgxpool.Pool
-	WorkerID     string                       // unique string per process: host+pid+uuid
-	Runner       string                       // "vps" or "local"
-	IdleInterval time.Duration                // poll cadence when queue empty (default 5s)
+	WorkerID     string                         // unique string per process: host+pid+uuid
+	Runner       string                         // "vps" or "local"
+	IdleInterval time.Duration                  // poll cadence when queue empty (default 5s)
 	Semaphores   map[string]*semaphore.Weighted // per-system rate limiters
-	BackoffBase  time.Duration                // default 30s
-	BackoffCap   time.Duration                // default 1h
+	BackoffBase  time.Duration                  // default 30s
+	BackoffCap   time.Duration                  // default 1h
 	Logger       zerolog.Logger
 
 	// Paused reports whether job execution is suspended. Checked before every
@@ -31,6 +31,14 @@ type DispatcherConfig struct {
 	// alternative (stopping the worker) makes the HTTP API unavailable, and
 	// inbound webhooks are then lost rather than queued. nil = never paused.
 	Paused func() bool
+
+	// CapReached reports whether the hourly LLM cap is binding. UsesLLM jobs
+	// remain queued while it returns true; nil means never capped.
+	CapReached func() bool
+	// RefundAttempt identifies failures that happened before useful work could
+	// start. The worker requeues them and undoes Claim's attempt increment.
+	// nil means no error qualifies.
+	RefundAttempt func(error) bool
 }
 
 // TypeDispatcher claims and runs jobs of one specific type.
@@ -68,6 +76,7 @@ func NewTypeDispatcher(cfg DispatcherConfig) *TypeDispatcher {
 func (d *TypeDispatcher) Run(ctx context.Context) {
 	log := d.cfg.Logger.With().Str("dispatcher", d.cfg.Type).Logger()
 	log.Info().Int("pool", d.entry.PoolSize).Msg("dispatcher starting")
+	capLogged := false
 	for ctx.Err() == nil {
 		// Acquire a pool slot, blocking until one is free or ctx is done.
 		if err := d.pool.Acquire(ctx, 1); err != nil {
@@ -81,6 +90,17 @@ func (d *TypeDispatcher) Run(ctx context.Context) {
 			d.sleep(ctx, d.cfg.IdleInterval)
 			continue
 		}
+		capped := d.entry.UsesLLM && d.cfg.CapReached != nil && d.cfg.CapReached()
+		if capped {
+			d.pool.Release(1)
+			if !capLogged {
+				log.Info().Msg("LLM cap reached; claims paused for this job type")
+				capLogged = true
+			}
+			d.sleep(ctx, d.cfg.IdleInterval)
+			continue
+		}
+		capLogged = false
 		lease := d.entry.Lease
 		if lease == 0 {
 			lease = 60 * time.Second

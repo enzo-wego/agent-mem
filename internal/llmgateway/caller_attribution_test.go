@@ -29,3 +29,20 @@ func TestCallerAttributionExternal(t *testing.T) {
 		t.Errorf("callerName = %q, want it to contain 'TestCallerAttributionExternal'", name)
 	}
 }
+
+type GeminiAdapter struct{}
+
+//go:noinline
+func (*GeminiAdapter) Generate() string {
+	return llmgateway.CallerNameForTesting()
+}
+
+func TestCallerAttributionSkipsGeminiAdapter(t *testing.T) {
+	name := (&GeminiAdapter{}).Generate()
+	if strings.Contains(name, "(*GeminiAdapter)") {
+		t.Fatalf("callerName attributed the adapter shim: %q", name)
+	}
+	if !strings.Contains(name, "TestCallerAttributionSkipsGeminiAdapter") {
+		t.Fatalf("callerName = %q, want outer test function", name)
+	}
+}

@@ -83,6 +83,14 @@ func (d *TypeDispatcher) runOne(ctx context.Context, job *Job) {
 		log.Info().Msg("interrupted; lease will expire")
 		return
 	}
+	if d.cfg.RefundAttempt != nil && d.cfg.RefundAttempt(err) {
+		delay := Backoff(job.Attempts, d.cfg.BackoffBase, d.cfg.BackoffCap)
+		if e := RetryRefund(ctx, d.cfg.DB, job.ID, err, delay); e != nil {
+			log.Error().Err(e).Msg("retry refund failed")
+		}
+		log.Info().Err(err).Dur("delay", delay).Msg("attempt refunded; scheduled retry")
+		return
+	}
 	if job.Attempts >= job.MaxAttempts || !IsRetryable(err) {
 		if e := Fail(ctx, d.cfg.DB, job.ID, err); e != nil {
 			log.Error().Err(e).Msg("fail failed")

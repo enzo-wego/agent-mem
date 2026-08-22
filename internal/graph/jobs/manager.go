@@ -15,7 +15,7 @@ type ManagerConfig struct {
 	Registry            *Registry
 	DB                  *pgxpool.Pool
 	WorkerID            string
-	Runner              string                        // "vps" or "local"
+	Runner              string // "vps" or "local"
 	Semaphores          map[string]*semaphore.Weighted
 	IdleInterval        time.Duration // dispatcher slow-poll cadence
 	BackoffBase         time.Duration
@@ -27,7 +27,9 @@ type ManagerConfig struct {
 	// Paused suspends job execution across every dispatcher. See
 	// DispatcherConfig.Paused. The janitor keeps running while paused — it only
 	// reclaims expired leases, which costs nothing and keeps the queue tidy.
-	Paused func() bool
+	Paused        func() bool
+	CapReached    func() bool
+	RefundAttempt func(error) bool
 }
 
 // Manager owns one TypeDispatcher per registered type plus one Janitor.
@@ -49,17 +51,19 @@ func NewManager(cfg ManagerConfig) *Manager {
 func (m *Manager) Run(ctx context.Context) {
 	for _, typ := range m.cfg.Registry.Types() {
 		d := NewTypeDispatcher(DispatcherConfig{
-			Type:         typ,
-			Registry:     m.cfg.Registry,
-			DB:           m.cfg.DB,
-			WorkerID:     m.cfg.WorkerID,
-			Runner:       m.cfg.Runner,
-			IdleInterval: m.cfg.IdleInterval,
-			Semaphores:   m.cfg.Semaphores,
-			BackoffBase:  m.cfg.BackoffBase,
-			BackoffCap:   m.cfg.BackoffCap,
-			Logger:       m.cfg.Logger,
-			Paused:       m.cfg.Paused,
+			Type:          typ,
+			Registry:      m.cfg.Registry,
+			DB:            m.cfg.DB,
+			WorkerID:      m.cfg.WorkerID,
+			Runner:        m.cfg.Runner,
+			IdleInterval:  m.cfg.IdleInterval,
+			Semaphores:    m.cfg.Semaphores,
+			BackoffBase:   m.cfg.BackoffBase,
+			BackoffCap:    m.cfg.BackoffCap,
+			Logger:        m.cfg.Logger,
+			Paused:        m.cfg.Paused,
+			CapReached:    m.cfg.CapReached,
+			RefundAttempt: m.cfg.RefundAttempt,
 		})
 		m.dispatchers = append(m.dispatchers, d)
 		m.wg.Add(1)

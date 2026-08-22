@@ -42,19 +42,19 @@ func (f *slackFetcher) Matches(nodeIDorURL string) bool {
 
 // slackAPIResponse is the minimal shape of a Slack conversations.* response.
 type slackAPIResponse struct {
-	OK       bool             `json:"ok"`
-	Error    string           `json:"error"`
-	Messages []slackMessage   `json:"messages"`
+	OK       bool           `json:"ok"`
+	Error    string         `json:"error"`
+	Messages []slackMessage `json:"messages"`
 }
 
 type slackMessage struct {
-	Type    string       `json:"type"`
-	User    string       `json:"user"`
-	BotID   string       `json:"bot_id"`
-	Text    string       `json:"text"`
-	Ts      string       `json:"ts"`
+	Type     string      `json:"type"`
+	User     string      `json:"user"`
+	BotID    string      `json:"bot_id"`
+	Text     string      `json:"text"`
+	Ts       string      `json:"ts"`
 	ThreadTs string      `json:"thread_ts"`
-	Files   []slackFile  `json:"files"`
+	Files    []slackFile `json:"files"`
 	// Attachments holds shared/forwarded messages and link unfurls. A forwarded
 	// message keeps its real content here (author_name, text, nested files), not in
 	// the top-level Text — so without this a "FYI @x" share shows nothing.
@@ -70,12 +70,12 @@ type slackAttachment struct {
 }
 
 type slackFile struct {
-	ID       string `json:"id"`
-	Name     string `json:"name"`
-	Mimetype string `json:"mimetype"`
-	Size     int64  `json:"size"`
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	Mimetype   string `json:"mimetype"`
+	Size       int64  `json:"size"`
 	URLPrivate string `json:"url_private"`
-	Thumb360 string `json:"thumb_360"`
+	Thumb360   string `json:"thumb_360"`
 }
 
 // Fetch retrieves messages for a slack node ID or archive URL.
@@ -207,6 +207,29 @@ func slackTSFromRaw(raw string) string {
 	return raw[:len(raw)-6] + "." + raw[len(raw)-6:]
 }
 
+// PermanentError marks a fetch failure that cannot recover through retry.
+// The handler maps it to jobs.ErrFatal without coupling fetchers to the queue.
+type PermanentError struct {
+	Code string
+}
+
+func (e *PermanentError) Error() string {
+	return fmt.Sprintf("slack fetcher: API error: %s", e.Code)
+}
+
+func classifySlackAPIError(code string) error {
+	switch code {
+	case "not_authed", "invalid_auth", "account_inactive", "token_revoked",
+		"token_expired", "missing_scope", "channel_not_found",
+		"thread_not_found", "message_not_found":
+		return &PermanentError{Code: code}
+	default:
+		// Known transient codes and unknown future codes both retry. A new
+		// Slack code must degrade to retry rather than silent permanent loss.
+		return fmt.Errorf("slack fetcher: API error: %s", code)
+	}
+}
+
 // fetchMessages calls conversations.replies or conversations.history.
 func (f *slackFetcher) fetchMessages(ctx context.Context, channel, ts string) ([]slackMessage, error) {
 	// Always try replies first; if only one message comes back it's a single-message fetch.
@@ -222,7 +245,7 @@ func (f *slackFetcher) fetchMessages(ctx context.Context, channel, ts string) ([
 			return nil, err
 		}
 		if !resp.OK {
-			return nil, fmt.Errorf("slack fetcher: API error: %s", resp.Error)
+			return nil, classifySlackAPIError(resp.Error)
 		}
 	}
 	return resp.Messages, nil

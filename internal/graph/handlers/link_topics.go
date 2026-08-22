@@ -88,6 +88,7 @@ func NewLinkTopicsHandler(deps Deps) jobs.Entry {
 		Systems:  []string{"gemini"},
 		PoolSize: 4,
 		Lease:    120 * time.Second,
+		UsesLLM:  true,
 	}
 }
 

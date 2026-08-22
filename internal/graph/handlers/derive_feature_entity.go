@@ -34,6 +34,7 @@ func NewDeriveFeatureEntityHandler(deps Deps) jobs.Entry {
 		Systems:  []string{"gemini"},
 		PoolSize: 2,
 		Lease:    SummaryLease, // reaches TextGenerator; see SummaryLease
+		UsesLLM:  true,
 	}
 }
 
