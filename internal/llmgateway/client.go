@@ -57,6 +57,11 @@ const RequestTimeout = 200 * time.Second
 // permanently failed must requeue on this one — see worker.isTransientLLMError.
 var ErrUnreachable = errors.New("llm-gateway unreachable")
 
+// ErrCapped reports that the local hourly generate-call ceiling refused work
+// before an HTTP request was made. Cap refusals also wrap ErrUnreachable so
+// existing retryability classification remains unchanged.
+var ErrCapped = errors.New("llm-gateway hourly cap reached")
+
 // StatusError is a non-200 answer from the gateway. It carries the code so
 // callers can separate "try again later" (429, 503, 5xx) from "this will never
 // work" (400, 401), instead of pattern-matching error strings.
@@ -226,6 +231,14 @@ func callerName() string {
 		// fn is like "github.com/agent-mem/agent-mem/internal/handlers.summarizeThreadHandler"
 		// or "github.com/agent-mem/agent-mem/internal/llmgateway_test.TestCallerAttributionExternal".
 		// Require: starts with modulePfx, and does NOT start with thisPkgPath + ".".
+		if strings.Contains(fn, "(*GeminiAdapter).") {
+			// GeminiAdapter is a reloadable pass-through shim, not the work
+			// spending quota. Keep walking so attribution names its caller.
+			if !more {
+				break
+			}
+			continue
+		}
 		if strings.HasPrefix(fn, modulePfx) && !strings.HasPrefix(fn, thisPkgPath+".") {
 			// Trim the module path prefix, keep "pkg.Func".
 			fn = fn[len(modulePfx):]
@@ -310,8 +323,8 @@ func (c *Client) generate(ctx context.Context, tier, systemPrompt, userMessage s
 		count := c.genMeter.get()
 		if count >= c.cap {
 			c.genMeter.logCapHit(c.cap, count)
-			return "", fmt.Errorf("%w: hourly cap of %d generate calls reached (caller=%s tier=%s)",
-				ErrUnreachable, c.cap, caller, tier)
+			return "", fmt.Errorf("%w: %w: hourly cap of %d generate calls reached (caller=%s tier=%s)",
+				ErrUnreachable, ErrCapped, c.cap, caller, tier)
 		}
 	}
 
@@ -326,7 +339,7 @@ func (c *Client) generate(ctx context.Context, tier, systemPrompt, userMessage s
 		return "", fmt.Errorf("llm-gateway: /generate returned no text (tier=%s backend=%s)", tier, out.Backend)
 	}
 	log.Info().
-		Str("caller", caller).
+		Str("llm_caller", caller).
 		Str("tier", tier).
 		Int64("elapsed_ms", time.Since(start).Milliseconds()).
 		Int("hour_count", n).
@@ -393,7 +406,7 @@ func (c *Client) EmbedWithOptions(ctx context.Context, text string, opts gemini.
 		return nil, fmt.Errorf("llm-gateway: /embed returned %d dims, want %d", len(v), dims)
 	}
 	log.Info().
-		Str("caller", caller).
+		Str("llm_caller", caller).
 		Str("tier", "embed").
 		Int64("elapsed_ms", time.Since(start).Milliseconds()).
 		Int("hour_count", n).
@@ -428,7 +441,7 @@ func (c *Client) EmbedBatch(ctx context.Context, texts []string) ([][]float32, e
 		}
 	}
 	log.Info().
-		Str("caller", caller).
+		Str("llm_caller", caller).
 		Str("tier", "embed-batch").
 		Int("batch_size", len(texts)).
 		Int64("elapsed_ms", time.Since(start).Milliseconds()).

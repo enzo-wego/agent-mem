@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -61,5 +62,30 @@ func TestNewGatewayClientHonoursCap(t *testing.T) {
 	}
 	if calls != 1 {
 		t.Errorf("HTTP call count = %d after cap refusal, want 1 (no new request)", calls)
+	}
+}
+
+func TestGetSettingsIncludesCapAndProcessingPaused(t *testing.T) {
+	s := &Server{config: &config.Config{
+		LLMHourlyCallCap: 73,
+		ProcessingPaused: true,
+	}}
+	req := httptest.NewRequest(http.MethodGet, "/api/settings", nil)
+	rec := httptest.NewRecorder()
+
+	s.handleGetSettings(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /api/settings status = %d, want 200", rec.Code)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode settings response: %v", err)
+	}
+	if got, ok := body["llm_hourly_call_cap"]; !ok || got != float64(73) {
+		t.Fatalf("llm_hourly_call_cap = %#v (present=%v), want 73", got, ok)
+	}
+	if got, ok := body["processing_paused"]; !ok || got != true {
+		t.Fatalf("processing_paused = %#v (present=%v), want true", got, ok)
 	}
 }

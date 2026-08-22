@@ -29,6 +29,8 @@ type settingsResponse struct {
 	GeminiEmbeddingDims int    `json:"gemini_embedding_dims"`
 	LLMGatewayURL       string `json:"llm_gateway_url"`
 	LLMGatewayAPIKey    string `json:"llm_gateway_api_key"`
+	LLMHourlyCallCap    int    `json:"llm_hourly_call_cap"`
+	ProcessingPaused    bool   `json:"processing_paused"`
 
 	ContextObservations int    `json:"context_observations"`
 	ContextFullCount    int    `json:"context_full_count"`
@@ -64,6 +66,8 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, _ *http.Request) {
 		GeminiEmbeddingDims: snap.GeminiEmbeddingDims,
 		LLMGatewayURL:       snap.LLMGatewayURL,
 		LLMGatewayAPIKey:    maskKey(snap.LLMGatewayAPIKey),
+		LLMHourlyCallCap:    snap.LLMHourlyCallCap,
+		ProcessingPaused:    snap.ProcessingPaused,
 		ContextObservations: snap.ContextObservations,
 		ContextFullCount:    snap.ContextFullCount,
 		ContextSessionCount: snap.ContextSessionCount,

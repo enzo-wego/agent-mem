@@ -24,6 +24,9 @@ type Entry struct {
 	// Heartbeat is true if the handler may run longer than the lease and
 	// needs lease extension via a background goroutine. Default false.
 	Heartbeat bool
+	// UsesLLM marks handlers that call the LLM gateway. A binding hourly cap
+	// prevents these jobs from being claimed, preserving their retry budget.
+	UsesLLM bool
 	// Handler runs the actual work.
 	Handler Handler
 }

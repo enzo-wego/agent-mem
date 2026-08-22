@@ -10,8 +10,10 @@ import (
 // fakeGateway stands in for llm-gateway and records which method was called, so
 // tests prove routing rather than just that a value came back.
 type fakeGateway struct {
-	out    string
-	called string
+	out      string
+	called   string
+	genCount int
+	cap      int
 }
 
 func (f *fakeGateway) Embed(context.Context, string) ([]float32, error) {
@@ -37,6 +39,10 @@ func (f *fakeGateway) GenerateCheap(context.Context, string, string) (string, er
 func (f *fakeGateway) Describe(context.Context, string, []byte, string) (string, string, []string, error) {
 	f.called = "Describe"
 	return f.out, "", nil, nil
+}
+
+func (f *fakeGateway) CallCount() (gen, embed, cap int) {
+	return f.genCount, 0, f.cap
 }
 
 // A nil client must produce a nil INTERFACE. Handlers gate on
@@ -95,5 +101,19 @@ func TestGeminiAdapterSwap(t *testing.T) {
 	ad.Swap(nil)
 	if out, _ := ad.Generate(ctx, "s", "u"); out != "two" {
 		t.Fatalf("Generate after nil swap = %q, want two (swap ignored)", out)
+	}
+}
+
+func TestGeminiAdapterCallCountTracksSwappedClient(t *testing.T) {
+	first := &fakeGateway{genCount: 2, cap: 10}
+	adapter := NewGeminiAdapter(first).(*GeminiAdapter)
+	if gen, _, cap := adapter.CallCount(); gen != 2 || cap != 10 {
+		t.Fatalf("first CallCount = (%d, %d), want (2, 10)", gen, cap)
+	}
+
+	second := &fakeGateway{genCount: 10, cap: 10}
+	adapter.Swap(second)
+	if gen, _, cap := adapter.CallCount(); gen != 10 || cap != 10 {
+		t.Fatalf("swapped CallCount = (%d, %d), want (10, 10)", gen, cap)
 	}
 }

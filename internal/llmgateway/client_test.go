@@ -362,7 +362,7 @@ func TestCapZeroNeverRefuses(t *testing.T) {
 //   - no HTTP request is made
 //   - the error contains "hourly cap"
 //   - IsRetryable classifies it as retryable
-//   - it wraps ErrUnreachable
+//   - it wraps both ErrCapped and ErrUnreachable
 func TestCapRefusalAtLimit(t *testing.T) {
 	httpCalled := false
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -398,6 +398,9 @@ func TestCapRefusalAtLimit(t *testing.T) {
 	}
 	if !errors.Is(err, ErrUnreachable) {
 		t.Errorf("cap error does not wrap ErrUnreachable: %v", err)
+	}
+	if !errors.Is(err, ErrCapped) {
+		t.Errorf("cap error does not wrap ErrCapped: %v", err)
 	}
 }
 

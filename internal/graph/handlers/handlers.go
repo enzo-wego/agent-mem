@@ -83,6 +83,7 @@ func RegisterAll(reg *jobs.Registry, deps Deps) {
 		Handler:  NewDetectHotTopics(deps),
 		PoolSize: 1,
 		Lease:    SummaryLease, // reaches TextGenerator; see SummaryLease
+		UsesLLM:  true,
 	})
 	reg.Register("notify_watch_channels", jobs.Entry{
 		Handler:  NewNotifyWatchChannels(deps),
@@ -99,5 +100,6 @@ func RegisterAll(reg *jobs.Registry, deps Deps) {
 		PoolSize:  1,
 		Lease:     600 * time.Second,
 		Heartbeat: true,
+		UsesLLM:   true,
 	})
 }

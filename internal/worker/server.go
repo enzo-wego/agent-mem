@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -25,6 +26,7 @@ import (
 	"github.com/agent-mem/agent-mem/internal/graph/identity"
 	"github.com/agent-mem/agent-mem/internal/graph/jobs"
 	"github.com/agent-mem/agent-mem/internal/graph/normalizer"
+	"github.com/agent-mem/agent-mem/internal/llmgateway"
 	"github.com/agent-mem/agent-mem/internal/search"
 	memsync "github.com/agent-mem/agent-mem/internal/sync"
 )
@@ -297,6 +299,16 @@ func NewServer(cfg *config.Config, logBuf *LogBuffer) (*Server, error) {
 		// Read per claim rather than captured once, so toggling the setting from
 		// the dashboard takes effect within one idle interval without a restart.
 		Paused: func() bool { return cfg.Snapshot().ProcessingPaused },
+		CapReached: func() bool {
+			if graphAdapter == nil {
+				return false
+			}
+			gen, _, cap := graphAdapter.CallCount()
+			return cap > 0 && gen >= cap
+		},
+		RefundAttempt: func(err error) bool {
+			return errors.Is(err, llmgateway.ErrCapped)
+		},
 	})
 
 	s := &Server{

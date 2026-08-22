@@ -57,6 +57,7 @@ func NewSummarizeThreadHandler(deps Deps) jobs.Entry {
 		Systems:  []string{"gemini"},
 		PoolSize: 3,
 		Lease:    SummaryLease, // must outlast a gateway Claude call; see SummaryLease
+		UsesLLM:  true,
 	}
 }
 

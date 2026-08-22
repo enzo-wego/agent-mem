@@ -67,6 +67,19 @@ func (a *GeminiAdapter) client() GeminiClient {
 	return a.c
 }
 
+// CallCount returns the current gateway client's hourly counters. The adapter
+// is stable across settings reloads, so callers always observe the swapped-in
+// client rather than a stale boot-time pointer.
+func (a *GeminiAdapter) CallCount() (gen, embed, cap int) {
+	counter, ok := a.client().(interface {
+		CallCount() (gen, embed, cap int)
+	})
+	if !ok {
+		return 0, 0, 0
+	}
+	return counter.CallCount()
+}
+
 // Embed generates one vector at the client's configured width. This reaches
 // OpenRouter on the far side of the gateway — Anthropic has no embeddings API —
 // but agent-mem does not know or care which provider serves it.
