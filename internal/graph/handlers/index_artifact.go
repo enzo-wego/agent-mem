@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/agent-mem/agent-mem/internal/graph/jobs"
+	"github.com/jackc/pgx/v5"
 	"github.com/pgvector/pgvector-go"
 )
 
@@ -100,13 +101,7 @@ WHERE channel_id=$1 AND thread_ts=$2`,
 			}
 		}
 
-		// Step 4: embed.
-		embedding, err := deps.Gemini.EmbedWithOptions(ctx, summary, graphEmbeddingOptions())
-		if err != nil {
-			return fmt.Errorf("%w: index_artifact embed: %v", jobs.ErrTransient, err)
-		}
-
-		// Step 4b: extract identifiers from RAW text (thread roots read the
+		// Step 4: extract identifiers from RAW text (thread roots read the
 		// whole thread) — summaries drop the IDs that shared-identifier
 		// candidates depend on.
 		identifiers, err := identifiersForNode(ctx, deps, nodeType, scope, threadTs, ownTs, bodyFull)
@@ -117,8 +112,48 @@ WHERE channel_id=$1 AND thread_ts=$2`,
 			identifiers = []string{}
 		}
 
-		// Step 5: UPSERT graph.artifact_index.
-		_, err = deps.DB.Exec(ctx, `
+		// Step 5: identical heuristic summaries share one indexed
+		// representative. The transaction-scoped advisory lock serializes the
+		// check through the upsert across the handler's worker pool.
+		var indexTx pgx.Tx
+		skipEmbedding := false
+		if summaryKind == "heuristic" {
+			indexTx, err = deps.DB.Begin(ctx)
+			if err != nil {
+				return fmt.Errorf("index_artifact: begin heuristic dedup transaction: %w", err)
+			}
+			defer func() {
+				_ = indexTx.Rollback(context.Background())
+			}()
+			if _, err = indexTx.Exec(ctx,
+				`SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))`,
+				summaryKind, summary); err != nil {
+				return fmt.Errorf("index_artifact: lock heuristic summary: %w", err)
+			}
+			if err = indexTx.QueryRow(ctx, `
+SELECT EXISTS (
+  SELECT 1
+  FROM graph.artifact_index
+  WHERE summary = $1
+    AND summary_kind = $2
+    AND embedding IS NOT NULL
+    AND node_id <> $3
+)`, summary, summaryKind, p.NodeID).Scan(&skipEmbedding); err != nil {
+				return fmt.Errorf("index_artifact: check duplicate heuristic summary: %w", err)
+			}
+		}
+
+		var embedding any
+		if !skipEmbedding {
+			vector, err := deps.Gemini.EmbedWithOptions(ctx, summary, graphEmbeddingOptions())
+			if err != nil {
+				return fmt.Errorf("%w: index_artifact embed: %v", jobs.ErrTransient, err)
+			}
+			embedding = pgvector.NewVector(vector)
+		}
+
+		// Step 6: UPSERT graph.artifact_index.
+		const upsertSQL = `
 			INSERT INTO graph.artifact_index (node_id, summary, summary_kind, embedding, identifiers, refreshed_at, machine_id)
 			VALUES ($1, $2, $3, $4, $5, NOW(), $6)
 			ON CONFLICT (node_id) DO UPDATE SET
@@ -126,11 +161,21 @@ WHERE channel_id=$1 AND thread_ts=$2`,
 				summary_kind = EXCLUDED.summary_kind,
 				embedding    = EXCLUDED.embedding,
 				identifiers  = EXCLUDED.identifiers,
-				refreshed_at = NOW()`,
-			p.NodeID, summary, summaryKind, pgvector.NewVector(embedding), identifiers, deps.MachineID,
-		)
+				refreshed_at = NOW()`
+		if indexTx != nil {
+			_, err = indexTx.Exec(ctx, upsertSQL,
+				p.NodeID, summary, summaryKind, embedding, identifiers, deps.MachineID)
+		} else {
+			_, err = deps.DB.Exec(ctx, upsertSQL,
+				p.NodeID, summary, summaryKind, embedding, identifiers, deps.MachineID)
+		}
 		if err != nil {
 			return fmt.Errorf("index_artifact: upsert artifact_index: %w", err)
+		}
+		if indexTx != nil {
+			if err = indexTx.Commit(ctx); err != nil {
+				return fmt.Errorf("index_artifact: commit heuristic dedup transaction: %w", err)
+			}
 		}
 
 		// Only thread roots (embedding their resource-aware summary) and

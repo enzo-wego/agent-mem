@@ -114,7 +114,7 @@ WITH me AS (
          COALESCE(NULLIF(n.metadata->>'thread_ts',''), split_part(n.id,':',3)) AS tt
   FROM graph.nodes n
   JOIN graph.artifact_index ai ON ai.node_id = n.id
-  WHERE n.id = $1
+  WHERE n.id = $1 AND ai.embedding IS NOT NULL
 ),
 sims AS (
   SELECT n.id, (1.0 - (ai.embedding <=> me.emb)) AS cosine
@@ -122,6 +122,7 @@ sims AS (
   JOIN graph.nodes n ON n.id = ai.node_id
   CROSS JOIN me
   WHERE n.type IN ('slack','slack_thread')
+    AND ai.embedding IS NOT NULL
     AND ai.summary_kind = 'thread_summary'
     AND n.deleted_at IS NULL
     AND n.scope NOT LIKE 'slack:D%'

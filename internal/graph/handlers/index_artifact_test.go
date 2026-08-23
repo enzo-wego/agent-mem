@@ -5,10 +5,14 @@ import (
 	"encoding/json"
 	"os"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/rs/zerolog"
+
+	"github.com/pgvector/pgvector-go"
 )
 
 func TestIndexArtifactHandler_BadPayload(t *testing.T) {
@@ -37,6 +41,208 @@ func TestIndexArtifactHandler_SkipsWithDB(t *testing.T) {
 		t.Skip("DATABASE_URL not set")
 	}
 	// Integration test placeholder — covered by DB-backed tests.
+}
+
+func TestIndexArtifactHandler_DuplicateHeuristicSkipsEmbedding(t *testing.T) {
+	pool := openTestDB(t)
+	truncateGraphHandlerTables(t, pool)
+	ctx := context.Background()
+
+	const (
+		representativeNodeID = "jira:PAY-1"
+		targetNodeID         = "jira:PAY-2"
+		body                 = "Repeated payment error"
+	)
+	if _, err := pool.Exec(ctx, `
+INSERT INTO graph.nodes (id, type, natural_key, body, machine_id)
+VALUES ($1, 'jira', $1, $3, 'test'),
+       ($2, 'jira', $2, $3, 'test')`,
+		representativeNodeID, targetNodeID, body); err != nil {
+		t.Fatalf("seed nodes: %v", err)
+	}
+
+	vector := make([]float32, GraphEmbeddingDims)
+	vector[0] = 1
+	if _, err := pool.Exec(ctx, `
+INSERT INTO graph.artifact_index
+  (node_id, summary, summary_kind, embedding, refreshed_at, machine_id)
+VALUES ($1, $2, 'heuristic', $3, NOW(), 'test')`,
+		representativeNodeID, heuristicSummary(targetNodeID, body), pgvector.NewVector(vector)); err != nil {
+		t.Fatalf("seed representative artifact: %v", err)
+	}
+
+	gemini := &mockGemini{embedResult: func() ([]float32, error) {
+		return vector, nil
+	}}
+	deps := Deps{
+		DB:        pool,
+		Gemini:    gemini,
+		Logger:    zerolog.Nop(),
+		MachineID: "test",
+	}
+	payload, err := json.Marshal(indexArtifactPayload{NodeID: targetNodeID, Force: true})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	if err := NewIndexArtifactHandler(deps).Handler(ctx, payload); err != nil {
+		t.Fatalf("index artifact: %v", err)
+	}
+
+	if calls := gemini.embedCalls.Load(); calls != 0 {
+		t.Fatalf("embedding calls = %d, want 0", calls)
+	}
+	var representativeEmbeddingIsNull bool
+	if err := pool.QueryRow(ctx, `
+SELECT embedding IS NULL
+FROM graph.artifact_index
+WHERE node_id = $1`, representativeNodeID).Scan(&representativeEmbeddingIsNull); err != nil {
+		t.Fatalf("read representative artifact: %v", err)
+	}
+	if representativeEmbeddingIsNull {
+		t.Fatal("representative heuristic embedding is NULL")
+	}
+	var summaryKind string
+	var embeddingIsNull bool
+	if err := pool.QueryRow(ctx, `
+SELECT summary_kind, embedding IS NULL
+FROM graph.artifact_index
+WHERE node_id = $1`, targetNodeID).Scan(&summaryKind, &embeddingIsNull); err != nil {
+		t.Fatalf("read indexed artifact: %v", err)
+	}
+	if summaryKind != "heuristic" {
+		t.Fatalf("summary kind = %q, want heuristic", summaryKind)
+	}
+	if !embeddingIsNull {
+		t.Fatal("duplicate heuristic embedding is non-NULL")
+	}
+}
+
+func TestIndexArtifactHandler_ConcurrentDuplicateHeuristicsKeepOneEmbedding(t *testing.T) {
+	pool := openTestDB(t)
+	truncateGraphHandlerTables(t, pool)
+	ctx := context.Background()
+
+	const body = "Concurrent repeated payment error"
+	nodeIDs := []string{"jira:PAY-3", "jira:PAY-4"}
+	if _, err := pool.Exec(ctx, `
+INSERT INTO graph.nodes (id, type, natural_key, body, machine_id)
+VALUES ($1, 'jira', $1, $3, 'test'),
+       ($2, 'jira', $2, $3, 'test')`,
+		nodeIDs[0], nodeIDs[1], body); err != nil {
+		t.Fatalf("seed nodes: %v", err)
+	}
+	summary := heuristicSummary(nodeIDs[0], body)
+
+	lockTx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin advisory-lock transaction: %v", err)
+	}
+	if _, err := lockTx.Exec(ctx,
+		`SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))`,
+		"heuristic", summary); err != nil {
+		_ = lockTx.Rollback(ctx)
+		t.Fatalf("acquire advisory lock: %v", err)
+	}
+
+	vector := make([]float32, GraphEmbeddingDims)
+	vector[0] = 1
+	releaseEmbedding := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() {
+		releaseOnce.Do(func() { close(releaseEmbedding) })
+	}
+	t.Cleanup(func() {
+		release()
+		_ = lockTx.Rollback(context.Background())
+	})
+
+	gemini := &mockGemini{embedResult: func() ([]float32, error) {
+		<-releaseEmbedding
+		return vector, nil
+	}}
+	handler := NewIndexArtifactHandler(Deps{
+		DB:        pool,
+		Gemini:    gemini,
+		Logger:    zerolog.Nop(),
+		MachineID: "test",
+	}).Handler
+
+	results := make(chan error, len(nodeIDs))
+	for _, nodeID := range nodeIDs {
+		payload, err := json.Marshal(indexArtifactPayload{NodeID: nodeID, Force: true})
+		if err != nil {
+			t.Fatalf("marshal payload: %v", err)
+		}
+		go func(payload []byte) {
+			results <- handler(ctx, payload)
+		}(payload)
+	}
+
+	readyDeadline := time.NewTimer(5 * time.Second)
+	defer readyDeadline.Stop()
+	readyTicker := time.NewTicker(10 * time.Millisecond)
+	defer readyTicker.Stop()
+readyLoop:
+	for {
+		select {
+		case <-readyTicker.C:
+			var advisoryWaiters int
+			if err := pool.QueryRow(ctx, `
+SELECT count(*)
+FROM pg_stat_activity
+WHERE datname = current_database()
+  AND wait_event = 'advisory'`).Scan(&advisoryWaiters); err != nil {
+				t.Fatalf("count advisory waiters: %v", err)
+			}
+			if advisoryWaiters >= len(nodeIDs) || gemini.embedCalls.Load() >= int32(len(nodeIDs)) {
+				break readyLoop
+			}
+		case <-readyDeadline.C:
+			t.Fatal("handlers did not reach the guarded embedding decision")
+		}
+	}
+
+	if err := lockTx.Commit(ctx); err != nil {
+		t.Fatalf("release advisory lock: %v", err)
+	}
+
+	embedDeadline := time.NewTimer(5 * time.Second)
+	defer embedDeadline.Stop()
+	embedTicker := time.NewTicker(10 * time.Millisecond)
+	defer embedTicker.Stop()
+	for gemini.embedCalls.Load() == 0 {
+		select {
+		case <-embedTicker.C:
+		case <-embedDeadline.C:
+			t.Fatal("representative embedding call did not start")
+		}
+	}
+	release()
+
+	for range nodeIDs {
+		select {
+		case err := <-results:
+			if err != nil {
+				t.Fatalf("index artifact: %v", err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("concurrent index artifact handler did not finish")
+		}
+	}
+
+	if calls := gemini.embedCalls.Load(); calls != 1 {
+		t.Fatalf("embedding calls = %d, want 1", calls)
+	}
+	var total, nonNull int
+	if err := pool.QueryRow(ctx, `
+SELECT count(*), count(embedding)
+FROM graph.artifact_index
+WHERE node_id = ANY($1)`, nodeIDs).Scan(&total, &nonNull); err != nil {
+		t.Fatalf("read concurrent artifacts: %v", err)
+	}
+	if total != len(nodeIDs) || nonNull != 1 {
+		t.Fatalf("artifacts total/non-NULL = %d/%d, want %d/1", total, nonNull, len(nodeIDs))
+	}
 }
 
 func TestHeuristicSummary(t *testing.T) {

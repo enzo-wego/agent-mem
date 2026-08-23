@@ -72,7 +72,7 @@ func seedSlackMsg(t *testing.T, pool *pgxpool.Pool, id, scope, threadTs string) 
 	t.Helper()
 	_, err := pool.Exec(context.Background(), `
 INSERT INTO graph.nodes (id, type, natural_key, scope, metadata, machine_id)
-VALUES ($1, 'slack', $1, $2, jsonb_build_object('thread_ts', $3), 'test')
+VALUES ($1, 'slack', $1, $2, jsonb_build_object('thread_ts', $3::text), 'test')
 ON CONFLICT (id) DO UPDATE SET scope=excluded.scope, metadata=excluded.metadata`,
 		id, scope, threadTs)
 	if err != nil {

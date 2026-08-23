@@ -130,6 +130,7 @@ FROM graph.artifact_index ai
 JOIN graph.nodes n ON n.id = ai.node_id
 LEFT JOIN graph.people p ON p.id = n.author_person_id
 WHERE n.deleted_at IS NULL
+  AND ai.embedding IS NOT NULL
   AND ($2::text[] IS NULL OR n.type = ANY($2))
   AND ($3::text[] IS NULL OR n.scope IS NULL OR n.scope = '' OR n.scope = ANY($3))
 ORDER BY ai.embedding <=> $1
