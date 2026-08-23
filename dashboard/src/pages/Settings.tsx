@@ -14,6 +14,7 @@ import {
   type ChannelFilters,
   type GatewayHealth,
   type GatewayConfig,
+  type GatewayConfigResponse,
   type OpenRouterUsage,
 } from '../api'
 
@@ -37,8 +38,8 @@ export function SettingsPage() {
       const updated = await updateSettings(partial)
       setSettings(updated)
       setToast({ type: 'ok', msg: 'Saved' })
-    } catch (error: unknown) {
-      setToast({ type: 'err', msg: error instanceof Error ? error.message : 'Save failed' })
+    } catch (e: any) {
+      setToast({ type: 'err', msg: e.message || 'Save failed' })
     } finally {
       setSaving(false)
     }
@@ -172,51 +173,53 @@ export function SettingsPage() {
 
 function GatewayPanel() {
   const [healthData, setHealthData] = useState<GatewayHealth | null>(null)
-  const [gatewayConfig, setGatewayConfig] = useState<GatewayConfig | null>(null)
+  const [configData, setConfigData] = useState<GatewayConfigResponse | null>(null)
   const [openRouterUsage, setOpenRouterUsage] = useState<OpenRouterUsage | null>(null)
-  const [budgetDraft, setBudgetDraft] = useState('')
+  const [draft, setDraft] = useState<GatewayConfig | null>(null)
   const [loadError, setLoadError] = useState('')
   const [saving, setSaving] = useState(false)
   const [notice, setNotice] = useState<{ type: 'ok' | 'err'; msg: string } | null>(null)
 
   const load = async () => {
     setLoadError('')
-    const [health, usage, configResult] = await Promise.all([
-      fetchGatewayHealth().catch((error: Error) => ({
-        available: false,
-        error: error.message || 'Gateway health request failed',
-      } as GatewayHealth)),
-      getOpenRouterUsage().catch(() => null),
-      fetchGatewayConfig()
-        .then((config) => ({ config, error: '' }))
-        .catch((error: Error) => ({ config: null, error: error.message || 'Gateway configuration request failed' })),
-    ])
-
-    setHealthData(health)
-    setOpenRouterUsage(usage)
-    setGatewayConfig(configResult.config)
-    if (configResult.config) {
-      setBudgetDraft(String(configResult.config.MAX_BUDGET_USD))
-    } else {
-      setBudgetDraft('')
-      setLoadError(configResult.error)
+    try {
+      const [health, gatewayConfig, usage] = await Promise.all([
+        fetchGatewayHealth(),
+        fetchGatewayConfig(),
+        getOpenRouterUsage().catch(() => null),
+      ])
+      setHealthData(health)
+      setConfigData(gatewayConfig)
+      setOpenRouterUsage(usage)
+      setDraft(gatewayConfig.available && gatewayConfig.config ? { ...gatewayConfig.config } : null)
+    } catch {
+      setLoadError('Failed to load gateway status and configuration')
+      setDraft(null)
     }
   }
 
   useEffect(() => { void load() }, [])
 
-  const saveUpdate = async (
-    partial: Parameters<typeof updateGatewayConfig>[0],
-    successMessage: string,
-  ) => {
+  const updateDraft = <K extends keyof GatewayConfig>(key: K, value: GatewayConfig[K]) => {
+    setDraft((current) => current ? { ...current, [key]: value } : current)
+  }
+
+  const save = async () => {
+    if (!draft || !configData?.config) return
     setSaving(true)
     setNotice(null)
     try {
-      await updateGatewayConfig(partial)
+      const changed = (Object.keys(draft) as (keyof GatewayConfig)[])
+        .filter((key) => draft[key] !== configData.config?.[key])
+      const partial = Object.fromEntries(changed.map((key) => [key, draft[key]])) as Partial<GatewayConfig>
+      const result = await updateGatewayConfig(partial)
+      if (!result.available) throw new Error(result.error || 'Gateway rejected the configuration')
+      // Re-read both endpoints after saving. The form never treats its local
+      // draft as authoritative; llm-gateway owns the values and health state.
       await load()
-      setNotice({ type: 'ok', msg: successMessage })
-    } catch (error: unknown) {
-      setNotice({ type: 'err', msg: error instanceof Error ? error.message : 'Gateway configuration update failed' })
+      setNotice({ type: 'ok', msg: 'Gateway configuration saved' })
+    } catch (e: any) {
+      setNotice({ type: 'err', msg: e.message || 'Gateway configuration save failed' })
     } finally {
       setSaving(false)
     }
@@ -231,32 +234,15 @@ function GatewayPanel() {
         : null
     )
     : null
-  const budget = Number(budgetDraft)
-  const budgetValid = budgetDraft.trim() !== '' && Number.isFinite(budget) && budget > 0
-
-  const tiers = gatewayConfig ? ([
-    {
-      key: 'BACKEND_CHEAP',
-      label: 'Cheap',
-      description: 'Observation extraction, session summaries, and high-volume topic-link confirmation.',
-      claudeModel: gatewayConfig.MODEL_CHEAP,
-      openRouterModel: gatewayConfig.OR_MODEL_CHEAP,
-    },
-    {
-      key: 'BACKEND_SUMMARY',
-      label: 'Summary',
-      description: 'Thread and cluster summaries, hot-topic detection, and feature-entity derivation.',
-      claudeModel: gatewayConfig.MODEL_SUMMARY,
-      openRouterModel: gatewayConfig.OR_MODEL_SUMMARY,
-    },
-    {
-      key: 'BACKEND_DESCRIBE',
-      label: 'Describe',
-      description: 'Multimodal image and PDF attachment descriptions.',
-      claudeModel: gatewayConfig.MODEL_CHEAP,
-      openRouterModel: gatewayConfig.OR_MODEL_DESCRIBE || gatewayConfig.OR_MODEL_SUMMARY,
-    },
-  ] as const) : []
+  const unavailable = loadError || (configData && !configData.available ? configData.error || 'gateway not reachable' : '')
+  const controlsDisabled = saving || !configData?.available || !draft
+  const dirty = !!draft && !!configData?.config
+    && (Object.keys(draft) as (keyof GatewayConfig)[])
+      .some((key) => draft[key] !== configData.config?.[key])
+  const numbersValid = !!draft
+    && Number.isFinite(draft.MAX_BUDGET_USD) && draft.MAX_BUDGET_USD > 0
+    && Number.isInteger(draft.CLAUDE_TIMEOUT_S) && draft.CLAUDE_TIMEOUT_S > 0
+    && draft.CLAUDE_TIMEOUT_S < 200
 
   return (
     <>
@@ -284,26 +270,26 @@ function GatewayPanel() {
             </div>
             {h.backends && (
               <div className="text-gray-500">
-                Backends: {Object.entries(h.backends).map(([tier, backend]) => `${tier}→${backend}`).join(', ')}
+                Backends: {Object.entries(h.backends).map(([tier, b]) => `${tier}→${b}`).join(', ')}
               </div>
             )}
             {h.models && (
               <div className="text-gray-500 font-mono break-all">
-                Models: {Object.entries(h.models).map(([tier, model]) => `${tier}=${model}`).join(', ')}
+                Models: {Object.entries(h.models).map(([tier, m]) => `${tier}=${m}`).join(', ')}
               </div>
             )}
             {typeof h.fallback_on_quota === 'boolean' && (
-              <div className="text-gray-400">Automatic fallback on quota: {h.fallback_on_quota ? 'on' : 'off'}</div>
+              <div className="text-gray-400">Fallback to OpenRouter on quota: {h.fallback_on_quota ? 'on' : 'off'}</div>
             )}
             <button onClick={() => { void load() }} className={btnSecondary}>Refresh</button>
           </div>
         )}
       </Field>
 
-      <Field label="LLM Backend" hint="Choose who bills each generation tier. Changes apply immediately and persist in llm-gateway.">
-        {loadError && (
+      <Field label="Gateway Configuration" hint="These values are owned and persisted by llm-gateway. Saving applies them to the live gateway process and then reloads this form from the gateway.">
+        {unavailable && (
           <div className="mb-3 px-3 py-2 rounded-md text-xs bg-red-50 text-red-700 dark:bg-red-900/30 dark:text-red-300">
-            Gateway configuration unavailable: {loadError}
+            Gateway configuration unavailable: {unavailable}
           </div>
         )}
         {notice && (
@@ -311,118 +297,99 @@ function GatewayPanel() {
             {notice.msg}
           </div>
         )}
-        {!gatewayConfig && (
-          <p className="text-xs text-gray-500">{loadError ? 'Controls are disabled until the gateway is reachable.' : 'Loading…'}</p>
+        {!draft && (
+          <p className="text-xs text-gray-500">{unavailable ? 'Controls are disabled until the gateway is reachable.' : 'Loading…'}</p>
         )}
-        {gatewayConfig && (
-          <div className="space-y-4">
-            {tiers.map((tier) => (
-              <TierBackendControl
-                key={tier.key}
-                label={tier.label}
-                description={tier.description}
-                value={gatewayConfig[tier.key]}
-                claudeModel={tier.claudeModel}
-                openRouterModel={tier.openRouterModel}
-                disabled={saving}
-                onChange={(backend) => {
-                  void saveUpdate({ [tier.key]: backend }, `${tier.label} tier now uses ${backend === 'claude' ? 'Claude subscription' : 'OpenRouter'}`)
-                }}
-              />
-            ))}
+        <div className={`mt-3 space-y-4 ${controlsDisabled ? 'opacity-60' : ''}`}>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              {([
+                ['BACKEND_SUMMARY', 'Summary backend'],
+                ['BACKEND_CHEAP', 'Cheap backend'],
+                ['BACKEND_DESCRIBE', 'Describe backend'],
+              ] as const).map(([key, label]) => (
+                <label key={key} className="text-xs text-gray-500 dark:text-gray-400">
+                  {label}
+                  <select value={draft?.[key] ?? ''} disabled={controlsDisabled} onChange={(e) => updateDraft(key, e.target.value as GatewayConfig[typeof key])} className={`${selectCls} mt-1 w-full`}>
+                    {!draft && <option value="">Unavailable</option>}
+                    {GATEWAY_BACKENDS.map((value) => <option key={value} value={value}>{value}</option>)}
+                  </select>
+                  {key === 'BACKEND_DESCRIBE' && (
+                    <span className="block mt-1 text-xs text-gray-400 dark:text-gray-500">
+                      On Claude, describe uses MODEL_CHEAP + EFFORT_CHEAP; on OpenRouter, it uses OR_MODEL_SUMMARY. There is no separate describe model.
+                    </span>
+                  )}
+                </label>
+              ))}
+            </div>
+            <p className="text-xs text-gray-400 dark:text-gray-500">
+              summary serves thread and cluster summaries, hot-topic detection, scope refresh, and feature-entity derivation; cheap serves flat-memory observation extraction and session summaries plus the high-volume topic-link confirm gate (one yes/no per candidate); describe serves multimodal image and PDF attachments (a different request shape, not a quality level).
+            </p>
 
-            <div className="rounded-md border border-amber-200 dark:border-amber-800 bg-amber-50/60 dark:bg-amber-950/20 px-3 py-2 text-xs text-amber-900 dark:text-amber-200">
-              Cheap OpenRouter calls cost approximately <strong>$0.00215/call</strong> at the measured
-              1,669 prompt / 97 completion tokens (2026-08-22), or approximately <strong>$250/month</strong>
-              at 117,000 calls. Claude subscription mode has <strong>$0 marginal cost</strong>.
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {([
+                ['MODEL_SUMMARY', 'Claude summary model'],
+                ['MODEL_CHEAP', 'Claude cheap model'],
+                ['OR_MODEL_SUMMARY', 'OpenRouter summary model'],
+                ['OR_MODEL_CHEAP', 'OpenRouter cheap model'],
+              ] as const).map(([key, label]) => (
+                <label key={key} className="text-xs text-gray-500 dark:text-gray-400">
+                  {label}
+                  <input type="text" value={draft?.[key] ?? ''} disabled={controlsDisabled} onChange={(e) => updateDraft(key, e.target.value)} className={`${inputCls} mt-1 w-full font-mono`} />
+                </label>
+              ))}
             </div>
 
-            <label className="block max-w-sm text-xs text-gray-500 dark:text-gray-400">
-              Max Claude budget (USD per call)
-              <div className="mt-1 flex gap-2">
-                <input
-                  type="number"
-                  min="0.01"
-                  step="0.01"
-                  value={budgetDraft}
-                  disabled={saving}
-                  onChange={(event) => setBudgetDraft(event.target.value)}
-                  className={inputCls}
-                />
-                <button
-                  disabled={saving || !budgetValid || budget === gatewayConfig.MAX_BUDGET_USD}
-                  onClick={() => { void saveUpdate({ MAX_BUDGET_USD: budget }, 'Maximum per-call budget saved') }}
-                  className={btnPrimary}
-                >
-                  {saving ? 'Saving…' : 'Save budget'}
-                </button>
-              </div>
-              <span className="mt-1 block text-gray-400 dark:text-gray-500">
-                Per-call ceiling passed to the Claude Agent SDK. It is not a daily or monthly spend limit.
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {([
+                ['EFFORT_SUMMARY', 'Summary effort'],
+                ['EFFORT_CHEAP', 'Cheap effort'],
+              ] as const).map(([key, label]) => (
+                <label key={key} className="text-xs text-gray-500 dark:text-gray-400">
+                  {label}
+                  <select value={draft?.[key] ?? ''} disabled={controlsDisabled} onChange={(e) => updateDraft(key, e.target.value as GatewayConfig[typeof key])} className={`${selectCls} mt-1 w-full`}>
+                    {!draft && <option value="">Unavailable</option>}
+                    {GATEWAY_EFFORTS.map((value) => <option key={value} value={value}>{value}</option>)}
+                  </select>
+                </label>
+              ))}
+            </div>
+            <p className="text-xs text-gray-400 dark:text-gray-500">
+              Reasoning effort is passed to the Claude Agent SDK only; OpenRouter never receives it, so changing it has no effect when that tier uses openrouter.
+            </p>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <label className="text-xs text-gray-500 dark:text-gray-400">
+                Max Claude budget (USD per call)
+                <input type="number" min="0.01" step="0.01" value={draft?.MAX_BUDGET_USD ?? ''} disabled={controlsDisabled} onChange={(e) => updateDraft('MAX_BUDGET_USD', Number(e.target.value))} className={`${inputCls} mt-1 w-full`} />
+                <span className="block mt-1 text-xs text-gray-400 dark:text-gray-500">
+                  Per-call ceiling passed to the Claude Agent SDK as max_budget_usd; it aborts one runaway call, not daily, monthly, or total spend.
+                </span>
+              </label>
+              <label className="text-xs text-gray-500 dark:text-gray-400">
+                Claude timeout (seconds, must be below 200)
+                <input type="number" min="1" max="199" step="1" value={draft?.CLAUDE_TIMEOUT_S ?? ''} disabled={controlsDisabled} onChange={(e) => updateDraft('CLAUDE_TIMEOUT_S', Number(e.target.value))} className={`${inputCls} mt-1 w-full`} />
+                <span className="block mt-1 text-xs text-gray-400 dark:text-gray-500">
+                  Wall clock for one call and the HTTP timeout for OpenRouter; it must stay under agent-mem's 200s client timeout, which stays under the 240s job lease, or the janitor can reclaim the expired job into a duplicate LLM call.
+                </span>
+              </label>
+            </div>
+
+            <label className="flex items-start gap-2 text-sm cursor-pointer">
+              <input type="checkbox" checked={draft?.FALLBACK_ON_QUOTA ?? false} disabled={controlsDisabled} onChange={(e) => updateDraft('FALLBACK_ON_QUOTA', e.target.checked)} className="mt-0.5 rounded border-gray-300 text-blue-600 focus:ring-blue-500" />
+              <span>
+                Fall back to OpenRouter when the Claude seat window closes
+                <span className="block text-xs text-amber-600 dark:text-amber-400">
+                  Generation will spend the same OpenRouter budget that funds embeddings.
+                </span>
               </span>
             </label>
+
+            <button disabled={controlsDisabled || !numbersValid || !dirty} onClick={() => { void save() }} className={btnPrimary}>
+              {saving ? 'Saving…' : 'Save Gateway Configuration'}
+            </button>
           </div>
-        )}
       </Field>
     </>
-  )
-}
-
-function TierBackendControl({
-  label,
-  description,
-  value,
-  claudeModel,
-  openRouterModel,
-  disabled,
-  onChange,
-}: {
-  label: string
-  description: string
-  value: 'claude' | 'openrouter'
-  claudeModel: string
-  openRouterModel: string
-  disabled: boolean
-  onChange: (value: 'claude' | 'openrouter') => void
-}) {
-  return (
-    <div className="rounded-md border border-gray-200 dark:border-gray-700 p-3">
-      <div className="mb-2">
-        <div className="text-sm font-medium text-gray-900 dark:text-gray-100">{label}</div>
-        <div className="text-xs text-gray-500 dark:text-gray-400">{description}</div>
-      </div>
-      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2" role="group" aria-label={`${label} backend`}>
-        {([
-          ['claude', 'Claude subscription', claudeModel, '$0 marginal'],
-          ['openrouter', 'OpenRouter', openRouterModel, 'metered per token'],
-        ] as const).map(([backend, title, model, cost]) => {
-          const selected = value === backend
-          return (
-            <button
-              key={backend}
-              type="button"
-              aria-pressed={selected}
-              disabled={disabled}
-              onClick={() => onChange(backend)}
-              className={`rounded-md border px-3 py-2 text-left transition-colors disabled:opacity-50 ${
-                selected
-                  ? backend === 'claude'
-                    ? 'border-blue-500 bg-blue-50 dark:border-blue-400 dark:bg-blue-950/30'
-                    : 'border-amber-500 bg-amber-50 dark:border-amber-400 dark:bg-amber-950/30'
-                  : 'border-gray-200 hover:bg-gray-50 dark:border-gray-700 dark:hover:bg-gray-800'
-              }`}
-            >
-              <span className="flex items-center justify-between gap-2 text-xs font-medium text-gray-900 dark:text-gray-100">
-                {title}
-                {selected && <span className="text-[10px] uppercase tracking-wide">current</span>}
-              </span>
-              <span className="mt-1 block break-all font-mono text-xs text-gray-500 dark:text-gray-400">{model}</span>
-              <span className="mt-1 block text-[11px] text-gray-400 dark:text-gray-500">{cost}</span>
-            </button>
-          )
-        })}
-      </div>
-    </div>
   )
 }
 
@@ -494,8 +461,8 @@ function ChannelFiltersSection() {
     try {
       await saveChannelFilters(cfgFromState(ignore, rules))
       setToast({ type: 'ok', msg: 'Saved' })
-    } catch (error: unknown) {
-      setToast({ type: 'err', msg: error instanceof Error ? error.message : 'Save failed' })
+    } catch (e: any) {
+      setToast({ type: 'err', msg: e.message || 'Save failed' })
     } finally {
       setSaving(false)
     }
@@ -580,6 +547,8 @@ function ChannelFiltersSection() {
 
 // --- Constants ---
 
+const GATEWAY_BACKENDS = ['claude', 'openrouter'] as const
+const GATEWAY_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const
 
 const SKIP_TOOLS = [
   { value: 'Read', label: 'Read', desc: 'File reading' },

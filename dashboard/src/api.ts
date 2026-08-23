@@ -307,6 +307,7 @@ export async function fetchGatewayHealth(): Promise<GatewayHealth> {
 }
 
 export type GatewayBackend = 'claude' | 'openrouter';
+export type GatewayEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
 export interface GatewayConfig {
   BACKEND_SUMMARY: GatewayBackend;
@@ -316,43 +317,37 @@ export interface GatewayConfig {
   MODEL_CHEAP: string;
   OR_MODEL_SUMMARY: string;
   OR_MODEL_CHEAP: string;
-  OR_MODEL_DESCRIBE?: string;
+  EFFORT_SUMMARY: GatewayEffort;
+  EFFORT_CHEAP: GatewayEffort;
+  FALLBACK_ON_QUOTA: boolean;
   MAX_BUDGET_USD: number;
+  CLAUDE_TIMEOUT_S: number;
 }
 
-export type GatewayConfigUpdate = Partial<Pick<
-  GatewayConfig,
-  | 'BACKEND_CHEAP'
-  | 'BACKEND_SUMMARY'
-  | 'BACKEND_DESCRIBE'
-  | 'OR_MODEL_CHEAP'
-  | 'OR_MODEL_SUMMARY'
-  | 'MAX_BUDGET_USD'
->>;
-
-async function readGatewayConfigResponse(res: Response): Promise<GatewayConfig> {
-  const body = await res.json().catch(() => null);
-  if (!res.ok) {
-    const message = body?.error || body?.detail || `HTTP ${res.status}`;
-    throw new Error(message);
-  }
-  return body as GatewayConfig;
+export interface GatewayConfigResponse {
+  available: boolean;
+  error?: string;
+  config?: GatewayConfig;
 }
 
-export async function fetchGatewayConfig(): Promise<GatewayConfig> {
-  const res = await authFetch(`${BASE}/api/gateway/config`);
-  return readGatewayConfigResponse(res);
+export async function fetchGatewayConfig(): Promise<GatewayConfigResponse> {
+  const res = await authFetch(`${BASE}/api/llm-gateway/config`);
+  return res.json();
 }
 
 export async function updateGatewayConfig(
-  partial: GatewayConfigUpdate,
-): Promise<GatewayConfig> {
-  const res = await authFetch(`${BASE}/api/gateway/config`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
+  partial: Partial<GatewayConfig>,
+): Promise<GatewayConfigResponse> {
+  const res = await authFetch(`${BASE}/api/llm-gateway/config`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
     body: JSON.stringify(partial),
   });
-  return readGatewayConfigResponse(res);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Unknown error' }));
+    throw new Error(err.error || `HTTP ${res.status}`);
+  }
+  return res.json();
 }
 
 // ── Graph backfill ──────────────────────────────────────────────────────────
