@@ -1,9 +1,15 @@
 package worker
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
+	"sort"
 	"strings"
+	"time"
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -131,6 +137,120 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 
 	// Return the full current settings (including masked keys) as the response.
 	s.handleGetSettings(w, r)
+}
+
+var gatewayConfigWritableKeys = map[string]struct{}{
+	"BACKEND_CHEAP":    {},
+	"BACKEND_SUMMARY":  {},
+	"BACKEND_DESCRIBE": {},
+	"OR_MODEL_CHEAP":   {},
+	"OR_MODEL_SUMMARY": {},
+	"MAX_BUDGET_USD":   {},
+}
+
+func (s *Server) handleGetGatewayConfig(w http.ResponseWriter, r *http.Request) {
+	s.proxyGatewayConfig(w, r, http.MethodGet, nil)
+}
+
+func (s *Server) handlePatchGatewayConfig(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<16)
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		writeGatewayConfigError(w, http.StatusBadRequest, "invalid gateway config body")
+		return
+	}
+
+	var updates map[string]json.RawMessage
+	if err := json.Unmarshal(body, &updates); err != nil || updates == nil {
+		writeGatewayConfigError(w, http.StatusBadRequest, "invalid JSON object")
+		return
+	}
+
+	unknown := make([]string, 0)
+	for key := range updates {
+		if _, ok := gatewayConfigWritableKeys[key]; !ok {
+			unknown = append(unknown, key)
+		}
+	}
+	if len(unknown) > 0 {
+		sort.Strings(unknown)
+		writeGatewayConfigError(w, http.StatusBadRequest,
+			"unsupported gateway config key: "+strings.Join(unknown, ", "))
+		return
+	}
+
+	s.proxyGatewayConfig(w, r, http.MethodPut, body)
+}
+
+func (s *Server) proxyGatewayConfig(w http.ResponseWriter, r *http.Request, method string, body []byte) {
+	snap := s.config.Snapshot()
+	base := strings.TrimSpace(snap.LLMGatewayURL)
+	if base == "" {
+		writeGatewayConfigError(w, http.StatusServiceUnavailable, "llm_gateway_url not configured")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+
+	status, raw, err := fetchGatewayConfig(
+		ctx,
+		gatewayHTTPClient,
+		method,
+		strings.TrimRight(base, "/")+"/config",
+		snap.LLMGatewayAPIKey,
+		body,
+	)
+	if err != nil {
+		writeGatewayConfigError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	if _, err := w.Write(raw); err != nil {
+		log.Error().Err(err).Msg("Failed to write gateway config response")
+	}
+}
+
+func fetchGatewayConfig(
+	ctx context.Context,
+	hc *http.Client,
+	method, url, apiKey string,
+	body []byte,
+) (int, []byte, error) {
+	req, err := http.NewRequestWithContext(ctx, method, url, bytes.NewReader(body))
+	if err != nil {
+		return 0, nil, fmt.Errorf("build llm-gateway /config request: %w", err)
+	}
+	req.Header.Set("X-API-Key", apiKey)
+	if method == http.MethodPut {
+		req.Header.Set("Content-Type", "application/json")
+	}
+
+	resp, err := hc.Do(req)
+	if err != nil {
+		return 0, nil, fmt.Errorf("llm-gateway unreachable: %w", err)
+	}
+	defer resp.Body.Close()
+
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return 0, nil, fmt.Errorf("read llm-gateway /config: %w", err)
+	}
+	if !json.Valid(raw) {
+		return 0, nil, fmt.Errorf("llm-gateway /config returned non-JSON")
+	}
+
+	return resp.StatusCode, raw, nil
+}
+
+func writeGatewayConfigError(w http.ResponseWriter, status int, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	if err := json.NewEncoder(w).Encode(map[string]string{"error": message}); err != nil {
+		log.Error().Err(err).Msg("Failed to encode gateway config error")
+	}
 }
 
 // newGatewayClient returns an llm-gateway client at the given embedding width,
