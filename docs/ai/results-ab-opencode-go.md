@@ -116,3 +116,25 @@ would have delivered it at zero quality risk.
    Go and the cheap tier staying put, the remaining prize is ~3,000 summary calls/month —
    a small offload against a quality bar Enzo has already rejected a cheap model on.
 4. **Do not build the cascade yet.** Nothing has passed that would use it.
+
+## Decision — Enzo, 2026-08-23: park OpenCode Go
+
+Cheap tier stays on `claude-haiku-4-5`, summary tier stays on `claude-sonnet-5`. Part 2 was
+never run and is not planned. No gateway change, no cascade, no `zen` provider.
+
+The reasoning is short: the only Go model with the volume headroom is not accurate enough,
+and Claude is unavailable on the Go endpoint — so Go cannot deliver the capacity insurance
+that was the entire point. Cheapness alone was never the goal, which is why a 3.5x better
+than expected cost figure does not change the outcome.
+
+**If this is ever revisited, start here and do not re-derive it:**
+
+1. The harness works and lives in the run record — a prompt-tuned retest is ~20 minutes and
+   ~$0.01. Use FRESH inputs; tuning against the same 100 overfits to them.
+2. The one thing to change is the prompt, not the model: require a shared *work item*, and
+   state explicitly that shared domain, shared participants and nearby timestamps are
+   insufficient. That is exactly where `mimo-v2.5` diverged from haiku in 14 of 16 cases.
+3. Keep the thresholds as written. They rejected a model that was cheap and fast, which is
+   the situation they exist for.
+4. Re-check whether Claude has become available on `/zen/go/v1` — that, not a cheaper open
+   model, is what would actually solve the original problem.
