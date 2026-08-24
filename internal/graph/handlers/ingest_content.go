@@ -188,6 +188,13 @@ func NewIngestContentHandler(deps Deps) http.Handler {
 				return
 			}
 
+			if skip, gateErr := eligibilityGateSkip(ctx, deps, req.Metadata.ChannelID, req.Metadata.Ts, req.Body); gateErr != nil {
+				deps.Logger.Warn().Err(gateErr).Str("channel_id", req.Metadata.ChannelID).Str("message_ts", req.Metadata.Ts).Msg("ingest_content: eligibility gate failed open")
+			} else if skip {
+				writeJSON(w, http.StatusOK, ingestResponse{NodeID: nodeID, Outcome: eligibilitySkippedOutcome})
+				return
+			}
+
 			subtype := ""
 			if req.Metadata.Subtype != nil {
 				subtype = *req.Metadata.Subtype
@@ -392,8 +399,8 @@ func NewIngestContentHandler(deps Deps) http.Handler {
 			_ = deps.DB.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM graph.nodes WHERE id=$1)`, rootID).Scan(&rootExists)
 			if !rootExists {
 				btID, btErr := jobs.Enqueue(ctx, deps.DB, "backfill_slack_thread", backfillSlackThreadPayload{
-					ChannelID:        req.Metadata.ChannelID,
-					ThreadTs:         req.Metadata.ThreadTs,
+					ChannelID: req.Metadata.ChannelID,
+					ThreadTs:  req.Metadata.ThreadTs,
 					// Only force full bot-message ingestion when recovering an alert
 					// thread; a recovered normal thread keeps the default skip policy.
 					ForceAlertThread: channelIsAlert(ctx, deps, req.Metadata.ChannelID),

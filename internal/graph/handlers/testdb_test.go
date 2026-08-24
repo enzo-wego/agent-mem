@@ -54,6 +54,7 @@ func truncateGraphHandlerTables(t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
 	ctx := context.Background()
 	tables := []string{
+		"graph.eligibility_decisions",
 		"graph.artifact_index",
 		"graph.artifact_bodies",
 		"graph.jira_epic_map",

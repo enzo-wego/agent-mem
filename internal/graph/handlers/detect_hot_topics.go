@@ -875,8 +875,9 @@ func (h *Subscriptions) create(w http.ResponseWriter, r *http.Request) {
 	var s subscription
 	err := h.db.QueryRow(r.Context(), `
 		INSERT INTO graph.topic_subscriptions
-		  (subscriber_slack_id, topic, channel_filter, min_participants, max_author_depth, sources, scope_definition)
-		VALUES ($1,$2,$3,$4,$5,$6,$7)
+		  (subscriber_slack_id, topic, channel_filter, min_participants, max_author_depth,
+		   sources, scope_definition, scope_refreshed_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,CASE WHEN $7 <> '' THEN NOW() ELSE NULL END)
 		RETURNING id, subscriber_slack_id, topic, channel_filter,
 		          min_participants, max_author_depth, active, created_at, COALESCE(scope_status,'')`,
 		subscriber, req.Topic, filter, minP, maxD, srcJSON, scopeDef).
@@ -973,7 +974,10 @@ func (h *Subscriptions) update(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.ScopeDefinition != nil {
 		args = append(args, *req.ScopeDefinition)
-		sets = append(sets, fmt.Sprintf("scope_definition=$%d", len(args)))
+		placeholder := fmt.Sprintf("$%d", len(args))
+		sets = append(sets,
+			"scope_refreshed_at=CASE WHEN scope_definition IS DISTINCT FROM "+placeholder+" THEN NOW() ELSE scope_refreshed_at END",
+			"scope_definition="+placeholder)
 	}
 	if req.Active != nil {
 		args = append(args, *req.Active)
