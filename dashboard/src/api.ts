@@ -585,6 +585,8 @@ export interface TopicSubscription {
   scope_summary?: string;
   scope_status?: string;
   scope_definition?: string;
+  scope_error?: string;
+  scope_refreshed_at?: string;
 }
 
 export async function listSubscriptions(): Promise<TopicSubscription[]> {

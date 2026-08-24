@@ -2,6 +2,31 @@ package fetchers
 
 import "testing"
 
+func TestCFBase(t *testing.T) {
+	tests := []struct {
+		name        string
+		cfBaseURL   string
+		jiraBaseURL string
+	}{
+		{name: "bare host", cfBaseURL: "https://x"},
+		{name: "wiki host", cfBaseURL: "https://x/wiki"},
+		{name: "trailing slash", cfBaseURL: "https://x/"},
+		{name: "Jira fallback", jiraBaseURL: "https://x"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := &Registry{cfg: Config{
+				CFBaseURL:   tt.cfBaseURL,
+				JiraBaseURL: tt.jiraBaseURL,
+			}}
+			if got := r.cfBase(); got != "https://x/wiki" {
+				t.Errorf("cfBase() = %q, want %q", got, "https://x/wiki")
+			}
+		})
+	}
+}
+
 func TestIsMarkdown(t *testing.T) {
 	for _, p := range []string{"README.md", "docs/Design.MARKDOWN", "a/b/c.md"} {
 		if !isMarkdown(p) {
