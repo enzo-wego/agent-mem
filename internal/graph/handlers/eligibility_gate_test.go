@@ -7,9 +7,13 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"os"
+	"strings"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/zerolog"
 
@@ -131,6 +135,67 @@ func eligibilityRequest(channelID, ts, body string) map[string]any {
 			"files":      []any{},
 		},
 	}
+}
+
+func eligibilityThreadRequest(channelID, ts, threadTS, body string) map[string]any {
+	req := eligibilityRequest(channelID, ts, body)
+	req["metadata"].(map[string]any)["thread_ts"] = threadTS
+	return req
+}
+
+func eligibilityScopeVersion(t *testing.T, pool *pgxpool.Pool, scopeID int64) time.Time {
+	t.Helper()
+	var version time.Time
+	if err := pool.QueryRow(t.Context(),
+		`SELECT scope_refreshed_at FROM graph.topic_subscriptions WHERE id=$1`, scopeID).Scan(&version); err != nil {
+		t.Fatalf("read eligibility scope version: %v", err)
+	}
+	return version
+}
+
+func seedEligibilityDecision(
+	t *testing.T,
+	pool *pgxpool.Pool,
+	channelID, messageTS string,
+	score any,
+	decision, source, mode string,
+	scopeVersion, decidedAt time.Time,
+) {
+	t.Helper()
+	if _, err := pool.Exec(t.Context(), `
+		INSERT INTO graph.eligibility_decisions
+		  (channel_id, message_ts, score, decision, decision_source, mode, scope_version, decided_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+		channelID, messageTS, score, decision, source, mode, scopeVersion, decidedAt); err != nil {
+		t.Fatalf("seed eligibility decision: %v", err)
+	}
+}
+
+func eligibilityLookupErrorPool(t *testing.T, allowedAcquisitions int) *pgxpool.Pool {
+	t.Helper()
+	dsn := os.Getenv("DATABASE_URL")
+	if databaseName(dsn) != "agentmem_test" {
+		t.Fatalf("lookup error pool requires agentmem_test")
+	}
+	config, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		t.Fatalf("parse lookup error pool config: %v", err)
+	}
+	config.MaxConns = 1
+	var mu sync.Mutex
+	acquisitions := 0
+	config.BeforeAcquire = func(context.Context, *pgx.Conn) bool {
+		mu.Lock()
+		defer mu.Unlock()
+		acquisitions++
+		return acquisitions <= allowedAcquisitions
+	}
+	pool, err := pgxpool.NewWithConfig(t.Context(), config)
+	if err != nil {
+		t.Fatalf("create lookup error pool: %v", err)
+	}
+	t.Cleanup(pool.Close)
+	return pool
 }
 
 func eligibilityDeps(pool *pgxpool.Pool, client GeminiClient) Deps {
@@ -498,5 +563,310 @@ func TestEligibilityGateRejectsEqualThresholds(t *testing.T) {
 	})
 	if _, err := decodeEligibilityGateConfig([]byte(raw)); err == nil {
 		t.Fatal("equal thresholds must be rejected")
+	}
+}
+
+func TestEligibilityGateSequentialDuplicateReusesDecision(t *testing.T) {
+	pool := openTestDB(t)
+	truncateGraphHandlerTables(t, pool)
+	const (
+		channelID = "CELIGDUP"
+		scopeText = "payments duplicate scope"
+		messageTS = "1800000060.000001"
+		body      = "payments duplicate message"
+	)
+	scopeID := seedEligibilityScope(t, pool, scopeText)
+	setEligibilityConfig(t, pool, eligibilityConfigJSON(t, eligibilityGateConfig{
+		Enabled:             true,
+		Mode:                eligibilityModeEnforce,
+		ScopeSubscriptionID: scopeID,
+		HighThreshold:       0.9,
+		LowThreshold:        0.1,
+		GatedChannels:       []string{channelID},
+	}))
+	client := &eligibilityGemini{embed: func(text string) ([]float32, error) {
+		switch text {
+		case scopeText, body:
+			return []float32{1, 0}, nil
+		default:
+			return nil, fmt.Errorf("unexpected embed text %q", text)
+		}
+	}}
+	handler := NewIngestContentHandler(eligibilityDeps(pool, client))
+
+	first := postJSON(t, handler, eligibilityRequest(channelID, messageTS, body))
+	if outcome := decodeIngestResponse(t, first.Body.Bytes()).Outcome; outcome != "created" {
+		t.Fatalf("first duplicate outcome = %q, want created", outcome)
+	}
+	second := postJSON(t, handler, eligibilityRequest(channelID, messageTS, body))
+	if outcome := decodeIngestResponse(t, second.Body.Bytes()).Outcome; outcome != "unchanged" {
+		t.Fatalf("second duplicate outcome = %q, want unchanged", outcome)
+	}
+
+	if got := client.embedCallCount(body); got != 1 {
+		t.Fatalf("message embed calls = %d, want 1", got)
+	}
+	var decisions int
+	if err := pool.QueryRow(t.Context(), `
+		SELECT COUNT(*) FROM graph.eligibility_decisions
+		WHERE channel_id=$1 AND message_ts=$2 AND decision_source='scored'`,
+		channelID, messageTS).Scan(&decisions); err != nil {
+		t.Fatalf("count duplicate decisions: %v", err)
+	}
+	if decisions != 1 {
+		t.Fatalf("duplicate audit rows = %d, want 1", decisions)
+	}
+}
+
+func TestEligibilityGateCurrentDecisionUsesLatestRow(t *testing.T) {
+	pool := openTestDB(t)
+	truncateGraphHandlerTables(t, pool)
+	const (
+		channelID = "CELIGLATEST"
+		messageTS = "1800000061.000001"
+	)
+	scopeID := seedEligibilityScope(t, pool, "payments latest scope")
+	scopeVersion := eligibilityScopeVersion(t, pool, scopeID)
+	setEligibilityConfig(t, pool, eligibilityConfigJSON(t, eligibilityGateConfig{
+		Enabled:             true,
+		Mode:                eligibilityModeEnforce,
+		ScopeSubscriptionID: scopeID,
+		HighThreshold:       0.9,
+		LowThreshold:        0.1,
+		GatedChannels:       []string{channelID},
+	}))
+	now := time.Now()
+	seedEligibilityDecision(t, pool, channelID, messageTS, 1.0, "eligible", "scored",
+		eligibilityModeDryRun, scopeVersion, now.Add(-time.Second))
+	seedEligibilityDecision(t, pool, channelID, messageTS, 0.0, "ineligible", "scored",
+		eligibilityModeDryRun, scopeVersion, now)
+
+	skip, err := eligibilityGateSkip(t.Context(), eligibilityDeps(pool, nil),
+		channelID, messageTS, "", "must not embed")
+	if err != nil {
+		t.Fatalf("reuse latest current decision: %v", err)
+	}
+	if !skip {
+		t.Fatal("latest current decision is ineligible under current enforce mode; want skip")
+	}
+	var decisions int
+	if err := pool.QueryRow(t.Context(), `
+		SELECT COUNT(*) FROM graph.eligibility_decisions WHERE channel_id=$1 AND message_ts=$2`,
+		channelID, messageTS).Scan(&decisions); err != nil {
+		t.Fatalf("count latest current decisions: %v", err)
+	}
+	if decisions != 2 {
+		t.Fatalf("current decision reuse wrote an audit row: got %d rows, want 2", decisions)
+	}
+}
+
+func TestEligibilityGateEligibleRootReplyInheritsWithoutScoring(t *testing.T) {
+	pool := openTestDB(t)
+	truncateGraphHandlerTables(t, pool)
+	const (
+		channelID = "CELIGINHERIT"
+		rootTS    = "1800000062.000001"
+		replyTS   = "1800000062.000002"
+		scopeText = "payments inherited root scope"
+		body      = "reply that must inherit"
+	)
+	scopeID := seedEligibilityScope(t, pool, scopeText)
+	scopeVersion := eligibilityScopeVersion(t, pool, scopeID)
+	setEligibilityConfig(t, pool, eligibilityConfigJSON(t, eligibilityGateConfig{
+		Enabled:             true,
+		Mode:                eligibilityModeEnforce,
+		ScopeSubscriptionID: scopeID,
+		HighThreshold:       0.9,
+		LowThreshold:        0.1,
+		GatedChannels:       []string{channelID},
+	}))
+	seedEligibilityDecision(t, pool, channelID, rootTS, 1.0, "eligible", "scored",
+		eligibilityModeDryRun, scopeVersion, time.Now())
+	client := &eligibilityGemini{embed: func(text string) ([]float32, error) {
+		return nil, fmt.Errorf("inherited reply unexpectedly embedded %q", text)
+	}}
+	handler := NewIngestContentHandler(eligibilityDeps(pool, client))
+
+	w := postJSON(t, handler, eligibilityThreadRequest(channelID, replyTS, rootTS, body))
+	if outcome := decodeIngestResponse(t, w.Body.Bytes()).Outcome; outcome != "created" {
+		t.Fatalf("inherited reply outcome = %q, want created", outcome)
+	}
+	if got := client.embedCallCount(scopeText); got != 0 {
+		t.Fatalf("inherited reply scope embed calls = %d, want 0", got)
+	}
+	if got := client.embedCallCount(body); got != 0 {
+		t.Fatalf("inherited reply message embed calls = %d, want 0", got)
+	}
+	var decision, source, mode string
+	var scoreIsNull bool
+	var inheritedScopeVersion time.Time
+	if err := pool.QueryRow(t.Context(), `
+		SELECT decision, decision_source, score IS NULL, mode, scope_version
+		FROM graph.eligibility_decisions
+		WHERE channel_id=$1 AND message_ts=$2
+		ORDER BY decided_at DESC, id DESC LIMIT 1`,
+		channelID, replyTS).Scan(&decision, &source, &scoreIsNull, &mode, &inheritedScopeVersion); err != nil {
+		t.Fatalf("read inherited decision: %v", err)
+	}
+	if decision != "eligible" || source != "inherited_root" || !scoreIsNull ||
+		mode != eligibilityModeEnforce || !inheritedScopeVersion.Equal(scopeVersion) {
+		t.Fatalf("inherited audit = decision %q source %q score_null %v mode %q scope %v, want eligible inherited_root true enforce %v",
+			decision, source, scoreIsNull, mode, inheritedScopeVersion, scopeVersion)
+	}
+}
+
+func TestEligibilityGateMissingRootFallsThroughToScoring(t *testing.T) {
+	pool := openTestDB(t)
+	truncateGraphHandlerTables(t, pool)
+	const (
+		channelID = "CELIGMISSINGROOT"
+		rootTS    = "1800000063.000001"
+		replyTS   = "1800000063.000002"
+		scopeText = "payments missing root scope"
+		body      = "payments reply with missing root"
+	)
+	scopeID := seedEligibilityScope(t, pool, scopeText)
+	setEligibilityConfig(t, pool, eligibilityConfigJSON(t, eligibilityGateConfig{
+		Enabled:             true,
+		Mode:                eligibilityModeEnforce,
+		ScopeSubscriptionID: scopeID,
+		HighThreshold:       0.9,
+		LowThreshold:        0.1,
+		GatedChannels:       []string{channelID},
+	}))
+	client := &eligibilityGemini{embed: func(text string) ([]float32, error) {
+		switch text {
+		case scopeText, body:
+			return []float32{1, 0}, nil
+		default:
+			return nil, fmt.Errorf("unexpected embed text %q", text)
+		}
+	}}
+	handler := NewIngestContentHandler(eligibilityDeps(pool, client))
+
+	w := postJSON(t, handler, eligibilityThreadRequest(channelID, replyTS, rootTS, body))
+	if outcome := decodeIngestResponse(t, w.Body.Bytes()).Outcome; outcome != "created" {
+		t.Fatalf("missing-root reply outcome = %q, want created", outcome)
+	}
+	if got := client.embedCallCount(scopeText); got != 1 {
+		t.Fatalf("missing-root scope embed calls = %d, want 1", got)
+	}
+	if got := client.embedCallCount(body); got != 1 {
+		t.Fatalf("missing-root message embed calls = %d, want 1", got)
+	}
+	var source string
+	var scoreIsNull bool
+	if err := pool.QueryRow(t.Context(), `
+		SELECT decision_source, score IS NULL FROM graph.eligibility_decisions
+		WHERE channel_id=$1 AND message_ts=$2`,
+		channelID, replyTS).Scan(&source, &scoreIsNull); err != nil {
+		t.Fatalf("read missing-root decision: %v", err)
+	}
+	if source != "scored" || scoreIsNull {
+		t.Fatalf("missing-root decision source = %q score_null = %v, want scored false", source, scoreIsNull)
+	}
+}
+
+func TestEligibilityGateLatestIneligibleRootFallsThroughAndCanScoreEligible(t *testing.T) {
+	pool := openTestDB(t)
+	truncateGraphHandlerTables(t, pool)
+	const (
+		channelID = "CELIGINELIGIBLEROOT"
+		rootTS    = "1800000064.000001"
+		replyTS   = "1800000064.000002"
+		scopeText = "payments ineligible root scope"
+		body      = "payments reply that is independently eligible"
+	)
+	scopeID := seedEligibilityScope(t, pool, scopeText)
+	scopeVersion := eligibilityScopeVersion(t, pool, scopeID)
+	setEligibilityConfig(t, pool, eligibilityConfigJSON(t, eligibilityGateConfig{
+		Enabled:             true,
+		Mode:                eligibilityModeEnforce,
+		ScopeSubscriptionID: scopeID,
+		HighThreshold:       0.9,
+		LowThreshold:        0.1,
+		GatedChannels:       []string{channelID},
+	}))
+	now := time.Now()
+	seedEligibilityDecision(t, pool, channelID, rootTS, 1.0, "eligible", "scored",
+		eligibilityModeDryRun, scopeVersion, now.Add(-time.Second))
+	seedEligibilityDecision(t, pool, channelID, rootTS, 0.0, "ineligible", "scored",
+		eligibilityModeDryRun, scopeVersion, now)
+	client := &eligibilityGemini{embed: func(text string) ([]float32, error) {
+		switch text {
+		case scopeText, body:
+			return []float32{1, 0}, nil
+		default:
+			return nil, fmt.Errorf("unexpected embed text %q", text)
+		}
+	}}
+	handler := NewIngestContentHandler(eligibilityDeps(pool, client))
+
+	w := postJSON(t, handler, eligibilityThreadRequest(channelID, replyTS, rootTS, body))
+	if outcome := decodeIngestResponse(t, w.Body.Bytes()).Outcome; outcome != "created" {
+		t.Fatalf("ineligible-root reply outcome = %q, want created", outcome)
+	}
+	var decision, source string
+	if err := pool.QueryRow(t.Context(), `
+		SELECT decision, decision_source FROM graph.eligibility_decisions
+		WHERE channel_id=$1 AND message_ts=$2`,
+		channelID, replyTS).Scan(&decision, &source); err != nil {
+		t.Fatalf("read independently scored reply: %v", err)
+	}
+	if decision != "eligible" || source != "scored" {
+		t.Fatalf("independently scored reply = %q source %q, want eligible scored", decision, source)
+	}
+}
+
+func TestEligibilityGateNewLookupErrorsFailOpen(t *testing.T) {
+	tests := []struct {
+		name                string
+		allowedAcquisitions int
+		threadTS            string
+		wantContext         string
+	}{
+		{
+			name:                "current message decision lookup",
+			allowedAcquisitions: 0,
+			wantContext:         "lookup current decision",
+		},
+		{
+			name:                "eligible root decision lookup",
+			allowedAcquisitions: 1,
+			threadTS:            "1800000065.000001",
+			wantContext:         "lookup eligible root decision",
+		},
+	}
+
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pool := openTestDB(t)
+			truncateGraphHandlerTables(t, pool)
+			channelID := fmt.Sprintf("CELIGLOOKUPERR%d", i)
+			scopeID := seedEligibilityScope(t, pool, "lookup error scope")
+			setEligibilityConfig(t, pool, eligibilityConfigJSON(t, eligibilityGateConfig{
+				Enabled:             true,
+				Mode:                eligibilityModeEnforce,
+				ScopeSubscriptionID: scopeID,
+				HighThreshold:       0.9,
+				LowThreshold:        0.1,
+				GatedChannels:       []string{channelID},
+			}))
+			if _, err := loadEligibilityGate(t.Context(), pool); err != nil {
+				t.Fatalf("prime eligibility config cache: %v", err)
+			}
+			errorPool := eligibilityLookupErrorPool(t, tt.allowedAcquisitions)
+			ctx, cancel := context.WithTimeout(t.Context(), 250*time.Millisecond)
+			defer cancel()
+
+			skip, err := eligibilityGateSkip(ctx, eligibilityDeps(errorPool, nil),
+				channelID, fmt.Sprintf("1800000065.%06d", i+2), tt.threadTS, "must fail open")
+			if skip {
+				t.Fatal("lookup error skip = true, want false")
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantContext) {
+				t.Fatalf("lookup error = %v, want context %q", err, tt.wantContext)
+			}
+		})
 	}
 }

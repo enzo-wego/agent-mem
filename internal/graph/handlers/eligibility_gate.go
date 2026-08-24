@@ -17,11 +17,13 @@ import (
 )
 
 const (
-	eligibilityGateKey        = "graph.eligibility_gate"
-	eligibilityModeDryRun     = "dry_run"
-	eligibilityModeEnforce    = "enforce"
-	eligibilitySkippedOutcome = "skipped_off_topic"
-	eligibilityGateTTL        = 60 * time.Second
+	eligibilityGateKey               = "graph.eligibility_gate"
+	eligibilityModeDryRun            = "dry_run"
+	eligibilityModeEnforce           = "enforce"
+	eligibilitySkippedOutcome        = "skipped_off_topic"
+	eligibilityDecisionScored        = "scored"
+	eligibilityDecisionInheritedRoot = "inherited_root"
+	eligibilityGateTTL               = 60 * time.Second
 )
 
 type eligibilityGateConfig struct {
@@ -193,13 +195,64 @@ func eligibilityGateApplies(cfg *eligibilityGateConfig, channelID string) bool {
 	return false
 }
 
-func eligibilityGateSkip(ctx context.Context, deps Deps, channelID, messageTS, body string) (bool, error) {
+type eligibilityDecision struct {
+	decision     string
+	scopeVersion time.Time
+}
+
+func loadLatestEligibilityDecision(
+	ctx context.Context,
+	db *pgxpool.Pool,
+	channelID, messageTS string,
+) (eligibilityDecision, bool, error) {
+	var decision eligibilityDecision
+	err := db.QueryRow(ctx, `
+		SELECT decision, scope_version
+		FROM graph.eligibility_decisions
+		WHERE channel_id=$1 AND message_ts=$2
+		ORDER BY decided_at DESC, id DESC
+		LIMIT 1`,
+		channelID, messageTS).Scan(&decision.decision, &decision.scopeVersion)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return eligibilityDecision{}, false, nil
+	}
+	if err != nil {
+		return eligibilityDecision{}, false, err
+	}
+	return decision, true, nil
+}
+
+func eligibilityGateSkip(ctx context.Context, deps Deps, channelID, messageTS, threadTS, body string) (bool, error) {
 	cfg, err := loadEligibilityGate(ctx, deps.DB)
 	if err != nil {
 		return false, err
 	}
 	if !eligibilityGateApplies(cfg, channelID) {
 		return false, nil
+	}
+	currentDecision, found, err := loadLatestEligibilityDecision(ctx, deps.DB, channelID, messageTS)
+	if err != nil {
+		return false, fmt.Errorf("eligibility gate: lookup current decision: %w", err)
+	}
+	if found {
+		return cfg.Mode == eligibilityModeEnforce && currentDecision.decision == "ineligible", nil
+	}
+
+	if threadTS != "" && threadTS != messageTS {
+		rootDecision, found, err := loadLatestEligibilityDecision(ctx, deps.DB, channelID, threadTS)
+		if err != nil {
+			return false, fmt.Errorf("eligibility gate: lookup eligible root decision: %w", err)
+		}
+		if found && rootDecision.decision == "eligible" {
+			if _, err := deps.DB.Exec(ctx, `
+				INSERT INTO graph.eligibility_decisions
+				  (channel_id, message_ts, score, decision, decision_source, mode, scope_version, decided_at)
+				VALUES ($1,$2,NULL,'eligible',$3,$4,$5,NOW())`,
+				channelID, messageTS, eligibilityDecisionInheritedRoot, cfg.Mode, rootDecision.scopeVersion); err != nil {
+				return false, fmt.Errorf("eligibility gate: audit inherited root decision: %w", err)
+			}
+			return false, nil
+		}
 	}
 	if deps.Gemini == nil {
 		return false, errors.New("eligibility gate: nil LLM client")
@@ -233,9 +286,9 @@ func eligibilityGateSkip(ctx context.Context, deps Deps, channelID, messageTS, b
 
 	if _, err := deps.DB.Exec(ctx, `
 		INSERT INTO graph.eligibility_decisions
-		  (channel_id, message_ts, score, decision, mode, scope_version, decided_at)
-		VALUES ($1,$2,$3,$4,$5,$6,NOW())`,
-		channelID, messageTS, score, decision, cfg.Mode, scopeVersion); err != nil {
+		  (channel_id, message_ts, score, decision, decision_source, mode, scope_version, decided_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,NOW())`,
+		channelID, messageTS, score, decision, eligibilityDecisionScored, cfg.Mode, scopeVersion); err != nil {
 		return false, fmt.Errorf("eligibility gate: audit decision: %w", err)
 	}
 	if adjudicationErr != nil {
