@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"strconv"
@@ -14,8 +15,9 @@ import (
 )
 
 var (
-	cfPageIDRe = regexp.MustCompile(`/pages/(\d+)`)
-	ghRepoRe   = regexp.MustCompile(`github\.com[/:]([^/\s]+/[^/\s#?]+)`)
+	cfPageIDRe   = regexp.MustCompile(`/pages/(\d+)`)
+	ghRepoRe     = regexp.MustCompile(`github\.com[/:]([^/\s]+/[^/\s#?]+)`)
+	httpStatusRe = regexp.MustCompile(`\bstatus\s+(\d{3})\b`)
 )
 
 // topicSource is one knowledge source attached to a subscription.
@@ -28,8 +30,11 @@ type refreshScopePayload struct {
 	SubscriptionID int64 `json:"subscription_id"`
 }
 
-// scopeDistillCap bounds how much source text we feed the distiller in one pass.
-const scopeDistillCap = 18000
+const (
+	// scopeDistillCap bounds how much source text we feed the distiller in one pass.
+	scopeDistillCap     = 18000
+	maxScopeErrorLength = 1000
+)
 
 // NewRefreshTopicScope returns the handler for refresh_topic_scope: it reads each
 // of a subscription's sources (Confluence page-tree + repo *.md), ingests them as
@@ -50,19 +55,30 @@ func NewRefreshTopicScope(deps Deps) jobs.Handler {
 			Scan(&topic, &srcRaw); err != nil {
 			return fmt.Errorf("%w: load subscription %d: %v", jobs.ErrFatal, p.SubscriptionID, err)
 		}
+		if _, err := deps.DB.Exec(ctx,
+			`UPDATE graph.topic_subscriptions SET scope_status='refreshing' WHERE id=$1`,
+			p.SubscriptionID); err != nil {
+			return fmt.Errorf("mark subscription %d refreshing: %w", p.SubscriptionID, err)
+		}
+
 		var sources []topicSource
 		_ = json.Unmarshal(srcRaw, &sources)
 
 		var titles []string // Confluence page titles
 		var docs []string   // "path: excerpt" for repo markdown
+		sourceFailures := make([]string, 0, len(sources))
 		ingested := 0
 
 		for _, s := range sources {
+			var sourceErr error
+			failureSource := s
 			switch s.Type {
 			case "confluence":
 				m := cfPageIDRe.FindStringSubmatch(s.URL)
 				if m == nil {
+					sourceErr = errors.New("no page id in confluence URL")
 					log.Warn().Str("url", s.URL).Msg("refresh_topic_scope: no page id in confluence url")
+					sourceFailures = append(sourceFailures, sourceFailureLine(s, sourceErr))
 					continue
 				}
 				rootID := m[1]
@@ -70,6 +86,7 @@ func NewRefreshTopicScope(deps Deps) jobs.Handler {
 				ingested++
 				refs, err := deps.Fetchers.ConfluenceDescendants(ctx, rootID)
 				if err != nil {
+					sourceErr = err
 					log.Warn().Err(err).Str("page", rootID).Msg("refresh_topic_scope: descendants failed")
 				}
 				for _, ref := range refs {
@@ -82,12 +99,16 @@ func NewRefreshTopicScope(deps Deps) jobs.Handler {
 			case "github":
 				m := ghRepoRe.FindStringSubmatch(s.URL)
 				if m == nil {
+					sourceErr = errors.New("no repository in GitHub URL")
 					log.Warn().Str("url", s.URL).Msg("refresh_topic_scope: no repo in github url")
+					sourceFailures = append(sourceFailures, sourceFailureLine(s, sourceErr))
 					continue
 				}
 				repo := strings.TrimSuffix(m[1], ".git")
+				failureSource.URL = repo
 				mds, err := deps.Fetchers.RepoMarkdown(ctx, repo, "")
 				if err != nil {
+					sourceErr = err
 					log.Warn().Err(err).Str("repo", repo).Msg("refresh_topic_scope: repo markdown failed")
 				}
 				for _, d := range mds {
@@ -103,26 +124,71 @@ func NewRefreshTopicScope(deps Deps) jobs.Handler {
 					ingested++
 					docs = append(docs, s.Type+" source: "+s.URL)
 				} else {
+					sourceErr = errors.New("unsupported source")
 					log.Warn().Str("type", s.Type).Str("url", s.URL).Msg("refresh_topic_scope: unsupported source")
 				}
+			}
+			if sourceErr != nil {
+				sourceFailures = append(sourceFailures, sourceFailureLine(failureSource, sourceErr))
 			}
 		}
 
 		scopeDef, scopeSum := genScope(ctx, deps, topic, titles, docs)
 		status := "ready"
-		if scopeDef == "" {
+		scopeErrText := scopeRefreshError(scopeDef, sourceFailures, len(sources))
+
+		var err error
+		if scopeDef != "" {
+			_, err = deps.DB.Exec(ctx,
+				`UPDATE graph.topic_subscriptions
+				 SET scope_definition=$2, scope_summary=$3, scope_status='ready',
+				     scope_refreshed_at=NOW(), scope_error=$4
+				 WHERE id=$1`,
+				p.SubscriptionID, scopeDef, scopeSum, scopeErrText)
+		} else {
+			// ponytail: a failed read must not delete the scope the judge is using.
 			status = "error"
+			_, err = deps.DB.Exec(ctx,
+				`UPDATE graph.topic_subscriptions
+				 SET scope_status='error', scope_error=$2
+				 WHERE id=$1`,
+				p.SubscriptionID, scopeErrText)
 		}
-		_, err := deps.DB.Exec(ctx,
-			`UPDATE graph.topic_subscriptions
-			 SET scope_definition=$2, scope_summary=$3, scope_status=$4, scope_refreshed_at=NOW()
-			 WHERE id=$1`,
-			p.SubscriptionID, scopeDef, scopeSum, status)
 		log.Info().Int64("sub", p.SubscriptionID).Int("ingested", ingested).
 			Int("titles", len(titles)).Int("docs", len(docs)).Str("status", status).
 			Msg("refresh_topic_scope: done")
 		return err
 	}
+}
+
+func sourceFailureLine(source topicSource, err error) string {
+	reason := "unknown error"
+	if err != nil {
+		raw := err.Error()
+		if match := httpStatusRe.FindStringSubmatch(raw); match != nil {
+			reason = "status " + match[1]
+		} else if first, _, _ := strings.Cut(raw, "\n"); strings.TrimSpace(first) != "" {
+			reason = strings.TrimSpace(first)
+		}
+	}
+	sourceType := strings.Join(strings.Fields(source.Type), " ")
+	sourceURL := strings.Join(strings.Fields(source.URL), " ")
+	return fmt.Sprintf("%s %s: %s", sourceType, sourceURL, reason)
+}
+
+func scopeRefreshError(scopeDefinition string, failures []string, sourceCount int) string {
+	if len(failures) == 0 {
+		if scopeDefinition != "" {
+			return ""
+		}
+		return fmt.Sprintf("no readable content in %d source(s)", sourceCount)
+	}
+	message := strings.Join(failures, "\n")
+	runes := []rune(message)
+	if len(runes) > maxScopeErrorLength {
+		message = string(runes[:maxScopeErrorLength])
+	}
+	return message
 }
 
 // ingestConfluencePage upserts a cf node and enqueues fetch_body + index_artifact

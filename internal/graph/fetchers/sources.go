@@ -27,11 +27,15 @@ type CFPageRef struct {
 // repo can't blow up the read / LLM-distill step.
 const maxRepoMarkdown = 300
 
-// cfBase returns the Confluence base URL (CFBaseURL, else JiraBaseURL + /wiki).
+// cfBase returns the normalized Confluence base URL.
+// ponytail: a bare site host is the easy mistake; normalize instead of documenting it.
 func (r *Registry) cfBase() string {
 	base := strings.TrimRight(r.cfg.CFBaseURL, "/")
 	if base == "" {
-		base = strings.TrimRight(r.cfg.JiraBaseURL, "/") + "/wiki"
+		base = strings.TrimRight(r.cfg.JiraBaseURL, "/")
+	}
+	if !strings.HasSuffix(base, "/wiki") {
+		base += "/wiki"
 	}
 	return base
 }

@@ -7,14 +7,12 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"os/exec"
 	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // TestSubscriptionGuards exercises the create/update HTTP handlers against the
@@ -22,16 +20,8 @@ import (
 // (criterion 6), a sources-only update behaving exactly as before (criterion 5),
 // and the newly editable min_participants / scope_definition / active fields.
 func TestSubscriptionGuards(t *testing.T) {
-	dsn := os.Getenv("DATABASE_URL")
-	if dsn == "" {
-		t.Skip("DATABASE_URL not set; skipping integration test")
-	}
+	pool := openTestDB(t)
 	ctx := context.Background()
-	pool, err := pgxpool.New(ctx, dsn)
-	if err != nil {
-		t.Fatalf("pool: %v", err)
-	}
-	defer pool.Close()
 	for _, tbl := range []string{"graph.topic_notifications", "graph.topic_subscriptions"} {
 		if _, err := pool.Exec(ctx, "DELETE FROM "+tbl); err != nil {
 			t.Fatalf("clean %s: %v", tbl, err)

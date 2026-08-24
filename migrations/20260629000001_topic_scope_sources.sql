@@ -7,7 +7,7 @@ ALTER TABLE graph.topic_subscriptions
   ADD COLUMN IF NOT EXISTS sources           JSONB       NOT NULL DEFAULT '[]'::jsonb,  -- [{type:'confluence'|'github', url:'...'}]
   ADD COLUMN IF NOT EXISTS scope_definition  TEXT        NOT NULL DEFAULT '',           -- judge guidance (distilled)
   ADD COLUMN IF NOT EXISTS scope_summary     TEXT        NOT NULL DEFAULT '',           -- human-readable summary
-  ADD COLUMN IF NOT EXISTS scope_status      TEXT        NOT NULL DEFAULT '',           -- '' | 'refreshing' | 'ready' | 'error'
+  ADD COLUMN IF NOT EXISTS scope_status      TEXT        NOT NULL DEFAULT '',           -- '' | 'queued' | 'refreshing' | 'ready' | 'error'
   ADD COLUMN IF NOT EXISTS scope_refreshed_at TIMESTAMPTZ;
 
 -- +goose Down
