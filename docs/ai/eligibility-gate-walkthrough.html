@@ -1,0 +1,781 @@
+<title>Gate Walkthrough</title>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+
+<style>
+:root {
+  --bg:        #F1F3F6;
+  --surface:   #FFFFFF;
+  --surface-2: #E8EBF0;
+  --ink:       #161A21;
+  --ink-2:     #3D4653;
+  --muted:     #6C7684;
+  --rule:      #D6DBE3;
+  --rule-firm: #B9C1CC;
+  --signal:    #96590A;
+  --signal-bg: #FBF0DC;
+  --pass:      #0E5F58;
+  --pass-bg:   #DCEFEC;
+  --drop:      #9B382C;
+  --drop-bg:   #F7E4E1;
+  --shadow:    0 1px 2px rgba(22,26,33,.06), 0 8px 24px -16px rgba(22,26,33,.22);
+
+  --display: "Bricolage Grotesque", "Helvetica Neue", Arial, sans-serif;
+  --body: "Source Serif 4", Georgia, "Times New Roman", serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg:        #0F1218;
+    --surface:   #171C24;
+    --surface-2: #1F252F;
+    --ink:       #E8EBF0;
+    --ink-2:     #B6BFCC;
+    --muted:     #808B9B;
+    --rule:      #2A313C;
+    --rule-firm: #3B4350;
+    --signal:    #E0A94A;
+    --signal-bg: #2A2114;
+    --pass:      #63C6B8;
+    --pass-bg:   #122A28;
+    --drop:      #E08578;
+    --drop-bg:   #2C1815;
+    --shadow:    0 1px 2px rgba(0,0,0,.5), 0 10px 30px -18px rgba(0,0,0,.8);
+  }
+}
+
+:root[data-theme="dark"] {
+  --bg:        #0F1218;
+  --surface:   #171C24;
+  --surface-2: #1F252F;
+  --ink:       #E8EBF0;
+  --ink-2:     #B6BFCC;
+  --muted:     #808B9B;
+  --rule:      #2A313C;
+  --rule-firm: #3B4350;
+  --signal:    #E0A94A;
+  --signal-bg: #2A2114;
+  --pass:      #63C6B8;
+  --pass-bg:   #122A28;
+  --drop:      #E08578;
+  --drop-bg:   #2C1815;
+  --shadow:    0 1px 2px rgba(0,0,0,.5), 0 10px 30px -18px rgba(0,0,0,.8);
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--body);
+  font-size: 17px;
+  line-height: 1.62;
+  -webkit-font-smoothing: antialiased;
+}
+
+.wrap {
+  max-width: 60rem;
+  margin: 0 auto;
+  padding: clamp(2rem, 5vw, 4.5rem) clamp(1.1rem, 4vw, 2.5rem) 6rem;
+  display: flex;
+  flex-direction: column;
+  gap: 3.25rem;
+}
+
+/* ---------- masthead ---------- */
+
+.masthead { display: flex; flex-direction: column; gap: 1rem; }
+
+.eyebrow {
+  font-family: var(--mono);
+  font-size: .7rem;
+  font-weight: 500;
+  letter-spacing: .13em;
+  text-transform: uppercase;
+  color: var(--muted);
+  display: flex;
+  flex-wrap: wrap;
+  gap: .5rem 1.1rem;
+}
+
+h1 {
+  font-family: var(--display);
+  font-weight: 700;
+  font-size: clamp(2.1rem, 5.4vw, 3.3rem);
+  line-height: 1.04;
+  letter-spacing: -.022em;
+  margin: 0;
+  text-wrap: balance;
+}
+
+.standfirst {
+  font-size: clamp(1.05rem, 2.4vw, 1.24rem);
+  line-height: 1.55;
+  color: var(--ink-2);
+  max-width: 40ch;
+  margin: 0;
+}
+
+.standfirst em { color: var(--ink); font-style: italic; }
+
+/* ---------- sections ---------- */
+
+section { display: flex; flex-direction: column; gap: 1.15rem; }
+
+h2 {
+  font-family: var(--display);
+  font-weight: 700;
+  font-size: clamp(1.35rem, 3vw, 1.72rem);
+  line-height: 1.15;
+  letter-spacing: -.014em;
+  margin: 0;
+  padding-bottom: .6rem;
+  border-bottom: 1px solid var(--rule-firm);
+  text-wrap: balance;
+}
+
+h3 {
+  font-family: var(--display);
+  font-weight: 500;
+  font-size: 1.03rem;
+  letter-spacing: -.005em;
+  margin: .6rem 0 -.35rem;
+}
+
+p { margin: 0; max-width: 68ch; }
+p + p { margin-top: -.2rem; }
+
+a { color: var(--signal); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+
+code {
+  font-family: var(--mono);
+  font-size: .855em;
+  background: var(--surface-2);
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  padding: .06em .32em;
+  white-space: nowrap;
+}
+
+/* ---------- the ladder ---------- */
+
+.ladder { display: flex; flex-direction: column; gap: 0; }
+
+.step {
+  display: grid;
+  grid-template-columns: 3.1rem 1fr;
+  gap: 0 1.1rem;
+  padding: 1.15rem 0;
+  border-top: 1px solid var(--rule);
+}
+.step:last-child { border-bottom: 1px solid var(--rule); }
+
+.step.here {
+  background: var(--signal-bg);
+  border-top-color: var(--signal);
+  margin-inline: calc(-1 * clamp(.6rem, 2vw, 1.2rem));
+  padding-inline: clamp(.6rem, 2vw, 1.2rem);
+}
+
+.step-n {
+  font-family: var(--mono);
+  font-size: .82rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+  padding-top: .22rem;
+}
+.step.here .step-n { color: var(--signal); }
+
+.step-body { display: flex; flex-direction: column; gap: .3rem; min-width: 0; }
+
+.step-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: .45rem .7rem;
+}
+
+.step-name {
+  font-family: var(--display);
+  font-weight: 500;
+  font-size: 1.06rem;
+  letter-spacing: -.006em;
+}
+
+.step-note { color: var(--ink-2); font-size: .95rem; }
+.step-note strong { color: var(--ink); font-weight: 600; }
+
+.tag {
+  font-family: var(--mono);
+  font-size: .655rem;
+  font-weight: 500;
+  letter-spacing: .07em;
+  text-transform: uppercase;
+  padding: .18em .5em;
+  border-radius: 2px;
+  white-space: nowrap;
+  border: 1px solid transparent;
+}
+.tag.free  { background: var(--pass-bg);   color: var(--pass);   border-color: color-mix(in srgb, var(--pass) 30%, transparent); }
+.tag.cheap { background: var(--surface-2); color: var(--ink-2);  border-color: var(--rule-firm); }
+.tag.paid  { background: var(--signal-bg); color: var(--signal); border-color: color-mix(in srgb, var(--signal) 35%, transparent); }
+.tag.costly{ background: var(--drop-bg);   color: var(--drop);   border-color: color-mix(in srgb, var(--drop) 30%, transparent); }
+
+/* ---------- panels ---------- */
+
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  padding: 1.25rem 1.35rem;
+  box-shadow: var(--shadow);
+  display: flex;
+  flex-direction: column;
+  gap: .8rem;
+}
+
+.panel-label {
+  font-family: var(--mono);
+  font-size: .68rem;
+  font-weight: 600;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.formula {
+  font-family: var(--mono);
+  font-size: .92rem;
+  line-height: 1.75;
+  overflow-x: auto;
+  padding-bottom: .2rem;
+}
+.formula .lit { color: var(--signal); }
+.formula .cmt { color: var(--muted); }
+
+/* ---------- tables ---------- */
+
+.scroller { overflow-x: auto; border: 1px solid var(--rule); border-radius: 4px; background: var(--surface); }
+
+table { border-collapse: collapse; width: 100%; font-size: .92rem; }
+
+th, td {
+  text-align: left;
+  padding: .62rem .85rem;
+  border-bottom: 1px solid var(--rule);
+  vertical-align: top;
+}
+thead th {
+  font-family: var(--mono);
+  font-size: .66rem;
+  font-weight: 600;
+  letter-spacing: .09em;
+  text-transform: uppercase;
+  color: var(--muted);
+  background: var(--surface-2);
+  white-space: nowrap;
+}
+tbody tr:last-child td { border-bottom: none; }
+td.num { font-family: var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+td.mono, th.mono { font-family: var(--mono); font-size: .84rem; }
+tr.mark td { background: var(--signal-bg); }
+tr.mark td:first-child { box-shadow: inset 3px 0 0 var(--signal); }
+
+/* ---------- callout ---------- */
+
+.callout {
+  border-left: 3px solid var(--drop);
+  background: var(--drop-bg);
+  padding: .95rem 1.15rem;
+  border-radius: 0 4px 4px 0;
+  display: flex;
+  flex-direction: column;
+  gap: .45rem;
+}
+.callout.good { border-left-color: var(--pass); background: var(--pass-bg); }
+.callout .panel-label { color: inherit; opacity: .8; }
+.callout p { font-size: .96rem; max-width: 66ch; }
+
+/* ---------- stat strip ---------- */
+
+.stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(9.5rem, 1fr));
+  gap: 1px;
+  background: var(--rule);
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.stat { background: var(--surface); padding: .95rem 1rem; display: flex; flex-direction: column; gap: .2rem; }
+.stat-v {
+  font-family: var(--display);
+  font-weight: 700;
+  font-size: 1.6rem;
+  line-height: 1;
+  letter-spacing: -.02em;
+  font-variant-numeric: tabular-nums;
+}
+.stat-k {
+  font-family: var(--mono);
+  font-size: .66rem;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* ---------- branch diagram ---------- */
+
+.branch { display: flex; flex-direction: column; gap: .55rem; }
+.bar {
+  display: grid;
+  grid-template-columns: 5.2rem 1fr;
+  align-items: stretch;
+  gap: .75rem;
+  font-size: .95rem;
+}
+.bar-k {
+  font-family: var(--mono);
+  font-size: .78rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+  text-align: right;
+  padding-top: .35rem;
+}
+.bar-v { padding: .32rem .7rem; border-radius: 3px; border: 1px solid var(--rule-firm); background: var(--surface-2); }
+.bar-v.pass { background: var(--pass-bg); border-color: color-mix(in srgb, var(--pass) 32%, transparent); }
+.bar-v.band { background: var(--signal-bg); border-color: color-mix(in srgb, var(--signal) 32%, transparent); }
+.bar-v.drop { background: var(--drop-bg); border-color: color-mix(in srgb, var(--drop) 32%, transparent); }
+.bar-v b { font-family: var(--display); font-weight: 500; }
+
+footer {
+  border-top: 1px solid var(--rule-firm);
+  padding-top: 1.2rem;
+  font-size: .87rem;
+  color: var(--muted);
+  display: flex;
+  flex-direction: column;
+  gap: .3rem;
+}
+footer code { background: none; border: none; padding: 0; }
+
+@media (max-width: 33rem) {
+  .step { grid-template-columns: 2.2rem 1fr; }
+  body { font-size: 16px; }
+}
+</style>
+
+<div class="wrap">
+
+<header class="masthead">
+  <div class="eyebrow">
+    <span>agent-mem · eligibility gate</span>
+    <span>live on hub</span>
+    <span>2026-08-24</span>
+  </div>
+  <h1>What happens to a Slack message between arriving and getting a score</h1>
+  <p class="standfirst">
+    Every message hits eight checks before it becomes a node. Exactly one of them
+    costs money, and it is the fifth. <em>This is what it does, and which model it uses.</em>
+  </p>
+</header>
+
+<section>
+  <h2>The short answer on the model</h2>
+  <div class="scroller">
+    <table>
+      <tbody>
+        <tr><th class="mono">model</th><td class="mono">google/gemini-embedding-001</td></tr>
+        <tr><th class="mono">not</th><td>No chat model. No Claude. No <code>generate</code> call. Embeddings only.</td></tr>
+        <tr><th class="mono">route</th><td class="mono">agent-mem → <code>POST /embed</code> on llm-gateway → OpenRouter <code>/embeddings</code></td></tr>
+        <tr><th class="mono">width</th><td class="num">3072 dims (halfvec), <code>GraphEmbeddingDims</code></td></tr>
+        <tr><th class="mono">task_type</th><td>Deliberately unset — OpenRouter rejects it, and a vector embedded with one lands in a different space than the stored corpus.</td></tr>
+        <tr><th class="mono">latency</th><td>~200–500&nbsp;ms. Plain HTTP, no subprocess, so it does not queue behind the gateway's 4-slot Claude semaphore.</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>
+    That last row is the reason the design is embeddings and not a cheap-tier judge.
+    A judge would spawn a Claude CLI subprocess per message and wait in the same
+    queue that <code>link_topics</code> saturates during bursts, where p50 is 12.3&nbsp;s.
+    An embed is flat regardless of gateway load.
+  </p>
+</section>
+
+<section>
+  <h2>The path, cheapest check first</h2>
+  <p>
+    The order is the design. Each stage is cheaper than the one below it, so a
+    message that can be dropped for free never reaches something that costs.
+    Everything below happens inside one HTTP request:
+    <code>POST /api/graph/ingest/content</code>, handled by
+    <code>internal/graph/handlers/ingest_content.go</code>.
+  </p>
+
+  <div class="ladder">
+
+    <div class="step">
+      <div class="step-n">01</div>
+      <div class="step-body">
+        <div class="step-head"><span class="step-name">Collector posts the message</span><span class="tag free">free</span></div>
+        <p class="step-note">
+          Body plus metadata: <code>channel_id</code>, <code>ts</code>, <code>thread_ts</code>,
+          author, subtype, attachments. <code>thread_ts</code> is present on arrival — the gate
+          needs it later.
+        </p>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="step-n">02</div>
+      <div class="step-body">
+        <div class="step-head"><span class="step-name">Derive <code>node_id</code></span><span class="tag free">free</span></div>
+        <p class="step-note">
+          <code>buildNodeID(source, canonical_url, metadata)</code>. Deterministic, so a
+          re-post of the same message resolves to the same node. A malformed request dies here with 400.
+        </p>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="step-n">03</div>
+      <div class="step-body">
+        <div class="step-head"><span class="step-name">Deletion and DM guards</span><span class="tag free">free</span></div>
+        <p class="step-note">
+          A deleted upstream message soft-deletes our copy and returns. Any channel id
+          starting with <code>D</code> is a direct message and is refused outright —
+          <strong>DMs never enter the graph</strong>.
+        </p>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="step-n">04</div>
+      <div class="step-body">
+        <div class="step-head"><span class="step-name">Per-channel filters</span><span class="tag cheap">1 db read</span></div>
+        <p class="step-note">
+          <code>graph.channel_filters</code> — an ignore-list plus keep/drop regexes. Purely
+          mechanical, and it runs before anything with a model attached.
+        </p>
+      </div>
+    </div>
+
+    <div class="step here">
+      <div class="step-n">05</div>
+      <div class="step-body">
+        <div class="step-head"><span class="step-name">The eligibility gate</span><span class="tag paid">1 embed, sometimes</span></div>
+        <p class="step-note">
+          <strong>This is where the score comes from.</strong> Four sub-steps, and three of
+          the four exit before spending anything. Detailed below.
+        </p>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="step-n">06</div>
+      <div class="step-body">
+        <div class="step-head"><span class="step-name">Alert-bot fingerprinting</span><span class="tag cheap">1 db read</span></div>
+        <p class="step-note">
+          Repeated machine alerts collapse into a fingerprint instead of becoming
+          hundreds of near-identical nodes.
+        </p>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="step-n">07</div>
+      <div class="step-body">
+        <div class="step-head"><span class="step-name">Upsert node and body</span><span class="tag cheap">writes</span></div>
+        <p class="step-note">
+          <code>graph.nodes</code> plus <code>graph.artifact_bodies</code>, and
+          <code>EnsurePerson</code> for the author. From here the message exists.
+        </p>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="step-n">08</div>
+      <div class="step-body">
+        <div class="step-head"><span class="step-name">Extraction, edges, follow-up jobs</span><span class="tag costly">llm calls</span></div>
+        <p class="step-note">
+          Entity extraction, edge reconciliation, stale-edge pruning, attachment nodes,
+          and enqueued <code>describe_attachment</code> work. <strong>This is the expensive
+          tail the gate exists to protect.</strong>
+        </p>
+      </div>
+    </div>
+
+  </div>
+</section>
+
+<section>
+  <h2>Inside stage 5 — four sub-steps, in order</h2>
+  <p>
+    <code>eligibilityGateSkip()</code>, <code>eligibility_gate.go:225</code>. Read it as a
+    series of escape hatches: only a message that falls through all three of the first
+    ones gets embedded.
+  </p>
+
+  <div class="ladder">
+    <div class="step">
+      <div class="step-n">5a</div>
+      <div class="step-body">
+        <div class="step-head"><span class="step-name">Does the gate apply here?</span><span class="tag free">cached 60s</span></div>
+        <p class="step-note">
+          Config comes from <code>settings['graph.eligibility_gate']</code>, cached for 60&nbsp;s.
+          Exempt channels are excluded. <strong>An empty <code>gated_channels</code> means every
+          channel is gated</strong> — not none, which is the opposite of what the name suggests.
+        </p>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="step-n">5b</div>
+      <div class="step-body">
+        <div class="step-head"><span class="step-name">Have we already judged this exact message?</span><span class="tag cheap">1 indexed select</span></div>
+        <p class="step-note">
+          Lookup on <code>(channel_id, message_ts)</code> in <code>graph.eligibility_decisions</code>,
+          newest first. If a decision exists, reuse it — <strong>no embed</strong>. This matters
+          because <code>ingest_content</code> is invoked repeatedly for the same message: one message
+          was scored 13 times across 6.5 minutes, another 6 times inside 3 seconds.
+        </p>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="step-n">5c</div>
+      <div class="step-body">
+        <div class="step-head"><span class="step-name">Is this a reply under an eligible root?</span><span class="tag cheap">1 indexed select</span></div>
+        <p class="step-note">
+          If <code>thread_ts</code> is set and differs from <code>ts</code>, look up the root's
+          decision. Root eligible → the reply inherits it, written as
+          <code>decision_source='inherited_root'</code> with <code>score = NULL</code>, and
+          <strong>no embed</strong>. Root missing or ineligible → fall through and score it
+          normally; a thread can turn relevant, and a missing root is never read as a refusal.
+        </p>
+      </div>
+    </div>
+
+    <div class="step here">
+      <div class="step-n">5d</div>
+      <div class="step-body">
+        <div class="step-head"><span class="step-name">Score it</span><span class="tag paid">1 embed</span></div>
+        <p class="step-note">
+          The only path that spends anything. Embed the body, cosine it against the
+          scope vector, compare to two thresholds, write one audit row.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>How the number is actually computed</h2>
+
+  <div class="panel">
+    <div class="panel-label">the whole of it</div>
+    <div class="formula">
+scope    = graph.topic_subscriptions[<span class="lit">1</span>].scope_definition   <span class="cmt">// 1,524 chars</span>
+scope_v  = embed(scope)                              <span class="cmt">// cached, computed once</span>
+msg_v    = embed(req.Body)                           <span class="cmt">// per message</span>
+
+<span class="lit">score</span>    = dot(scope_v, msg_v) / (‖scope_v‖ · ‖msg_v‖)   <span class="cmt">// plain cosine</span>
+    </div>
+  </div>
+
+  <p>
+    There is no model judging relevance and no prompt. The score is the cosine of the
+    angle between two vectors — the message, and a single 1,524-character description of
+    what payments work <em>is</em>. Nothing else is consulted: not the channel, not the
+    author, not the thread, not the time.
+  </p>
+
+  <h3>The scope vector is computed once, not per message</h3>
+  <p>
+    Cached under <code>{subscription_id, scope_refreshed_at}</code>. Editing the scope bumps
+    <code>scope_refreshed_at</code>, which changes the key, evicts the old entry and forces
+    a re-embed. Every audit row records the <code>scope_version</code> it was judged under,
+    so a threshold is never calibrated across two different definitions of scope.
+  </p>
+
+  <h3>Then two thresholds, and a band in the middle</h3>
+  <div class="branch">
+    <div class="bar">
+      <div class="bar-k">≥ 0.62</div>
+      <div class="bar-v pass"><b>eligible</b> — process it</div>
+    </div>
+    <div class="bar">
+      <div class="bar-k">0.45 – 0.62</div>
+      <div class="bar-v band"><b>uncertain</b> — would ask a cheap LLM, but <code>llm_adjudicate</code> is <strong>off</strong>, so it defaults to eligible</div>
+    </div>
+    <div class="bar">
+      <div class="bar-k">≤ 0.45</div>
+      <div class="bar-v drop"><b>ineligible</b> — dropped, but only in <code>enforce</code> mode</div>
+    </div>
+  </div>
+
+  <p>
+    Cosine is clamped to <code>[-1, 1]</code>, and a zero-magnitude, NaN or infinite result
+    is an error rather than a score — which, per the fail-open rule below, means the
+    message is processed.
+  </p>
+</section>
+
+<section>
+  <h2>Why your 0.488 message scored 0.488</h2>
+  <div class="callout">
+    <div class="panel-label">the honest answer</div>
+    <p>
+      Because <strong>0.488 is the floor, not a middling score</strong>. It is the lowest
+      value the corpus has ever produced. Embedding cosine has a high floor — two
+      unrelated English sentences rarely score near zero — and the asymmetry makes it
+      worse: a 56-character message compared against a 1,524-character multi-topic
+      document can never align sharply, so everything compresses toward the middle.
+    </p>
+    <p>
+      Read the number as a rank, not a probability. Across 324 scored messages the whole
+      observed range is <strong>0.4836 to 0.6644</strong> — a span of 0.18. Off-topic banter
+      sitting at 0.488 is the gate working: that message is at the bottom of everything
+      it has ever seen.
+    </p>
+  </div>
+</section>
+
+<section>
+  <h2>What the gate has actually done, live</h2>
+
+  <div class="stats">
+    <div class="stat"><span class="stat-v">324</span><span class="stat-k">scored</span></div>
+    <div class="stat"><span class="stat-v">24</span><span class="stat-k">inherited</span></div>
+    <div class="stat"><span class="stat-v">0</span><span class="stat-k">ineligible</span></div>
+    <div class="stat"><span class="stat-v">0</span><span class="stat-k">messages dropped</span></div>
+  </div>
+
+  <p>
+    Zero, on both counts, and for two separate reasons. First, <code>low_threshold: 0.45</code>
+    sits <strong>below the entire observed range</strong> — the minimum ever seen is 0.4836 —
+    so nothing has been judged ineligible even once. Second, the mode is
+    <code>dry_run</code>: even a message marked ineligible would still be processed. The
+    gate is currently a measuring instrument, not a filter.
+  </p>
+
+  <div class="scroller">
+    <table>
+      <thead>
+        <tr><th>setting</th><th class="mono">value</th><th>meaning</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>enabled</td><td class="mono">true</td><td>scoring and auditing are on</td></tr>
+        <tr class="mark"><td>mode</td><td class="mono">dry_run</td><td>decisions recorded, nothing dropped</td></tr>
+        <tr><td>high_threshold</td><td class="num">0.62</td><td>uncalibrated placeholder</td></tr>
+        <tr class="mark"><td>low_threshold</td><td class="num">0.45</td><td>below the whole observed range — why nothing is ever ineligible</td></tr>
+        <tr><td>llm_adjudicate</td><td class="mono">false</td><td>the uncertain band resolves to eligible</td></tr>
+        <tr><td>gated_channels</td><td class="mono">[]</td><td><strong>every</strong> channel is gated</td></tr>
+        <tr><td>exempt_channels</td><td class="num">4 channels</td><td>skipped entirely</td></tr>
+        <tr><td>scope_subscription_id</td><td class="num">1</td><td>the 1,524-char payments scope</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section>
+  <h2>Threads: one message in, whole thread by inheritance</h2>
+  <p>
+    The scorer only ever reads <code>req.Body</code> — one message, never the surrounding
+    conversation. That would be a real problem on its own, because replies are short and
+    context-free by nature. "thank you for the update" scored 0.5334; in
+    <code>enforce</code> the gate would have kept the question and dropped the answer.
+  </p>
+  <p>
+    Inheritance fixes it without a second embed. A reply under an eligible root is
+    eligible by lookup — exact rather than approximate, and free. The schema keeps the two
+    kinds of row from ever being confused, so inherited rows cannot contaminate the score
+    distribution used for calibration:
+  </p>
+
+  <div class="scroller">
+    <table>
+      <thead>
+        <tr><th class="mono">decision_source</th><th class="mono">score</th><th>count</th><th>enforced by</th></tr>
+      </thead>
+      <tbody>
+        <tr><td class="mono">scored</td><td class="mono">NOT NULL</td><td class="num">324</td><td>paired CHECK constraint</td></tr>
+        <tr><td class="mono">inherited_root</td><td class="mono">NULL</td><td class="num">24</td><td>paired CHECK constraint</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="callout good">
+    <div class="panel-label">measured after deploy</div>
+    <p>
+      Before: 299 audit rows covering 85 distinct messages — a <strong>3.5×</strong> multiplier
+      on embedding calls, because a duplicate ingest re-embedded from scratch. After the
+      <code>(channel_id, message_ts)</code> short-circuit and thread inheritance, the most
+      recent full hour is <strong>22 rows over 22 distinct messages — ratio 1.00</strong>, with
+      16 of those 22 inherited and therefore free. Roughly an 82% cut in gate embeds.
+    </p>
+  </div>
+</section>
+
+<section>
+  <h2>Every error path processes the message</h2>
+  <p>
+    This is the one invariant worth stating on its own. A gate that drops at ingest never
+    creates the node, and nothing downstream recovers it — a false negative is permanent
+    data loss, while a false positive wastes one LLM call. So the asymmetry is built in
+    everywhere:
+  </p>
+
+  <div class="scroller">
+    <table>
+      <thead>
+        <tr><th>failure</th><th>what happens</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>config unreadable or malformed</td><td>gate does not apply; message processed</td></tr>
+        <tr><td>dedup or thread lookup errors</td><td>logged as <em>failed open</em>; message processed</td></tr>
+        <tr><td>scope missing or empty</td><td>error; message processed</td></tr>
+        <tr><td><code>/embed</code> fails or times out</td><td>error; message processed</td></tr>
+        <tr><td>cosine not finite</td><td>error; message processed</td></tr>
+        <tr><td>LLM adjudication fails</td><td>defaults to <strong>eligible</strong></td></tr>
+        <tr><td>audit insert fails</td><td>error; message processed</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>
+    In practice this fires about once every 45 minutes, almost always
+    <code>context canceled</code> on the embed POST, tracking the gateway's own ~3.5%
+    <code>/embed</code> 502 rate. Every one of those failed in the safe direction.
+  </p>
+</section>
+
+<section>
+  <h2>Where calibration stands</h2>
+  <p>
+    Offline labelling of 31 distinct messages — 6 clearly in scope, 21 clearly out, 4
+    marginal — puts the usable boundary near <strong>0.596</strong>, not the shipped 0.45.
+    At that point every clearly in-scope message survives and 88% of the noise is dropped;
+    precision is 67%, recall 100%. Given the cost asymmetry, that is the right shape of trade.
+  </p>
+  <p>
+    It is not yet safe to set. The conclusion rests on 6 positives, and 0.5965 is the
+    lowest of them — a knife edge that one in-scope message at 0.58 would move. The plan
+    is to let <code>dry_run</code> accumulate to roughly 30 in-scope samples first. Two
+    things must also happen before <code>enforce</code>:
+    <code>gated_channels</code> has to be populated, because empty means everything; and the
+    thresholds have to be set from a distribution produced by the scoring that will
+    actually be running.
+  </p>
+</section>
+
+<footer>
+  <div>Code: <code>internal/graph/handlers/eligibility_gate.go</code> · <code>ingest_content.go:191</code> · <code>graph.eligibility_decisions</code></div>
+  <div>Shipped <code>0f6d481</code> (gate) and <code>1e6922f</code> (dedup + thread inheritance). Live on the hub in <code>dry_run</code>.</div>
+  <div>Numbers read from the hub database on 2026-08-24; nothing here is projected.</div>
+</footer>
+
+</div>
