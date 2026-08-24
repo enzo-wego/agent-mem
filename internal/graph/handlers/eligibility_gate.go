@@ -230,6 +230,12 @@ func eligibilityGateSkip(ctx context.Context, deps Deps, channelID, messageTS, t
 	if !eligibilityGateApplies(cfg, channelID) {
 		return false, nil
 	}
+	// An empty body (e.g. a Slack message carrying only blocks/attachments)
+	// has nothing to judge: fall through as eligible without embedding, without
+	// a dedup lookup, and without an audit row. The message is still processed.
+	if strings.TrimSpace(body) == "" {
+		return false, nil
+	}
 	currentDecision, found, err := loadLatestEligibilityDecision(ctx, deps.DB, channelID, messageTS)
 	if err != nil {
 		return false, fmt.Errorf("eligibility gate: lookup current decision: %w", err)
