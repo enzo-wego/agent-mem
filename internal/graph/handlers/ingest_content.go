@@ -188,13 +188,6 @@ func NewIngestContentHandler(deps Deps) http.Handler {
 				return
 			}
 
-			if skip, gateErr := eligibilityGateSkip(ctx, deps, req.Metadata.ChannelID, req.Metadata.Ts, req.Metadata.ThreadTs, req.Body); gateErr != nil {
-				deps.Logger.Warn().Err(gateErr).Str("channel_id", req.Metadata.ChannelID).Str("message_ts", req.Metadata.Ts).Msg("ingest_content: eligibility gate failed open")
-			} else if skip {
-				writeJSON(w, http.StatusOK, ingestResponse{NodeID: nodeID, Outcome: eligibilitySkippedOutcome})
-				return
-			}
-
 			subtype := ""
 			if req.Metadata.Subtype != nil {
 				subtype = *req.Metadata.Subtype
@@ -202,6 +195,13 @@ func NewIngestContentHandler(deps Deps) http.Handler {
 			automated := req.Metadata.Author.IsBot || subtype == "bot_message"
 			if decision := decideAlertBot(ctx, deps, req.Metadata.ChannelID, req.Body, automated); decision.Skip {
 				writeJSON(w, http.StatusOK, ingestResponse{NodeID: nodeID, Outcome: "alert_fingerprinted"})
+				return
+			}
+
+			if skip, gateErr := eligibilityGateSkip(ctx, deps, req.Metadata.ChannelID, req.Metadata.Ts, req.Metadata.ThreadTs, req.Body); gateErr != nil {
+				deps.Logger.Warn().Err(gateErr).Str("channel_id", req.Metadata.ChannelID).Str("message_ts", req.Metadata.Ts).Msg("ingest_content: eligibility gate failed open")
+			} else if skip {
+				writeJSON(w, http.StatusOK, ingestResponse{NodeID: nodeID, Outcome: eligibilitySkippedOutcome})
 				return
 			}
 		}

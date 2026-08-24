@@ -870,3 +870,240 @@ func TestEligibilityGateNewLookupErrorsFailOpen(t *testing.T) {
 		})
 	}
 }
+
+// clearAlertFingerprints removes any leftover fingerprint rows for channelID
+// so alert-bot tests are idempotent across repeated runs (truncateGraphHandlerTables
+// does not cover these tables).
+func clearAlertFingerprints(t *testing.T, pool *pgxpool.Pool, channelID string) {
+	t.Helper()
+	for _, tbl := range []string{"graph.alert_fingerprint_events", "graph.alert_fingerprints"} {
+		if _, err := pool.Exec(t.Context(), `DELETE FROM `+tbl+` WHERE channel_id=$1`, channelID); err != nil {
+			t.Fatalf("clear %s: %v", tbl, err)
+		}
+	}
+	t.Cleanup(func() {
+		for _, tbl := range []string{"graph.alert_fingerprint_events", "graph.alert_fingerprints"} {
+			_, _ = pool.Exec(context.Background(), `DELETE FROM `+tbl+` WHERE channel_id=$1`, channelID)
+		}
+	})
+}
+
+// seedAlertChannel registers a slack channel row with the given (alert-shaped
+// or not) name so decideAlertBot's channelIsAlert lookup resolves it.
+func seedAlertChannel(t *testing.T, pool *pgxpool.Pool, channelID, name string) {
+	t.Helper()
+	if _, err := pool.Exec(t.Context(), `
+		INSERT INTO graph.slack_channels (slack_channel_id, name, machine_id)
+		VALUES ($1, $2, 'eligibility-test')
+		ON CONFLICT (slack_channel_id) DO UPDATE SET name = EXCLUDED.name`,
+		channelID, name); err != nil {
+		t.Fatalf("seed alert channel: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM graph.slack_channels WHERE slack_channel_id=$1`, channelID)
+	})
+}
+
+// botEligibilityRequest returns an eligibility request whose author is a bot.
+func botEligibilityRequest(channelID, ts, body string) map[string]any {
+	req := eligibilityRequest(channelID, ts, body)
+	req["metadata"].(map[string]any)["author"] = map[string]any{
+		"display_name": "AlertBot",
+		"is_bot":       true,
+	}
+	return req
+}
+
+// TestEligibilityGateEmptyBodyIsProcessedWithoutEmbeddingOrAudit covers the
+// empty-body guard (agent-mem-8nx0): a Slack message with only blocks or
+// attachments has no text, so the gate must fall through as eligible without
+// embedding anything and without writing an audit row. The message itself is
+// still ingested (fail-open direction).
+func TestEligibilityGateEmptyBodyIsProcessedWithoutEmbeddingOrAudit(t *testing.T) {
+	for name, body := range map[string]string{
+		"empty body":      "",
+		"whitespace only": " \n\t  ",
+	} {
+		t.Run(name, func(t *testing.T) {
+			pool := openTestDB(t)
+			truncateGraphHandlerTables(t, pool)
+			const (
+				channelID = "CELIGEMPTY"
+				scopeText = "payments checkout scope"
+			)
+			scopeID := seedEligibilityScope(t, pool, scopeText)
+			setEligibilityConfig(t, pool, eligibilityConfigJSON(t, eligibilityGateConfig{
+				Enabled:             true,
+				Mode:                eligibilityModeDryRun,
+				ScopeSubscriptionID: scopeID,
+				HighThreshold:       1,
+				LowThreshold:        0,
+				GatedChannels:       []string{channelID},
+			}))
+
+			client := &eligibilityGemini{}
+			handler := NewIngestContentHandler(eligibilityDeps(pool, client))
+
+			w := postJSON(t, handler, eligibilityRequest(channelID, "1800000000.000001", body))
+			if w.Code != http.StatusOK {
+				t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+			}
+			if outcome := decodeIngestResponse(t, w.Body.Bytes()).Outcome; outcome != "created" {
+				t.Fatalf("outcome = %q, want created (empty body is not a failure)", outcome)
+			}
+
+			if got := client.embedCallCount(body); got != 0 {
+				t.Fatalf("body embed calls = %d, want 0 (empty body must never reach /embed)", got)
+			}
+			if got := client.embedCallCount(scopeText); got != 0 {
+				t.Fatalf("scope embed calls = %d, want 0 (guard runs before scope load)", got)
+			}
+			var decisions int
+			if err := pool.QueryRow(t.Context(),
+				`SELECT COUNT(*) FROM graph.eligibility_decisions WHERE channel_id=$1`, channelID).
+				Scan(&decisions); err != nil {
+				t.Fatalf("count decisions: %v", err)
+			}
+			if decisions != 0 {
+				t.Fatalf("eligibility decisions = %d, want 0 (no audit row for empty body)", decisions)
+			}
+			var nodes int
+			if err := pool.QueryRow(t.Context(),
+				`SELECT COUNT(*) FROM graph.nodes WHERE scope=$1`, "slack:"+channelID).Scan(&nodes); err != nil {
+				t.Fatalf("count nodes: %v", err)
+			}
+			if nodes != 1 {
+				t.Fatalf("nodes = %d, want 1 (message must still be processed)", nodes)
+			}
+		})
+	}
+}
+
+// TestIngestAlertBotRepeatSkipsGateWithoutScoring covers the reorder
+// (agent-mem-hzu8): a repeated alert template in an alert-named channel must
+// be fingerprinted away BEFORE the eligibility gate pays for an embed, so the
+// second message produces no eligibility_decisions row and no node. A novel
+// template still reaches the gate and is scored exactly once.
+func TestIngestAlertBotRepeatSkipsGateWithoutScoring(t *testing.T) {
+	pool := openTestDB(t)
+	truncateGraphHandlerTables(t, pool)
+	const (
+		channelID = "CALERTREORDER"
+		scopeText = "payments scope"
+	)
+	clearAlertFingerprints(t, pool, channelID)
+	seedAlertChannel(t, pool, channelID, "reorder-alerts")
+	scopeID := seedEligibilityScope(t, pool, scopeText)
+	setEligibilityConfig(t, pool, eligibilityConfigJSON(t, eligibilityGateConfig{
+		Enabled:             true,
+		Mode:                eligibilityModeDryRun,
+		ScopeSubscriptionID: scopeID,
+		HighThreshold:       1,
+		LowThreshold:        0,
+		GatedChannels:       []string{channelID},
+	}))
+
+	client := &eligibilityGemini{}
+	handler := NewIngestContentHandler(eligibilityDeps(pool, client))
+
+	// First sighting: novel fingerprint escalates, so the message legitimately
+	// reaches the gate and is scored once.
+	novel := "PaymentFailed order 123456 amount 50.00 at 2026-08-24T10:11:12Z"
+	w := postJSON(t, handler, botEligibilityRequest(channelID, "1800000000.000001", novel))
+	if w.Code != http.StatusOK {
+		t.Fatalf("novel: status = %d, body = %s", w.Code, w.Body.String())
+	}
+	if outcome := decodeIngestResponse(t, w.Body.Bytes()).Outcome; outcome != "created" {
+		t.Fatalf("novel outcome = %q, want created", outcome)
+	}
+
+	// Second sighting: same template, different volatile values — the
+	// fingerprint is known, so it must be discarded before the gate runs.
+	repeat := "PaymentFailed order 999999 amount 70.00 at 2026-08-24T11:12:13Z"
+	w = postJSON(t, handler, botEligibilityRequest(channelID, "1800000000.000002", repeat))
+	if w.Code != http.StatusOK {
+		t.Fatalf("repeat: status = %d, body = %s", w.Code, w.Body.String())
+	}
+	if outcome := decodeIngestResponse(t, w.Body.Bytes()).Outcome; outcome != "alert_fingerprinted" {
+		t.Fatalf("repeat outcome = %q, want alert_fingerprinted", outcome)
+	}
+
+	if got := client.embedCallCount(repeat); got != 0 {
+		t.Fatalf("repeat body embed calls = %d, want 0 (fingerprinting must precede the gate)", got)
+	}
+	var decisions int
+	if err := pool.QueryRow(t.Context(),
+		`SELECT COUNT(*) FROM graph.eligibility_decisions WHERE channel_id=$1`, channelID).
+		Scan(&decisions); err != nil {
+		t.Fatalf("count decisions: %v", err)
+	}
+	if decisions != 1 {
+		t.Fatalf("eligibility decisions = %d, want 1 (only the novel template is scored)", decisions)
+	}
+	var nodes int
+	if err := pool.QueryRow(t.Context(),
+		`SELECT COUNT(*) FROM graph.nodes WHERE scope=$1`, "slack:"+channelID).Scan(&nodes); err != nil {
+		t.Fatalf("count nodes: %v", err)
+	}
+	if nodes != 1 {
+		t.Fatalf("nodes = %d, want 1 (repeat must not produce a node)", nodes)
+	}
+}
+
+// TestIngestHumanMessageInAlertChannelStillScored pins the no-behaviour-change
+// half of the reorder: a non-automated message in an alert-named channel is
+// unaffected — decideAlertBot returns Skip=false after one indexed read, the
+// gate still scores it, and no alert fingerprint is recorded.
+func TestIngestHumanMessageInAlertChannelStillScored(t *testing.T) {
+	pool := openTestDB(t)
+	truncateGraphHandlerTables(t, pool)
+	const (
+		channelID = "CALERTHUMAN"
+		scopeText = "payments human scope"
+	)
+	clearAlertFingerprints(t, pool, channelID)
+	seedAlertChannel(t, pool, channelID, "payments-alerts")
+	scopeID := seedEligibilityScope(t, pool, scopeText)
+	setEligibilityConfig(t, pool, eligibilityConfigJSON(t, eligibilityGateConfig{
+		Enabled:             true,
+		Mode:                eligibilityModeDryRun,
+		ScopeSubscriptionID: scopeID,
+		HighThreshold:       1,
+		LowThreshold:        0,
+		GatedChannels:       []string{channelID},
+	}))
+
+	client := &eligibilityGemini{}
+	handler := NewIngestContentHandler(eligibilityDeps(pool, client))
+
+	body := "hey team, the checkout deploy is green — human message in an alert channel"
+	w := postJSON(t, handler, eligibilityRequest(channelID, "1800000000.000001", body))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+	if outcome := decodeIngestResponse(t, w.Body.Bytes()).Outcome; outcome != "created" {
+		t.Fatalf("outcome = %q, want created", outcome)
+	}
+
+	if got := client.embedCallCount(body); got != 1 {
+		t.Fatalf("body embed calls = %d, want 1 (gate still scores human messages)", got)
+	}
+	var scored int
+	if err := pool.QueryRow(t.Context(), `
+		SELECT COUNT(*) FROM graph.eligibility_decisions
+		WHERE channel_id=$1 AND decision_source='scored'`, channelID).Scan(&scored); err != nil {
+		t.Fatalf("count scored decisions: %v", err)
+	}
+	if scored != 1 {
+		t.Fatalf("scored decisions = %d, want 1", scored)
+	}
+	var fingerprints int
+	if err := pool.QueryRow(t.Context(),
+		`SELECT COUNT(*) FROM graph.alert_fingerprints WHERE channel_id=$1`, channelID).
+		Scan(&fingerprints); err != nil {
+		t.Fatalf("count fingerprints: %v", err)
+	}
+	if fingerprints != 0 {
+		t.Fatalf("alert fingerprints = %d, want 0 (non-automated messages are never fingerprinted)", fingerprints)
+	}
+}
