@@ -54,6 +54,8 @@ func Mount(r chi.Router, deps Deps) {
 	r.Put("/api/graph/continents", channels.putContinents)
 	r.Get("/api/graph/channel-filters", channels.getChannelFilters)
 	r.Put("/api/graph/channel-filters", channels.putChannelFilters)
+	r.Get("/api/graph/eligibility-gate", channels.getEligibilityGate)
+	r.Put("/api/graph/eligibility-gate", channels.putEligibilityGate)
 
 	// Topic subscriptions (hot-topic enzobot alerts).
 	subs := NewSubscriptions(deps)

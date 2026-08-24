@@ -931,6 +931,41 @@ export async function saveChannelFilters(cfg: ChannelFilters): Promise<ChannelFi
   return res.json();
 }
 
+export type EligibilityGateMode = 'dry_run' | 'enforce';
+
+export interface EligibilityGateConfig {
+  enabled: boolean;
+  mode: EligibilityGateMode;
+  scope_subscription_id: number;
+  high_threshold: number;
+  low_threshold: number;
+  llm_adjudicate: boolean;
+  gated_channels: string[];
+  exempt_channels: string[];
+}
+
+export async function fetchEligibilityGate(): Promise<EligibilityGateConfig> {
+  const res = await authFetch(`${BASE}/api/graph/eligibility-gate`);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Unknown error' }));
+    throw new Error(err.error || `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function saveEligibilityGate(cfg: EligibilityGateConfig): Promise<EligibilityGateConfig> {
+  const res = await authFetch(`${BASE}/api/graph/eligibility-gate`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify(cfg),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Unknown error' }));
+    throw new Error(err.error || `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
 export async function graphNeighbors(id: string, depth = 1): Promise<GraphNeighbor[]> {
   // Keep ':' literal — the chi path param doesn't decode %3A, so node ids like
   // "jira:PAY-2190" / "slack:C..:ts" must keep their colons unencoded.

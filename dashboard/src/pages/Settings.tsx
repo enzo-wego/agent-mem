@@ -5,6 +5,8 @@ import {
   fetchChannels,
   fetchChannelFilters,
   saveChannelFilters,
+  fetchEligibilityGate,
+  saveEligibilityGate,
   fetchGatewayHealth,
   fetchGatewayConfig,
   updateGatewayConfig,
@@ -12,6 +14,7 @@ import {
   type Settings,
   type ChannelCount,
   type ChannelFilters,
+  type EligibilityGateConfig,
   type GatewayHealth,
   type GatewayConfig,
   type GatewayConfigResponse,
@@ -139,6 +142,7 @@ export function SettingsPage() {
 
       {/* Channel Filters (graph memory) */}
       <ChannelFiltersSection />
+      <EligibilityGateSection />
 
       {/* Context */}
       <Section title="Context Window">
@@ -542,6 +546,237 @@ function ChannelFiltersSection() {
         </>
       )}
     </Section>
+  )
+}
+
+// --- Slack eligibility gate ---
+
+const defaultEligibilityGate: EligibilityGateConfig = {
+  enabled: false,
+  mode: 'dry_run',
+  scope_subscription_id: 1,
+  high_threshold: 0.62,
+  low_threshold: 0.45,
+  llm_adjudicate: false,
+  gated_channels: [],
+  exempt_channels: [],
+}
+
+function EligibilityGateSection() {
+  const [config, setConfig] = useState<EligibilityGateConfig | null>(null)
+  const [channels, setChannels] = useState<ChannelCount[]>([])
+  const [saving, setSaving] = useState(false)
+  const [toast, setToast] = useState<{ type: 'ok' | 'err'; msg: string } | null>(null)
+
+  useEffect(() => {
+    Promise.all([fetchEligibilityGate(), fetchChannels()])
+      .then(([cfg, ch]) => {
+        setConfig({
+          ...defaultEligibilityGate,
+          ...cfg,
+          gated_channels: Array.isArray(cfg.gated_channels) ? cfg.gated_channels : [],
+          exempt_channels: Array.isArray(cfg.exempt_channels) ? cfg.exempt_channels : [],
+        })
+        setChannels(ch || [])
+      })
+      .catch(() => setToast({ type: 'err', msg: 'Failed to load eligibility gate' }))
+  }, [])
+
+  const save = async () => {
+    if (!config) return
+    setSaving(true)
+    setToast(null)
+    try {
+      const updated = await saveEligibilityGate(config)
+      setConfig(updated)
+      setToast({ type: 'ok', msg: 'Saved' })
+    } catch (e: unknown) {
+      setToast({ type: 'err', msg: e instanceof Error ? e.message : 'Save failed' })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const update = (patch: Partial<EligibilityGateConfig>) => {
+    if (config) setConfig({ ...config, ...patch })
+  }
+
+  return (
+    <Section title="Slack Eligibility Gate">
+      {toast && (
+        <div className={`text-sm px-3 py-1.5 rounded-md ${toast.type === 'ok' ? 'bg-green-50 text-green-700 dark:bg-green-900/30 dark:text-green-300' : 'bg-red-50 text-red-700 dark:bg-red-900/30 dark:text-red-300'}`}>
+          {toast.msg}
+        </div>
+      )}
+
+      {!config ? (
+        <p className="text-sm text-gray-500">Loading…</p>
+      ) : (
+        <>
+          <div className="text-xs px-3 py-2 rounded-md border border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-300">
+            Dry run records decisions but never skips messages. The 0.62 high and 0.45 low thresholds are uncalibrated placeholders, not recommendations; review audit results before enforcing.
+          </div>
+
+          <Field label="Enabled" hint="Apply this gate to Slack ingest immediately after channel filters. Other ingest sources are never gated.">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={config.enabled}
+                disabled={saving}
+                onChange={(e) => update({ enabled: e.target.checked })}
+                className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+              />
+              <span className="text-sm">{config.enabled ? 'Enabled' : 'Disabled'}</span>
+            </label>
+          </Field>
+
+          <Field label="Mode" hint="dry_run audits every decision and continues; enforce skips audited ineligible messages.">
+            <select
+              value={config.mode}
+              disabled={saving}
+              onChange={(e) => update({ mode: e.target.value as EligibilityGateConfig['mode'] })}
+              className={selectCls}
+            >
+              <option value="dry_run">Dry run</option>
+              <option value="enforce">Enforce</option>
+            </select>
+          </Field>
+
+          <Field label="Scope subscription ID" hint="The topic subscription whose scope_definition is embedded and used as the relevance target.">
+            <input
+              type="number"
+              min="1"
+              step="1"
+              value={config.scope_subscription_id}
+              disabled={saving}
+              onChange={(e) => update({ scope_subscription_id: Number(e.target.value) })}
+              className={inputCls}
+            />
+          </Field>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <Field label="High threshold" hint="Scores at or above this value are eligible.">
+              <input
+                type="number"
+                min="0"
+                max="1"
+                step="0.01"
+                value={config.high_threshold}
+                disabled={saving}
+                onChange={(e) => update({ high_threshold: Number(e.target.value) })}
+                className={inputCls}
+              />
+            </Field>
+            <Field label="Low threshold" hint="Scores at or below this value are ineligible.">
+              <input
+                type="number"
+                min="0"
+                max="1"
+                step="0.01"
+                value={config.low_threshold}
+                disabled={saving}
+                onChange={(e) => update({ low_threshold: Number(e.target.value) })}
+                className={inputCls}
+              />
+            </Field>
+          </div>
+
+          <Field label="Cheap-tier adjudication" hint="Ask the cheap generation tier for a strict yes/no only when the cosine score is between the thresholds. Without this, middle-band messages remain eligible.">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={config.llm_adjudicate}
+                disabled={saving}
+                onChange={(e) => update({ llm_adjudicate: e.target.checked })}
+                className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+              />
+              <span className="text-sm">{config.llm_adjudicate ? 'Adjudicate uncertain messages' : 'Keep uncertain messages'}</span>
+            </label>
+          </Field>
+
+          <EligibilityChannelPicker
+            label="Gated channels"
+            hint="Only these Slack channels are gated. An empty list means all Slack channels except exemptions."
+            value={config.gated_channels}
+            channels={channels}
+            disabled={saving}
+            onChange={(gated_channels) => update({ gated_channels })}
+          />
+
+          <EligibilityChannelPicker
+            label="Exempt channels"
+            hint="These Slack channels bypass the gate completely: no embeddings, adjudication, or audit row."
+            value={config.exempt_channels}
+            channels={channels}
+            disabled={saving}
+            onChange={(exempt_channels) => update({ exempt_channels })}
+          />
+
+          <button disabled={saving || config.low_threshold >= config.high_threshold} onClick={save} className={btnPrimary}>
+            {saving ? 'Saving…' : 'Save eligibility gate'}
+          </button>
+        </>
+      )}
+    </Section>
+  )
+}
+
+function EligibilityChannelPicker({
+  label,
+  hint,
+  value,
+  channels,
+  disabled,
+  onChange,
+}: {
+  label: string
+  hint: string
+  value: string[]
+  channels: ChannelCount[]
+  disabled: boolean
+  onChange: (value: string[]) => void
+}) {
+  const nameOf = (id: string) => {
+    const channel = channels.find((c) => c.channel_id === id)
+    return channel?.name ? `${channel.name} (${id})` : id
+  }
+  const available = channels.filter((channel) => !value.includes(channel.channel_id))
+
+  return (
+    <Field label={label} hint={hint}>
+      <div className="flex flex-wrap gap-1.5 mb-2">
+        {value.length === 0 && <span className="text-xs text-gray-400">No channels selected.</span>}
+        {value.map((id) => (
+          <span key={id} className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800">
+            {nameOf(id)}
+            <button
+              type="button"
+              disabled={disabled}
+              onClick={() => onChange(value.filter((item) => item !== id))}
+              className="ml-0.5 hover:text-red-500 font-bold disabled:opacity-50"
+              title="Remove"
+            >
+              x
+            </button>
+          </span>
+        ))}
+      </div>
+      <select
+        value=""
+        disabled={disabled}
+        onChange={(e) => {
+          if (e.target.value) onChange([...value, e.target.value])
+        }}
+        className={selectCls}
+      >
+        <option value="">+ add channel…</option>
+        {available.map((channel) => (
+          <option key={channel.channel_id} value={channel.channel_id}>
+            {channel.name ? `${channel.name} (${channel.channel_id})` : channel.channel_id}
+          </option>
+        ))}
+      </select>
+    </Field>
   )
 }
 
