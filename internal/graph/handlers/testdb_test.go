@@ -3,7 +3,6 @@ package handlers
 import (
 	"context"
 	"os"
-	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -27,13 +26,12 @@ func openTestDB(t *testing.T) *pgxpool.Pool {
 	if dsn == "" {
 		t.Skip("DATABASE_URL not set; skipping integration test")
 	}
-	// This helper DELETEs every row in the graph tables. On 2026-07-14 an
-	// integration test run against the live dev database hard-deleted the graph
-	// and synced the damage to prod. Refuse anything whose database name does
-	// not say "test" — use agentmem_test, not agentmem. See agent-mem-z14.
-	if !strings.Contains(databaseName(dsn), "test") {
-		t.Fatalf("refusing to run: DATABASE_URL database name %q does not contain \"test\"; "+
-			"handler tests delete all rows in the graph tables", databaseName(dsn))
+	// This helper DELETEs graph rows. On 2026-07-14 an integration test run
+	// against the live dev database hard-deleted the graph and synced the damage
+	// to prod. Require the dedicated scratch database exactly.
+	if databaseName(dsn) != "agentmem_test" {
+		t.Fatalf("refusing to run: DATABASE_URL database name %q is not \"agentmem_test\"; "+
+			"handler tests may delete graph rows", databaseName(dsn))
 	}
 
 	ctx := context.Background()

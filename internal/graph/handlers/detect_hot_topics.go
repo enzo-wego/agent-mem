@@ -31,18 +31,20 @@ const (
 
 // subscription mirrors a graph.topic_subscriptions row.
 type subscription struct {
-	ID              int64         `json:"id"`
-	SubscriberSlack string        `json:"subscriber_slack_id"`
-	Topic           string        `json:"topic"`
-	ChannelFilter   []string      `json:"channel_filter"`
-	MinParticipants int           `json:"min_participants"`
-	MaxAuthorDepth  int           `json:"max_author_depth"`
-	Active          bool          `json:"active"`
-	CreatedAt       time.Time     `json:"created_at"`
-	Sources         []topicSource `json:"sources"`
-	ScopeDefinition string        `json:"scope_definition"` // judge guidance; GUI-editable
-	ScopeSummary    string        `json:"scope_summary"`    // human-readable, shown in UI
-	ScopeStatus     string        `json:"scope_status"`
+	ID               int64         `json:"id"`
+	SubscriberSlack  string        `json:"subscriber_slack_id"`
+	Topic            string        `json:"topic"`
+	ChannelFilter    []string      `json:"channel_filter"`
+	MinParticipants  int           `json:"min_participants"`
+	MaxAuthorDepth   int           `json:"max_author_depth"`
+	Active           bool          `json:"active"`
+	CreatedAt        time.Time     `json:"created_at"`
+	Sources          []topicSource `json:"sources"`
+	ScopeDefinition  string        `json:"scope_definition"` // judge guidance; GUI-editable
+	ScopeSummary     string        `json:"scope_summary"`    // human-readable, shown in UI
+	ScopeStatus      string        `json:"scope_status"`
+	ScopeError       string        `json:"scope_error"`
+	ScopeRefreshedAt *time.Time    `json:"scope_refreshed_at,omitempty"`
 }
 
 // judgeTopicText returns the text the LLM judge should match against: the
@@ -779,7 +781,8 @@ func listSubscriptions(ctx context.Context, db *pgxpool.Pool, activeOnly bool) (
 	q := `SELECT id, subscriber_slack_id, topic, channel_filter,
 	             min_participants, max_author_depth, active, created_at,
 	             COALESCE(sources,'[]'::jsonb), COALESCE(scope_definition,''),
-	             COALESCE(scope_summary,''), COALESCE(scope_status,'')
+	             COALESCE(scope_summary,''), COALESCE(scope_status,''),
+	             COALESCE(scope_error,''), scope_refreshed_at
 	      FROM graph.topic_subscriptions`
 	if activeOnly {
 		q += ` WHERE active`
@@ -796,7 +799,8 @@ func listSubscriptions(ctx context.Context, db *pgxpool.Pool, activeOnly bool) (
 		var srcRaw []byte
 		if err := rows.Scan(&s.ID, &s.SubscriberSlack, &s.Topic, &s.ChannelFilter,
 			&s.MinParticipants, &s.MaxAuthorDepth, &s.Active, &s.CreatedAt,
-			&srcRaw, &s.ScopeDefinition, &s.ScopeSummary, &s.ScopeStatus); err != nil {
+			&srcRaw, &s.ScopeDefinition, &s.ScopeSummary, &s.ScopeStatus,
+			&s.ScopeError, &s.ScopeRefreshedAt); err != nil {
 			return nil, err
 		}
 		_ = json.Unmarshal(srcRaw, &s.Sources)
@@ -900,8 +904,15 @@ func (h *Subscriptions) refresh(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad id", http.StatusBadRequest)
 		return
 	}
-	ct, err := h.db.Exec(r.Context(),
-		`UPDATE graph.topic_subscriptions SET scope_status='refreshing' WHERE id=$1`, id)
+	tx, err := h.db.Begin(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer func() { _ = tx.Rollback(r.Context()) }()
+
+	ct, err := tx.Exec(r.Context(),
+		`UPDATE graph.topic_subscriptions SET scope_status='queued' WHERE id=$1`, id)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -910,13 +921,17 @@ func (h *Subscriptions) refresh(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	if _, err := jobs.Enqueue(r.Context(), h.db, "refresh_topic_scope",
+	if _, err := jobs.Enqueue(r.Context(), tx, "refresh_topic_scope",
 		map[string]any{"subscription_id": id},
 		jobs.EnqueueOptions{Priority: 3, TargetRunner: h.runner, MachineID: h.machineID}); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, http.StatusAccepted, map[string]string{"status": "refreshing"})
+	if err := tx.Commit(r.Context()); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]string{"status": "queued"})
 }
 
 // update applies a partial change to a subscription: any of sources,

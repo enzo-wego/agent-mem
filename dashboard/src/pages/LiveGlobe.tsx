@@ -1022,6 +1022,10 @@ export function LiveGlobePage() {
   const [scopeMinP, setScopeMinP] = useState('')
   const [scopeDef, setScopeDef] = useState('')
   const [scopeActive, setScopeActive] = useState(true)
+  const scopePollRef = useRef<number | null>(null)
+  const scopePollGenerationRef = useRef(0)
+  const subsOpenRef = useRef(subsOpen)
+  subsOpenRef.current = subsOpen
 
   function refreshSubs() {
     listSubscriptions()
@@ -1233,24 +1237,44 @@ export function LiveGlobePage() {
       .finally(() => setSubBusy(false))
   }
 
-  // refreshSubScope triggers a source re-read and polls until the scope is ready.
+  function clearScopePoll() {
+    scopePollGenerationRef.current++
+    if (scopePollRef.current !== null) {
+      window.clearInterval(scopePollRef.current)
+      scopePollRef.current = null
+    }
+  }
+
+  // One panel-level poll watches every in-flight subscription. Restarting it
+  // invalidates older callbacks, so a stale response cannot clear a newer poll.
+  function startScopePoll() {
+    clearScopePoll()
+    if (!subsOpenRef.current) return
+    const generation = scopePollGenerationRef.current
+    let ticks = 0
+    scopePollRef.current = window.setInterval(() => {
+      ticks++
+      if (ticks > 12 && ticks % 4 !== 0) return
+      if (generation !== scopePollGenerationRef.current || !subsOpenRef.current) return
+      listSubscriptions()
+        .then((list) => {
+          if (generation !== scopePollGenerationRef.current || !subsOpenRef.current) return
+          const next = list || []
+          setSubs(next)
+          const busy = next.some((sub) => sub.scope_status === 'queued' || sub.scope_status === 'refreshing')
+          if (!busy) clearScopePoll()
+        })
+        .catch(() => {})
+    }, 5000)
+  }
+
+  // refreshSubScope marks the selected card queued immediately, then the
+  // panel-level poll follows every queued/refreshing subscription to completion.
   function refreshSubScope(id: number) {
     refreshSubscription(id)
       .then(() => {
-        refreshSubs()
-        let tries = 0
-        const poll = window.setInterval(() => {
-          tries++
-          listSubscriptions()
-            .then((list) => {
-              setSubs(list || [])
-              const me = (list || []).find((x) => x.id === id)
-              if (!me || me.scope_status !== 'refreshing' || tries > 40) {
-                window.clearInterval(poll)
-              }
-            })
-            .catch(() => {})
-        }, 5000)
+        setSubs((current) => current.map((sub) => (sub.id === id ? { ...sub, scope_status: 'queued' } : sub)))
+        startScopePoll()
       })
       .catch((e: unknown) => setSubError(e instanceof Error ? e.message : 'refresh failed'))
   }
@@ -1262,7 +1286,23 @@ export function LiveGlobePage() {
   }
 
   useEffect(() => {
-    if (subsOpen) refreshSubs()
+    if (subsOpen) {
+      listSubscriptions()
+        .then((list) => {
+          if (!subsOpenRef.current) return
+          const next = list || []
+          setSubs(next)
+          if (next.some((sub) => sub.scope_status === 'queued' || sub.scope_status === 'refreshing')) {
+            startScopePoll()
+          }
+        })
+        .catch(() => {
+          if (subsOpenRef.current) setSubs([])
+        })
+    } else {
+      clearScopePoll()
+    }
+    return clearScopePoll
   }, [subsOpen])
 
   // Open the existing "Graph" overlay for a search hit by adapting it to a topic.
@@ -3398,7 +3438,9 @@ export function LiveGlobePage() {
                 <div style={{ color: C.dim, fontSize: 11 }}>no subscriptions yet</div>
               )}
               {subs.map((s) => {
+                const queued = s.scope_status === 'queued'
                 const refreshing = s.scope_status === 'refreshing'
+                const busy = queued || refreshing
                 return (
                   <div
                     key={s.id}
@@ -3427,20 +3469,24 @@ export function LiveGlobePage() {
                       {(s.sources?.length ?? 0) > 0 && (
                         <button
                           onClick={() => refreshSubScope(s.id)}
-                          disabled={refreshing}
-                          title="Re-read + analyze the sources"
+                          disabled={busy}
+                          title={
+                            queued
+                              ? 'waiting for LLM budget; the hourly cap resets on the hour'
+                              : 'Re-read + analyze the sources'
+                          }
                           style={{
                             background: 'transparent',
-                            border: `1px solid ${refreshing ? C.green : C.border}`,
-                            color: refreshing ? C.green : C.dim,
-                            cursor: refreshing ? 'default' : 'pointer',
+                            border: `1px solid ${busy ? C.green : C.border}`,
+                            color: busy ? C.green : C.dim,
+                            cursor: busy ? 'default' : 'pointer',
                             fontFamily: MONO,
                             fontSize: 10,
                             borderRadius: 2,
                             padding: '2px 8px',
                           }}
                         >
-                          {refreshing ? 'analyzing…' : '↻ refresh'}
+                          {queued ? 'queued…' : refreshing ? 'analyzing…' : '↻ refresh'}
                         </button>
                       )}
                       <button
@@ -3526,6 +3572,11 @@ export function LiveGlobePage() {
                         })}
                       </div>
                     )}
+                    {s.scope_error && (
+                      <div style={{ color: C.red, fontSize: 10, lineHeight: 1.5, whiteSpace: 'pre-wrap' }}>
+                        {s.scope_error}
+                      </div>
+                    )}
                     {s.scope_summary && (
                       <div
                         style={{
@@ -3542,6 +3593,11 @@ export function LiveGlobePage() {
                           Scope
                         </span>
                         <div style={{ marginTop: 3 }}>{s.scope_summary}</div>
+                        {s.scope_status === 'error' && s.scope_refreshed_at && (
+                          <div style={{ color: C.dim, fontSize: 8, marginTop: 4 }}>
+                            last ok: {new Date(s.scope_refreshed_at).toLocaleString()}
+                          </div>
+                        )}
                       </div>
                     )}
                     {editingSub === s.id && (
