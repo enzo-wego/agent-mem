@@ -219,13 +219,14 @@ func eligibilityGateSkip(ctx context.Context, deps Deps, channelID, messageTS, b
 	}
 
 	decision := "eligible"
+	var adjudicationErr error
 	switch {
 	case score >= cfg.HighThreshold:
 	case score <= cfg.LowThreshold:
 		decision = "ineligible"
 	case cfg.LLMAdjudicate:
-		decision, err = adjudicateEligibility(ctx, deps.Gemini, scope.definition, body)
-		if err != nil {
+		decision, adjudicationErr = adjudicateEligibility(ctx, deps.Gemini, scope.definition, body)
+		if adjudicationErr != nil {
 			decision = "eligible"
 		}
 	}
@@ -237,8 +238,8 @@ func eligibilityGateSkip(ctx context.Context, deps Deps, channelID, messageTS, b
 		channelID, messageTS, score, decision, cfg.Mode, scopeVersion); err != nil {
 		return false, fmt.Errorf("eligibility gate: audit decision: %w", err)
 	}
-	if err != nil {
-		return false, err
+	if adjudicationErr != nil {
+		return false, adjudicationErr
 	}
 	return cfg.Mode == eligibilityModeEnforce && decision == "ineligible", nil
 }
