@@ -100,3 +100,80 @@ reviewable act rather than a dashboard click.
   the deploy path is in `CLAUDE.md`.
 - **Merging to `main` and deploying each need explicit human approval in the round that does
   them.** Open a PR and stop.
+
+---
+
+# Addendum — the dashboard changes (added 2026-08-25 after review of the GUI)
+
+The GUI is **not** broken by the guard: `saveEligibilityGate` (`dashboard/src/api.ts`) already
+extracts `err.error` from the response and rethrows it, and `EligibilityGateSection.save()`
+(`dashboard/src/pages/Settings.tsx`) renders `e.message` in an error toast. So a rejected save
+surfaces the server's reason verbatim without any change.
+
+Three small changes are still warranted.
+
+## GUI-1 — mirror the new rule on the Save button
+
+The component already establishes this idiom for the *other* validation rule:
+
+```tsx
+<button disabled={saving || config.low_threshold >= config.high_threshold} …>
+```
+
+Extend that condition so `mode === 'enforce'` with an empty `gated_channels` also disables
+Save. Follow the existing pattern rather than inventing a new validation mechanism — the server
+remains the authority, this is only to stop a pointless round trip.
+
+## GUI-2 — the "Gated channels" hint becomes wrong
+
+Current hint: *"Only these Slack channels are gated. An empty list means all Slack channels
+except exemptions."*
+
+That stays true under `dry_run` but is actively misleading under `enforce` once the guard
+lands. Amend it to say that an empty list means all channels, **and that `enforce` requires an
+explicit list**. Keep it to one or two sentences in the existing voice.
+
+## GUI-3 — say why Save is disabled (fixes a pre-existing gap too)
+
+Today, if `low_threshold >= high_threshold`, the button is disabled with **no visible reason** —
+the user gets a dead button and no explanation. Render a short inline message next to or above
+the button naming the blocking condition, covering both cases:
+
+- thresholds inverted (`low >= high`)
+- `enforce` selected with no gated channels
+
+One line of text per condition is enough. Do not add a modal, a tooltip-only affordance, or a
+new component.
+
+## Non-goals for the GUI
+
+- Do not redesign the eligibility panel or restructure `EligibilityGateSection`.
+- Do not add client-side validation for rules the server does not enforce — the two must not
+  drift.
+- Do not change the Exempt channels picker, the channel-fetch logic, or any other Settings
+  section.
+
+## Hard constraint — the embedded dashboard MUST be rebuilt before committing
+
+The Go binary serves an embedded copy of the built dashboard. Editing `dashboard/src` alone
+ships nothing. From the repo root:
+
+```bash
+cd dashboard && npm run build
+cd .. && rm -rf internal/worker/dashboard/* && cp -R dashboard/dist/* internal/worker/dashboard/
+```
+
+Commit the rebuilt `internal/worker/dashboard/` output together with the source change. A PR
+that edits `dashboard/src` without the rebuilt embed output is incomplete and will appear to
+work in dev while changing nothing in production.
+
+## Added acceptance criteria
+
+8. Save is disabled when `mode === 'enforce'` and `gated_channels` is empty, and enabled again
+   as soon as a channel is added.
+9. Save is still disabled when thresholds are inverted (no regression).
+10. A visible reason accompanies every disabled state.
+11. The Gated channels hint states that `enforce` requires an explicit list.
+12. `npm run build` succeeds and the rebuilt embed output is committed in the same PR.
+13. A rejected server save still shows the server's own message in the error toast — do not
+    swallow it behind a client-side check.
