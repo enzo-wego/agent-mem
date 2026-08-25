@@ -601,6 +601,9 @@ function EligibilityGateSection() {
     if (config) setConfig({ ...config, ...patch })
   }
 
+  const thresholdsInvalid = config !== null && config.low_threshold >= config.high_threshold
+  const enforceChannelsInvalid = config?.mode === 'enforce' && config.gated_channels.length === 0
+
   return (
     <Section title="Slack Eligibility Gate">
       {toast && (
@@ -696,7 +699,7 @@ function EligibilityGateSection() {
 
           <EligibilityChannelPicker
             label="Gated channels"
-            hint="Only these Slack channels are gated. An empty list means all Slack channels except exemptions."
+            hint="Only these Slack channels are gated. An empty list means all Slack channels except exemptions; enforce requires an explicit list."
             value={config.gated_channels}
             channels={channels}
             disabled={saving}
@@ -712,7 +715,14 @@ function EligibilityGateSection() {
             onChange={(exempt_channels) => update({ exempt_channels })}
           />
 
-          <button disabled={saving || config.low_threshold >= config.high_threshold} onClick={save} className={btnPrimary}>
+          {thresholdsInvalid && (
+            <p className="text-sm text-red-600 dark:text-red-400">Low threshold must be lower than high threshold.</p>
+          )}
+          {enforceChannelsInvalid && (
+            <p className="text-sm text-red-600 dark:text-red-400">Enforce requires at least one gated channel.</p>
+          )}
+
+          <button disabled={saving || thresholdsInvalid || enforceChannelsInvalid} onClick={save} className={btnPrimary}>
             {saving ? 'Saving…' : 'Save eligibility gate'}
           </button>
         </>

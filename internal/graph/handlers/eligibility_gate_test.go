@@ -566,6 +566,72 @@ func TestEligibilityGateRejectsEqualThresholds(t *testing.T) {
 	}
 }
 
+func TestEligibilityGateValidatesGatedChannelsForMode(t *testing.T) {
+	tests := []struct {
+		name          string
+		mode          string
+		gatedChannels []string
+		wantErr       string
+	}{
+		{
+			name:    "enforce requires explicit channels",
+			mode:    eligibilityModeEnforce,
+			wantErr: "enforce requires a non-empty gated_channels list; an empty list means every channel",
+		},
+		{
+			name:          "enforce accepts explicit channels",
+			mode:          eligibilityModeEnforce,
+			gatedChannels: []string{"CELIGIBILITY"},
+		},
+		{
+			name: "dry run accepts every channel",
+			mode: eligibilityModeDryRun,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateEligibilityGateConfig(eligibilityGateConfig{
+				Mode:                tt.mode,
+				ScopeSubscriptionID: 1,
+				HighThreshold:       0.9,
+				LowThreshold:        0.1,
+				GatedChannels:       tt.gatedChannels,
+			})
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("validate eligibility gate config: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("validation error = %v, want error containing %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestLoadEligibilityGateTreatsEnforceWithoutGatedChannelsAsOff(t *testing.T) {
+	pool := openTestDB(t)
+	setEligibilityConfig(t, pool, eligibilityConfigJSON(t, eligibilityGateConfig{
+		Enabled:             true,
+		Mode:                eligibilityModeEnforce,
+		ScopeSubscriptionID: 1,
+		HighThreshold:       0.9,
+		LowThreshold:        0.1,
+		GatedChannels:       []string{},
+		ExemptChannels:      []string{},
+	}))
+
+	cfg, err := loadEligibilityGate(t.Context(), pool)
+	if err != nil {
+		t.Fatalf("load eligibility gate: %v", err)
+	}
+	if cfg != nil {
+		t.Fatalf("loaded eligibility gate = %#v, want nil", cfg)
+	}
+}
+
 func TestEligibilityGateSequentialDuplicateReusesDecision(t *testing.T) {
 	pool := openTestDB(t)
 	truncateGraphHandlerTables(t, pool)
