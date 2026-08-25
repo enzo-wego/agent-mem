@@ -101,6 +101,20 @@ export function ContinentsPage() {
   const inputCls =
     'px-2 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm'
 
+  // Sort a copy (channels is state, never sort in place) by the displayed name
+  // — the same value the Name column renders. A-Z, case-insensitive via
+  // localeCompare. Channels with no resolved name (display falls through to the
+  // bare id) sort last, grouped together, instead of interleaving ids into the
+  // alphabet. Recomputed every render, so renaming via the Name input re-sorts.
+  const sortedChannels = [...channels].sort((a, b) => {
+    const an = nameOf(a.channel_id, cfg, a.name)
+    const bn = nameOf(b.channel_id, cfg, b.name)
+    const aBare = an === a.channel_id
+    const bBare = bn === b.channel_id
+    if (aBare !== bBare) return aBare ? 1 : -1
+    return an.localeCompare(bn)
+  })
+
   return (
     <div>
       <div className="flex items-center justify-between mb-1">
@@ -199,7 +213,7 @@ export function ContinentsPage() {
               </tr>
             </thead>
             <tbody>
-              {channels.map((ch) => {
+              {sortedChannels.map((ch) => {
                 const auto = continentOf(ch.channel_id, { ...cfg, overrides: {} }, ch.name)
                 const autoLabel = cfg.continents.find((c) => c.id === auto)?.label || 'none'
                 return (
