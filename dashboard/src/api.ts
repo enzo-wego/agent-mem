@@ -537,6 +537,7 @@ export interface ContinentCfg {
   overrides: Record<string, string>; // channelId -> continent id
   names: Record<string, string>; // channelId -> display name
   groups?: Record<string, string>; // slack usergroup id (S...) -> name
+  ignore?: string[]; // muted channel ids: no DM notifications (still ingested)
 }
 
 // fetchChannels returns per-channel message counts. Pass days>0 to restrict to

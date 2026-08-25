@@ -73,6 +73,15 @@ export function ContinentsPage() {
     else delete overrides[channelId]
     update({ ...cfg, overrides })
   }
+  const toggleNotify = (channelId: string, notify: boolean) => {
+    const cur = cfg.ignore ?? []
+    const ignore = notify
+      ? cur.filter((id) => id !== channelId)
+      : cur.includes(channelId)
+        ? cur
+        : [...cur, channelId]
+    update({ ...cfg, ignore })
+  }
 
   const handleSave = async () => {
     setSaving(true)
@@ -105,7 +114,9 @@ export function ContinentsPage() {
         </button>
       </div>
       <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
-        Configure how Slack channels group into continents on the Globe.
+        Configure how Slack channels group into continents on the Globe. The Notify column controls DM
+        notifications — unticking mutes a channel&apos;s alerts without stopping ingestion (use the
+        Settings page&apos;s channel filters to drop a channel entirely).
       </p>
 
       {error && <p className="text-red-500 text-sm mb-3">{error}</p>}
@@ -184,6 +195,7 @@ export function ContinentsPage() {
                 <th className="px-4 py-2 font-medium">Name</th>
                 <th className="px-4 py-2 font-medium text-right">Msgs</th>
                 <th className="px-4 py-2 font-medium">Continent</th>
+                <th className="px-4 py-2 font-medium">Notify</th>
               </tr>
             </thead>
             <tbody>
@@ -216,6 +228,19 @@ export function ContinentsPage() {
                           </option>
                         ))}
                       </select>
+                    </td>
+                    <td className="px-4 py-2 whitespace-nowrap">
+                      <label className="inline-flex items-center gap-1.5">
+                        <input
+                          type="checkbox"
+                          checked={!(cfg.ignore ?? []).includes(ch.channel_id)}
+                          onChange={(e) => toggleNotify(ch.channel_id, e.target.checked)}
+                          title="Send DM notifications for this channel"
+                        />
+                        {!(cfg.ignore ?? []).includes(ch.channel_id) ? null : (
+                          <span className="text-xs text-gray-400 dark:text-gray-500">muted</span>
+                        )}
+                      </label>
                     </td>
                   </tr>
                 )
