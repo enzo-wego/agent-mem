@@ -18,12 +18,12 @@ function buildPoints(channels: ChannelCount[], cfg: ContinentCfg): ChannelPoint[
   const colorById = new Map(cfg.continents.map((c) => [c.id, c.color]))
   const pts: ChannelPoint[] = []
   for (const ch of channels) {
-    const cid = continentOf(ch.channel_id, cfg)
+    const cid = continentOf(ch.channel_id, cfg, ch.name)
     const center = centerById.get(cid) ?? [0, 0]
     const [lat, lng] = placement(ch.channel_id, center as [number, number])
     pts.push({
       channelId: ch.channel_id,
-      name: nameOf(ch.channel_id, cfg),
+      name: nameOf(ch.channel_id, cfg, ch.name),
       count: ch.count,
       lat,
       lng,

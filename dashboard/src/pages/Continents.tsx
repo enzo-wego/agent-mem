@@ -200,7 +200,7 @@ export function ContinentsPage() {
             </thead>
             <tbody>
               {channels.map((ch) => {
-                const auto = continentOf(ch.channel_id, { ...cfg, overrides: {} })
+                const auto = continentOf(ch.channel_id, { ...cfg, overrides: {} }, ch.name)
                 const autoLabel = cfg.continents.find((c) => c.id === auto)?.label || 'none'
                 return (
                   <tr key={ch.channel_id} className="border-b border-gray-100 dark:border-gray-700/50">
@@ -210,7 +210,7 @@ export function ContinentsPage() {
                         type="text"
                         value={cfg.names[ch.channel_id] || ''}
                         onChange={(e) => setName(ch.channel_id, e.target.value)}
-                        placeholder={nameOf(ch.channel_id, cfg)}
+                        placeholder={nameOf(ch.channel_id, cfg, ch.name)}
                         className={`${inputCls} w-56`}
                       />
                     </td>
