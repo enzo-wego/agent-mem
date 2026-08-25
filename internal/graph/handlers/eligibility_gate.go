@@ -149,6 +149,9 @@ func validateEligibilityGateConfig(cfg eligibilityGateConfig) error {
 	if cfg.Mode != eligibilityModeDryRun && cfg.Mode != eligibilityModeEnforce {
 		return fmt.Errorf("mode must be %q or %q", eligibilityModeDryRun, eligibilityModeEnforce)
 	}
+	if cfg.Mode == eligibilityModeEnforce && len(cfg.GatedChannels) == 0 {
+		return errors.New("enforce requires a non-empty gated_channels list; an empty list means every channel")
+	}
 	if cfg.ScopeSubscriptionID <= 0 {
 		return errors.New("scope_subscription_id must be positive")
 	}
