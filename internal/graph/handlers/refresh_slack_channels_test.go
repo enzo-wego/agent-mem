@@ -2,13 +2,17 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/agent-mem/agent-mem/internal/graph/jobs"
 )
 
 // TestRefreshSlackChannelsBackfill drives the targeted conversations.info
@@ -173,9 +177,9 @@ func TestRefreshSlackChannelsBackfill(t *testing.T) {
 			slackAPIBaseURL, slackHTTP = srv.URL, srv.Client()
 			t.Cleanup(func() { slackAPIBaseURL, slackHTTP = oldBase, oldHTTP })
 
-			t.Setenv("SLACK_BOT_TOKEN", "xoxb-test-not-real")
-
-			h := refreshSlackChannelsHandler(testDeps(pool))
+			deps := testDeps(pool)
+			deps.SlackBotToken = "xoxb-test-not-real"
+			h := refreshSlackChannelsHandler(deps)
 			err := h(ctx, nil)
 			if tc.wantJobErr && err == nil {
 				t.Fatalf("job returned nil; want an error (list pass failed)")
@@ -244,9 +248,9 @@ func TestRefreshSlackChannelsBackfill_CapEnforced(t *testing.T) {
 	oldBase, oldHTTP := slackAPIBaseURL, slackHTTP
 	slackAPIBaseURL, slackHTTP = srv.URL, srv.Client()
 	t.Cleanup(func() { slackAPIBaseURL, slackHTTP = oldBase, oldHTTP })
-	t.Setenv("SLACK_BOT_TOKEN", "xoxb-test-not-real")
-
-	h := refreshSlackChannelsHandler(testDeps(pool))
+	deps := testDeps(pool)
+	deps.SlackBotToken = "xoxb-test-not-real"
+	h := refreshSlackChannelsHandler(deps)
 	if err := h(ctx, nil); err != nil {
 		t.Fatalf("job returned %v; want nil", err)
 	}
@@ -264,6 +268,66 @@ func TestRefreshSlackChannelsBackfill_CapEnforced(t *testing.T) {
 		if _, ok := channelName(t, pool, id); ok {
 			t.Errorf("channel %s resolved; want deferred by cap", id)
 		}
+	}
+}
+
+// TestRefreshSlackChannels_TokenSource pins agent-mem-q8tm: the handler reads
+// its bot token from deps.SlackBotToken (the AGENT_MEM_SLACK_BOT_TOKEN path
+// every other Slack handler uses), never os.Getenv("SLACK_BOT_TOKEN"). A set
+// deps token runs regardless of the environment; an empty one fails terminally
+// and names the variable that is actually read. Needs the scratch DB: the
+// token-present path runs the (empty) list + backfill passes, which query
+// graph.nodes.
+func TestRefreshSlackChannels_TokenSource(t *testing.T) {
+	cases := []struct {
+		name         string
+		depsToken    string
+		envToken     string // value for SLACK_BOT_TOKEN; "" leaves it empty
+		wantErrFatal bool
+	}{
+		{"deps token set, env empty -> runs", "xoxb-deps-not-real", "", false},
+		{"deps token set, env also set -> runs", "xoxb-deps-not-real", "xoxb-env-not-real", false},
+		{"deps token empty, env set -> ErrFatal (env ignored)", "", "xoxb-env-not-real", true},
+		{"deps token empty, env empty -> ErrFatal", "", "", true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			pool := openTestDB(t)
+			truncateGraphHandlerTables(t, pool)
+
+			// Empty list + no seeded nodes: the token-present path completes
+			// with zero Slack work, so this test isolates the token gate.
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"ok":true,"channels":[],"response_metadata":{"next_cursor":""}}`))
+			}))
+			defer srv.Close()
+			oldBase, oldHTTP := slackAPIBaseURL, slackHTTP
+			slackAPIBaseURL, slackHTTP = srv.URL, srv.Client()
+			t.Cleanup(func() { slackAPIBaseURL, slackHTTP = oldBase, oldHTTP })
+
+			// A non-empty env token in the "empty deps" cases proves the env is
+			// no longer consulted: the handler must still fail.
+			t.Setenv("SLACK_BOT_TOKEN", tc.envToken)
+
+			deps := testDeps(pool)
+			deps.SlackBotToken = tc.depsToken
+			err := refreshSlackChannelsHandler(deps)(context.Background(), nil)
+
+			if tc.wantErrFatal {
+				if !errors.Is(err, jobs.ErrFatal) {
+					t.Fatalf("err = %v; want jobs.ErrFatal", err)
+				}
+				if !strings.Contains(err.Error(), "AGENT_MEM_SLACK_BOT_TOKEN") {
+					t.Fatalf("err %q should name AGENT_MEM_SLACK_BOT_TOKEN", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("err = %v; want nil (handler ran with deps token)", err)
+			}
+		})
 	}
 }
 
