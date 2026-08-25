@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
 	"time"
 
 	"github.com/agent-mem/agent-mem/internal/graph/jobs"
@@ -28,9 +27,9 @@ func NewRefreshSlackChannelsHandler(deps Deps) jobs.Entry {
 
 func refreshSlackChannelsHandler(deps Deps) jobs.Handler {
 	return func(ctx context.Context, _ []byte) error {
-		token := os.Getenv("SLACK_BOT_TOKEN")
+		token := deps.SlackBotToken
 		if token == "" {
-			return fmt.Errorf("%w: refresh_slack_channels: SLACK_BOT_TOKEN not set", jobs.ErrFatal)
+			return fmt.Errorf("%w: refresh_slack_channels: AGENT_MEM_SLACK_BOT_TOKEN not set", jobs.ErrFatal)
 		}
 
 		// The full-list pass. Its error is captured, not returned early: the
