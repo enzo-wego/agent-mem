@@ -137,27 +137,6 @@ type SyncableGraphIdentityMap struct {
 	ResolvedAt time.Time `json:"resolved_at"`
 }
 
-// SyncableGraphJob is a graph.jobs row for sync transport (target_runner != 'local' only).
-type SyncableGraphJob struct {
-	ID           int64      `json:"id"`
-	Type         string     `json:"type"`
-	Payload      []byte     `json:"payload"`
-	Priority     int16      `json:"priority"`
-	Status       string     `json:"status"`
-	AvailableAt  time.Time  `json:"available_at"`
-	Attempts     int16      `json:"attempts"`
-	MaxAttempts  int16      `json:"max_attempts"`
-	LastError    *string    `json:"last_error,omitempty"`
-	LockedBy     *string    `json:"locked_by,omitempty"`
-	LockedAt     *time.Time `json:"locked_at,omitempty"`
-	EnqueuedAt   time.Time  `json:"enqueued_at"`
-	CompletedAt  *time.Time `json:"completed_at,omitempty"`
-	TargetRunner string     `json:"target_runner"`
-	SyncID       string     `json:"sync_id"`
-	SyncVersion  int64      `json:"sync_version"`
-	MachineID    string     `json:"machine_id"`
-}
-
 // SyncableGraphUserAffinityConfig is a graph.user_affinity_config row for sync transport.
 type SyncableGraphUserAffinityConfig struct {
 	EEID                int       `json:"eeid"`
@@ -389,36 +368,6 @@ func (db *DB) GetUnsyncedGraphEntities(ctx context.Context, limit int) ([]Syncab
 	return out, rows.Err()
 }
 
-// GetUnsyncedGraphJobs returns graph.jobs rows (target_runner != 'local') not yet synced.
-func (db *DB) GetUnsyncedGraphJobs(ctx context.Context, limit int) ([]SyncableGraphJob, error) {
-	rows, err := db.Pool.Query(ctx, `
-		SELECT id, type, payload, priority, status, available_at, attempts, max_attempts,
-		       last_error, locked_by, locked_at, enqueued_at, completed_at, target_runner,
-		       sync_id::text, sync_version, machine_id
-		FROM graph.jobs
-		WHERE sync_version = 0 AND target_runner != 'local'
-		ORDER BY id ASC LIMIT $1
-	`, limit)
-	if err != nil {
-		return nil, fmt.Errorf("get unsynced graph jobs: %w", err)
-	}
-	defer rows.Close()
-
-	var out []SyncableGraphJob
-	for rows.Next() {
-		var j SyncableGraphJob
-		if err := rows.Scan(
-			&j.ID, &j.Type, &j.Payload, &j.Priority, &j.Status, &j.AvailableAt, &j.Attempts, &j.MaxAttempts,
-			&j.LastError, &j.LockedBy, &j.LockedAt, &j.EnqueuedAt, &j.CompletedAt, &j.TargetRunner,
-			&j.SyncID, &j.SyncVersion, &j.MachineID,
-		); err != nil {
-			return nil, fmt.Errorf("scan graph job: %w", err)
-		}
-		out = append(out, j)
-	}
-	return out, rows.Err()
-}
-
 // GetUnsyncedGraphUserAffinityConfig returns graph.user_affinity_config rows not yet synced.
 func (db *DB) GetUnsyncedGraphUserAffinityConfig(ctx context.Context, limit int) ([]SyncableGraphUserAffinityConfig, error) {
 	rows, err := db.Pool.Query(ctx, `
@@ -604,22 +553,6 @@ func (db *DB) ImportGraphIdentityMap(ctx context.Context, im *SyncableGraphIdent
 		VALUES ($1,$2,$3,$4)
 		ON CONFLICT (source, external_id) DO NOTHING`,
 		im.Source, im.ExternalID, im.PersonID, im.ResolvedAt,
-	)
-	return err
-}
-
-// ImportGraphJob imports a graph.jobs row from sync.
-func (db *DB) ImportGraphJob(ctx context.Context, j *SyncableGraphJob) error {
-	_, err := db.Pool.Exec(ctx, `
-		INSERT INTO graph.jobs
-			(type, payload, priority, status, available_at, attempts, max_attempts,
-			 last_error, locked_by, locked_at, enqueued_at, completed_at, target_runner,
-			 sync_id, sync_version, machine_id)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
-		ON CONFLICT DO NOTHING`,
-		j.Type, j.Payload, j.Priority, j.Status, j.AvailableAt, j.Attempts, j.MaxAttempts,
-		j.LastError, j.LockedBy, j.LockedAt, j.EnqueuedAt, j.CompletedAt, j.TargetRunner,
-		j.SyncID, j.SyncVersion, j.MachineID,
 	)
 	return err
 }
@@ -845,36 +778,6 @@ func (db *DB) GetGraphEntitiesForPull(ctx context.Context, excludeSource string,
 			return nil, fmt.Errorf("scan graph entity for pull: %w", err)
 		}
 		out = append(out, e)
-	}
-	return out, rows.Err()
-}
-
-// GetGraphJobsForPull returns graph.jobs rows from other machines (target_runner != 'local').
-func (db *DB) GetGraphJobsForPull(ctx context.Context, excludeSource string, afterID, limit int) ([]SyncableGraphJob, error) {
-	rows, err := db.Pool.Query(ctx, `
-		SELECT id, type, payload, priority, status, available_at, attempts, max_attempts,
-		       last_error, locked_by, locked_at, enqueued_at, completed_at, target_runner,
-		       sync_id::text, sync_version, machine_id
-		FROM graph.jobs
-		WHERE machine_id IS DISTINCT FROM $1 AND id > $2 AND target_runner != 'local'
-		ORDER BY id ASC LIMIT $3
-	`, excludeSource, afterID, limit)
-	if err != nil {
-		return nil, fmt.Errorf("get graph jobs for pull: %w", err)
-	}
-	defer rows.Close()
-
-	var out []SyncableGraphJob
-	for rows.Next() {
-		var j SyncableGraphJob
-		if err := rows.Scan(
-			&j.ID, &j.Type, &j.Payload, &j.Priority, &j.Status, &j.AvailableAt, &j.Attempts, &j.MaxAttempts,
-			&j.LastError, &j.LockedBy, &j.LockedAt, &j.EnqueuedAt, &j.CompletedAt, &j.TargetRunner,
-			&j.SyncID, &j.SyncVersion, &j.MachineID,
-		); err != nil {
-			return nil, fmt.Errorf("scan graph job for pull: %w", err)
-		}
-		out = append(out, j)
 	}
 	return out, rows.Err()
 }
