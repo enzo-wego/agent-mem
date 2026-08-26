@@ -102,13 +102,6 @@ func (s *Server) handleSyncPush(w http.ResponseWriter, r *http.Request) {
 			received++
 		}
 	}
-	for i := range payload.GraphJobs {
-		if err := s.db.ImportGraphJob(ctx, &payload.GraphJobs[i]); err != nil {
-			rejected++
-		} else {
-			received++
-		}
-	}
 	for i := range payload.GraphUserAffinityConfig {
 		if err := s.db.ImportGraphUserAffinityConfig(ctx, &payload.GraphUserAffinityConfig[i]); err != nil {
 			rejected++
@@ -144,13 +137,7 @@ func (s *Server) handleSyncPull(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Per-table cursors: cloud-side IDs from previous pull
-	obsAfter, _ := strconv.Atoi(r.URL.Query().Get("obs_after"))
-	sumAfter, _ := strconv.Atoi(r.URL.Query().Get("sum_after"))
-	promptAfter, _ := strconv.Atoi(r.URL.Query().Get("prompt_after"))
-	sessAfter, _ := strconv.Atoi(r.URL.Query().Get("sess_after"))
-
-	// Graph cursors: int keyset for people/edges/jobs (monotonic BIGSERIAL id).
+	// Graph cursors: int keyset for people/edges (monotonic BIGSERIAL id).
 	// The other six paginate on (timestamp, pk), transported as "<RFC3339Nano>|<pk>"
 	// in one query param and decoded here (empty/unparseable => from the beginning).
 	gPeopleAfter, _ := strconv.Atoi(r.URL.Query().Get("g_people_after"))
@@ -160,16 +147,10 @@ func (s *Server) handleSyncPull(w http.ResponseWriter, r *http.Request) {
 	gArtBodyTS, gArtBodyPK := sync.DecodeCursor(r.URL.Query().Get("g_artbody_after"))
 	gSlackGrpTS, gSlackGrpPK := sync.DecodeCursor(r.URL.Query().Get("g_slackgrp_after"))
 	gEntitiesTS, gEntitiesPK := sync.DecodeCursor(r.URL.Query().Get("g_entities_after"))
-	gJobsAfter, _ := strconv.Atoi(r.URL.Query().Get("g_jobs_after"))
 	gAffinityTS, gAffinityPKStr := sync.DecodeCursor(r.URL.Query().Get("g_affinity_after"))
 	gAffinityAfter, _ := strconv.Atoi(gAffinityPKStr) // eeid; 0 (empty/unparseable) starts from the beginning
 
 	ctx := r.Context()
-
-	observations, _ := s.db.GetObservationsForPull(ctx, machineID, obsAfter, limit)
-	summaries, _ := s.db.GetSummariesForPull(ctx, machineID, sumAfter, limit)
-	prompts, _ := s.db.GetPromptsForPull(ctx, machineID, promptAfter, limit)
-	sessions, _ := s.db.GetSessionsForPull(ctx, machineID, sessAfter, limit)
 
 	// Graph tables
 	graphPeople, _ := s.db.GetGraphPeopleForPull(ctx, machineID, gPeopleAfter, limit)
@@ -179,33 +160,16 @@ func (s *Server) handleSyncPull(w http.ResponseWriter, r *http.Request) {
 	graphArtBody, _ := s.db.GetGraphArtifactBodiesForPull(ctx, machineID, gArtBodyTS, gArtBodyPK, limit/2)
 	graphSlackGrp, _ := s.db.GetGraphSlackGroupsForPull(ctx, machineID, gSlackGrpTS, gSlackGrpPK, limit)
 	graphEntities, _ := s.db.GetGraphEntitiesForPull(ctx, machineID, gEntitiesTS, gEntitiesPK, limit)
-	graphJobs, _ := s.db.GetGraphJobsForPull(ctx, machineID, gJobsAfter, limit)
 	graphAffinity, _ := s.db.GetGraphUserAffinityConfigForPull(ctx, machineID, gAffinityTS, gAffinityAfter, limit)
 
 	// Compute cursors: max ID per table
 	cursors := sync.PullCursors{}
-	if len(observations) > 0 {
-		cursors.Observations = observations[len(observations)-1].ID
-	}
-	if len(summaries) > 0 {
-		cursors.Summaries = summaries[len(summaries)-1].ID
-	}
-	if len(prompts) > 0 {
-		cursors.Prompts = prompts[len(prompts)-1].ID
-	}
-	if len(sessions) > 0 {
-		cursors.Sessions = sessions[len(sessions)-1].ID
-	}
-
 	// Graph cursors: the last returned row's key per table (keyset, never offset).
 	if len(graphPeople) > 0 {
 		cursors.GraphPeople = int(graphPeople[len(graphPeople)-1].ID)
 	}
 	if len(graphEdges) > 0 {
 		cursors.GraphEdges = int(graphEdges[len(graphEdges)-1].ID)
-	}
-	if len(graphJobs) > 0 {
-		cursors.GraphJobs = int(graphJobs[len(graphJobs)-1].ID)
 	}
 	// Keyset cursors: the last returned row's (timestamp, pk), encoded as one
 	// string. ORDER BY guarantees the last row holds the max pair in the batch.
@@ -235,10 +199,6 @@ func (s *Server) handleSyncPull(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := sync.SyncPullResponse{
-		Sessions:                sessions,
-		Observations:            observations,
-		Summaries:               summaries,
-		Prompts:                 prompts,
 		GraphPeople:             graphPeople,
 		GraphNodes:              graphNodes,
 		GraphEdges:              graphEdges,
@@ -246,7 +206,6 @@ func (s *Server) handleSyncPull(w http.ResponseWriter, r *http.Request) {
 		GraphArtifactBodies:     graphArtBody,
 		GraphSlackGroups:        graphSlackGrp,
 		GraphEntities:           graphEntities,
-		GraphJobs:               graphJobs,
 		GraphUserAffinityConfig: graphAffinity,
 		Cursors:                 cursors,
 	}

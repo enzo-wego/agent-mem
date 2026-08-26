@@ -182,134 +182,139 @@ func NewServer(cfg *config.Config, logBuf *LogBuffer) (*Server, error) {
 	reg := jobs.NewRegistry()
 	graphhandlers.RegisterAll(reg, graphDeps)
 
-	// Refresh Slack channel id→name on startup so the map labels channels by name
-	// (covers channels added since the last boot). Deduped: skip if one is already
-	// queued/running. Best-effort — a failure just leaves names unresolved.
-	var refreshPending bool
-	_ = pool.QueryRow(ctx,
-		`SELECT EXISTS(SELECT 1 FROM graph.jobs WHERE type='refresh_slack_channels' AND status IN ('queued','running'))`).
-		Scan(&refreshPending)
-	if !refreshPending {
-		if _, err := jobs.Enqueue(ctx, pool, "refresh_slack_channels", map[string]any{},
-			jobs.EnqueueOptions{TargetRunner: cfg.Graph.Runner, MachineID: cfg.MachineID}); err != nil {
-			graphLog.Warn().Err(err).Msg("startup: enqueue refresh_slack_channels failed")
-		}
-	}
-
-	// Resolve Slack bot_id authors (B…) to bot names on startup — users.list can't
-	// reach them, so they'd otherwise show as raw ids in author chips. Deduped like
-	// the channel refresh; best-effort.
-	var botsPending bool
-	_ = pool.QueryRow(ctx,
-		`SELECT EXISTS(SELECT 1 FROM graph.jobs WHERE type='refresh_slack_bots' AND status IN ('queued','running'))`).
-		Scan(&botsPending)
-	if !botsPending {
-		if _, err := jobs.Enqueue(ctx, pool, "refresh_slack_bots", map[string]any{},
-			jobs.EnqueueOptions{TargetRunner: cfg.Graph.Runner, MachineID: cfg.MachineID}); err != nil {
-			graphLog.Warn().Err(err).Msg("startup: enqueue refresh_slack_bots failed")
-		}
-	}
-
-	// Kick off the self-rescheduling hot-topic detector (deduped: skip if one is
-	// already queued/running). Each run re-enqueues the next tick.
-	var detectPending bool
-	_ = pool.QueryRow(ctx,
-		`SELECT EXISTS(SELECT 1 FROM graph.jobs WHERE type='detect_hot_topics' AND status IN ('queued','running'))`).
-		Scan(&detectPending)
-	if !detectPending {
-		if _, err := jobs.Enqueue(ctx, pool, "detect_hot_topics", map[string]any{},
-			jobs.EnqueueOptions{TargetRunner: cfg.Graph.Runner, MachineID: cfg.MachineID}); err != nil {
-			graphLog.Warn().Err(err).Msg("startup: enqueue detect_hot_topics failed")
-		}
-	}
-
-	// Recompute evidence-backed person roles daily. The handler schedules its next run;
-	// startup only repairs a missing chain and triggers the first computation after deploy.
-	var rolesPending bool
-	_ = pool.QueryRow(ctx,
-		`SELECT EXISTS(SELECT 1 FROM graph.jobs WHERE type='derive_person_roles' AND status IN ('queued','running'))`).
-		Scan(&rolesPending)
-	if !rolesPending {
-		if _, err := jobs.Enqueue(ctx, pool, "derive_person_roles", map[string]any{},
-			jobs.EnqueueOptions{TargetRunner: "any", MachineID: cfg.MachineID}); err != nil {
-			graphLog.Warn().Err(err).Msg("startup: enqueue derive_person_roles failed")
-		}
-	}
-
-	// Kick off the self-rescheduling Jira board→epic map refresh (deduped).
-	var jiraBoardPending bool
-	_ = pool.QueryRow(ctx,
-		`SELECT EXISTS(SELECT 1 FROM graph.jobs WHERE type='refresh_jira_board' AND status IN ('queued','running'))`).
-		Scan(&jiraBoardPending)
-	if !jiraBoardPending {
-		if _, err := jobs.Enqueue(ctx, pool, "refresh_jira_board", map[string]any{},
-			jobs.EnqueueOptions{TargetRunner: cfg.Graph.Runner, MachineID: cfg.MachineID}); err != nil {
-			graphLog.Warn().Err(err).Msg("startup: enqueue refresh_jira_board failed")
-		}
-	}
-
-	// Kick off the self-rescheduling watch-channels notifier (DMs every message in
-	// the Payment Partners group). Deduped: skip if one is already queued/running.
-	var watchPending bool
-	_ = pool.QueryRow(ctx,
-		`SELECT EXISTS(SELECT 1 FROM graph.jobs WHERE type='notify_watch_channels' AND status IN ('queued','running'))`).
-		Scan(&watchPending)
-	if !watchPending {
-		if _, err := jobs.Enqueue(ctx, pool, "notify_watch_channels", map[string]any{},
-			jobs.EnqueueOptions{TargetRunner: cfg.Graph.Runner, MachineID: cfg.MachineID}); err != nil {
-			graphLog.Warn().Err(err).Msg("startup: enqueue notify_watch_channels failed")
-		}
-	}
-
-	// Arm the 7-day hourly monitor (threaded DM report). Deduped; the handler
-	// self-expires 7 days after its first run, so a restart after that just no-ops.
-	var monitorPending bool
-	_ = pool.QueryRow(ctx,
-		`SELECT EXISTS(SELECT 1 FROM graph.jobs WHERE type='monitor_hourly_report' AND status IN ('queued','running'))`).
-		Scan(&monitorPending)
-	if !monitorPending {
-		if _, err := jobs.Enqueue(ctx, pool, "monitor_hourly_report", map[string]any{},
-			jobs.EnqueueOptions{TargetRunner: cfg.Graph.Runner, MachineID: cfg.MachineID}); err != nil {
-			graphLog.Warn().Err(err).Msg("startup: enqueue monitor_hourly_report failed")
-		}
-	}
-
-	// Backfill summaries for discussion threads (2+ messages) that never got one
-	// — the lazy popup path only summarizes what a user happens to open. LLM
-	// required; idempotent (summarized threads no longer match the query).
-	if graphDeps.Gemini != nil {
-		go func() {
-			if n := graphhandlers.BackfillMissingThreadSummaries(ctx, pool, 1000); n > 0 {
-				graphLog.Info().Int("enqueued", n).Msg("startup: thread-summary backfill")
+	var mgr *jobs.Manager
+	if cfg.Graph.Runner == "none" {
+		graphLog.Info().Msg("graph jobs disabled on this machine (runner=none)")
+	} else {
+		// Refresh Slack channel id→name on startup so the map labels channels by name
+		// (covers channels added since the last boot). Deduped: skip if one is already
+		// queued/running. Best-effort — a failure just leaves names unresolved.
+		var refreshPending bool
+		_ = pool.QueryRow(ctx,
+			`SELECT EXISTS(SELECT 1 FROM graph.jobs WHERE type='refresh_slack_channels' AND status IN ('queued','running'))`).
+			Scan(&refreshPending)
+		if !refreshPending {
+			if _, err := jobs.Enqueue(ctx, pool, "refresh_slack_channels", map[string]any{},
+				jobs.EnqueueOptions{TargetRunner: cfg.Graph.Runner, MachineID: cfg.MachineID}); err != nil {
+				graphLog.Warn().Err(err).Msg("startup: enqueue refresh_slack_channels failed")
 			}
-		}()
-	}
-	mgr := jobs.NewManager(jobs.ManagerConfig{
-		Registry:            reg,
-		DB:                  pool,
-		WorkerID:            cfg.MachineID,
-		Runner:              cfg.Graph.Runner,
-		Semaphores:          sems,
-		IdleInterval:        5 * time.Second,
-		BackoffBase:         30 * time.Second,
-		BackoffCap:          time.Hour,
-		JanitorScanInterval: 30 * time.Second,
-		JanitorBatchSize:    100,
-		Logger:              graphLog,
-		// Read per claim rather than captured once, so toggling the setting from
-		// the dashboard takes effect within one idle interval without a restart.
-		Paused: func() bool { return cfg.Snapshot().ProcessingPaused },
-		CapReached: func() bool {
-			if graphAdapter == nil {
-				return false
+		}
+
+		// Resolve Slack bot_id authors (B…) to bot names on startup — users.list can't
+		// reach them, so they'd otherwise show as raw ids in author chips. Deduped like
+		// the channel refresh; best-effort.
+		var botsPending bool
+		_ = pool.QueryRow(ctx,
+			`SELECT EXISTS(SELECT 1 FROM graph.jobs WHERE type='refresh_slack_bots' AND status IN ('queued','running'))`).
+			Scan(&botsPending)
+		if !botsPending {
+			if _, err := jobs.Enqueue(ctx, pool, "refresh_slack_bots", map[string]any{},
+				jobs.EnqueueOptions{TargetRunner: cfg.Graph.Runner, MachineID: cfg.MachineID}); err != nil {
+				graphLog.Warn().Err(err).Msg("startup: enqueue refresh_slack_bots failed")
 			}
-			gen, _, cap := graphAdapter.CallCount()
-			return cap > 0 && gen >= cap
-		},
-		RefundAttempt: func(err error) bool {
-			return errors.Is(err, llmgateway.ErrCapped)
-		},
-	})
+		}
+
+		// Kick off the self-rescheduling hot-topic detector (deduped: skip if one is
+		// already queued/running). Each run re-enqueues the next tick.
+		var detectPending bool
+		_ = pool.QueryRow(ctx,
+			`SELECT EXISTS(SELECT 1 FROM graph.jobs WHERE type='detect_hot_topics' AND status IN ('queued','running'))`).
+			Scan(&detectPending)
+		if !detectPending {
+			if _, err := jobs.Enqueue(ctx, pool, "detect_hot_topics", map[string]any{},
+				jobs.EnqueueOptions{TargetRunner: cfg.Graph.Runner, MachineID: cfg.MachineID}); err != nil {
+				graphLog.Warn().Err(err).Msg("startup: enqueue detect_hot_topics failed")
+			}
+		}
+
+		// Recompute evidence-backed person roles daily. The handler schedules its next run;
+		// startup only repairs a missing chain and triggers the first computation after deploy.
+		var rolesPending bool
+		_ = pool.QueryRow(ctx,
+			`SELECT EXISTS(SELECT 1 FROM graph.jobs WHERE type='derive_person_roles' AND status IN ('queued','running'))`).
+			Scan(&rolesPending)
+		if !rolesPending {
+			if _, err := jobs.Enqueue(ctx, pool, "derive_person_roles", map[string]any{},
+				jobs.EnqueueOptions{TargetRunner: "any", MachineID: cfg.MachineID}); err != nil {
+				graphLog.Warn().Err(err).Msg("startup: enqueue derive_person_roles failed")
+			}
+		}
+
+		// Kick off the self-rescheduling Jira board→epic map refresh (deduped).
+		var jiraBoardPending bool
+		_ = pool.QueryRow(ctx,
+			`SELECT EXISTS(SELECT 1 FROM graph.jobs WHERE type='refresh_jira_board' AND status IN ('queued','running'))`).
+			Scan(&jiraBoardPending)
+		if !jiraBoardPending {
+			if _, err := jobs.Enqueue(ctx, pool, "refresh_jira_board", map[string]any{},
+				jobs.EnqueueOptions{TargetRunner: cfg.Graph.Runner, MachineID: cfg.MachineID}); err != nil {
+				graphLog.Warn().Err(err).Msg("startup: enqueue refresh_jira_board failed")
+			}
+		}
+
+		// Kick off the self-rescheduling watch-channels notifier (DMs every message in
+		// the Payment Partners group). Deduped: skip if one is already queued/running.
+		var watchPending bool
+		_ = pool.QueryRow(ctx,
+			`SELECT EXISTS(SELECT 1 FROM graph.jobs WHERE type='notify_watch_channels' AND status IN ('queued','running'))`).
+			Scan(&watchPending)
+		if !watchPending {
+			if _, err := jobs.Enqueue(ctx, pool, "notify_watch_channels", map[string]any{},
+				jobs.EnqueueOptions{TargetRunner: cfg.Graph.Runner, MachineID: cfg.MachineID}); err != nil {
+				graphLog.Warn().Err(err).Msg("startup: enqueue notify_watch_channels failed")
+			}
+		}
+
+		// Arm the 7-day hourly monitor (threaded DM report). Deduped; the handler
+		// self-expires 7 days after its first run, so a restart after that just no-ops.
+		var monitorPending bool
+		_ = pool.QueryRow(ctx,
+			`SELECT EXISTS(SELECT 1 FROM graph.jobs WHERE type='monitor_hourly_report' AND status IN ('queued','running'))`).
+			Scan(&monitorPending)
+		if !monitorPending {
+			if _, err := jobs.Enqueue(ctx, pool, "monitor_hourly_report", map[string]any{},
+				jobs.EnqueueOptions{TargetRunner: cfg.Graph.Runner, MachineID: cfg.MachineID}); err != nil {
+				graphLog.Warn().Err(err).Msg("startup: enqueue monitor_hourly_report failed")
+			}
+		}
+
+		// Backfill summaries for discussion threads (2+ messages) that never got one
+		// — the lazy popup path only summarizes what a user happens to open. LLM
+		// required; idempotent (summarized threads no longer match the query).
+		if graphDeps.Gemini != nil {
+			go func() {
+				if n := graphhandlers.BackfillMissingThreadSummaries(ctx, pool, 1000); n > 0 {
+					graphLog.Info().Int("enqueued", n).Msg("startup: thread-summary backfill")
+				}
+			}()
+		}
+		mgr = jobs.NewManager(jobs.ManagerConfig{
+			Registry:            reg,
+			DB:                  pool,
+			WorkerID:            cfg.MachineID,
+			Runner:              cfg.Graph.Runner,
+			Semaphores:          sems,
+			IdleInterval:        5 * time.Second,
+			BackoffBase:         30 * time.Second,
+			BackoffCap:          time.Hour,
+			JanitorScanInterval: 30 * time.Second,
+			JanitorBatchSize:    100,
+			Logger:              graphLog,
+			// Read per claim rather than captured once, so toggling the setting from
+			// the dashboard takes effect within one idle interval without a restart.
+			Paused: func() bool { return cfg.Snapshot().ProcessingPaused },
+			CapReached: func() bool {
+				if graphAdapter == nil {
+					return false
+				}
+				gen, _, cap := graphAdapter.CallCount()
+				return cap > 0 && gen >= cap
+			},
+			RefundAttempt: func(err error) bool {
+				return errors.Is(err, llmgateway.ErrCapped)
+			},
+		})
+	}
 
 	s := &Server{
 		config:       cfg,
