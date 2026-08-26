@@ -209,6 +209,7 @@ func (e *Engine) push(ctx context.Context) error {
 func (e *Engine) pull(ctx context.Context) error {
 	totalImported := 0
 	importFailed := 0
+	graphPeopleImported := false
 
 	// record tallies an import result. On failure we log and count but never stop:
 	// the cursor must still advance past a failed row. Blocking on failure would
@@ -281,6 +282,9 @@ func (e *Engine) pull(ctx context.Context) error {
 
 		// Import graph tables in FK order (people -> nodes -> edges, then the
 		// rest). record() logs+counts failures and always advances.
+		if len(pullResp.GraphPeople) > 0 {
+			graphPeopleImported = true
+		}
 		for i := range pullResp.GraphPeople {
 			record(e.db.ImportGraphPerson(ctx, &pullResp.GraphPeople[i]), "graph.people", strconv.FormatInt(pullResp.GraphPeople[i].ID, 10))
 		}
@@ -329,6 +333,15 @@ func (e *Engine) pull(ctx context.Context) error {
 		}
 		if pullResp.Cursors.GraphUserAffinityConfig != "" {
 			e.setPullCursorStr(ctx, "graph.user_affinity_config", pullResp.Cursors.GraphUserAffinityConfig)
+		}
+	}
+
+	// Once per pull cycle, after the people batch has imported, lift
+	// graph.people_id_seq above max(id) so a locally-authored person can never
+	// take an id the hub already assigned to someone else (agent-mem-xdq1).
+	if graphPeopleImported {
+		if err := e.db.ReseedGraphPeopleSequence(ctx); err != nil {
+			log.Warn().Err(err).Msg("reseed graph.people_id_seq")
 		}
 	}
 
