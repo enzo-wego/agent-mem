@@ -431,20 +431,41 @@ func (db *DB) MarkSyncedGraphBySyncID(ctx context.Context, schema, table string,
 // ---------------------------------------------------------------------------
 
 // ImportGraphPerson imports a graph.people row from sync.
+//
+// Unlike most Import* routines, this inserts id explicitly and infers on the
+// primary key: graph.nodes.author_person_id, people.reports_to and
+// people.merged_into all reference people(id) ACROSS MACHINES, so a pulled
+// person's id must survive verbatim. Letting the row take a fresh
+// nextval('graph.people_id_seq') on the receiving side is the drift that
+// breaks those FKs (agent-mem-xdq1). ON CONFLICT (id) DO NOTHING makes the
+// primary key the explicit inference target, not whichever constraint happens
+// to fire first.
 func (db *DB) ImportGraphPerson(ctx context.Context, p *SyncableGraphPerson) error {
 	_, err := db.Pool.Exec(ctx, `
 		INSERT INTO graph.people
-			(eeid, email, display_name, slack_user_id, jira_account_id,
+			(id, eeid, email, display_name, slack_user_id, jira_account_id,
 			 github_login, pagerduty_user_id, is_bot, reports_to, depth_from_root,
 			 first_seen_at, identity_resolved_at, merged_into,
 			 sync_id, sync_version, machine_id)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
-		ON CONFLICT DO NOTHING`,
-		p.EEID, p.Email, p.DisplayName, p.SlackUserID, p.JiraAccountID,
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+		ON CONFLICT (id) DO NOTHING`,
+		p.ID, p.EEID, p.Email, p.DisplayName, p.SlackUserID, p.JiraAccountID,
 		p.GithubLogin, p.PagerdutyUserID, p.IsBot, p.ReportsTo, p.DepthFromRoot,
 		p.FirstSeenAt, p.IdentityResolvedAt, p.MergedInto,
 		p.SyncID, p.SyncVersion, p.MachineID,
 	)
+	return err
+}
+
+// ReseedGraphPeopleSequence advances graph.people_id_seq to at least max(id) so
+// a locally-authored person can never take an id the hub has already assigned to
+// a different person. Idempotent; run once per pull cycle after the people batch
+// imports (never per row). See agent-mem-xdq1.
+func (db *DB) ReseedGraphPeopleSequence(ctx context.Context) error {
+	_, err := db.Pool.Exec(ctx, `
+		SELECT setval('graph.people_id_seq',
+			GREATEST((SELECT COALESCE(max(id), 0) FROM graph.people), last_value))
+		FROM graph.people_id_seq`)
 	return err
 }
 

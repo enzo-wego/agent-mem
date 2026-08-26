@@ -542,3 +542,59 @@ func TestGraphSync_UnparseableCursorWalksFromStart(t *testing.T) {
 		t.Errorf("want lowest (updated_at, id) row first, got %q", pulled[0].ID)
 	}
 }
+
+// TestGraphSync_ImportPersonPreservesID pins agent-mem-xdq1: a pulled person
+// carries an id that other tables reference across machines
+// (nodes.author_person_id, people.reports_to, people.merged_into), so
+// ImportGraphPerson must insert that id verbatim rather than take a fresh
+// nextval('graph.people_id_seq'). After the import the sequence must also sit
+// above the imported id so a locally-authored person cannot later collide.
+func TestGraphSync_ImportPersonPreservesID(t *testing.T) {
+	pool := openTestPool(t)
+	truncateGraphSyncTables(t, pool)
+	ctx := context.Background()
+	db := database.NewDB(pool)
+
+	// Reset the sequence to a low value so the collision the bug produces (a
+	// fresh nextval landing below the incoming id) would be observable.
+	if _, err := pool.Exec(ctx, `SELECT setval('graph.people_id_seq', 1, false)`); err != nil {
+		t.Fatalf("reset sequence: %v", err)
+	}
+
+	const hubID int64 = 999042
+	p := &database.SyncableGraphPerson{
+		ID:          hubID,
+		DisplayName: "Hub Person",
+		FirstSeenAt: time.Now().UTC().Truncate(time.Second),
+		SyncID:      "abcd0000-0000-0000-0000-0000000d0001",
+		SyncVersion: 7,
+		MachineID:   "hub-test",
+	}
+	if err := db.ImportGraphPerson(ctx, p); err != nil {
+		t.Fatalf("ImportGraphPerson: %v", err)
+	}
+
+	// The id must survive verbatim.
+	var gotID int64
+	if err := pool.QueryRow(ctx,
+		`SELECT id FROM graph.people WHERE sync_id = $1`, p.SyncID).Scan(&gotID); err != nil {
+		t.Fatalf("select imported person: %v", err)
+	}
+	if gotID != hubID {
+		t.Fatalf("imported id was reassigned: want %d, got %d", hubID, gotID)
+	}
+
+	// The reseed the engine runs once per cycle must lift the sequence above the
+	// imported id, so the next locally-authored insert cannot reuse it.
+	if err := db.ReseedGraphPeopleSequence(ctx); err != nil {
+		t.Fatalf("ReseedGraphPeopleSequence: %v", err)
+	}
+	var nextID int64
+	if err := pool.QueryRow(ctx,
+		`SELECT nextval('graph.people_id_seq')`).Scan(&nextID); err != nil {
+		t.Fatalf("nextval: %v", err)
+	}
+	if nextID <= hubID {
+		t.Fatalf("sequence did not move above imported id: nextval %d, imported %d", nextID, hubID)
+	}
+}
