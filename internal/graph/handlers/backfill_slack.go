@@ -7,7 +7,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
 	"time"
 
 	"github.com/agent-mem/agent-mem/internal/graph/identity"
@@ -42,7 +41,7 @@ func backfillSlackChannelHandler(deps Deps) jobs.Handler {
 			return fmt.Errorf("%w: backfill_slack_channel: channel_id and oldest_ts required", jobs.ErrFatal)
 		}
 
-		token := os.Getenv("SLACK_BOT_TOKEN")
+		token := deps.SlackBotToken
 		if token == "" {
 			return fmt.Errorf("%w: backfill_slack_channel: SLACK_BOT_TOKEN not set", jobs.ErrFatal)
 		}

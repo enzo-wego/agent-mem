@@ -7,7 +7,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
 	"strings"
 	"time"
 
@@ -32,7 +31,7 @@ func NewRefreshSlackBotsHandler(deps Deps) jobs.Entry {
 // such person and fills in the real name (e.g. "GitHub", "PagerDuty").
 func refreshSlackBotsHandler(deps Deps) jobs.Handler {
 	return func(ctx context.Context, _ []byte) error {
-		token := os.Getenv("SLACK_BOT_TOKEN")
+		token := deps.SlackBotToken
 		if token == "" {
 			return fmt.Errorf("%w: refresh_slack_bots: SLACK_BOT_TOKEN not set", jobs.ErrFatal)
 		}

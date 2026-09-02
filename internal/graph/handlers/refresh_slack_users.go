@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
 	"strings"
 	"time"
 
@@ -29,7 +28,7 @@ func NewRefreshSlackUsersHandler(deps Deps) jobs.Entry {
 
 func refreshSlackUsersHandler(deps Deps) jobs.Handler {
 	return func(ctx context.Context, _ []byte) error {
-		token := os.Getenv("SLACK_BOT_TOKEN")
+		token := deps.SlackBotToken
 		if token == "" {
 			return fmt.Errorf("%w: refresh_slack_users: SLACK_BOT_TOKEN not set", jobs.ErrFatal)
 		}

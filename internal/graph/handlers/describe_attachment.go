@@ -66,7 +66,14 @@ func describeAttachmentHandler(deps Deps) jobs.Handler {
 		}
 
 		// Step 2: download the bytes with source-appropriate auth.
-		data, err := downloadWithAuth(ctx, p.ExternalURL, p.Source)
+		data, err := downloadWithAuth(
+			ctx,
+			p.ExternalURL,
+			p.Source,
+			deps.SlackBotToken,
+			deps.JiraToken,
+			deps.JiraEmail,
+		)
 		if err != nil {
 			return fmt.Errorf("%w: describe_attachment download: %w", jobs.ErrTransient, err)
 		}
@@ -232,7 +239,7 @@ func describeAttachmentHandler(deps Deps) jobs.Handler {
 }
 
 // downloadWithAuth downloads bytes from url, injecting the appropriate auth header.
-func downloadWithAuth(ctx context.Context, url, source string) ([]byte, error) {
+func downloadWithAuth(ctx context.Context, url, source, slackToken, jiraToken, jiraEmail string) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
@@ -240,17 +247,14 @@ func downloadWithAuth(ctx context.Context, url, source string) ([]byte, error) {
 
 	switch source {
 	case "slack":
-		token := os.Getenv("SLACK_BOT_TOKEN")
-		if token != "" {
-			req.Header.Set("Authorization", "Bearer "+token)
+		if slackToken != "" {
+			req.Header.Set("Authorization", "Bearer "+slackToken)
 		}
 	case "jira", "confluence":
-		token := os.Getenv("JIRA_TOKEN")
-		email := os.Getenv("JIRA_EMAIL")
-		if token != "" && email != "" {
-			req.SetBasicAuth(email, token)
-		} else if token != "" {
-			req.Header.Set("Authorization", "Bearer "+token)
+		if jiraToken != "" && jiraEmail != "" {
+			req.SetBasicAuth(jiraEmail, jiraToken)
+		} else if jiraToken != "" {
+			req.Header.Set("Authorization", "Bearer "+jiraToken)
 		}
 	case "github":
 		token := os.Getenv("GH_TOKEN")
