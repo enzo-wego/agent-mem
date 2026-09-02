@@ -162,6 +162,8 @@ func NewServer(cfg *config.Config, logBuf *LogBuffer) (*Server, error) {
 		LiteParse:   liteparseConfigFromEnv(),
 
 		SlackBotToken: cfg.Graph.SlackBotToken,
+		JiraEmail:     cfg.Graph.JiraEmail,
+		JiraToken:     cfg.Graph.JiraToken,
 		SlackDMUserID: cfg.Graph.SlackDMUserID,
 		Runner:        cfg.Graph.Runner,
 		PublicBaseURL: cfg.PublicBaseURL,

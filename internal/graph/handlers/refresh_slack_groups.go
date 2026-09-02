@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
@@ -25,7 +24,7 @@ func NewRefreshSlackGroupsHandler(deps Deps) jobs.Entry {
 
 func refreshSlackGroupsHandler(deps Deps) jobs.Handler {
 	return func(ctx context.Context, payload []byte) error {
-		token := os.Getenv("SLACK_BOT_TOKEN")
+		token := deps.SlackBotToken
 		if token == "" {
 			return fmt.Errorf("%w: refresh_slack_groups: SLACK_BOT_TOKEN not set", jobs.ErrFatal)
 		}

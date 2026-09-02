@@ -45,6 +45,8 @@ type Deps struct {
 	// Hot-topic alerts (Feature: topic subscriptions → enzobot DM).
 	SlackBotToken string // bot token used to DM via chat.postMessage
 	SlackDMUserID string // default Slack user id (U…) to DM when a sub omits one
+	JiraEmail     string
+	JiraToken     string
 	Runner        string // target_runner for self-rescheduled jobs ("any"|"vps"|"local")
 	// PublicBaseURL is the public dashboard origin (settings: public_base_url,
 	// e.g. https://enzogo.io.vn) for outward links in DMs. Empty = no link.

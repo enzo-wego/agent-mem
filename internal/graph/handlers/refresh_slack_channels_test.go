@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"sort"
 	"strings"
 	"testing"
@@ -273,7 +274,7 @@ func TestRefreshSlackChannelsBackfill_CapEnforced(t *testing.T) {
 
 // TestRefreshSlackChannels_TokenSource pins agent-mem-q8tm: the handler reads
 // its bot token from deps.SlackBotToken (the AGENT_MEM_SLACK_BOT_TOKEN path
-// every other Slack handler uses), never os.Getenv("SLACK_BOT_TOKEN"). A set
+// every other Slack handler uses), never the unprefixed environment variable. A set
 // deps token runs regardless of the environment; an empty one fails terminally
 // and names the variable that is actually read. Needs the scratch DB: the
 // token-present path runs the (empty) list + backfill passes, which query
@@ -326,6 +327,34 @@ func TestRefreshSlackChannels_TokenSource(t *testing.T) {
 			}
 			if err != nil {
 				t.Fatalf("err = %v; want nil (handler ran with deps token)", err)
+			}
+		})
+	}
+}
+
+// TestSlackHandlers_TokenSourceConvention guards every Slack handler against
+// bypassing the configured AGENT_MEM_SLACK_BOT_TOKEN path through Deps.
+func TestSlackHandlers_TokenSourceConvention(t *testing.T) {
+	files := []string{
+		"backfill_slack.go",
+		"backfill_slack_thread.go",
+		"describe_attachment.go",
+		"refresh_slack_bots.go",
+		"refresh_slack_channels.go",
+		"refresh_slack_groups.go",
+		"refresh_slack_users.go",
+		"resolve_identity.go",
+	}
+
+	bareEnvRead := `os.Getenv(` + `"SLACK_BOT_TOKEN"` + `)`
+	for _, file := range files {
+		t.Run(file, func(t *testing.T) {
+			source, err := os.ReadFile(file)
+			if err != nil {
+				t.Fatalf("read %s: %v", file, err)
+			}
+			if strings.Contains(string(source), bareEnvRead) {
+				t.Fatalf("%s reads SLACK_BOT_TOKEN directly; use deps.SlackBotToken", file)
 			}
 		})
 	}

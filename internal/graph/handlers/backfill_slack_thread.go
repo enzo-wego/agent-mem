@@ -7,7 +7,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
 	"time"
 
 	"github.com/agent-mem/agent-mem/internal/graph/jobs"
@@ -41,7 +40,7 @@ func backfillSlackThreadHandler(deps Deps) jobs.Handler {
 			return fmt.Errorf("%w: backfill_slack_thread: channel_id and thread_ts required", jobs.ErrFatal)
 		}
 
-		token := os.Getenv("SLACK_BOT_TOKEN")
+		token := deps.SlackBotToken
 		if token == "" {
 			return fmt.Errorf("%w: backfill_slack_thread: SLACK_BOT_TOKEN not set", jobs.ErrFatal)
 		}

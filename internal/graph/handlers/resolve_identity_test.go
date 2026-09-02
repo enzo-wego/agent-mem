@@ -30,15 +30,15 @@ func TestResolveIdentityHandler_MissingPersonID(t *testing.T) {
 }
 
 func TestFetchUserInfo_UnknownSource(t *testing.T) {
-	_, _, err := fetchUserInfo(context.Background(), "unknown_source", "id123")
+	_, _, err := fetchUserInfo(context.Background(), "unknown_source", "id123", "")
 	if err == nil {
 		t.Fatal("expected error for unknown source")
 	}
 }
 
 func TestFetchUserInfo_SlackMissingToken(t *testing.T) {
-	t.Setenv("SLACK_BOT_TOKEN", "")
-	_, _, err := fetchUserInfo(context.Background(), "slack", "U123")
+	t.Setenv("SLACK_BOT_TOKEN", "xoxb-env-token-must-be-ignored")
+	_, _, err := fetchUserInfo(context.Background(), "slack", "U123", "")
 	if err == nil {
 		t.Fatal("expected error when SLACK_BOT_TOKEN is not set")
 	}
@@ -46,7 +46,7 @@ func TestFetchUserInfo_SlackMissingToken(t *testing.T) {
 
 func TestFetchUserInfo_JiraMissingToken(t *testing.T) {
 	t.Setenv("JIRA_TOKEN", "")
-	_, _, err := fetchUserInfo(context.Background(), "jira", "accountid123")
+	_, _, err := fetchUserInfo(context.Background(), "jira", "accountid123", "")
 	if err == nil {
 		t.Fatal("expected error when JIRA_TOKEN is not set")
 	}

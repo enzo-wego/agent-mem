@@ -25,7 +25,7 @@ func NewResolveIdentityHandler(deps Deps) jobs.Entry {
 		Handler:  resolveIdentityHandler(deps),
 		Systems:  []string{}, // source resolved at runtime
 		PoolSize: 4,
-		Lease:  30 * time.Second,
+		Lease:    30 * time.Second,
 	}
 }
 
@@ -58,7 +58,7 @@ func resolveIdentityHandler(deps Deps) jobs.Handler {
 		}
 
 		// Step 1b: query source user-info API.
-		email, displayName, err := fetchUserInfo(ctx, p.Source, p.ExternalID)
+		email, displayName, err := fetchUserInfo(ctx, p.Source, p.ExternalID, deps.SlackBotToken)
 		if err != nil {
 			return err // already wrapped as ErrTransient or ErrFatal
 		}
@@ -91,10 +91,10 @@ func resolveIdentityHandler(deps Deps) jobs.Handler {
 }
 
 // fetchUserInfo calls the source's user-info API and returns (email, displayName, error).
-func fetchUserInfo(ctx context.Context, source, externalID string) (string, string, error) {
+func fetchUserInfo(ctx context.Context, source, externalID, slackToken string) (string, string, error) {
 	switch source {
 	case "slack":
-		return fetchSlackUserInfo(ctx, externalID)
+		return fetchSlackUserInfo(ctx, externalID, slackToken)
 	case "jira", "confluence":
 		return fetchAtlassianUserInfo(ctx, externalID)
 	case "github":
@@ -108,8 +108,7 @@ func fetchUserInfo(ctx context.Context, source, externalID string) (string, stri
 }
 
 // fetchSlackUserInfo calls users.info and extracts email + display_name.
-func fetchSlackUserInfo(ctx context.Context, userID string) (string, string, error) {
-	token := os.Getenv("SLACK_BOT_TOKEN")
+func fetchSlackUserInfo(ctx context.Context, userID, token string) (string, string, error) {
 	if token == "" {
 		return "", "", fmt.Errorf("%w: resolve_identity: SLACK_BOT_TOKEN not set", jobs.ErrFatal)
 	}
