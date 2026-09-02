@@ -72,6 +72,7 @@ type hotThread struct {
 
 	HasImportant    bool   // an author is in the subscriber's reporting line / near org circle
 	ImportantAuthor string // name of that important author (for the DM)
+	HasAlwaysAlert  bool   // an author explicitly bypasses topic relevance for this subscriber
 }
 
 // NewDetectHotTopics returns the handler for the self-rescheduling
@@ -99,15 +100,17 @@ func NewDetectHotTopics(deps Deps) jobs.Handler {
 		}
 		ignored := ignoredChannelIDs(ctx, deps.DB)
 		for _, s := range subs {
-			// Resolve the subscriber's "important people" (their reporting line +
-			// within ~2 hops), so a message from one of them lowers the bar.
-			important := ownerImportantEeids(ctx, deps.DB, s.SubscriberSlack)
+			// Resolve the subscriber once, then derive both their wider important
+			// circle and the explicit always-alert subset.
+			owner := subscriberEEID(ctx, deps.DB, s.SubscriberSlack)
+			important := ownerImportantEeids(ctx, deps.DB, owner)
+			alwaysAlert := alwaysAlertEeids(ctx, deps.DB, owner)
 			// Whose threads to stay out of: the person this sub DMs.
 			subscriber := s.SubscriberSlack
 			if subscriber == "" {
 				subscriber = deps.SlackDMUserID
 			}
-			hot, err := findHotThreads(ctx, deps.DB, s, important, subscriber)
+			hot, err := findHotThreads(ctx, deps.DB, s, important, alwaysAlert, subscriber)
 			if err != nil {
 				log.Warn().Err(err).Int64("sub", s.ID).Msg("detect_hot_topics: query failed")
 				continue
@@ -122,22 +125,24 @@ func NewDetectHotTopics(deps Deps) jobs.Handler {
 				if notified[h.RootNodeID] || ignored[h.Channel] {
 					continue
 				}
-				// Topic gate: is this hot thread genuinely ABOUT the topic? Decided
-				// by an LLM judgment — cosine on a bare topic word couldn't tell a
-				// deployment thread (0.52) from a real payments incident (0.512).
-				// A cached verdict is reused until the thread's message count
-				// changes; only LLM verdicts are cached (keyword fallback is free).
-				if j, ok := judged[h.RootNodeID]; ok && j.msgCount == h.MsgCount {
-					if !j.relevant {
-						continue
-					}
-				} else {
-					relevant, fromLLM := topicMatches(ctx, deps, s, h)
-					if fromLLM {
-						saveJudgment(ctx, deps.DB, s.ID, h.RootNodeID, h.MsgCount, relevant)
-					}
-					if !relevant {
-						continue
+				if !h.HasAlwaysAlert {
+					// Topic gate: is this hot thread genuinely ABOUT the topic? Decided
+					// by an LLM judgment — cosine on a bare topic word couldn't tell a
+					// deployment thread (0.52) from a real payments incident (0.512).
+					// A cached verdict is reused until the thread's message count
+					// changes; only LLM verdicts are cached (keyword fallback is free).
+					if j, ok := judged[h.RootNodeID]; ok && j.msgCount == h.MsgCount {
+						if !j.relevant {
+							continue
+						}
+					} else {
+						relevant, fromLLM := topicMatches(ctx, deps, s, h)
+						if fromLLM {
+							saveJudgment(ctx, deps.DB, s.ID, h.RootNodeID, h.MsgCount, relevant)
+						}
+						if !relevant {
+							continue
+						}
 					}
 				}
 				// Dedup: claim the (sub, thread) pair; skip if already notified.
@@ -203,7 +208,7 @@ func NewDetectHotTopics(deps Deps) jobs.Handler {
 // ponytail: the check is windowed like everything else here — it sees only the
 // messages inside detectLookback, so a thread you last spoke in >24h ago can
 // still alert. Widen to a per-root EXISTS over graph.nodes if that shows up.
-func findHotThreads(ctx context.Context, db *pgxpool.Pool, s subscription, important []int32, subscriber string) ([]hotThread, error) {
+func findHotThreads(ctx context.Context, db *pgxpool.Pool, s subscription, important, alwaysAlert []int32, subscriber string) ([]hotThread, error) {
 	const q = `
 WITH recent AS (
   SELECT n.id,
@@ -216,6 +221,7 @@ WITH recent AS (
          COALESCE(p.depth_from_root, 99) AS depth,
          COALESCE(p.display_name, '') AS author,
          (p.eeid = ANY($4::int[])) AS is_important,
+         (p.eeid = ANY($6::int[])) AS is_always_alert,
          -- The subscriber authored this message. Duplicate identities merged into
          -- them (a GitHub/Jira row carrying no slack_user_id) count too, else the
          -- 60-odd messages attributed to those rows leave the thread unsuppressed.
@@ -262,6 +268,7 @@ grp AS (
          max(ts)                                           AS last_ts,
          string_agg(text || COALESCE(' ' || NULLIF(att,''), ''), ' ') AS blob,
          bool_or(COALESCE(is_important,false))             AS has_important,
+         bool_or(COALESCE(is_always_alert,false))          AS has_always_alert,
          bool_or(COALESCE(is_subscriber,false))            AS has_subscriber,
          (array_agg(author) FILTER (WHERE is_important))[1] AS important_author
   FROM recent
@@ -271,7 +278,8 @@ SELECT g.root_node_id, g.channel, COALESCE(c.name,''),
        g.msg_count, g.participants, g.top_depth,
        COALESCE(g.top_author,''), COALESCE(g.first_text,''), g.last_ts,
        LEFT(COALESCE(g.blob,''), 2000),
-       COALESCE(g.has_important,false), COALESCE(g.important_author,'')
+       COALESCE(g.has_important,false), COALESCE(g.important_author,''),
+       COALESCE(g.has_always_alert,false)
 FROM grp g
 LEFT JOIN graph.slack_channels c ON c.slack_channel_id = g.channel
 WHERE (g.participants >= $3 OR g.has_important)
@@ -285,7 +293,10 @@ LIMIT 50`
 	if important == nil {
 		important = []int32{}
 	}
-	rows, err := db.Query(ctx, q, detectLookback, filter, s.MinParticipants, important, subscriber)
+	if alwaysAlert == nil {
+		alwaysAlert = []int32{}
+	}
+	rows, err := db.Query(ctx, q, detectLookback, filter, s.MinParticipants, important, subscriber, alwaysAlert)
 	if err != nil {
 		return nil, err
 	}
@@ -295,7 +306,7 @@ LIMIT 50`
 		var h hotThread
 		if err := rows.Scan(&h.RootNodeID, &h.Channel, &h.ChannelName,
 			&h.MsgCount, &h.Participants, &h.TopDepth, &h.TopAuthor, &h.FirstLine, &h.LastTS, &h.Blob,
-			&h.HasImportant, &h.ImportantAuthor); err != nil {
+			&h.HasImportant, &h.ImportantAuthor, &h.HasAlwaysAlert); err != nil {
 			return nil, err
 		}
 		out = append(out, h)
@@ -303,18 +314,26 @@ LIMIT 50`
 	return out, rows.Err()
 }
 
-// ownerImportantEeids returns the eeids the subscriber treats as "important":
-// their reporting line (ancestors — where the LCA of (owner, other) IS the
-// other, i.e. their manager up to the CEO) plus anyone within ~2 org hops. Empty
-// when the subscriber isn't org-anchored (no eeid) or has no distances yet.
-func ownerImportantEeids(ctx context.Context, db *pgxpool.Pool, subscriberSlack string) []int32 {
+// subscriberEEID resolves an active Slack identity to its org owner.
+func subscriberEEID(ctx context.Context, db *pgxpool.Pool, subscriberSlack string) int32 {
 	if subscriberSlack == "" {
-		return nil
+		return 0
 	}
 	var owner int32
 	if err := db.QueryRow(ctx,
 		`SELECT COALESCE(eeid,0) FROM graph.people WHERE slack_user_id=$1 AND merged_into IS NULL`,
-		subscriberSlack).Scan(&owner); err != nil || owner == 0 {
+		subscriberSlack).Scan(&owner); err != nil {
+		return 0
+	}
+	return owner
+}
+
+// ownerImportantEeids returns the eeids the owner treats as "important":
+// their reporting line (ancestors — where the LCA of (owner, other) IS the
+// other, i.e. their manager up to the CEO) plus anyone within ~2 org hops. Empty
+// when the subscriber isn't org-anchored (no eeid) or has no distances yet.
+func ownerImportantEeids(ctx context.Context, db *pgxpool.Pool, owner int32) []int32 {
+	if owner == 0 {
 		return nil
 	}
 	rows, err := db.Query(ctx, `

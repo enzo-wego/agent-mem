@@ -3,6 +3,8 @@ package handlers
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
@@ -57,7 +59,7 @@ func TestFindHotThreads(t *testing.T) {
 
 	// Volume-only gate: ≥ min_participants distinct people.
 	sub := subscription{Topic: "payments", MinParticipants: 4}
-	hot, err := findHotThreads(ctx, pool, sub, nil, "")
+	hot, err := findHotThreads(ctx, pool, sub, nil, nil, "")
 	if err != nil {
 		t.Fatalf("findHotThreads: %v", err)
 	}
@@ -81,7 +83,7 @@ func TestFindHotThreads(t *testing.T) {
 	}
 
 	// With min_participants=2, a reporter+responder thread (C3) also fires.
-	hot2, _ := findHotThreads(ctx, pool, subscription{Topic: "payments", MinParticipants: 2}, nil, "")
+	hot2, _ := findHotThreads(ctx, pool, subscription{Topic: "payments", MinParticipants: 2}, nil, nil, "")
 	got2 := map[string]bool{}
 	for _, h := range hot2 {
 		got2[h.Channel] = true
@@ -141,7 +143,7 @@ func TestFindHotThreadsSkipsSubscriberThreads(t *testing.T) {
 	insSlack(t, pool, "C2", ts(now, 22), theirs, insPerson(t, pool, "Third", 5), "reply")
 
 	sub := subscription{Topic: "payments", MinParticipants: 2}
-	hot, err := findHotThreads(ctx, pool, sub, nil, "UOWNER")
+	hot, err := findHotThreads(ctx, pool, sub, nil, nil, "UOWNER")
 	if err != nil {
 		t.Fatalf("findHotThreads: %v", err)
 	}
@@ -160,7 +162,7 @@ func TestFindHotThreadsSkipsSubscriberThreads(t *testing.T) {
 	}
 
 	// Empty subscriber disables the filter entirely.
-	all, err := findHotThreads(ctx, pool, sub, nil, "")
+	all, err := findHotThreads(ctx, pool, sub, nil, nil, "")
 	if err != nil {
 		t.Fatalf("findHotThreads(no subscriber): %v", err)
 	}
@@ -294,7 +296,7 @@ func TestFindHotThreads_ImportantLoneMessage(t *testing.T) {
 	insSlack(t, pool, "CB", ts(now, 0), "", boss, "payments are down in PK")
 
 	// min_participants=4 (volume gate fails for a lone msg); important=[7] must surface it.
-	hot, err := findHotThreads(ctx, pool, subscription{Topic: "payments", MinParticipants: 4}, []int32{7}, "")
+	hot, err := findHotThreads(ctx, pool, subscription{Topic: "payments", MinParticipants: 4}, []int32{7}, nil, "")
 	if err != nil {
 		t.Fatalf("findHotThreads: %v", err)
 	}
@@ -311,11 +313,145 @@ func TestFindHotThreads_ImportantLoneMessage(t *testing.T) {
 		t.Errorf("HasImportant=%v ImportantAuthor=%q, want true/Boss", cb.HasImportant, cb.ImportantAuthor)
 	}
 	// Without the important set, the lone message must NOT surface.
-	hot0, _ := findHotThreads(ctx, pool, subscription{Topic: "payments", MinParticipants: 4}, nil, "")
+	hot0, _ := findHotThreads(ctx, pool, subscription{Topic: "payments", MinParticipants: 4}, nil, nil, "")
 	for _, h := range hot0 {
 		if h.Channel == "CB" {
 			t.Errorf("lone message must not surface without importance")
 		}
+	}
+}
+
+// TestDetectHotTopics_AlwaysAlertBypassesOnlyRelevance proves that an explicit
+// always-alert author ignores cached and fresh negative relevance verdicts,
+// while the wider important set, channel ignore list, subscriber suppression,
+// and judgment/notification dedup behavior remain unchanged.
+func TestDetectHotTopics_AlwaysAlertBypassesOnlyRelevance(t *testing.T) {
+	pool := openTestDB(t)
+	ctx := context.Background()
+	for _, tbl := range []string{
+		"graph.topic_notifications",
+		"graph.topic_judgments",
+		"graph.topic_subscriptions",
+		"graph.thread_summaries",
+	} {
+		if _, err := pool.Exec(ctx, "DELETE FROM "+tbl); err != nil {
+			t.Fatalf("clean %s: %v", tbl, err)
+		}
+	}
+	truncateGraphHandlerTables(t, pool)
+
+	insPersonWithEEID := func(name, slack string, eeid int32) int64 {
+		t.Helper()
+		var id int64
+		if err := pool.QueryRow(ctx, `
+INSERT INTO graph.people (eeid, display_name, slack_user_id, depth_from_root, machine_id)
+VALUES ($1,$2,NULLIF($3,''),5,'test') RETURNING id`, eeid, name, slack).Scan(&id); err != nil {
+			t.Fatalf("seed person %s: %v", name, err)
+		}
+		return id
+	}
+	owner := insPersonWithEEID("Enzo Nguyen", "UOWNER", 982)
+	ross := insPersonWithEEID("Ross Veitch", "UROSS", 452)
+	alex := insPersonWithEEID("Alexandre Morin", "UALEX", 1001)
+
+	now := time.Now()
+	freshTS := ts(now, 10)
+	cachedTS := ts(now, 20)
+	alexTS := ts(now, 30)
+	ignoredTS := ts(now, 40)
+	subscriberTS := ts(now, 50)
+	insSlack(t, pool, "CROSSFRESH", freshTS, "", ross, "company strategy and hiring")
+	insSlack(t, pool, "CROSSCACHED", cachedTS, "", ross, "office planning")
+	insSlack(t, pool, "CALEX", alexTS, "", alex, "team lunch")
+	insSlack(t, pool, "C0B1BR522F5", ignoredTS, "", ross, "board preparation")
+	insSlack(t, pool, "CSUBSCRIBER", subscriberTS, subscriberTS, ross, "annual planning")
+	insSlack(t, pool, "CSUBSCRIBER", ts(now, 51), subscriberTS, owner, "I am already in this thread")
+
+	subID := insSubscription(t, pool, "UOWNER", "payments")
+	freshID := "slack:CROSSFRESH:" + freshTS
+	cachedID := "slack:CROSSCACHED:" + cachedTS
+	alexID := "slack:CALEX:" + alexTS
+	ignoredID := "slack:C0B1BR522F5:" + ignoredTS
+	subscriberID := "slack:CSUBSCRIBER:" + subscriberTS
+	if _, err := pool.Exec(ctx, `
+INSERT INTO graph.topic_judgments (subscription_id, root_node_id, msg_count, relevant)
+VALUES ($1,$2,1,false)`, subID, cachedID); err != nil {
+		t.Fatalf("seed cached negative judgment: %v", err)
+	}
+	for _, summary := range []struct{ channel, threadTS string }{
+		{"CROSSFRESH", freshTS},
+		{"CROSSCACHED", cachedTS},
+	} {
+		if _, err := pool.Exec(ctx, `
+INSERT INTO graph.thread_summaries (channel_id, thread_ts, signature, summary, overview)
+VALUES ($1,$2,'1:test','cached','cached overview')`, summary.channel, summary.threadTS); err != nil {
+			t.Fatalf("seed thread summary %s: %v", summary.channel, err)
+		}
+	}
+
+	var judgeCalls int
+	gem := &mockGemini{generateResult: func() (string, error) {
+		judgeCalls++
+		return `{"relevant":false}`, nil
+	}}
+	var posted int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.Contains(r.URL.Path, "chat.postMessage") {
+			posted++
+		}
+		_, _ = w.Write([]byte(`{"ok":true,"channel":{"id":"DTEST"},"ts":"1700000000.000001"}`))
+	}))
+	defer srv.Close()
+	oldBase, oldHTTP := slackAPIBaseURL, slackHTTP
+	slackAPIBaseURL, slackHTTP = srv.URL, srv.Client()
+	t.Cleanup(func() { slackAPIBaseURL, slackHTTP = oldBase, oldHTTP })
+
+	deps := Deps{
+		DB:            pool,
+		Gemini:        gem,
+		Logger:        zerolog.Nop(),
+		MachineID:     "test",
+		SlackBotToken: "xoxb-placeholder-not-real",
+	}
+	if err := NewDetectHotTopics(deps)(ctx, nil); err != nil {
+		t.Fatalf("detect hot topics: %v", err)
+	}
+	if judgeCalls != 1 {
+		t.Fatalf("LLM calls = %d, want 1 for Alexandre only; Ross must bypass relevance", judgeCalls)
+	}
+	if posted != 2 {
+		t.Fatalf("Slack posts = %d, want 2 for Ross's fresh and cached-negative threads", posted)
+	}
+
+	notified := loadNotified(ctx, pool, subID)
+	for _, id := range []string{freshID, cachedID} {
+		if !notified[id] {
+			t.Errorf("always-alert thread %s was not notified", id)
+		}
+	}
+	for _, id := range []string{alexID, ignoredID, subscriberID} {
+		if notified[id] {
+			t.Errorf("suppressed thread %s was notified", id)
+		}
+	}
+	var freshJudgments int
+	if err := pool.QueryRow(ctx, `
+SELECT count(*) FROM graph.topic_judgments
+WHERE subscription_id=$1 AND root_node_id=$2`, subID, freshID).Scan(&freshJudgments); err != nil {
+		t.Fatalf("count fresh Ross judgments: %v", err)
+	}
+	if freshJudgments != 0 {
+		t.Errorf("fresh always-alert judgments = %d, want 0", freshJudgments)
+	}
+	var alexRelevant bool
+	if err := pool.QueryRow(ctx, `
+SELECT relevant FROM graph.topic_judgments
+WHERE subscription_id=$1 AND root_node_id=$2`, subID, alexID).Scan(&alexRelevant); err != nil {
+		t.Fatalf("read Alexandre judgment: %v", err)
+	}
+	if alexRelevant {
+		t.Error("Alexandre's negative relevance judgment was not preserved")
 	}
 }
 
@@ -471,7 +607,7 @@ func TestFindHotThreads_AttachmentBlob(t *testing.T) {
 
 	// min_participants=1 surfaces every thread. Topic is unused by findHotThreads
 	// (relevance is judged later in the handler).
-	hot, err := findHotThreads(ctx, pool, subscription{Topic: "", MinParticipants: 1}, nil, "")
+	hot, err := findHotThreads(ctx, pool, subscription{Topic: "", MinParticipants: 1}, nil, nil, "")
 	if err != nil {
 		t.Fatalf("findHotThreads: %v", err)
 	}
