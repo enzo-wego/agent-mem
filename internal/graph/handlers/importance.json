@@ -23,7 +23,7 @@
   },
 
   "overrides": [
-    { "name": "Ross Veitch",     "score": 1.00, "why": "CEO — top priority",                "pin": false },
+    { "name": "Ross Veitch",     "score": 1.00, "why": "CEO — top priority",                "pin": false, "always_alert": true },
     { "name": "Alexandre Morin", "score": 0.85, "why": "owns payments business",            "pin": true  },
     { "name": "Surbhi Babbar",   "score": 0.75, "why": "payments-geeks · you work together", "pin": true  }
   ]

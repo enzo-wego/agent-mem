@@ -16,10 +16,17 @@ func TestLoadImportanceConfig(t *testing.T) {
 	if len(c.Overrides) == 0 {
 		t.Error("expected at least one override person")
 	}
+	var alwaysAlert []string
 	for _, o := range c.Overrides {
 		if o.Name == "" || o.Score <= 0 {
 			t.Errorf("override has empty name or non-positive score: %+v", o)
 		}
+		if o.AlwaysAlert {
+			alwaysAlert = append(alwaysAlert, o.Name)
+		}
+	}
+	if len(alwaysAlert) != 1 || alwaysAlert[0] != "Ross Veitch" {
+		t.Errorf("always-alert overrides = %v, want Ross Veitch only", alwaysAlert)
 	}
 }
 

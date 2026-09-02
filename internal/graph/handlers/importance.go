@@ -1,8 +1,8 @@
 package handlers
 
 import (
-	_ "embed"
 	"context"
+	_ "embed"
 	"encoding/json"
 	"strings"
 
@@ -22,10 +22,11 @@ type importanceConfig struct {
 	OwnerEEID   int32 `json:"owner_eeid"`
 	ManagerEEID int32 `json:"manager_eeid"`
 	Overrides   []struct {
-		Name  string  `json:"name"`
-		Score float64 `json:"score"`
-		Why   string  `json:"why"`
-		Pin   bool    `json:"pin"`
+		Name        string  `json:"name"`
+		Score       float64 `json:"score"`
+		Why         string  `json:"why"`
+		Pin         bool    `json:"pin"`
+		AlwaysAlert bool    `json:"always_alert"`
 	} `json:"overrides"`
 }
 
@@ -41,7 +42,6 @@ func loadImportanceConfig() importanceConfig {
 // business owner or a daily collaborator the reporting tree puts far away) to
 // their eeids, so a message from one of them counts as "important" and can alert
 // on its own. Only applies for the config's owner — these pins are the owner's.
-// Matches by display_name (case-insensitive) against un-merged people.
 func overrideImportantEeids(ctx context.Context, db *pgxpool.Pool, owner int32) []int32 {
 	cfg := loadImportanceConfig()
 	if owner == 0 || owner != cfg.OwnerEEID || len(cfg.Overrides) == 0 {
@@ -53,6 +53,31 @@ func overrideImportantEeids(ctx context.Context, db *pgxpool.Pool, owner int32) 
 			names = append(names, strings.ToLower(n))
 		}
 	}
+	return resolveOverrideEeids(ctx, db, names)
+}
+
+// alwaysAlertEeids resolves only explicit always-alert overrides. They bypass
+// topic relevance for this config's owner, without widening the important set.
+func alwaysAlertEeids(ctx context.Context, db *pgxpool.Pool, owner int32) []int32 {
+	cfg := loadImportanceConfig()
+	if owner == 0 || owner != cfg.OwnerEEID || len(cfg.Overrides) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(cfg.Overrides))
+	for _, o := range cfg.Overrides {
+		if !o.AlwaysAlert {
+			continue
+		}
+		if n := strings.TrimSpace(o.Name); n != "" {
+			names = append(names, strings.ToLower(n))
+		}
+	}
+	return resolveOverrideEeids(ctx, db, names)
+}
+
+// resolveOverrideEeids matches display names case-insensitively against active,
+// unmerged people with an org eeid.
+func resolveOverrideEeids(ctx context.Context, db *pgxpool.Pool, names []string) []int32 {
 	if len(names) == 0 {
 		return nil
 	}
