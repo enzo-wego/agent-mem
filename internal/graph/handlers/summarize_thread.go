@@ -76,7 +76,7 @@ func summarizeThreadHandler(deps Deps) jobs.Handler {
 
 		// Load the thread's messages (root + replies), oldest first.
 		rows, err := deps.DB.Query(ctx, `
-SELECT COALESCE(NULLIF(n.title,''), n.body), COALESCE(NULLIF(CASE WHEN p.display_name ~ '^[BU][A-Z0-9]{6,}$' THEN '' ELSE p.display_name END,''), NULLIF(n.metadata->'author'->>'display_name',''), ''),
+SELECT COALESCE(NULLIF(n.body,''), n.title, ''), COALESCE(NULLIF(CASE WHEN p.display_name ~ '^[BU][A-Z0-9]{6,}$' THEN '' ELSE p.display_name END,''), NULLIF(n.metadata->'author'->>'display_name',''), ''),
        COALESCE(p.department,''), COALESCE(p.job_title,''),
        COALESCE(dr.domain,''), COALESCE(dr.role_label,''),
        (EXTRACT(EPOCH FROM n.updated_at) * 1000)::bigint AS upd_ms
@@ -111,7 +111,7 @@ ORDER BY COALESCE(to_timestamp(NULLIF(n.metadata->>'ts','')::float8), n.first_se
 			if author == "" {
 				author = "someone"
 			}
-			line := withDept(author, dept, jobTitle, domain, role) + ": " + flattenLines(body, 400) + "\n"
+			line := withDept(author, dept, jobTitle, domain, role) + ": " + flattenLines(body, 2000) + "\n"
 			if b.Len()+len(line) <= 7000 {
 				b.WriteString(line)
 			}

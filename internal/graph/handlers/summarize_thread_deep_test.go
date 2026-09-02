@@ -79,6 +79,63 @@ ON CONFLICT (id) DO NOTHING`, n.id, "msg "+n.author, meta)
 	}
 }
 
+func TestSummarizeThread_PrefersBodyAndCapsEachMessage(t *testing.T) {
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		t.Skip("DATABASE_URL not set; skipping integration test")
+	}
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatalf("pool: %v", err)
+	}
+	defer pool.Close()
+	for _, tbl := range []string{"graph.thread_summaries", "graph.nodes"} {
+		if _, err := pool.Exec(ctx, "DELETE FROM "+tbl); err != nil {
+			t.Fatalf("clean %s: %v", tbl, err)
+		}
+	}
+
+	const bodyMarker = "Merchant of Record"
+	body := strings.Repeat("a", 1200) + bodyMarker + strings.Repeat("b", 500)
+	for _, n := range []struct {
+		id, ts, title, body string
+	}{
+		{"slack:C:400.000001", "400.000001", "Short generated label", body},
+		{"slack:C:400.000002", "400.000002", "Attachment-only title", ""},
+		{"slack:C:400.000003", "400.000003", "", strings.Repeat("X", 10000)},
+	} {
+		meta := `{"ts":"` + n.ts + `","thread_ts":"400.000001","author":{"display_name":"Ross"}}`
+		if _, err := pool.Exec(ctx, `
+INSERT INTO graph.nodes (id, type, natural_key, title, body, scope, metadata, machine_id)
+VALUES ($1,'slack',$1,$2,$3,'slack:C',$4::jsonb,'test')`, n.id, n.title, n.body, meta); err != nil {
+			t.Fatalf("seed %s: %v", n.id, err)
+		}
+	}
+
+	gem := &mockGemini{generateResult: func() (string, error) {
+		return `{"topic":"UCP support","overview":"The team discussed UCP support.","highlights":[]}`, nil
+	}}
+	deps := Deps{DB: pool, Gemini: gem, Logger: zerolog.Nop()}
+	payload, _ := json.Marshal(map[string]string{"channel_id": "C", "thread_ts": "400.000001"})
+	if err := NewSummarizeThreadHandler(deps).Handler(ctx, payload); err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	if !strings.Contains(gem.generateUser, bodyMarker) {
+		t.Errorf("summary prompt missing body marker beyond the generated title")
+	}
+	if strings.Contains(gem.generateUser, "Short generated label") {
+		t.Errorf("summary prompt used generated title instead of body")
+	}
+	if !strings.Contains(gem.generateUser, "Attachment-only title") {
+		t.Errorf("summary prompt missing title fallback for empty body")
+	}
+	if x := strings.Count(gem.generateUser, "X"); x != 2000 {
+		t.Errorf("huge-message contribution = %d chars, want 2000", x)
+	}
+}
+
 // TestSummarizeThread_StandaloneMessage verifies a lone top-level message (no
 // thread_ts metadata, no replies) gets a cached topic summary keyed by its own
 // ts — previously skipped, leaving /topics showing raw first lines like
