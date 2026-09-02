@@ -211,7 +211,7 @@ SELECT n.id,
        COALESCE(p.job_title,'')                                     AS job_title,
        COALESCE(dr.domain,'')                                       AS domain,
        COALESCE(dr.role_label,'')                                   AS role_label,
-       COALESCE(NULLIF(n.title,''), n.body, '')                     AS text,
+       COALESCE(NULLIF(n.body,''), n.title, '')                     AS text,
        CASE WHEN COALESCE(NULLIF(n.metadata->>'thread_ts',''),'') <> ''
             THEN 'slack:'||replace(n.scope,'slack:','')||':'||(n.metadata->>'thread_ts')
             ELSE n.id END                                           AS root_node_id

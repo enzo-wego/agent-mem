@@ -215,7 +215,7 @@ WITH recent AS (
          replace(n.scope,'slack:','') AS channel,
          COALESCE(NULLIF(n.metadata->>'thread_ts',''), '') AS thread_ts,
          n.author_person_id,
-         COALESCE(NULLIF(n.title,''), n.body, '') AS text,
+         COALESCE(NULLIF(n.body,''), n.title, '') AS text,
          COALESCE(a.att, '') AS att,
          COALESCE(to_timestamp(NULLIF(n.metadata->>'ts','')::float8), n.first_seen_at) AS ts,
          COALESCE(p.depth_from_root, 99) AS depth,
@@ -235,7 +235,7 @@ WITH recent AS (
   -- writes that into artifact_bodies.body_full (= description + "\n\nOCR:\n" +
   -- ocr); the description/ocr_text columns are populated only on rows synced
   -- from another machine, so read all three. Capped at 500 chars per attachment
-  -- so a full-page form OCR can't evict real message text from LEFT(blob,2000)
+  -- so a full-page form OCR can't dominate the 6000-char aggregate budget
   -- below. Scoped to attachment node types so referenced URLs/tickets don't leak
   -- their fetched bodies into the judge blob. The LATERAL aggregates → exactly
   -- one row, so it never fans out (msg_count/participants unaffected).
@@ -266,7 +266,7 @@ grp AS (
          (array_agg(author ORDER BY depth ASC, ts ASC))[1] AS top_author,
          (array_agg(text   ORDER BY ts ASC))[1]            AS first_text,
          max(ts)                                           AS last_ts,
-         string_agg(text || COALESCE(' ' || NULLIF(att,''), ''), ' ') AS blob,
+         string_agg(left(text, 2000) || COALESCE(' ' || NULLIF(att,''), ''), ' ') AS blob,
          bool_or(COALESCE(is_important,false))             AS has_important,
          bool_or(COALESCE(is_always_alert,false))          AS has_always_alert,
          bool_or(COALESCE(is_subscriber,false))            AS has_subscriber,
@@ -277,7 +277,7 @@ grp AS (
 SELECT g.root_node_id, g.channel, COALESCE(c.name,''),
        g.msg_count, g.participants, g.top_depth,
        COALESCE(g.top_author,''), COALESCE(g.first_text,''), g.last_ts,
-       LEFT(COALESCE(g.blob,''), 2000),
+       LEFT(COALESCE(g.blob,''), 6000),
        COALESCE(g.has_important,false), COALESCE(g.important_author,''),
        COALESCE(g.has_always_alert,false)
 FROM grp g
@@ -486,7 +486,7 @@ func buildAlert(ctx context.Context, deps Deps, s subscription, h hotThread) str
 	var msgs []alertMsg
 	if rows, err := deps.DB.Query(ctx, `
 SELECT COALESCE(NULLIF(CASE WHEN p.display_name ~ '^[BU][A-Z0-9]{6,}$' THEN '' ELSE p.display_name END,''), NULLIF(n.metadata->'author'->>'display_name',''), ''),
-       COALESCE(NULLIF(n.title,''), n.body, ''),
+       COALESCE(NULLIF(n.body,''), n.title, ''),
        COALESCE(p.department,''),
        COALESCE(p.job_title,''),
        COALESCE(dr.domain,''),

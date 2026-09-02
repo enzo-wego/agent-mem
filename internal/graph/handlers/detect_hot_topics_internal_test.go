@@ -664,6 +664,84 @@ func TestFindHotThreads_AttachmentBlob(t *testing.T) {
 	}
 }
 
+func TestFindHotThreads_PrefersBodyAndCapsEachMessage(t *testing.T) {
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		t.Skip("DATABASE_URL not set; skipping integration test")
+	}
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatalf("pool: %v", err)
+	}
+	defer pool.Close()
+	for _, tbl := range []string{"graph.topic_notifications", "graph.nodes", "graph.people"} {
+		if _, err := pool.Exec(ctx, "DELETE FROM "+tbl); err != nil {
+			t.Fatalf("clean %s: %v", tbl, err)
+		}
+	}
+
+	now := time.Now()
+	author := insPerson(t, pool, "Reporter", 5)
+	author2 := insPerson(t, pool, "Responder", 5)
+
+	const bodyMarker = "Merchant of Record"
+	bodyTS := ts(now, 0)
+	body := strings.Repeat("a", 1200) + bodyMarker + strings.Repeat("b", 500)
+	insSlack(t, pool, "CBODY", bodyTS, "", author, body)
+	if _, err := pool.Exec(ctx, `UPDATE graph.nodes SET title='Short generated label' WHERE id=$1`, "slack:CBODY:"+bodyTS); err != nil {
+		t.Fatalf("set CBODY title: %v", err)
+	}
+
+	fallbackTS := ts(now, 10)
+	insSlack(t, pool, "CFALLBACK", fallbackTS, "", author, "")
+	if _, err := pool.Exec(ctx, `UPDATE graph.nodes SET title='Attachment-only title' WHERE id=$1`, "slack:CFALLBACK:"+fallbackTS); err != nil {
+		t.Fatalf("set CFALLBACK title: %v", err)
+	}
+
+	const mateMarker = "THREAD_MATE_SURVIVES"
+	capRoot := ts(now, 20)
+	insSlack(t, pool, "CCAP", capRoot, capRoot, author, strings.Repeat("X", 10000))
+	insSlack(t, pool, "CCAP", ts(now, 21), capRoot, author2, mateMarker)
+
+	hot, err := findHotThreads(ctx, pool, subscription{MinParticipants: 1}, nil, nil, "")
+	if err != nil {
+		t.Fatalf("findHotThreads: %v", err)
+	}
+	got := map[string]hotThread{}
+	for _, h := range hot {
+		got[h.Channel] = h
+	}
+
+	if h, ok := got["CBODY"]; !ok {
+		t.Fatalf("CBODY missing; channels=%v", keys(got))
+	} else {
+		if !strings.Contains(h.Blob, bodyMarker) {
+			t.Errorf("CBODY blob missing body marker beyond the generated title: %q", h.Blob)
+		}
+		if strings.Contains(h.Blob, "Short generated label") {
+			t.Errorf("CBODY blob used generated title instead of body: %q", h.Blob)
+		}
+	}
+
+	if h, ok := got["CFALLBACK"]; !ok {
+		t.Fatalf("CFALLBACK missing; channels=%v", keys(got))
+	} else if h.Blob != "Attachment-only title" {
+		t.Errorf("CFALLBACK blob = %q, want title fallback", h.Blob)
+	}
+
+	if h, ok := got["CCAP"]; !ok {
+		t.Fatalf("CCAP missing; channels=%v", keys(got))
+	} else {
+		if !strings.Contains(h.Blob, mateMarker) {
+			t.Errorf("CCAP blob lost the thread-mate after one huge message")
+		}
+		if x := strings.Count(h.Blob, "X"); x != 2000 {
+			t.Errorf("CCAP huge-message contribution = %d chars, want 2000", x)
+		}
+	}
+}
+
 func insSlackFile(t *testing.T, pool *pgxpool.Pool, fileID, title string) {
 	t.Helper()
 	id := "slack_file:" + fileID
