@@ -19,9 +19,11 @@ func NewBuilder(db *database.DB, cfg *config.Config) *Builder {
 }
 
 // BuildContext queries recent observations and summaries for the project
-// and renders them as markdown for injection into Claude's session.
-// Returns empty string if no data exists.
-func (b *Builder) BuildContext(ctx context.Context, project string) (string, error) {
+// and renders them as markdown for injection into Claude's session. When the
+// repo at cwd is on a branch naming a Payments issue whose epic has a standing
+// brief, that brief is prepended (round 3; DB read only, silently absent
+// otherwise). Returns empty string if no data exists.
+func (b *Builder) BuildContext(ctx context.Context, project, cwd string) (string, error) {
 	observations, err := b.db.GetRecentObservations(ctx, project, b.cfg.ContextObservations)
 	if err != nil {
 		return "", err
@@ -32,9 +34,10 @@ func (b *Builder) BuildContext(ctx context.Context, project string) (string, err
 		return "", err
 	}
 
+	brief := epicBriefForCwd(ctx, b.db.Pool, cwd)
 	if len(observations) == 0 && len(summaries) == 0 {
-		return "", nil
+		return brief, nil
 	}
 
-	return render(observations, summaries, b.cfg.ContextFullCount), nil
+	return brief + render(observations, summaries, b.cfg.ContextFullCount), nil
 }
