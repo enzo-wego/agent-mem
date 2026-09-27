@@ -9,6 +9,9 @@ import {
   saveEligibilityGate,
   fetchBusinessRoot,
   saveBusinessRoot,
+  fetchBoostAlphas,
+  saveBoostAlphas,
+  type BoostAlphas,
   fetchGatewayHealth,
   fetchGatewayConfig,
   updateGatewayConfig,
@@ -146,6 +149,7 @@ export function SettingsPage() {
       <ChannelFiltersSection />
       <EligibilityGateSection />
       <BusinessRootSection />
+      <BoostAlphasSection />
 
       {/* Context */}
       <Section title="Context Window">
@@ -592,6 +596,78 @@ function BusinessRootSection() {
         <Field label="Jira project" hint="Project whose epics form the business:payments subtree (PART_OF edges and epic membership). Rebuilt by refresh_jira_board every 6h.">
           <EditableField value={project} saving={saving} onSave={save} placeholder="PAY" />
         </Field>
+      )}
+    </Section>
+  )
+}
+
+// --- Search boost alphas ---
+
+const BOOST_ALPHA_FIELDS: { key: keyof BoostAlphas; label: string; hint: string }[] = [
+  { key: 'rec', label: 'Recency (graph.boost.alpha.rec)', hint: '30-day half-life on updated_at.' },
+  { key: 'team', label: 'Team affinity (graph.boost.alpha.team)', hint: 'Asker ↔ author closeness; 0.1 when no asker.' },
+  { key: 'temporal', label: 'Temporal proximity (graph.boost.alpha.temporal)', hint: 'Distance to the query window centre; neutral without a window.' },
+  { key: 'auth', label: 'Authority (graph.boost.alpha.auth)', hint: 'Author depth from the org root.' },
+]
+
+function BoostAlphasSection() {
+  const [alphas, setAlphas] = useState<BoostAlphas | null>(null)
+  const [legacy, setLegacy] = useState<Record<string, number>>({})
+  const [saving, setSaving] = useState(false)
+  const [toast, setToast] = useState<{ type: 'ok' | 'err'; msg: string } | null>(null)
+
+  useEffect(() => {
+    fetchBoostAlphas()
+      .then((cfg) => { setAlphas(cfg.alphas); setLegacy(cfg.legacy_weights) })
+      .catch(() => setToast({ type: 'err', msg: 'Failed to load boost alphas' }))
+  }, [])
+
+  const save = async (key: keyof BoostAlphas, raw: string) => {
+    if (!alphas) return
+    const v = Number(raw)
+    if (!Number.isFinite(v) || v < 0 || v > 1) {
+      setToast({ type: 'err', msg: 'Alpha must be a number between 0 and 1' })
+      return
+    }
+    setSaving(true)
+    setToast(null)
+    try {
+      const updated = await saveBoostAlphas({ ...alphas, [key]: v })
+      setAlphas(updated.alphas)
+      setToast({ type: 'ok', msg: 'Saved — applies to the next search' })
+    } catch (e: unknown) {
+      setToast({ type: 'err', msg: e instanceof Error ? e.message : 'Save failed' })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Section title="Search Boosts (four-arm retrieval)">
+      <p className="text-xs text-gray-400 dark:text-gray-500">
+        /api/graph/search fuses the semantic, keyword, graph and temporal arms by reciprocal rank, then multiplies by
+        1 + α·(component − 0.5) per boost. 0 disables a boost; 0.2 lets it move a score by ±10%.
+      </p>
+      {toast && (
+        <div className={`text-sm px-3 py-1.5 rounded-md ${toast.type === 'ok' ? 'bg-green-50 text-green-700 dark:bg-green-900/30 dark:text-green-300' : 'bg-red-50 text-red-700 dark:bg-red-900/30 dark:text-red-300'}`}>
+          {toast.msg}
+        </div>
+      )}
+      {alphas === null ? (
+        <p className="text-sm text-gray-500">Loading…</p>
+      ) : (
+        <>
+          {BOOST_ALPHA_FIELDS.map((f) => (
+            <Field key={f.key} label={f.label} hint={f.hint}>
+              <EditableField value={String(alphas[f.key])} saving={saving} onSave={(v) => save(f.key, v)} placeholder="0.2" />
+            </Field>
+          ))}
+          <Field label="Legacy weights (graph.weights.*)" hint="Read-only. Still used by /api/graph/resolve's additive score; search no longer reads them.">
+            <p className="text-sm font-mono text-gray-500 dark:text-gray-400">
+              {Object.entries(legacy).map(([k, v]) => `${k}=${v}`).join('  ')}
+            </p>
+          </Field>
+        </>
       )}
     </Section>
   )

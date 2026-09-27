@@ -418,17 +418,35 @@ export interface GraphNode {
   body?: string;
   scope?: string;
   score?: number;
-  score_breakdown?: Record<string, number>;
+  score_breakdown?: ScoreBreakdown;
   author?: string;
   summary?: string;
   updated_at?: string;
   created_at?: string;
 }
 
+// Per-node scoring detail. rrf/ranks/temporal come from the four-arm search
+// (semantic, keyword, graph, temporal); resolve only fills the five components.
+export interface ScoreBreakdown {
+  sem: number;
+  rec: number;
+  edge: number;
+  team: number;
+  auth: number;
+  temporal?: number;
+  rrf?: number;
+  ranks?: Record<string, number>;
+}
+
+export const SEARCH_ARMS = ['semantic', 'keyword', 'graph', 'temporal'] as const;
+
 export interface GraphSearchResponse {
   results: GraphNode[];
   query: string;
   total: number;
+  arms?: string[];
+  arm_errors?: Record<string, string>;
+  window?: { start: string; end: string };
 }
 
 export async function graphSearch(query: string, types?: string[], limit = 20): Promise<GraphSearchResponse> {
@@ -987,6 +1005,42 @@ export async function saveBusinessRoot(cfg: BusinessRootConfig): Promise<Busines
     method: 'PUT',
     headers: { 'Content-Type': 'application/json', ...authHeaders() },
     body: JSON.stringify(cfg),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Unknown error' }));
+    throw new Error(err.error || `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+// ── Search boost alphas (four-arm retrieval) ─────────────────────────────────
+
+export interface BoostAlphas {
+  rec: number;
+  team: number;
+  temporal: number;
+  auth: number;
+}
+
+export interface BoostAlphasConfig {
+  alphas: BoostAlphas;
+  legacy_weights: Record<string, number>; // graph.weights.*, still used by resolve
+}
+
+export async function fetchBoostAlphas(): Promise<BoostAlphasConfig> {
+  const res = await authFetch(`${BASE}/api/graph/boost-alphas`);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Unknown error' }));
+    throw new Error(err.error || `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function saveBoostAlphas(alphas: BoostAlphas): Promise<BoostAlphasConfig> {
+  const res = await authFetch(`${BASE}/api/graph/boost-alphas`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ alphas }),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: 'Unknown error' }));

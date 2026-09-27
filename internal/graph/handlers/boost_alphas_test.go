@@ -24,11 +24,12 @@ func TestBoostAlphas_RoundTripAndValidation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer pool.Close()
 	cleanup := func() {
 		_, _ = pool.Exec(ctx, `DELETE FROM settings WHERE key = ANY($1)`, scoring.BoostAlphaKeys[:])
 	}
 	cleanup()
+	// Cleanup runs LIFO: close the pool after the settings are deleted.
+	t.Cleanup(pool.Close)
 	t.Cleanup(cleanup)
 
 	h := NewChannels(pool)
