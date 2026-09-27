@@ -8,7 +8,9 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// Weights are the per-component coefficients in the weighted sum.
+// Weights are the per-component coefficients in the weighted sum. Legacy:
+// /api/graph/search fuses arms by rank (see Fuse/Boost) and no longer reads
+// them; /api/graph/resolve still does.
 type Weights struct {
 	Sem  float64
 	Rec  float64
@@ -17,13 +19,22 @@ type Weights struct {
 	Auth float64
 }
 
-// Components are the per-component normalised inputs.
+// Components are the per-component normalised inputs. The fusion fields
+// (RRF, Ranks, Temporal) are only populated by the four-arm search path.
 type Components struct {
 	Sem  float64 `json:"sem"`
 	Rec  float64 `json:"rec"`
 	Edge float64 `json:"edge"`
 	Team float64 `json:"team"`
 	Auth float64 `json:"auth"`
+	// Temporal is proximity to the query window's centre (0.5 when the query
+	// has no window).
+	Temporal float64 `json:"temporal,omitempty"`
+	// RRF is the reciprocal-rank-fusion score before boosts.
+	RRF float64 `json:"rrf,omitempty"`
+	// Ranks is each arm's 1-based rank for the node; arms that did not return
+	// it are absent.
+	Ranks map[string]int `json:"ranks,omitempty"`
 }
 
 // Combine returns the weighted sum. No normalisation of weights — the
