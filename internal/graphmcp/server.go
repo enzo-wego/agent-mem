@@ -205,7 +205,8 @@ func NewServer(client GraphClient, version string) *mcp.Server {
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "graph_epic",
 		Description: "List a Jira epic's members (issues, Slack threads, pull requests, documents) grouped by type, " +
-			"each with how it joined (via: epic_self, key, topic_link, eligible), plus the epic's activity window. " +
+			"each with how it joined (via: epic_self, key, topic_link, eligible), the epic's activity window, " +
+			"and its standing brief (brief, highlights, open_items citing member node ids; brief_updated_at) when one exists. " +
 			"Use key 'payments' for the whole Payments business root.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input EpicInput) (*mcp.CallToolResult, map[string]any, error) {
 		input.Key = strings.TrimSpace(input.Key)

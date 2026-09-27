@@ -39,13 +39,18 @@ type epicResponse struct {
 	Replies  int                     `json:"replies"`
 	ByVia    map[string]int          `json:"by_via"`
 	Business bool                    `json:"business,omitempty"`
+	// Round 3: the standing brief from graph.epic_briefs, when one exists.
+	Brief          string          `json:"brief,omitempty"`
+	Highlights     json.RawMessage `json:"highlights,omitempty"`
+	OpenItems      json.RawMessage `json:"open_items,omitempty"`
+	BriefUpdatedAt *time.Time      `json:"brief_updated_at,omitempty"`
 }
 
 // Epic handles GET /api/graph/epic/{key}: the epic (or `business:payments`)
-// with its members grouped by node type, each with how it joined (`via`), and
-// the activity window from the epic's own membership row. Round 3 adds the
-// brief. A key with no membership rows is a 404 (unknown epic or the rebuild
-// has not run yet).
+// with its members grouped by node type, each with how it joined (`via`), the
+// activity window from the epic's own membership row, plus the standing brief
+// (graph.epic_briefs) when one exists. A key with no membership rows is a 404
+// (unknown epic or the rebuild has not run yet).
 type Epic struct {
 	db *pgxpool.Pool
 }
@@ -131,6 +136,11 @@ ORDER BY m.last_at DESC NULLS LAST, n.id`, key, nodeID)
 	if rows.Err() != nil {
 		http.Error(w, rows.Err().Error(), http.StatusInternalServerError)
 		return
+	}
+	if br, ok := loadEpicBrief(ctx, h.db, key); ok && br.Brief != "" {
+		resp.Brief, resp.Highlights, resp.OpenItems = br.Brief, br.Highlights, br.OpenItems
+		u := br.UpdatedAt
+		resp.BriefUpdatedAt = &u
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(resp)

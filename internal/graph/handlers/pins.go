@@ -190,6 +190,10 @@ type boardEpicGroup struct {
 	Issues      []boardIssue   `json:"issues"`
 	Threads     []pinnedThread `json:"threads"`
 	LastMs      int64          `json:"last_ms"` // newest thread activity in the group
+	// Brief is the standing epic brief (graph.epic_briefs), "" until the
+	// refresh_epic_brief job has written one. The swimlane header expands to it.
+	Brief          string     `json:"brief,omitempty"`
+	BriefUpdatedAt *time.Time `json:"brief_updated_at,omitempty"`
 }
 
 // boardMaxThreadsPerEpic caps each swimlane; boardWindowDays caps how far back
@@ -324,6 +328,12 @@ WHERE e.kind = 'REFERENCES'
 			g.Threads = g.Threads[:boardMaxThreadsPerEpic]
 		}
 		sort.Slice(g.Issues, func(i, j int) bool { return g.Issues[i].Key < g.Issues[j].Key })
+		if g.EpicKey != "" {
+			if br, ok := loadEpicBrief(ctx, h.db, g.EpicKey); ok && br.Brief != "" {
+				u := br.UpdatedAt
+				g.Brief, g.BriefUpdatedAt = br.Brief, &u
+			}
+		}
 		out = append(out, *g)
 	}
 	sortBoardGroups(out)

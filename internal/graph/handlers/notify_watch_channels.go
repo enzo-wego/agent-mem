@@ -244,7 +244,8 @@ LIMIT 50`
 
 // buildChannelMsg composes the DM for a single watched-channel message: channel,
 // the thread topic (so a bare reply has context), author (with department), the
-// text (Slack codes humanized), and a permalink.
+// text (Slack codes humanized), the thread's epic with the first sentence of
+// its brief when it has one, and a permalink.
 func buildChannelMsg(ctx context.Context, deps Deps, m watchedMsg) string {
 	topic := threadTopic(ctx, deps.DB, m.rootNodeID)
 	names := loadSlackNames(ctx, deps.DB, m.text, topic)
@@ -263,10 +264,45 @@ func buildChannelMsg(ctx context.Context, deps Deps, m watchedMsg) string {
 		fmt.Fprintf(&b, "_Thread: %s_\n", humanizeSlack(topic, names))
 	}
 	fmt.Fprintf(&b, "*%s:* %s\n", withDept(author, m.dept, m.title, m.domain, m.role), firstLine(text, 600))
+	if key, brief := threadEpicBrief(ctx, deps.DB, m.rootNodeID); key != "" {
+		if brief != "" {
+			fmt.Fprintf(&b, "_epic: %s · %s_\n", key, brief)
+		} else {
+			fmt.Fprintf(&b, "_epic: %s_\n", key)
+		}
+	}
 	if link := slackPermalink(m.rootNodeID); link != "" {
 		b.WriteString(link)
 	}
 	return b.String()
+}
+
+// threadEpicBrief returns the thread root's epic key (its strongest
+// graph.epic_membership row, business root excluded) and the first sentence of
+// that epic's standing brief ("" until refresh_epic_brief has written one).
+// DB read only; "" when the thread is in no epic.
+func threadEpicBrief(ctx context.Context, db *pgxpool.Pool, rootNodeID string) (key, brief string) {
+	_ = db.QueryRow(ctx, `
+SELECT m.epic_key, COALESCE(b.brief,'')
+FROM graph.epic_membership m
+LEFT JOIN graph.epic_briefs b ON b.epic_key = m.epic_key
+WHERE m.node_id = $1 AND m.epic_key <> $2
+ORDER BY m.confidence DESC, m.epic_key
+LIMIT 1`, rootNodeID, businessRootID).Scan(&key, &brief)
+	return key, firstSentence(brief, 200)
+}
+
+// firstSentence returns the first sentence of s (up to the first ". ", "! " or
+// "? " boundary, or the first line), trimmed to n runes.
+func firstSentence(s string, n int) string {
+	s = firstLine(s, 10000)
+	for i, r := range s {
+		if (r == '.' || r == '!' || r == '?') && i+1 < len(s) && s[i+1] == ' ' {
+			s = s[:i+1]
+			break
+		}
+	}
+	return firstLine(s, n)
 }
 
 // splitSlackRoot parses a slack root node id "slack:<channel>:<thread_ts>" into
