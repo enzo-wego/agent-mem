@@ -40,7 +40,12 @@ FROM graph.nodes n WHERE n.id = $1`, nodeID).Scan(&typ, &deg)
 	case "slack", "slack_thread":
 		return true
 	case "jira", "gh_pr", "cf_page", "cf", "gws_doc", "gws", "wegohub", "claude_artifact", "pagerduty", "sentry", "datadog":
+		// Epics stay under the same cap: a 190-ref epic is a hub, not a corridor.
 		return deg <= 12
+	case "business":
+		// The business root touches every epic; walking through it is "all of
+		// Payments". Scope with ?business=payments instead.
+		return false
 	default:
 		return false
 	}

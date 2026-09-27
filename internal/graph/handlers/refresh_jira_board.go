@@ -301,12 +301,13 @@ func refreshJiraBoardHandler(deps Deps) jobs.Handler {
 			return fmt.Errorf("%w: refresh_jira_board: AGENT_MEM_JIRA_BASE_URL/EMAIL/TOKEN not set", jobs.ErrFatal)
 		}
 
+		project := businessRootProject(ctx, deps.DB)
 		// The graph is the source of which issues matter: only keys some Slack
 		// thread (or other artifact) actually references.
 		krows, err := deps.DB.Query(ctx,
 			`SELECT DISTINCT natural_key FROM graph.nodes
 			 WHERE type='jira' AND natural_key LIKE $1 AND deleted_at IS NULL`,
-			jiraBoardProject+"-%")
+			project+"-%")
 		if err != nil {
 			return fmt.Errorf("load jira keys: %w", err)
 		}
@@ -401,6 +402,11 @@ ON CONFLICT (issue_key) DO UPDATE SET
 			total++
 		}
 		deps.Logger.Info().Int("issues", total).Int("live_epics", len(onBoard)).Msg("refresh_jira_board: epic map refreshed")
+		// Round 1: PART_OF edges and the membership table hang off the epic map
+		// just written, so they are rebuilt in the same run (6h cadence).
+		if err := rebuildEpicHierarchy(ctx, deps.DB, deps.MachineID, project, ranks); err != nil {
+			return fmt.Errorf("epic hierarchy: %w", err)
+		}
 		return nil
 	}
 }
