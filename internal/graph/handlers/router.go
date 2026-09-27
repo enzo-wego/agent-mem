@@ -25,6 +25,8 @@ func Mount(r chi.Router, deps Deps) {
 	r.Post("/api/graph/backfill/slack", NewBackfillSlackHandler(deps).ServeHTTP)
 	r.Post("/api/graph/backfill/attachments", NewBackfillAttachmentsHandler(deps).ServeHTTP)
 	r.Post("/api/graph/backfill/stale-summaries", NewBackfillStaleSummariesHandler(deps).ServeHTTP)
+	r.Post("/api/graph/backfill/jira-metadata", NewBackfillJiraMetadataHandler(deps).ServeHTTP)
+	r.Post("/api/graph/backfill/subtree-index", NewBackfillSubtreeIndexHandler(deps).ServeHTTP)
 	r.Get("/api/graph/topic-rules", NewTopicRulesHandler().ServeHTTP)
 
 	// Read endpoints (Phase 3).
