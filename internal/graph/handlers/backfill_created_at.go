@@ -8,10 +8,27 @@ import (
 )
 
 // fetchableForCreatedAt are node types whose real created_at we can recover by
-// fetching the source artifact (Slack is excluded: its created_at is already the
-// message ts, set at ingest). cf/cf_page cover both confluence id schemes.
+// fetching the source artifact (gh_pr from the PR's created_at, jira from the
+// issue's created, …). Slack is excluded: its created_at is the message ts,
+// which is in the node id and needs no fetch (see backfillSlackCreatedAt).
+// cf/cf_page cover both confluence id schemes.
 var fetchableForCreatedAt = []string{
 	"jira", "gh_pr", "cf", "cf_page", "confluence", "pagerduty", "datadog", "sentry", "gws", "gws_doc",
+}
+
+// backfillSlackCreatedAt fills created_at for Slack messages that still lack
+// one (rows ingested before created_at was set at ingest) from the ts segment
+// of the id, slack:<channel>:<ts>. Pure SQL, no fetch. Returns rows updated.
+func backfillSlackCreatedAt(ctx context.Context, deps Deps) (int64, error) {
+	tag, err := deps.DB.Exec(ctx, `
+UPDATE graph.nodes
+SET created_at = to_timestamp(split_part(id, ':', 3)::numeric)
+WHERE type = 'slack' AND created_at IS NULL
+  AND split_part(id, ':', 3) ~ '^[0-9]+(\.[0-9]+)?$'`)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
 }
 
 // NewBackfillCreatedAtHandler returns the job entry for "backfill_created_at": it
@@ -28,6 +45,11 @@ func NewBackfillCreatedAtHandler(deps Deps) jobs.Entry {
 
 func backfillCreatedAtHandler(deps Deps) jobs.Handler {
 	return func(ctx context.Context, _ []byte) error {
+		slackFilled, err := backfillSlackCreatedAt(ctx, deps)
+		if err != nil {
+			return err
+		}
+
 		rows, err := deps.DB.Query(ctx, `
 SELECT id FROM graph.nodes
 WHERE created_at IS NULL AND deleted_at IS NULL AND type = ANY($1)
@@ -69,7 +91,7 @@ SELECT EXISTS(
 			}
 			enqueued++
 		}
-		deps.Logger.Info().Int("candidates", len(ids)).Int("enqueued", enqueued).Msg("backfill_created_at: done")
+		deps.Logger.Info().Int64("slack_filled", slackFilled).Int("candidates", len(ids)).Int("enqueued", enqueued).Msg("backfill_created_at: done")
 		return nil
 	}
 }
