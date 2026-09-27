@@ -86,7 +86,8 @@ func TestClient_ProxiesGraphEndpoints(t *testing.T) {
 			return client.Person(ctx, "Lei", 5)
 		},
 		func() (map[string]any, error) {
-			return client.Search(ctx, SearchRequest{Q: "GST invoice", Limit: 10, Epic: []string{"PAY-2307", "PAY-2197"}, Business: "payments"})
+			return client.Search(ctx, SearchRequest{Q: "GST invoice", Limit: 10, Epic: []string{"PAY-2307", "PAY-2197"}, Business: "payments",
+				Since: "2026-08-01", Until: "2026-08-31", Arms: []string{"keyword", "temporal"}})
 		},
 		func() (map[string]any, error) {
 			return client.Epic(ctx, "PAY-2307")
@@ -111,7 +112,7 @@ func TestClient_ProxiesGraphEndpoints(t *testing.T) {
 		{method: http.MethodPost, escapedPath: "/api/graph/resolve", contentType: "application/json"},
 		{method: http.MethodGet, escapedPath: "/api/settings"},
 		{method: http.MethodGet, escapedPath: "/api/graph/person", query: "limit=5&q=Lei"},
-		{method: http.MethodGet, escapedPath: "/api/graph/search", query: "business=payments&epic=PAY-2307&epic=PAY-2197&limit=10&q=GST+invoice"},
+		{method: http.MethodGet, escapedPath: "/api/graph/search", query: "arms=keyword%2Ctemporal&business=payments&epic=PAY-2307&epic=PAY-2197&limit=10&q=GST+invoice&since=2026-08-01&until=2026-08-31"},
 		{method: http.MethodGet, escapedPath: "/api/graph/epic/PAY-2307"},
 	}
 	if len(observed) != len(expected) {

@@ -43,6 +43,9 @@ type SearchRequest struct {
 	Limit    int
 	Epic     []string
 	Business string
+	Since    string
+	Until    string
+	Arms     []string
 }
 
 // NewClient creates a worker API client.
@@ -83,6 +86,15 @@ func (c *Client) Search(ctx context.Context, req SearchRequest) (map[string]any,
 	}
 	if req.Business != "" {
 		values.Set("business", req.Business)
+	}
+	if req.Since != "" {
+		values.Set("since", req.Since)
+	}
+	if req.Until != "" {
+		values.Set("until", req.Until)
+	}
+	if len(req.Arms) > 0 {
+		values.Set("arms", strings.Join(req.Arms, ","))
 	}
 	return c.doJSON(ctx, http.MethodGet, "/api/graph/search", values, nil)
 }

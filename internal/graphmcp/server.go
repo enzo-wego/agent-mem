@@ -20,11 +20,14 @@ type GraphClient interface {
 }
 
 type SearchInput struct {
-	Q        string   `json:"q" jsonschema:"Natural-language or keyword query to search for"`
+	Q        string   `json:"q" jsonschema:"Natural-language or keyword query to search for; a time phrase such as 'in August' or 'last week' is parsed into a window"`
 	Types    []string `json:"types,omitempty" jsonschema:"Optional graph node types to include"`
 	Limit    int      `json:"limit,omitempty" jsonschema:"Maximum results, from 1 to 50; defaults to 10"`
 	Epic     []string `json:"epic,omitempty" jsonschema:"Optional Jira epic keys (e.g. PAY-2307) to scope results to"`
 	Business string   `json:"business,omitempty" jsonschema:"Optional business root to scope results to; currently only 'payments'"`
+	Since    string   `json:"since,omitempty" jsonschema:"Optional window start, RFC3339 or YYYY-MM-DD; overrides any time phrase in q"`
+	Until    string   `json:"until,omitempty" jsonschema:"Optional window end, RFC3339 or YYYY-MM-DD (a date is inclusive)"`
+	Arms     []string `json:"arms,omitempty" jsonschema:"Optional retrieval arms to run: semantic, keyword, graph, temporal; defaults to all"`
 }
 
 type EpicInput struct {
@@ -86,6 +89,7 @@ func NewServer(client GraphClient, version string) *mcp.Server {
 		output, err := client.Search(ctx, SearchRequest{
 			Q: input.Q, Types: input.Types, Limit: input.Limit,
 			Epic: input.Epic, Business: input.Business,
+			Since: input.Since, Until: input.Until, Arms: input.Arms,
 		})
 		return nil, output, err
 	})
