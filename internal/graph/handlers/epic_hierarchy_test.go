@@ -28,13 +28,13 @@ func seedEpicFixture(t *testing.T, pool *pgxpool.Pool) {
 	node("jira:PAY-100", "jira", "PAY-100", `{}`)
 	node("jira:PAY-101", "jira", "PAY-101", `{}`)
 	node("jira:PAY-102", "jira", "PAY-102", `{}`)
-	node("slack:C1:1.0", "slack", "slack:C1:1.0", `{"thread_ts":"1.0"}`)  // thread A root
-	node("slack:C1:1.5", "slack", "slack:C1:1.5", `{"thread_ts":"1.0"}`)  // reply under A
-	node("slack:C1:2.0", "slack", "slack:C1:2.0", `{"thread_ts":"2.0"}`)  // B: 0.85 to A
-	node("slack:C1:3.0", "slack", "slack:C1:3.0", `{"thread_ts":"3.0"}`)  // C: 0.6 to A
-	node("slack:C1:4.0", "slack", "slack:C1:4.0", `{"thread_ts":"4.0"}`)  // D: 0.9 to B (chained)
-	node("slack:C1:5.0", "slack", "slack:C1:5.0", `{"thread_ts":"5.0"}`)  // E: eligible only
-	node("gh_pr:wego/payments#1", "gh_pr", "wego/payments#1", `{}`)       // PR → PAY-102
+	node("slack:C1:1.0", "slack", "slack:C1:1.0", `{"thread_ts":"1.0"}`) // thread A root
+	node("slack:C1:1.5", "slack", "slack:C1:1.5", `{"thread_ts":"1.0"}`) // reply under A
+	node("slack:C1:2.0", "slack", "slack:C1:2.0", `{"thread_ts":"2.0"}`) // B: 0.85 to A
+	node("slack:C1:3.0", "slack", "slack:C1:3.0", `{"thread_ts":"3.0"}`) // C: 0.6 to A
+	node("slack:C1:4.0", "slack", "slack:C1:4.0", `{"thread_ts":"4.0"}`) // D: 0.9 to B (chained)
+	node("slack:C1:5.0", "slack", "slack:C1:5.0", `{"thread_ts":"5.0"}`) // E: eligible only
+	node("gh_pr:wego/payments#1", "gh_pr", "wego/payments#1", `{}`)      // PR → PAY-102
 
 	exec(`INSERT INTO graph.jira_epic_map (issue_key, epic_key, epic_summary, machine_id) VALUES
 	      ('PAY-100','PAY-100','Epic one','test'),
