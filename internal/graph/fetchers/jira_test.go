@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -53,11 +54,13 @@ func TestJiraFetcher_HappyPath(t *testing.T) {
 	adfBytes, _ := json.Marshal(adf)
 	resp.Fields.Description = adfBytes
 
+	var gotFields string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Accept") != "application/json" {
 			http.Error(w, "bad accept", http.StatusBadRequest)
 			return
 		}
+		gotFields = r.URL.Query().Get("fields")
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(resp)
 	}))
@@ -86,8 +89,20 @@ func TestJiraFetcher_HappyPath(t *testing.T) {
 	if body.ContentType != "application/json" {
 		t.Errorf("content type = %q", body.ContentType)
 	}
-	if len(body.Raw) == 0 {
-		t.Error("raw body is empty")
+	for _, want := range []string{"issuetype", "resolutiondate", "parent", "status", "labels"} {
+		if !strings.Contains(","+gotFields+",", ","+want+",") {
+			t.Errorf("fields param %q missing %q", gotFields, want)
+		}
+	}
+	// Raw is the full issue JSON so the normalizer can lift metadata from fields.
+	var raw struct {
+		Key    string `json:"key"`
+		Fields struct {
+			Description map[string]any `json:"description"`
+		} `json:"fields"`
+	}
+	if err := json.Unmarshal(body.Raw, &raw); err != nil || raw.Key != "PAY-2128" || raw.Fields.Description["type"] != "doc" {
+		t.Errorf("raw = %s (err %v); want full issue JSON with ADF description", body.Raw, err)
 	}
 }
 

@@ -20,6 +20,10 @@ type Normalizer interface {
 type Result struct {
 	Text     string
 	Mentions []Mention
+	// Metadata carries source fields the normalizer lifted out of the raw body
+	// (e.g. Jira status/issuetype/labels). Merged into graph.nodes.metadata by
+	// the caller; nil when the source has none.
+	Metadata map[string]any
 }
 
 // Mention is a structured reference to a person or entity found inline.

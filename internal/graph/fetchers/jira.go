@@ -78,7 +78,7 @@ func (f *jiraFetcher) Fetch(ctx context.Context, node string) (FetchedBody, erro
 	}
 
 	baseURL := strings.TrimRight(f.cfg.JiraBaseURL, "/")
-	apiURL := fmt.Sprintf("%s/rest/api/3/issue/%s?fields=summary,description,status,assignee,reporter,creator,labels,created,updated,attachment", baseURL, key)
+	apiURL := fmt.Sprintf("%s/rest/api/3/issue/%s?fields=summary,description,status,issuetype,assignee,reporter,creator,labels,created,updated,resolutiondate,parent,attachment", baseURL, key)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
 	if err != nil {
@@ -98,17 +98,17 @@ func (f *jiraFetcher) Fetch(ctx context.Context, node string) (FetchedBody, erro
 		return FetchedBody{}, fmt.Errorf("jira fetcher status %d: %s", resp.StatusCode, string(body))
 	}
 
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return FetchedBody{}, fmt.Errorf("jira fetcher: read response: %w", err)
+	}
 	var issue jiraIssueResponse
-	if err := json.NewDecoder(resp.Body).Decode(&issue); err != nil {
+	if err := json.Unmarshal(raw, &issue); err != nil {
 		return FetchedBody{}, fmt.Errorf("jira fetcher: decode response: %w", err)
 	}
 
-	// Raw = JSON of the ADF description object so the Jira normalizer can walk it.
-	raw := []byte(issue.Fields.Description)
-	if len(raw) == 0 || string(raw) == "null" {
-		raw = []byte("{}")
-	}
-
+	// Raw = the full issue JSON: the Jira normalizer walks fields.description as
+	// ADF and lifts status/issuetype/labels/… into node metadata.
 	bodyTS := parseJiraTime(issue.Fields.Updated)
 	createdAt := parseJiraTime(issue.Fields.Created)
 

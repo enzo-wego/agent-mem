@@ -69,12 +69,14 @@ func fetchBodyHandler(deps Deps) jobs.Handler {
 		norm, normOK := deps.Normalizers.For(fetcher.Source())
 		var plainText string
 		var mentions []string
+		var normMeta map[string]any
 		if normOK {
 			result, err := norm.Normalize(ctx, body.Raw, body.Metadata)
 			if err != nil {
 				deps.Logger.Warn().Err(err).Str("node_id", body.NodeID).Msg("fetch_body: normalizer error; using empty text")
 			} else {
 				plainText = result.Text
+				normMeta = result.Metadata
 				for _, m := range result.Mentions {
 					mentions = append(mentions, m.ExternalID)
 				}
@@ -119,12 +121,20 @@ func fetchBodyHandler(deps Deps) jobs.Handler {
 		naturalKey, _ := ids.ParseNaturalKey(body.NodeID)
 		scope := deriveScope(fetcher.Source(), body.Metadata)
 
-		// Build metadata JSON. graph.nodes.metadata is NOT NULL, so default to
-		// an empty object — sources that don't populate Metadata (jira, confluence,
-		// github, …) would otherwise pass an explicit NULL and fail the upsert.
+		// Build metadata JSON: the fetcher's metadata plus whatever the normalizer
+		// lifted from the body (Jira status/issuetype/…). graph.nodes.metadata is
+		// NOT NULL, so default to an empty object — sources that populate neither
+		// (confluence, github, …) would otherwise pass an explicit NULL and fail.
 		metaJSON := []byte("{}")
-		if body.Metadata != nil {
-			if b, mErr := json.Marshal(body.Metadata); mErr == nil {
+		if len(body.Metadata) > 0 || len(normMeta) > 0 {
+			merged := make(map[string]any, len(body.Metadata)+len(normMeta))
+			for k, v := range body.Metadata {
+				merged[k] = v
+			}
+			for k, v := range normMeta {
+				merged[k] = v
+			}
+			if b, mErr := json.Marshal(merged); mErr == nil {
 				metaJSON = b
 			}
 		}
@@ -153,7 +163,7 @@ func fetchBodyHandler(deps Deps) jobs.Handler {
 				created_at       = COALESCE(graph.nodes.created_at, EXCLUDED.created_at),
 				author_person_id = COALESCE(EXCLUDED.author_person_id, graph.nodes.author_person_id),
 				scope            = EXCLUDED.scope,
-				metadata         = EXCLUDED.metadata,
+				metadata         = graph.nodes.metadata || EXCLUDED.metadata,
 				updated_at       = NOW(),
 				machine_id       = EXCLUDED.machine_id
 			WHERE graph.nodes.body_ts IS NULL OR EXCLUDED.body_ts >= graph.nodes.body_ts`,
