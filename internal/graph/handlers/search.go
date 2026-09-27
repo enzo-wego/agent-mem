@@ -8,14 +8,16 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/pgvector/pgvector-go"
 
 	"github.com/agent-mem/agent-mem/internal/gemini"
 	"github.com/agent-mem/agent-mem/internal/graph/acl"
+	"github.com/agent-mem/agent-mem/internal/graph/bfs"
 	"github.com/agent-mem/agent-mem/internal/graph/scoring"
+	"github.com/agent-mem/agent-mem/internal/graph/temporal"
 )
 
 // Embedder is the minimal interface Search needs to embed a query string.
@@ -25,26 +27,27 @@ type Embedder interface {
 	EmbedWithOptions(ctx context.Context, text string, opts gemini.EmbedOptions) ([]float32, error)
 }
 
-// Search handles GET /api/graph/search.
+// Search handles GET /api/graph/search: four retrieval arms (semantic,
+// keyword, graph, temporal) run concurrently, are fused by reciprocal rank,
+// then boosted by recency / team / temporal proximity / authority.
 type Search struct {
-	db      *pgxpool.Pool
-	embed   Embedder
-	aclBld  *acl.Builder
-	weights scoring.Weights
+	db     *pgxpool.Pool
+	embed  Embedder
+	aclBld *acl.Builder
+	exp    *bfs.Expander
+	// now is injectable so the temporal window parser is testable.
+	now func() time.Time
 }
 
-// NewSearch creates a Search handler. embed may be nil (semantic scoring
-// will be skipped and only recency/team/authority used).
+// NewSearch creates a Search handler. embed may be nil: the semantic and
+// graph arms are then skipped and reported in arm_errors.
 func NewSearch(db *pgxpool.Pool) (*Search, error) {
-	w, err := scoring.LoadWeights(context.Background(), db)
-	if err != nil {
-		return nil, err
-	}
 	return &Search{
-		db:      db,
-		embed:   nil, // wired at server level via NewSearchWithEmbedder
-		aclBld:  acl.NewBuilder(db, 5*time.Minute),
-		weights: w,
+		db:     db,
+		embed:  nil, // wired at server level via NewSearchWithEmbedder
+		aclBld: acl.NewBuilder(db, 5*time.Minute),
+		exp:    bfs.NewExpander(db),
+		now:    time.Now,
 	}, nil
 }
 
@@ -71,22 +74,55 @@ type searchResult struct {
 	CreatedAt      time.Time          `json:"created_at"`
 }
 
+type searchWindow struct {
+	Start time.Time `json:"start"`
+	End   time.Time `json:"end"`
+}
+
+type searchResponse struct {
+	Results []searchResult `json:"results"`
+	Total   int            `json:"total"`
+	// Arms that contributed a list to fusion, in fixed order.
+	Arms []string `json:"arms"`
+	// ArmErrors maps an arm that was requested but produced nothing usable to
+	// the reason (query error, no embedder…). Never fails the request.
+	ArmErrors map[string]string `json:"arm_errors,omitempty"`
+	// Window is the parsed or explicit time window the temporal arm used.
+	Window *searchWindow `json:"window,omitempty"`
+	// Query is the text the semantic/keyword arms saw (time phrase removed).
+	Query string `json:"query"`
+}
+
+// maxSearchLimit caps ?limit; per-arm budgets are limit*3 like before.
+const maxSearchLimit = 50
+
 func (s *Search) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	q := r.URL.Query().Get("q")
+	qv := r.URL.Query()
+	q := strings.TrimSpace(qv.Get("q"))
 	if q == "" {
 		http.Error(w, "q required", http.StatusBadRequest)
 		return
 	}
-	typesFilter := splitCSV(r.URL.Query().Get("types"))
-	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	if limit <= 0 || limit > 50 {
+	limit, _ := strconv.Atoi(qv.Get("limit"))
+	if limit <= 0 || limit > maxSearchLimit {
 		limit = 10
 	}
-	// Round 1: scope to one or more epics and/or the Payments business root
-	// (?epic=PAY-2307&epic=PAY-2197&business=payments). Applied in SQL next to
-	// the ACL predicate, so limit*3 still counts only in-scope candidates.
-	epicKeys, err := epicScopeFromQuery(r.URL.Query())
+	budget := limit * 3
+	epicKeys, err := epicScopeFromQuery(qv)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	wanted, err := parseArms(qv.Get("arms"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// Time window: explicit since/until win; otherwise a phrase in q.
+	now := s.now()
+	win, rest, hasWindow, err := s.window(qv, q, now)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -103,136 +139,287 @@ func (s *Search) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		scopes, _ := s.aclBld.For(ctx, askerEEID)
 		scopeArg = append(scopes, "public")
 	}
+	var typesArg any
+	if t := splitCSV(qv.Get("types")); len(t) > 0 {
+		typesArg = t
+	}
+	filter := searchFilter{types: typesArg, scope: scopeArg, epic: epicScopeArg(epicKeys)}
 
-	// Embed the query if an embedder is available.
-	var queryVec []float32
-	if s.embed != nil {
-		v, err := s.embed.EmbedWithOptions(ctx, q, graphEmbeddingOptions())
+	// One embedding of the topic (time phrase removed) serves the semantic
+	// and temporal arms. A query that was only a time phrase has no topic.
+	var vec []float32
+	armErrs := map[string]string{}
+	if s.embed == nil {
+		armErrs[armSemantic] = "no embedder configured"
+	} else if rest == "" {
+		armErrs[armSemantic] = "query is only a time phrase"
+	} else {
+		v, err := s.embed.EmbedWithOptions(ctx, rest, graphEmbeddingOptions())
 		if err != nil {
-			http.Error(w, "embed failed: "+err.Error(), http.StatusInternalServerError)
+			armErrs[armSemantic] = "embed failed: " + err.Error()
+		} else {
+			vec = v
+		}
+	}
+	if rest == "" {
+		armErrs[armKeyword] = "query is only a time phrase"
+	}
+	if !hasWindow {
+		armErrs[armTemporal] = "no time window in query or since/until"
+	}
+
+	// Run the arms. Semantic → graph is the one true dependency (graph seeds
+	// are the top semantic hits), so graph runs in the semantic goroutine.
+	// Skip decisions are final before any goroutine starts; goroutines only
+	// write through record (under mu).
+	if wanted[armGraph] && (armErrs[armSemantic] != "" || !wanted[armSemantic]) {
+		armErrs[armGraph] = "needs the semantic arm for seeds"
+	}
+	var (
+		mu    sync.Mutex
+		wg    sync.WaitGroup
+		lists = map[string][]armHit{}
+	)
+	record := func(arm string, hits []armHit, err error) {
+		mu.Lock()
+		defer mu.Unlock()
+		if err != nil {
+			armErrs[arm] = err.Error()
 			return
 		}
-		queryVec = v
+		lists[arm] = hits
 	}
+	runSemantic := wanted[armSemantic] && armErrs[armSemantic] == ""
+	runGraph := wanted[armGraph] && armErrs[armGraph] == ""
+	runKeyword := wanted[armKeyword] && armErrs[armKeyword] == ""
+	runTemporal := wanted[armTemporal] && armErrs[armTemporal] == ""
+	run := func(arm string, fn func() ([]armHit, error)) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			hits, err := fn()
+			record(arm, hits, err)
+		}()
+	}
+	if runSemantic {
+		run(armSemantic, func() ([]armHit, error) {
+			hits, err := semanticArm(ctx, s.db, vec, filter, budget)
+			if err != nil {
+				if runGraph {
+					record(armGraph, nil, fmt.Errorf("semantic seeds unavailable: %w", err))
+				}
+				return nil, err
+			}
+			if runGraph {
+				g, gerr := graphArm(ctx, s.db, s.exp, hits)
+				record(armGraph, g, gerr)
+			}
+			return hits, nil
+		})
+	}
+	if runKeyword {
+		run(armKeyword, func() ([]armHit, error) {
+			return keywordArm(ctx, s.db, rest, filter, budget)
+		})
+	}
+	if runTemporal {
+		run(armTemporal, func() ([]armHit, error) {
+			return temporalArm(ctx, s.db, s.exp, win, vec, filter)
+		})
+	}
+	wg.Wait()
 
-	var rows interface {
-		Next() bool
-		Scan(...any) error
-		Close()
-		Err() error
-	}
-
-	if queryVec != nil {
-		// Semantic search: order by vector cosine distance.
-		query := `
-SELECT n.id, n.type, COALESCE(n.title,''), COALESCE(n.url,''),
-       COALESCE(ai.summary,''),
-       COALESCE(p.display_name,''),
-       1.0 - (ai.embedding <=> $1) AS cosine,
-       n.updated_at,
-       COALESCE(n.created_at, n.first_seen_at) AS created_at,
-       COALESCE(p.depth_from_root, 0),
-       COALESCE(p.is_bot, false),
-       COALESCE(p.eeid, 0)
-FROM graph.artifact_index ai
-JOIN graph.nodes n ON n.id = ai.node_id
-LEFT JOIN graph.people p ON p.id = n.author_person_id
-WHERE n.deleted_at IS NULL
-  AND ai.embedding IS NOT NULL
-  AND ($2::text[] IS NULL OR n.type = ANY($2))
-  AND ($3::text[] IS NULL OR n.scope IS NULL OR n.scope = '' OR n.scope = ANY($3))
-  AND ` + epicScopeSQL5 + `
-ORDER BY ai.embedding <=> $1
-LIMIT $4
-`
-		var typesArg any
-		if len(typesFilter) > 0 {
-			typesArg = typesFilter
+	// Fuse by rank, then load node metadata for the fused set (applying the
+	// filter once more so graph-arm neighbours obey type/ACL/epic scope).
+	ranked := make(map[string][]string, len(lists))
+	armLocal := make(map[string]map[string]float64, len(lists))
+	for arm, hits := range lists {
+		ids := make([]string, len(hits))
+		local := make(map[string]float64, len(hits))
+		for i, h := range hits {
+			ids[i] = h.ID
+			local[h.ID] = h.Score
 		}
-		rows, err = s.db.Query(ctx, query,
-			pgvector.NewVector(queryVec),
-			typesArg, scopeArg, limit*3, epicScopeArg(epicKeys))
-	} else {
-		// Keyword/title search fallback when no embedder.
-		query := `
-SELECT n.id, n.type, COALESCE(n.title,''), COALESCE(n.url,''),
-       COALESCE(ai.summary,''),
-       COALESCE(p.display_name,''),
-       0.5 AS cosine,
-       n.updated_at,
-       COALESCE(n.created_at, n.first_seen_at) AS created_at,
-       COALESCE(p.depth_from_root, 0),
-       COALESCE(p.is_bot, false),
-       COALESCE(p.eeid, 0)
-FROM graph.nodes n
-LEFT JOIN graph.artifact_index ai ON ai.node_id = n.id
-LEFT JOIN graph.people p ON p.id = n.author_person_id
-WHERE n.deleted_at IS NULL
-  AND ($1::text[] IS NULL OR n.type = ANY($1))
-  AND ($2::text[] IS NULL OR n.scope IS NULL OR n.scope = '' OR n.scope = ANY($2))
-  AND ` + epicScopeSQL5 + `
-  AND (n.title ILIKE '%' || $3 || '%' OR n.body ILIKE '%' || $3 || '%')
-ORDER BY n.updated_at DESC
-LIMIT $4
-`
-		var typesArg any
-		if len(typesFilter) > 0 {
-			typesArg = typesFilter
-		}
-		rows, err = s.db.Query(ctx, query, typesArg, scopeArg, q, limit*3, epicScopeArg(epicKeys))
+		ranked[arm] = ids
+		armLocal[arm] = local
 	}
+	fused := scoring.Fuse(ranked, scoring.RRFK)
+	ids := make([]string, 0, len(fused))
+	for id := range fused {
+		ids = append(ids, id)
+	}
+	alphas, err := scoring.LoadBoostAlphas(ctx, s.db)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	defer rows.Close()
-
-	now := time.Now()
-	var results []searchResult
-	for rows.Next() {
-		var (
-			id, typ, title, url, summary, authorName string
-			cosine                                   float64
-			updatedAt                                time.Time
-			createdAt                                time.Time
-			depth                                    int16
-			isBot                                    bool
-			authorEEID                               int
-		)
-		if err := rows.Scan(&id, &typ, &title, &url, &summary, &authorName,
-			&cosine, &updatedAt, &createdAt, &depth, &isBot, &authorEEID); err != nil {
-			continue
-		}
-		c := scoring.Components{
-			Sem:  scoring.Semantic(cosine),
-			Rec:  scoring.Recency(updatedAt, now, 30*24*time.Hour),
-			Edge: 0, // /search has no graph context — leave 0
-			Team: personScoreForSearch(ctx, s.db, askerEEID, authorEEID),
-			Auth: scoring.Authority(depth, 6),
-		}
-		score := scoring.Combine(s.weights, c)
-		results = append(results, searchResult{
-			NodeID: id, ID: id, Type: typ, Title: title, URL: url,
-			Summary: summary, Score: score, ScoreBreakdown: c,
-			Author: authorName, CreatedAt: createdAt,
-		})
-	}
-	if rows.Err() != nil {
-		http.Error(w, rows.Err().Error(), http.StatusInternalServerError)
+	results, err := s.hydrateResults(ctx, ids, filter, fused, armLocal, alphas, askerEEID, win, hasWindow, now)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-
-	// Re-rank by combined score, return top `limit`.
 	sortByScore(results)
 	if len(results) > limit {
 		results = results[:limit]
 	}
 
+	resp := searchResponse{Results: results, Total: len(results), Arms: []string{}, Query: rest}
+	for _, arm := range allArms {
+		if _, ok := lists[arm]; ok {
+			resp.Arms = append(resp.Arms, arm)
+		}
+	}
+	if len(armErrs) > 0 {
+		resp.ArmErrors = armErrs
+	}
+	if hasWindow {
+		resp.Window = &searchWindow{Start: win.Start, End: win.End}
+	}
+	if resp.Results == nil {
+		resp.Results = []searchResult{}
+	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
-		"results": results,
-		"total":   len(results),
-	})
+	json.NewEncoder(w).Encode(resp)
+}
+
+// hydrateResults loads the fused ids in one query and computes the boosted
+// score for each. Rows the filter rejects (graph-arm neighbours outside the
+// requested types/scope/epic) are dropped here.
+func (s *Search) hydrateResults(ctx context.Context, ids []string, f searchFilter,
+	fused map[string]scoring.Fused, armLocal map[string]map[string]float64,
+	alphas scoring.BoostAlphas, askerEEID int, win temporal.Window, hasWindow bool, now time.Time) ([]searchResult, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	rows, err := s.db.Query(ctx, `
+SELECT n.id, n.type, COALESCE(n.title,''), COALESCE(n.url,''),
+       COALESCE(ai.summary,''),
+       COALESCE(p.display_name,''),
+       n.updated_at,
+       COALESCE(n.created_at, n.first_seen_at) AS created_at,
+       COALESCE(p.depth_from_root, 0),
+       COALESCE(p.eeid, 0)
+FROM graph.nodes n
+LEFT JOIN graph.artifact_index ai ON ai.node_id = n.id
+LEFT JOIN graph.people p ON p.id = n.author_person_id
+WHERE n.id = ANY($1)
+  AND `+f.sql(2, 3, 4), append([]any{ids}, f.args()...)...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var results []searchResult
+	for rows.Next() {
+		var (
+			id, typ, title, url, summary, authorName string
+			updatedAt, createdAt                     time.Time
+			depth                                    int16
+			authorEEID                               int
+		)
+		if err := rows.Scan(&id, &typ, &title, &url, &summary, &authorName,
+			&updatedAt, &createdAt, &depth, &authorEEID); err != nil {
+			return nil, err
+		}
+		fz := fused[id]
+		c := scoring.Components{
+			Sem:      scoring.Semantic(armLocal[armSemantic][id]),
+			Rec:      scoring.Recency(updatedAt, now, 30*24*time.Hour),
+			Edge:     armLocal[armGraph][id],
+			Team:     personScoreForSearch(ctx, s.db, askerEEID, authorEEID),
+			Auth:     scoring.Authority(depth, 6),
+			Temporal: 0.5,
+			RRF:      fz.Score,
+			Ranks:    fz.Ranks,
+		}
+		if hasWindow {
+			c.Temporal = win.Proximity(createdAt)
+		}
+		results = append(results, searchResult{
+			NodeID: id, ID: id, Type: typ, Title: title, URL: url,
+			Summary:        summary,
+			Score:          scoring.Boost(fz.Score, alphas, c.Rec, c.Team, c.Temporal, c.Auth),
+			ScoreBreakdown: c,
+			Author:         authorName, CreatedAt: createdAt,
+		})
+	}
+	return results, rows.Err()
+}
+
+// window resolves the temporal window: explicit ?since/?until (RFC3339 or
+// YYYY-MM-DD; a date-only `until` is inclusive) override a phrase parsed out
+// of q. rest is q with the phrase removed (unchanged when since/until set).
+func (s *Search) window(qv map[string][]string, q string, now time.Time) (temporal.Window, string, bool, error) {
+	get := func(k string) string {
+		if v, ok := qv[k]; ok && len(v) > 0 {
+			return strings.TrimSpace(v[0])
+		}
+		return ""
+	}
+	since, until := get("since"), get("until")
+	if since == "" && until == "" {
+		start, end, rest, ok := temporal.Parse(q, now)
+		if !ok {
+			return temporal.Window{}, q, false, nil
+		}
+		return temporal.Window{Start: start, End: end}, rest, true, nil
+	}
+	win := temporal.Window{Start: time.Unix(0, 0).UTC(), End: now.Add(24 * time.Hour)}
+	if since != "" {
+		t, _, err := parseWhen(since)
+		if err != nil {
+			return temporal.Window{}, q, false, fmt.Errorf("since: %w", err)
+		}
+		win.Start = t
+	}
+	if until != "" {
+		t, dateOnly, err := parseWhen(until)
+		if err != nil {
+			return temporal.Window{}, q, false, fmt.Errorf("until: %w", err)
+		}
+		if dateOnly {
+			t = t.AddDate(0, 0, 1)
+		}
+		win.End = t
+	}
+	if !win.End.After(win.Start) {
+		return temporal.Window{}, q, false, fmt.Errorf("until must be after since")
+	}
+	return win, q, true, nil
+}
+
+// parseWhen accepts RFC3339 or YYYY-MM-DD; dateOnly reports the latter.
+func parseWhen(s string) (t time.Time, dateOnly bool, err error) {
+	if t, err = time.Parse(time.RFC3339, s); err == nil {
+		return t.UTC(), false, nil
+	}
+	if t, err = time.Parse("2006-01-02", s); err == nil {
+		return t, true, nil
+	}
+	return time.Time{}, false, fmt.Errorf("want RFC3339 or YYYY-MM-DD, got %q", s)
+}
+
+// parseArms turns ?arms=semantic,keyword into the enabled set; empty = all.
+func parseArms(csv string) (map[string]bool, error) {
+	out := make(map[string]bool, len(allArms))
+	names := splitCSV(csv)
+	if len(names) == 0 {
+		names = allArms
+	}
+	for _, n := range names {
+		n = strings.ToLower(n)
+		known := false
+		for _, a := range allArms {
+			if a == n {
+				known = true
+				break
+			}
+		}
+		if !known {
+			return nil, fmt.Errorf("unknown arm %q (want %s)", n, strings.Join(allArms, ","))
+		}
+		out[n] = true
+	}
+	return out, nil
 }
 
 func splitCSV(s string) []string {
@@ -249,10 +436,6 @@ func splitCSV(s string) []string {
 	}
 	return out
 }
-
-// epicScopeSQL5 is epicScopePredicate bound to $5, the slot both search
-// queries use for the epic-key array.
-var epicScopeSQL5 = fmt.Sprintf(epicScopePredicate, "$5")
 
 // personScoreForSearch is the simplified person scoring used in /search
 // where there's no asker thread to anchor against.
