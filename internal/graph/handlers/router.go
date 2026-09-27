@@ -65,6 +65,8 @@ func Mount(r chi.Router, deps Deps) {
 	r.Put("/api/graph/business-root", channels.putBusinessRoot)
 	r.Get("/api/graph/boost-alphas", channels.getBoostAlphas)
 	r.Put("/api/graph/boost-alphas", channels.putBoostAlphas)
+	r.Get("/api/graph/epic-briefs", channels.getEpicBriefsConfig)
+	r.Put("/api/graph/epic-briefs", channels.putEpicBriefsConfig)
 
 	// Topic subscriptions (hot-topic enzobot alerts).
 	subs := NewSubscriptions(deps)

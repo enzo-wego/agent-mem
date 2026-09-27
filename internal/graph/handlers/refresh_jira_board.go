@@ -407,6 +407,12 @@ ON CONFLICT (issue_key) DO UPDATE SET
 		if err := rebuildEpicHierarchy(ctx, deps.DB, deps.MachineID, project, ranks); err != nil {
 			return fmt.Errorf("epic hierarchy: %w", err)
 		}
+		// Round 3: one refresh_epic_brief per on-board epic whose members or
+		// member summaries changed since its brief. Not self-rescheduling —
+		// this 6h tick is its only trigger.
+		if n := enqueueEpicBriefs(ctx, deps, project); n > 0 {
+			deps.Logger.Info().Int("enqueued", n).Msg("refresh_jira_board: epic briefs enqueued")
+		}
 		return nil
 	}
 }
