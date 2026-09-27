@@ -2,7 +2,10 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"net/http"
+	"regexp"
 	"strings"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -304,4 +307,43 @@ WHERE m.epic_key = w.epic_key
 		return fmt.Errorf("commit membership rebuild: %w", err)
 	}
 	return nil
+}
+
+// businessRootProjectRe: a Jira project key (uppercase letters/digits, letter
+// first), so a typo cannot turn the LIKE filter into a wildcard.
+var businessRootProjectRe = regexp.MustCompile(`^[A-Z][A-Z0-9]{1,9}$`)
+
+type businessRootConfig struct {
+	Project string `json:"project"`
+}
+
+// getBusinessRoot serves GET /api/graph/business-root: the Jira project key
+// behind the Payments business root (Settings page).
+func (h *Channels) getBusinessRoot(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(businessRootConfig{Project: businessRootProject(r.Context(), h.db)})
+}
+
+// putBusinessRoot serves PUT /api/graph/business-root. Takes effect on the
+// next refresh_jira_board run (6h); no cache to invalidate.
+func (h *Channels) putBusinessRoot(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<10)
+	var cfg businessRootConfig
+	if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	cfg.Project = strings.ToUpper(strings.TrimSpace(cfg.Project))
+	if !businessRootProjectRe.MatchString(cfg.Project) {
+		writeError(w, http.StatusBadRequest, "project must be a Jira project key like PAY")
+		return
+	}
+	if _, err := h.db.Exec(r.Context(), `
+		INSERT INTO settings(key,value) VALUES($1,$2)
+		ON CONFLICT(key) DO UPDATE SET value=excluded.value`, businessRootProjectKey, cfg.Project); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(cfg)
 }

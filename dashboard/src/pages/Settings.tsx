@@ -7,6 +7,8 @@ import {
   saveChannelFilters,
   fetchEligibilityGate,
   saveEligibilityGate,
+  fetchBusinessRoot,
+  saveBusinessRoot,
   fetchGatewayHealth,
   fetchGatewayConfig,
   updateGatewayConfig,
@@ -143,6 +145,7 @@ export function SettingsPage() {
       {/* Channel Filters (graph memory) */}
       <ChannelFiltersSection />
       <EligibilityGateSection />
+      <BusinessRootSection />
 
       {/* Context */}
       <Section title="Context Window">
@@ -544,6 +547,51 @@ function ChannelFiltersSection() {
             {saving ? 'Saving…' : 'Save filters'}
           </button>
         </>
+      )}
+    </Section>
+  )
+}
+
+// --- Business root ---
+
+function BusinessRootSection() {
+  const [project, setProject] = useState<string | null>(null)
+  const [saving, setSaving] = useState(false)
+  const [toast, setToast] = useState<{ type: 'ok' | 'err'; msg: string } | null>(null)
+
+  useEffect(() => {
+    fetchBusinessRoot()
+      .then((cfg) => setProject(cfg.project))
+      .catch(() => setToast({ type: 'err', msg: 'Failed to load business root' }))
+  }, [])
+
+  const save = async (v: string) => {
+    setSaving(true)
+    setToast(null)
+    try {
+      const updated = await saveBusinessRoot({ project: v })
+      setProject(updated.project)
+      setToast({ type: 'ok', msg: 'Saved — applies on the next refresh_jira_board run' })
+    } catch (e: unknown) {
+      setToast({ type: 'err', msg: e instanceof Error ? e.message : 'Save failed' })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Section title="Business Root (Payments)">
+      {toast && (
+        <div className={`text-sm px-3 py-1.5 rounded-md ${toast.type === 'ok' ? 'bg-green-50 text-green-700 dark:bg-green-900/30 dark:text-green-300' : 'bg-red-50 text-red-700 dark:bg-red-900/30 dark:text-red-300'}`}>
+          {toast.msg}
+        </div>
+      )}
+      {project === null ? (
+        <p className="text-sm text-gray-500">Loading…</p>
+      ) : (
+        <Field label="Jira project" hint="Project whose epics form the business:payments subtree (PART_OF edges and epic membership). Rebuilt by refresh_jira_board every 6h.">
+          <EditableField value={project} saving={saving} onSave={save} placeholder="PAY" />
+        </Field>
       )}
     </Section>
   )

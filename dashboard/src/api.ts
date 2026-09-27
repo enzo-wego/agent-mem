@@ -967,6 +967,34 @@ export async function saveEligibilityGate(cfg: EligibilityGateConfig): Promise<E
   return res.json();
 }
 
+// ── Business root (Payments epic hierarchy) ───────────────────────────────────
+
+export interface BusinessRootConfig {
+  project: string; // Jira project key whose epics hang off business:payments
+}
+
+export async function fetchBusinessRoot(): Promise<BusinessRootConfig> {
+  const res = await authFetch(`${BASE}/api/graph/business-root`);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Unknown error' }));
+    throw new Error(err.error || `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function saveBusinessRoot(cfg: BusinessRootConfig): Promise<BusinessRootConfig> {
+  const res = await authFetch(`${BASE}/api/graph/business-root`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify(cfg),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Unknown error' }));
+    throw new Error(err.error || `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
 export async function graphNeighbors(id: string, depth = 1): Promise<GraphNeighbor[]> {
   // Keep ':' literal — the chi path param doesn't decode %3A, so node ids like
   // "jira:PAY-2190" / "slack:C..:ts" must keep their colons unencoded.
