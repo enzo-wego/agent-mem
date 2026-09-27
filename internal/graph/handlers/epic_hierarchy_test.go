@@ -2,8 +2,12 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -211,5 +215,58 @@ VALUES ('business:payments','business','payments','test')`); err != nil {
 	}
 	if expandableThrough(context.Background(), pool, "business:payments") {
 		t.Error("business root must not be expandable through")
+	}
+}
+
+// GET /api/graph/epic/{key} lists members grouped by type with via, folds
+// replies into the count, and reports the epic window; unknown keys are 404.
+func TestEpicEndpoint_Fixture(t *testing.T) {
+	pool := openTestDB(t)
+	truncateGraphHandlerTables(t, pool)
+	t.Cleanup(func() { truncateGraphHandlerTables(t, pool) })
+	seedEpicFixture(t, pool)
+	if err := rebuildEpicHierarchy(context.Background(), pool, "test", "PAY", map[string]int{"PAY-100": 0}); err != nil {
+		t.Fatalf("rebuild: %v", err)
+	}
+
+	r := chi.NewRouter()
+	r.Method("GET", "/api/graph/epic/{key}", NewEpic(pool))
+	get := func(key string) (int, epicResponse) {
+		t.Helper()
+		req := httptest.NewRequest("GET", "/api/graph/epic/"+key, nil)
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		var resp epicResponse
+		_ = json.NewDecoder(w.Body).Decode(&resp)
+		return w.Code, resp
+	}
+
+	code, resp := get("pay-100")
+	if code != http.StatusOK {
+		t.Fatalf("status %d", code)
+	}
+	if resp.EpicKey != "PAY-100" || resp.NodeID != "jira:PAY-100" || resp.FirstAt == nil || resp.LastAt == nil {
+		t.Errorf("header = %+v", resp)
+	}
+	// jira: PAY-101, PAY-102; slack roots: A (key), B (topic_link); gh_pr: 1; reply folded.
+	if got := len(resp.Members["jira"]); got != 2 {
+		t.Errorf("jira members = %d, want 2", got)
+	}
+	if got := len(resp.Members["slack"]); got != 2 {
+		t.Errorf("slack members = %d, want 2: %+v", got, resp.Members["slack"])
+	}
+	if got := len(resp.Members["gh_pr"]); got != 1 || resp.Members["gh_pr"][0].Via != viaKey {
+		t.Errorf("gh_pr members = %+v", resp.Members["gh_pr"])
+	}
+	if resp.Replies != 1 || resp.Total != 6 || resp.ByVia[viaTopicLink] != 1 {
+		t.Errorf("counts: replies=%d total=%d by_via=%v", resp.Replies, resp.Total, resp.ByVia)
+	}
+
+	code, resp = get("payments")
+	if code != http.StatusOK || !resp.Business || resp.ByVia[viaEligible] != 1 {
+		t.Errorf("business root: status %d resp %+v", code, resp)
+	}
+	if code, _ := get("PAY-404"); code != http.StatusNotFound {
+		t.Errorf("unknown epic status = %d, want 404", code)
 	}
 }

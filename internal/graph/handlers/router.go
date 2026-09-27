@@ -42,6 +42,9 @@ func Mount(r chi.Router, deps Deps) {
 	resolve, _ := NewResolve(deps.DB)
 	r.Method("POST", "/api/graph/resolve", resolve)
 
+	// Epic (or business root) members grouped by type, with the activity window.
+	r.Method("GET", "/api/graph/epic/{key}", NewEpic(deps.DB))
+
 	r.Method("GET", "/api/graph/slack-users", NewSlackUsersHandler(deps))
 	r.Method("GET", "/api/graph/slack-user", NewSlackUserHandler(deps))
 
