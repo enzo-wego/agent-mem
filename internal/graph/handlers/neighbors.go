@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -120,6 +121,15 @@ func (h *neighborsHandler) serve(w http.ResponseWriter, r *http.Request) {
 		depth = 1
 	}
 	kindFilter := r.URL.Query()["kind"]
+	// Epic/business scope: rows outside it are neither surfaced nor traversed
+	// through, same contract as the ACL predicate below. The opened node is
+	// exempt (the caller named it).
+	epicKeys, err := epicScopeFromQuery(r.URL.Query())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	epicArg := epicScopeArg(epicKeys)
 
 	// ACL: a real asker (eeid != 0) only sees neighbors in scope; eeid 0 is the
 	// trusted unfiltered view. Hidden nodes are neither surfaced nor traversed
@@ -209,7 +219,8 @@ LEFT JOIN LATERAL (
     AND COALESCE(NULLIF(m.metadata->>'thread_ts',''), split_part(m.id,':',3))
       = COALESCE(NULLIF(n.metadata->>'thread_ts',''), split_part(n.id,':',3))
 ) tspan ON TRUE
-WHERE n.id=$1`, n.NodeID)
+WHERE n.id=$1
+  AND `+epicScopeSQL2, n.NodeID, epicArg)
 			if err := row.Scan(&item.Node.NodeID, &item.Node.Type, &item.Node.URL,
 				&title, &body, &item.Node.ThreadTS, &threadSummary, &item.Node.Overview, &item.Node.Channel, &item.Node.TSMs, &scope,
 				&item.Node.FirstTSMs, &item.Node.LastTSMs); err != nil {
@@ -451,3 +462,7 @@ ORDER BY f.id`, parentIDs)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{"neighbors": out})
 }
+
+// epicScopeSQL2 is epicScopePredicate bound to $2 for the per-row lookups in
+// this file.
+var epicScopeSQL2 = fmt.Sprintf(epicScopePredicate, "$2")

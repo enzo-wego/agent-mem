@@ -22,6 +22,10 @@ type resolveRequest struct {
 	Depth         int      `json:"depth"`
 	BudgetTokens  int      `json:"budget_tokens"`
 	IncludeBodies bool     `json:"include_bodies"`
+	// Epic keys and/or business ("payments") to scope the result to; see
+	// epicScopeKeys. Seeds themselves are not filtered.
+	Epic     []string `json:"epic,omitempty"`
+	Business string   `json:"business,omitempty"`
 }
 
 type resolveResponse struct {
@@ -94,6 +98,11 @@ func (h *Resolve) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if req.BudgetTokens <= 0 {
 		req.BudgetTokens = 4000
 	}
+	epicKeys, err := epicScopeKeys(req.Epic, req.Business)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 
 	scopes, _ := h.aclBld.For(ctx, req.AskerEEID)
 	scopeSet := make(map[string]bool, len(scopes))
@@ -139,9 +148,29 @@ func (h *Resolve) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// admin view (same contract as /search). See checkScope for "public".
 	// (The API key is the privilege boundary here; asker_eeid is advisory until
 	// the asker identity is authenticated — see Mount's auth note.)
+	//
+	// Epic scope sits next to it: a candidate outside the requested epics is
+	// dropped exactly like a hidden one, except the seeds, which the caller
+	// named explicitly.
+	seedSet := make(map[string]bool, len(canonSeeds))
+	for _, s := range canonSeeds {
+		seedSet[s] = true
+	}
+	visitedIDs := make([]string, 0, len(visited))
+	for id := range visited {
+		visitedIDs = append(visitedIDs, id)
+	}
+	inEpic, err := epicMembers(ctx, h.db, epicKeys, visitedIDs)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	var filtered []bfs.Candidate
 	noFilter := req.AskerEEID == 0
 	for _, c := range visited {
+		if !inEpic[c.NodeID] && !seedSet[c.NodeID] {
+			continue
+		}
 		if noFilter {
 			filtered = append(filtered, c)
 			continue
@@ -277,6 +306,7 @@ WHERE n.id = $1 AND n.deleted_at IS NULL`, s).Scan(
 }
 
 func (h *Resolve) canonicalizeSeeds(ctx context.Context, seeds []string) []string {
+	seeds = h.expandEpicSeeds(ctx, seeds)
 	resolved := make([]string, len(seeds))
 	copy(resolved, seeds)
 	for i, seed := range seeds {
@@ -322,6 +352,36 @@ LIMIT 1
 		}
 	}
 	return resolved
+}
+
+// expandEpicSeeds replaces an `epic:PAY-2307` seed with the epic node plus its
+// epic_self members (the issues under it), so the BFS starts from the whole
+// epic rather than one ticket. Unknown epics expand to nothing.
+func (h *Resolve) expandEpicSeeds(ctx context.Context, seeds []string) []string {
+	out := make([]string, 0, len(seeds))
+	for _, seed := range seeds {
+		key, ok := strings.CutPrefix(seed, "epic:")
+		if !ok {
+			out = append(out, seed)
+			continue
+		}
+		key = strings.ToUpper(strings.TrimSpace(key))
+		rows, err := h.db.Query(ctx, `
+SELECT node_id FROM graph.epic_membership
+WHERE epic_key = $1 AND via = $2
+ORDER BY (node_id = 'jira:' || $1) DESC, node_id`, key, viaEpicSelf)
+		if err != nil {
+			continue
+		}
+		for rows.Next() {
+			var id string
+			if rows.Scan(&id) == nil {
+				out = append(out, id)
+			}
+		}
+		rows.Close()
+	}
+	return out
 }
 
 type scoredCand struct {

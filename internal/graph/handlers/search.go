@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"sort"
 	"strconv"
@@ -82,6 +83,14 @@ func (s *Search) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if limit <= 0 || limit > 50 {
 		limit = 10
 	}
+	// Round 1: scope to one or more epics and/or the Payments business root
+	// (?epic=PAY-2307&epic=PAY-2197&business=payments). Applied in SQL next to
+	// the ACL predicate, so limit*3 still counts only in-scope candidates.
+	epicKeys, err := epicScopeFromQuery(r.URL.Query())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 
 	// noFilter when no asker principal is asserted (eeid 0 = the trusted
 	// dashboard/integration calling behind the API key). A real asker
@@ -112,11 +121,10 @@ func (s *Search) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Close()
 		Err() error
 	}
-	var err error
 
 	if queryVec != nil {
 		// Semantic search: order by vector cosine distance.
-		const query = `
+		query := `
 SELECT n.id, n.type, COALESCE(n.title,''), COALESCE(n.url,''),
        COALESCE(ai.summary,''),
        COALESCE(p.display_name,''),
@@ -133,6 +141,7 @@ WHERE n.deleted_at IS NULL
   AND ai.embedding IS NOT NULL
   AND ($2::text[] IS NULL OR n.type = ANY($2))
   AND ($3::text[] IS NULL OR n.scope IS NULL OR n.scope = '' OR n.scope = ANY($3))
+  AND ` + epicScopeSQL5 + `
 ORDER BY ai.embedding <=> $1
 LIMIT $4
 `
@@ -142,10 +151,10 @@ LIMIT $4
 		}
 		rows, err = s.db.Query(ctx, query,
 			pgvector.NewVector(queryVec),
-			typesArg, scopeArg, limit*3)
+			typesArg, scopeArg, limit*3, epicScopeArg(epicKeys))
 	} else {
 		// Keyword/title search fallback when no embedder.
-		const query = `
+		query := `
 SELECT n.id, n.type, COALESCE(n.title,''), COALESCE(n.url,''),
        COALESCE(ai.summary,''),
        COALESCE(p.display_name,''),
@@ -161,6 +170,7 @@ LEFT JOIN graph.people p ON p.id = n.author_person_id
 WHERE n.deleted_at IS NULL
   AND ($1::text[] IS NULL OR n.type = ANY($1))
   AND ($2::text[] IS NULL OR n.scope IS NULL OR n.scope = '' OR n.scope = ANY($2))
+  AND ` + epicScopeSQL5 + `
   AND (n.title ILIKE '%' || $3 || '%' OR n.body ILIKE '%' || $3 || '%')
 ORDER BY n.updated_at DESC
 LIMIT $4
@@ -169,7 +179,7 @@ LIMIT $4
 		if len(typesFilter) > 0 {
 			typesArg = typesFilter
 		}
-		rows, err = s.db.Query(ctx, query, typesArg, scopeArg, q, limit*3)
+		rows, err = s.db.Query(ctx, query, typesArg, scopeArg, q, limit*3, epicScopeArg(epicKeys))
 	}
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -239,6 +249,10 @@ func splitCSV(s string) []string {
 	}
 	return out
 }
+
+// epicScopeSQL5 is epicScopePredicate bound to $5, the slot both search
+// queries use for the epic-key array.
+var epicScopeSQL5 = fmt.Sprintf(epicScopePredicate, "$5")
 
 // personScoreForSearch is the simplified person scoring used in /search
 // where there's no asker thread to anchor against.
