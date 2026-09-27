@@ -1072,6 +1072,8 @@ export function LiveGlobePage() {
   // ── Board section (auto-pinned: threads referencing PAY board tickets) ───────
   const [boardGroups, setBoardGroups] = useState<BoardEpicGroup[]>([])
   const [collapsedEpics, setCollapsedEpics] = useState<Set<string>>(new Set())
+  // Swimlanes whose standing brief (round 3, graph.epic_briefs) is shown.
+  const [briefOpen, setBriefOpen] = useState<Set<string>>(new Set())
   // Swimlanes collapse by default. Seed each epic key once, so the 60s refresh
   // can't re-collapse a swimlane the user manually expanded.
   const seededEpicsRef = useRef<Set<string>>(new Set())
@@ -3255,7 +3257,50 @@ export function LiveGlobePage() {
                       <span style={{ color: C.dim, fontSize: 9 }}>
                         {g.threads.length} thread{g.threads.length === 1 ? '' : 's'}
                       </span>
+                      {g.brief && (
+                        <span
+                          title={
+                            g.brief_updated_at
+                              ? `brief updated ${new Date(g.brief_updated_at).toLocaleString()}`
+                              : 'epic brief'
+                          }
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            setBriefOpen((cur) => {
+                              const next = new Set(cur)
+                              if (next.has(gKey)) next.delete(gKey)
+                              else next.add(gKey)
+                              return next
+                            })
+                          }}
+                          style={{
+                            color: briefOpen.has(gKey) ? C.text : C.dim,
+                            fontSize: 8,
+                            letterSpacing: '0.08em',
+                            border: `1px solid ${C.border}`,
+                            borderRadius: 2,
+                            padding: '0 3px',
+                            cursor: 'pointer',
+                          }}
+                        >
+                          BRIEF {briefOpen.has(gKey) ? '▾' : '▸'}
+                        </span>
+                      )}
                     </div>
+                    {g.brief && briefOpen.has(gKey) && (
+                      <div
+                        style={{
+                          color: C.text,
+                          fontSize: 10,
+                          lineHeight: 1.5,
+                          whiteSpace: 'pre-wrap',
+                          padding: '2px 6px 6px 14px',
+                          borderLeft: `2px solid ${C.border}`,
+                        }}
+                      >
+                        {g.brief}
+                      </div>
+                    )}
                     {!collapsed && g.threads.map((p) => renderPinCard(p, { unpin: false }))}
                   </div>
                 )

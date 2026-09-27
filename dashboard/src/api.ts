@@ -897,6 +897,8 @@ export interface BoardEpicGroup {
   threads: PinnedThread[];
   last_ms: number;
   active_count: number; // threads with a new message inside the active window
+  brief?: string; // standing epic brief (graph.epic_briefs); absent until refresh_epic_brief writes one
+  brief_updated_at?: string;
 }
 
 export async function fetchBoardPins(): Promise<{ groups: BoardEpicGroup[]; activeHours: number }> {
@@ -1056,4 +1058,33 @@ export async function graphNeighbors(id: string, depth = 1): Promise<GraphNeighb
   const res = await authFetch(`${BASE}/api/graph/node/${seg}/neighbors?depth=${depth}`);
   const data = await res.json();
   return data.neighbors ?? [];
+}
+
+// ── Epic briefs (round 3: refresh_epic_brief job) ────────────────────────────
+
+export interface EpicBriefsConfig {
+  enabled: boolean; // graph.epic_briefs.enabled — gates enqueue and every queued job
+  min_interval_minutes: number; // graph.epic_briefs.min_interval_minutes — floor between rebuilds per epic
+}
+
+export async function fetchEpicBriefsConfig(): Promise<EpicBriefsConfig> {
+  const res = await authFetch(`${BASE}/api/graph/epic-briefs`);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Unknown error' }));
+    throw new Error(err.error || `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function saveEpicBriefsConfig(cfg: EpicBriefsConfig): Promise<EpicBriefsConfig> {
+  const res = await authFetch(`${BASE}/api/graph/epic-briefs`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify(cfg),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Unknown error' }));
+    throw new Error(err.error || `HTTP ${res.status}`);
+  }
+  return res.json();
 }

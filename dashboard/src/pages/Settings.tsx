@@ -12,6 +12,9 @@ import {
   fetchBoostAlphas,
   saveBoostAlphas,
   type BoostAlphas,
+  fetchEpicBriefsConfig,
+  saveEpicBriefsConfig,
+  type EpicBriefsConfig,
   fetchGatewayHealth,
   fetchGatewayConfig,
   updateGatewayConfig,
@@ -150,6 +153,7 @@ export function SettingsPage() {
       <EligibilityGateSection />
       <BusinessRootSection />
       <BoostAlphasSection />
+      <EpicBriefsSection />
 
       {/* Context */}
       <Section title="Context Window">
@@ -596,6 +600,86 @@ function BusinessRootSection() {
         <Field label="Jira project" hint="Project whose epics form the business:payments subtree (PART_OF edges and epic membership). Rebuilt by refresh_jira_board every 6h.">
           <EditableField value={project} saving={saving} onSave={save} placeholder="PAY" />
         </Field>
+      )}
+    </Section>
+  )
+}
+
+// --- Epic briefs ---
+
+function EpicBriefsSection() {
+  const [cfg, setCfg] = useState<EpicBriefsConfig | null>(null)
+  const [saving, setSaving] = useState(false)
+  const [toast, setToast] = useState<{ type: 'ok' | 'err'; msg: string } | null>(null)
+
+  useEffect(() => {
+    fetchEpicBriefsConfig()
+      .then(setCfg)
+      .catch(() => setToast({ type: 'err', msg: 'Failed to load epic briefs config' }))
+  }, [])
+
+  const save = async (patch: Partial<EpicBriefsConfig>) => {
+    if (!cfg) return
+    setSaving(true)
+    setToast(null)
+    try {
+      const updated = await saveEpicBriefsConfig({ ...cfg, ...patch })
+      setCfg(updated)
+      setToast({ type: 'ok', msg: 'Saved — applies on the next refresh_jira_board run and to queued jobs' })
+    } catch (e: unknown) {
+      setToast({ type: 'err', msg: e instanceof Error ? e.message : 'Save failed' })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Section title="Epic Briefs">
+      {toast && (
+        <div className={`text-sm px-3 py-1.5 rounded-md ${toast.type === 'ok' ? 'bg-green-50 text-green-700 dark:bg-green-900/30 dark:text-green-300' : 'bg-red-50 text-red-700 dark:bg-red-900/30 dark:text-red-300'}`}>
+          {toast.msg}
+        </div>
+      )}
+      {cfg === null ? (
+        <p className="text-sm text-gray-500">Loading…</p>
+      ) : (
+        <>
+          <Field
+            label="Enabled (graph.epic_briefs.enabled)"
+            hint="refresh_jira_board enqueues one refresh_epic_brief job (1 LLM call, summary tier) per on-board epic whose members or member summaries changed. Off by default: canary with dry_run jobs first."
+          >
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={cfg.enabled}
+                disabled={saving}
+                onChange={(e) => save({ enabled: e.target.checked })}
+                className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+              />
+              <span className={`text-sm font-medium ${cfg.enabled ? 'text-green-600 dark:text-green-400' : 'text-gray-500 dark:text-gray-400'}`}>
+                {cfg.enabled ? 'Enabled' : 'Disabled'}
+              </span>
+            </label>
+          </Field>
+          <Field
+            label="Minimum interval, minutes (graph.epic_briefs.min_interval_minutes)"
+            hint="A brief younger than this is not rebuilt even when its members changed; the next 6h board refresh re-enqueues it. 1–1440."
+          >
+            <EditableField
+              value={String(cfg.min_interval_minutes)}
+              saving={saving}
+              onSave={(v) => {
+                const n = Number(v)
+                if (!Number.isInteger(n) || n < 1 || n > 1440) {
+                  setToast({ type: 'err', msg: 'Interval must be an integer between 1 and 1440' })
+                  return
+                }
+                void save({ min_interval_minutes: n })
+              }}
+              placeholder="60"
+            />
+          </Field>
+        </>
       )}
     </Section>
   )
