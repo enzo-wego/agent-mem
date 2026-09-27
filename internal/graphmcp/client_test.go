@@ -55,7 +55,7 @@ func TestClient_ProxiesGraphEndpoints(t *testing.T) {
 
 	calls := []func() (map[string]any, error){
 		func() (map[string]any, error) {
-			return client.Search(ctx, "TRY currency", []string{"slack_thread", "jira"}, 5)
+			return client.Search(ctx, SearchRequest{Q: "TRY currency", Types: []string{"slack_thread", "jira"}, Limit: 5})
 		},
 		func() (map[string]any, error) {
 			return client.Node(ctx, "jira:PAY-2223", "")
@@ -85,6 +85,12 @@ func TestClient_ProxiesGraphEndpoints(t *testing.T) {
 		func() (map[string]any, error) {
 			return client.Person(ctx, "Lei", 5)
 		},
+		func() (map[string]any, error) {
+			return client.Search(ctx, SearchRequest{Q: "GST invoice", Limit: 10, Epic: []string{"PAY-2307", "PAY-2197"}, Business: "payments"})
+		},
+		func() (map[string]any, error) {
+			return client.Epic(ctx, "PAY-2307")
+		},
 	}
 	for i, call := range calls {
 		got, err := call()
@@ -105,6 +111,8 @@ func TestClient_ProxiesGraphEndpoints(t *testing.T) {
 		{method: http.MethodPost, escapedPath: "/api/graph/resolve", contentType: "application/json"},
 		{method: http.MethodGet, escapedPath: "/api/settings"},
 		{method: http.MethodGet, escapedPath: "/api/graph/person", query: "limit=5&q=Lei"},
+		{method: http.MethodGet, escapedPath: "/api/graph/search", query: "business=payments&epic=PAY-2307&epic=PAY-2197&limit=10&q=GST+invoice"},
+		{method: http.MethodGet, escapedPath: "/api/graph/epic/PAY-2307"},
 	}
 	if len(observed) != len(expected) {
 		t.Fatalf("observed %d requests, want %d: %#v", len(observed), len(expected), observed)
@@ -178,7 +186,7 @@ func TestClient_CancellationReachesWorker(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
 	go func() {
-		_, err := client.Search(ctx, "cancel me", nil, 10)
+		_, err := client.Search(ctx, SearchRequest{Q: "cancel me", Limit: 10})
 		errCh <- err
 	}()
 	<-started
