@@ -5,6 +5,7 @@ package extractor
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -159,6 +160,9 @@ func slackTSToStandard(raw string) string {
 	return raw[:len(raw)-6] + "." + raw[len(raw)-6:]
 }
 
+// slackThreadTSRe is a dotted Slack ts as it appears in a thread_ts param.
+var slackThreadTSRe = regexp.MustCompile(`^\d{10}\.\d{6}$`)
+
 var rules = []rule{
 	// Slack thread/message archive URL:
 	// https://wego.slack.com/archives/C08S954G2LX/p1779710863216389
@@ -170,6 +174,28 @@ var rules = []rule{
 			nodeID := ids.SlackThread(channel, ts)
 			return Finding{
 				NodeID:   nodeID,
+				Type:     ids.TypeSlackThread,
+				Source:   m[0],
+				EdgeKind: "REFERENCES",
+				Match:    OriginURL,
+			}, true
+		},
+	},
+	// Slack reply permalink: .../p<ts>?thread_ts=<root>&cid=... also links the
+	// thread root, so the edge reaches the titled root node, not only the reply.
+	{
+		re: regexp.MustCompile(`\bwego\.slack\.com/archives/(C\w+)/p\d+\?([^\s)>\]|"']+)`),
+		build: func(m []string) (Finding, bool) {
+			q, err := url.ParseQuery(strings.TrimRight(m[2], ".,;:!?"))
+			if err != nil {
+				return Finding{}, false
+			}
+			tt := q.Get("thread_ts")
+			if !slackThreadTSRe.MatchString(tt) {
+				return Finding{}, false
+			}
+			return Finding{
+				NodeID:   ids.SlackThread(m[1], tt),
 				Type:     ids.TypeSlackThread,
 				Source:   m[0],
 				EdgeKind: "REFERENCES",
