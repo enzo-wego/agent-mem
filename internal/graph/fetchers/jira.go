@@ -109,8 +109,8 @@ func (f *jiraFetcher) Fetch(ctx context.Context, node string) (FetchedBody, erro
 		raw = []byte("{}")
 	}
 
-	bodyTS := parseJiraTime(issue.Fields.Updated)
-	createdAt := parseJiraTime(issue.Fields.Created)
+	bodyTS := ParseJiraTime(issue.Fields.Updated)
+	createdAt := ParseJiraTime(issue.Fields.Created)
 
 	var author AuthorRef
 	if r := issue.Fields.Reporter; r != nil {
@@ -148,9 +148,9 @@ func (f *jiraFetcher) Fetch(ctx context.Context, node string) (FetchedBody, erro
 	}, nil
 }
 
-// parseJiraTime parses Jira's timestamps. Jira returns "2006-01-02T15:04:05.000-0700"
+// ParseJiraTime parses Jira's timestamps. Jira returns "2006-01-02T15:04:05.000-0700"
 // (numeric tz offset, no colon), which isn't quite RFC3339; try both. Zero on failure.
-func parseJiraTime(s string) time.Time {
+func ParseJiraTime(s string) time.Time {
 	if s == "" {
 		return time.Time{}
 	}

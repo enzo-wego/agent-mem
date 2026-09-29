@@ -56,6 +56,9 @@ func Mount(r chi.Router, deps Deps) {
 	r.Put("/api/graph/channel-filters", channels.putChannelFilters)
 	r.Get("/api/graph/eligibility-gate", channels.getEligibilityGate)
 	r.Put("/api/graph/eligibility-gate", channels.putEligibilityGate)
+	jiraUpdates := NewJiraUpdatesHandler(deps)
+	r.Method("GET", "/api/graph/jira-updates", jiraUpdates)
+	r.Method("PUT", "/api/graph/jira-updates", jiraUpdates)
 
 	// Topic subscriptions (hot-topic enzobot alerts).
 	subs := NewSubscriptions(deps)
