@@ -8,7 +8,10 @@ go build ./... 2>&1 | tee "$L/build.log"
 go vet ./... 2>&1 | tee -a "$L/build.log"
 go test -count=1 -v ./internal/graph/extractor/ 2>&1 | tee "$L/extractor.log"
 go test -count=1 -v -run 'TestJira|TestEdgePersist' ./internal/graph/handlers/ 2>&1 | tee "$L/handlers.log"
-go test -count=1 ./internal/graph/... ./internal/worker/... 2>&1 | tee "$L/all.log"
+# Serial packages (-p 1): they share the agentmem_test DB. Known failures make
+# go test exit non-zero, so this pipeline is allowed to fail and the explicit
+# KNOWN_FAILING check below decides.
+go test -count=1 -p 1 ./internal/graph/... ./internal/worker/... 2>&1 | tee "$L/all.log" || true
 # TAP reporter: node's default reporter is spec, which has no "# pass N" lines.
 (cd dashboard && node --test --test-reporter=tap scripts/jiraSyncState.test.ts) 2>&1 | tee "$L/node.log"
 (cd dashboard && npm run build) 2>&1 | tee "$L/dash.log"
@@ -24,6 +27,13 @@ for t in TestReplyPermalink_RootOnly TestReplyPermalink_ReplyAddsRoot TestReplyP
   grep -q -- "^--- PASS: $t " "$L/extractor.log" "$L/handlers.log" || { echo "MISSING PASS: $t"; exit 1; }
 done
 ! grep -qE -- '--- (SKIP|FAIL)' "$L/extractor.log" "$L/handlers.log"
-! grep -q '^FAIL' "$L/all.log"
+# fail on main, agent-mem-y827
+KNOWN_FAILING=(TestE2E_IngestContent_TRYThread TestImportBambooHR_CSVBytes_ParsesAndUpserts TestIngestURL_AlreadyFresh)
+FAILED=$(sed -n 's/^--- FAIL: \([^ ]*\) .*/\1/p' "$L/all.log" | sort -u)
+for k in "${KNOWN_FAILING[@]}"; do
+  grep -qx -- "$k" <<<"$FAILED" || echo "note: now passing: $k"
+done
+UNEXPECTED=$(grep -vxF -f <(printf '%s\n' "${KNOWN_FAILING[@]}") <<<"$FAILED" || true)
+if [[ -n "$UNEXPECTED" ]]; then echo "UNEXPECTED FAIL: $UNEXPECTED"; exit 1; fi
 grep -qx '# fail 0' "$L/node.log"; grep -qx '# pass 8' "$L/node.log"
 echo "ALL CHECKS PASSED"

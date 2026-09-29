@@ -180,21 +180,26 @@ type jiraUpdatedResp struct {
 func refreshJiraUpdatesHandler(deps Deps) jobs.Handler {
 	return func(ctx context.Context, _ []byte) error {
 		start := time.Now().UTC().Truncate(time.Second)
-		health := func(write func(context.Context) error) {
+		health := func(write func(context.Context) error) bool {
 			hctx, cancel := context.WithTimeout(context.Background(), jiraUpdatesHealthTimeout)
 			defer cancel()
 			if err := write(hctx); err != nil {
 				deps.Logger.Error().Err(err).Msg("refresh_jira_updates: health write failed")
+				return false
 			}
+			return true
 		}
 		fail := func(msg string) {
 			deps.Logger.Warn().Str("error", msg).Msg("refresh_jira_updates: run failed")
 			health(func(c context.Context) error { return putSetting(c, deps.DB, jiraUpdatesKeyLastErr, msg) })
 		}
 
-		health(func(c context.Context) error {
+		// If last_run_at can't be written the DB is down: stop; the ticker retries.
+		if !health(func(c context.Context) error {
 			return putSetting(c, deps.DB, jiraUpdatesKeyLastRun, start.Format(time.RFC3339))
-		})
+		}) {
+			return nil
+		}
 
 		baseURL := strings.TrimRight(os.Getenv("AGENT_MEM_JIRA_BASE_URL"), "/")
 		email := os.Getenv("AGENT_MEM_JIRA_EMAIL")
@@ -373,6 +378,7 @@ func NewJiraUpdatesHandler(deps Deps) http.Handler {
 				Enabled         *bool `json:"enabled"`
 				IntervalMinutes *int  `json:"interval_minutes"`
 			}
+			r.Body = http.MaxBytesReader(w, r.Body, 1<<10)
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 				writeError(w, http.StatusBadRequest, "invalid JSON")
 				return
