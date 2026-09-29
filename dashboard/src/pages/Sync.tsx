@@ -1,5 +1,15 @@
 import { useEffect, useState } from 'react'
-import { fetchSyncInfo, fetchHealth, fetchCloudStats, type SyncInfo, type HealthResponse, type StatsResponse } from '../api'
+import {
+  fetchSyncInfo,
+  fetchHealth,
+  fetchCloudStats,
+  fetchJiraUpdates,
+  type SyncInfo,
+  type HealthResponse,
+  type StatsResponse,
+  type JiraUpdatesStatus,
+} from '../api'
+import { jiraSyncState, type JiraSyncState } from '../jiraSyncState'
 
 export function SyncPage() {
   const [syncInfo, setSyncInfo] = useState<SyncInfo | null>(null)
@@ -44,6 +54,8 @@ export function SyncPage() {
           </div>
         )}
       </div>
+
+      <JiraFreshnessRow />
 
       {/* Sync Status */}
       <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
@@ -194,6 +206,63 @@ export function SyncPage() {
             </div>
           </div>
         </div>
+      )}
+    </div>
+  )
+}
+
+const JIRA_STATE_STYLE: Record<JiraSyncState, { dot: string; label: string }> = {
+  unavailable: { dot: 'bg-gray-400', label: 'Unavailable' },
+  off: { dot: 'bg-gray-400', label: 'Off' },
+  never: { dot: 'bg-red-500', label: 'Never succeeded' },
+  stale: { dot: 'bg-red-500', label: 'Stale' },
+  error: { dot: 'bg-amber-500', label: 'Last run failed' },
+  ok: { dot: 'bg-green-500', label: 'OK' },
+}
+
+function relativeTime(iso: string, now: Date): string {
+  const s = Math.max(0, Math.round((now.getTime() - new Date(iso).getTime()) / 1000))
+  if (s < 60) return `${s}s ago`
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`
+  return `${Math.floor(s / 86400)}d ago`
+}
+
+// Jira freshness: health of the refresh_jira_updates poll. Refetched every 60 s.
+function JiraFreshnessRow() {
+  const [cfg, setCfg] = useState<JiraUpdatesStatus | null>(null)
+  const [now, setNow] = useState(() => new Date())
+
+  useEffect(() => {
+    const load = () =>
+      fetchJiraUpdates()
+        .then(setCfg)
+        .catch(() => setCfg(null))
+        .finally(() => setNow(new Date()))
+    load()
+    const id = setInterval(load, 60_000)
+    return () => clearInterval(id)
+  }, [])
+
+  const state = jiraSyncState(cfg, now)
+  const style = JIRA_STATE_STYLE[state]
+  return (
+    <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
+      <div className="flex items-center justify-between text-sm">
+        <div className="flex items-center gap-2">
+          <span className={`inline-block w-2.5 h-2.5 rounded-full ${style.dot}`} />
+          <span className="font-semibold">Jira freshness</span>
+          <span className="text-gray-500">{style.label}</span>
+        </div>
+        {cfg && (
+          <div className="flex items-center gap-4 text-gray-500">
+            <span>Last OK: {cfg.last_ok_at ? relativeTime(cfg.last_ok_at, now) : 'never'}</span>
+            <span>{cfg.last_queued ?? 0} queued</span>
+          </div>
+        )}
+      </div>
+      {state === 'error' && cfg?.last_error && (
+        <p className="mt-2 text-xs text-amber-700 dark:text-amber-300 font-mono break-all">{cfg.last_error}</p>
       )}
     </div>
   )
