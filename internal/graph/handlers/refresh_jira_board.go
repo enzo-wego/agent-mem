@@ -416,24 +416,37 @@ func jiraSearchPage(ctx context.Context, client *http.Client, baseURL, email, to
 	if pageToken != "" {
 		payload["nextPageToken"] = pageToken
 	}
-	raw, _ := json.Marshal(payload)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/rest/api/3/search/jql", strings.NewReader(string(raw)))
+	body, err := jiraSearchRaw(ctx, client, baseURL, email, token, payload)
 	if err != nil {
 		return nil, "", err
+	}
+	return parseJiraEpicRows(body)
+}
+
+// jiraSearchRaw POSTs body to /rest/api/3/search/jql and returns the raw
+// response body. A non-200 status is an error.
+func jiraSearchRaw(ctx context.Context, client *http.Client, baseURL, email, token string, body map[string]any) ([]byte, error) {
+	raw, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/rest/api/3/search/jql", strings.NewReader(string(raw)))
+	if err != nil {
+		return nil, err
 	}
 	req.SetBasicAuth(email, token)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, "", err
+		return nil, err
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 	if err != nil {
-		return nil, "", err
+		return nil, err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, "", fmt.Errorf("jira search %d: %s", resp.StatusCode, firstLine(string(body), 200))
+		return nil, fmt.Errorf("jira search %d: %s", resp.StatusCode, firstLine(string(respBody), 200))
 	}
-	return parseJiraEpicRows(body)
+	return respBody, nil
 }
