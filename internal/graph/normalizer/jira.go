@@ -82,6 +82,12 @@ func walkADF(node map[string]any, b *strings.Builder, mentions *[]Mention) {
 		url, _ := attrs["url"].(string)
 		b.WriteString(url)
 
+	case "blockCard", "embedCard":
+		attrs, _ := node["attrs"].(map[string]any)
+		url, _ := attrs["url"].(string)
+		b.WriteString(url)
+		b.WriteString("\n\n")
+
 	case "paragraph":
 		walkChildren(node, b, mentions)
 		b.WriteString("\n\n")
@@ -102,7 +108,7 @@ func walkADF(node map[string]any, b *strings.Builder, mentions *[]Mention) {
 	case "codeBlock":
 		b.WriteString("```")
 		walkChildren(node, b, mentions)
-		b.WriteString("```")
+		b.WriteString("```\n\n")
 
 	default:
 		// doc, blockquote, table, etc. — just recurse into children.
