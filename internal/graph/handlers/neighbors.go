@@ -21,17 +21,16 @@ import (
 // files connect every thread sharing a phrase, an author, or an upload —
 // walking through them turns "related to this thread" into "everything that
 // ever said apple pay" (verified: feature:unified_apple_pay, REFERENCES
-// degree 94). Real resources are corridors only while quiet; a popular one
-// chains dozens of unrelated threads.
-// ponytail: total REFERENCES degree ≤ 12; count distinct referrer THREADS if
-// a single chatty thread ever inflates a legit ticket past the cap.
+// degree 94). Real resources are corridors only while quiet; the cap measures
+// popularity (how many things link to the node), not its own outgoing links.
+// A resource with more than 12 incoming REFERENCES chains unrelated threads.
 func expandableThrough(ctx context.Context, db *pgxpool.Pool, nodeID string) bool {
 	var typ string
 	var deg int
 	err := db.QueryRow(ctx, `
 SELECT n.type,
        (SELECT count(*) FROM graph.edges e
-        WHERE (e.from_node_id = n.id OR e.to_node_id = n.id) AND e.kind = 'REFERENCES')
+        WHERE e.to_node_id = n.id AND e.kind = 'REFERENCES')
 FROM graph.nodes n WHERE n.id = $1`, nodeID).Scan(&typ, &deg)
 	if err != nil {
 		return false
