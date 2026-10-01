@@ -477,6 +477,17 @@ export function parseSlackLink(s: string): { nodeId: string; channel: string; ts
   return { nodeId: `slack:${channel}:${ts}`, channel, ts };
 }
 
+export function parseGraphSeed(s: string): string | null {
+  const term = s.trim();
+  if (/^[A-Za-z][A-Za-z0-9]+-\d+$/.test(term)) {
+    return `jira:${term.toUpperCase()}`;
+  }
+  if (/^https?:\/\//i.test(term)) {
+    return term;
+  }
+  return null;
+}
+
 export async function graphResolve(
   seeds: string[],
   query?: string,
@@ -488,6 +499,7 @@ export async function graphResolve(
     headers: { 'Content-Type': 'application/json', ...authHeaders() },
     body: JSON.stringify({ seeds, query, depth, budget_tokens: budgetTokens }),
   });
+  if (!res.ok) throw new Error(`resolve failed: ${res.status}`);
   return res.json();
 }
 

@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/agent-mem/agent-mem/internal/graph/handlers"
 )
 
@@ -313,4 +315,165 @@ func TestResolve_SlackPermalinkSeedSurfacesThreadFiles(t *testing.T) {
 	if !inMisses[file1] || !inMisses[file2] {
 		t.Errorf("want both files in cache_misses; got %v", resp.CacheMisses)
 	}
+}
+
+type resolveSeedResponse struct {
+	Artifacts []struct {
+		NodeID string `json:"node_id"`
+		Hop    int    `json:"hop"`
+	} `json:"artifacts"`
+	GraphTrace struct {
+		ExpandedNodes int `json:"expanded_nodes"`
+	} `json:"graph_trace"`
+}
+
+func seedJiraResolveFixture(t *testing.T, pool *pgxpool.Pool) {
+	t.Helper()
+	seedNode(t, pool, "jira:PAY-2407", "jira", "GO Loyalty discount")
+	seedBody(t, pool, "jira:PAY-2407", "Ticket body.")
+	seedNode(t, pool, "slack:C1:1700000000.000100", "slack", "requirement thread")
+	seedBody(t, pool, "slack:C1:1700000000.000100", "Thread body.")
+	seedEdge(t, pool, "slack:C1:1700000000.000100", "jira:PAY-2407", "REFERENCES")
+}
+
+func resolveSeeds(t *testing.T, pool *pgxpool.Pool, seeds ...string) resolveSeedResponse {
+	t.Helper()
+	payload, err := json.Marshal(map[string]any{
+		"seeds":         seeds,
+		"depth":         1,
+		"budget_tokens": 4000,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, err := handlers.NewResolve(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := httptest.NewRequest(http.MethodPost, "/api/graph/resolve", bytes.NewReader(payload))
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d body %s", w.Code, w.Body.String())
+	}
+	var resp resolveSeedResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatal(err)
+	}
+	return resp
+}
+
+func requireArtifact(t *testing.T, resp resolveSeedResponse, nodeID string, hop int) {
+	t.Helper()
+	for _, artifact := range resp.Artifacts {
+		if artifact.NodeID == nodeID && artifact.Hop == hop {
+			return
+		}
+	}
+	t.Fatalf("want artifact %q at hop %d, got %+v", nodeID, hop, resp.Artifacts)
+}
+
+func TestResolve_JiraBrowseURLSeed(t *testing.T) {
+	pool := testDB(t)
+	seedJiraResolveFixture(t, pool)
+
+	resp := resolveSeeds(t, pool, "https://wegomushi.atlassian.net/browse/PAY-2407?focusedCommentId=1#c")
+
+	requireArtifact(t, resp, "jira:PAY-2407", 0)
+	requireArtifact(t, resp, "slack:C1:1700000000.000100", 1)
+}
+
+func TestResolve_JiraSelectedIssueURLSeed(t *testing.T) {
+	pool := testDB(t)
+	seedJiraResolveFixture(t, pool)
+
+	resp := resolveSeeds(t, pool, "https://wegomushi.atlassian.net/jira/software/c/projects/PAY/boards/193?selectedIssue=PAY-2407")
+
+	requireArtifact(t, resp, "jira:PAY-2407", 0)
+}
+
+func TestResolve_JiraSelectedIssueWinsOverBrowse(t *testing.T) {
+	pool := testDB(t)
+	seedJiraResolveFixture(t, pool)
+
+	resp := resolveSeeds(t, pool, "https://wegomushi.atlassian.net/browse/PAY-1?selectedIssue=PAY-2407")
+
+	requireArtifact(t, resp, "jira:PAY-2407", 0)
+}
+
+func TestResolve_JiraLowercaseKeyInURL(t *testing.T) {
+	pool := testDB(t)
+	seedJiraResolveFixture(t, pool)
+
+	resp := resolveSeeds(t, pool, "https://wegomushi.atlassian.net/browse/pay-2407")
+
+	requireArtifact(t, resp, "jira:PAY-2407", 0)
+}
+
+func TestResolve_UnknownURLSeedDropped(t *testing.T) {
+	pool := testDB(t)
+
+	resp := resolveSeeds(t, pool, "https://example.com/nothing")
+
+	if len(resp.Artifacts) != 0 {
+		t.Fatalf("artifacts = %+v, want none", resp.Artifacts)
+	}
+	if resp.GraphTrace.ExpandedNodes != 0 {
+		t.Fatalf("expanded_nodes = %d, want 0", resp.GraphTrace.ExpandedNodes)
+	}
+	var jobs int
+	if err := pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM graph.jobs WHERE payload->>'node_id' LIKE '%://%'`).Scan(&jobs); err != nil {
+		t.Fatal(err)
+	}
+	if jobs != 0 {
+		t.Fatalf("raw URL fetch jobs = %d, want 0", jobs)
+	}
+}
+
+func TestResolve_MixedKnownAndUnknownSeeds(t *testing.T) {
+	pool := testDB(t)
+	seedJiraResolveFixture(t, pool)
+
+	resp := resolveSeeds(t, pool,
+		"https://example.com/nothing",
+		"https://wegomushi.atlassian.net/browse/PAY-2407",
+	)
+
+	requireArtifact(t, resp, "jira:PAY-2407", 0)
+	for _, artifact := range resp.Artifacts {
+		if strings.Contains(artifact.NodeID, "://") {
+			t.Fatalf("raw URL artifact returned: %+v", artifact)
+		}
+	}
+}
+
+func TestResolve_AtlassianNonJiraURLUsesStoredURL(t *testing.T) {
+	pool := testDB(t)
+	const (
+		nodeID  = "confluence:PAY:123"
+		nodeURL = "https://wegomushi.atlassian.net/wiki/spaces/PAY/pages/123"
+	)
+	seedNode(t, pool, nodeID, "confluence", "PAY notes")
+	seedNodeURL(t, pool, nodeID, nodeURL)
+	seedBody(t, pool, nodeID, "Confluence body.")
+
+	resp := resolveSeeds(t, pool, nodeURL)
+
+	requireArtifact(t, resp, nodeID, 0)
+}
+
+func TestResolve_InvalidJiraKeyFallsThroughToStoredURL(t *testing.T) {
+	pool := testDB(t)
+	const (
+		nodeID  = "gh_pr:x/y#1"
+		nodeURL = "https://wegomushi.atlassian.net/browse/not_a_key"
+	)
+	seedNode(t, pool, nodeID, "gh_pr", "Stored URL")
+	seedNodeURL(t, pool, nodeID, nodeURL)
+	seedBody(t, pool, nodeID, "Pull request body.")
+
+	resp := resolveSeeds(t, pool, nodeURL)
+
+	requireArtifact(t, resp, nodeID, 0)
 }

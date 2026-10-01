@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/agent-mem/agent-mem/internal/graph/acl"
 	"github.com/agent-mem/agent-mem/internal/graph/bfs"
 	"github.com/agent-mem/agent-mem/internal/graph/hydrate"
+	"github.com/agent-mem/agent-mem/internal/graph/ids"
 	"github.com/agent-mem/agent-mem/internal/graph/scoring"
 )
 
@@ -277,37 +279,51 @@ WHERE n.id = $1 AND n.deleted_at IS NULL`, s).Scan(
 }
 
 func (h *Resolve) canonicalizeSeeds(ctx context.Context, seeds []string) []string {
-	resolved := make([]string, len(seeds))
-	copy(resolved, seeds)
-	for i, seed := range seeds {
+	resolved := make([]string, 0, len(seeds))
+	for _, seed := range seeds {
+		canonical := seed
 		if strings.Contains(seed, "://") {
 			// A pasted Slack permalink resolves to its canonical node id from the
 			// path alone, so ?thread_ts=…&cid=… and #fragments don't defeat the
 			// match; the reply→thread-root promotion below then puts the root's
-			// files at hop 1. Falling through to the url lookup would leave the raw
-			// URL as resolved[i], which silently fails the slack: prefix check and
-			// enters the BFS as a garbage node id.
+			// files at hop 1.
 			if sid := slackNodeIDFromURL(seed); sid != "" {
-				resolved[i] = sid
+				canonical = sid
 			} else {
-				// Non-Slack: match the bare stored url too (tracking params like
-				// ?utm_source=… must not break the lookup); the raw url is compared
-				// as well, so a stored url with a legitimate query still matches.
-				_ = h.db.QueryRow(ctx, `
+				// Jira links canonicalize by key even when the node has no stored
+				// URL. selectedIssue wins because it identifies the issue open in
+				// board and backlog panels.
+				if parsed, err := url.Parse(seed); err == nil && parsed.Hostname() == "wegomushi.atlassian.net" {
+					key := parsed.Query().Get("selectedIssue")
+					if key == "" {
+						key = extractJiraKey(parsed.Path)
+					}
+					if jiraID, err := ids.Jira(strings.ToUpper(key)); err == nil {
+						canonical = jiraID
+					}
+				}
+				if canonical == seed {
+					// Non-Slack: match the bare stored url too (tracking params
+					// like ?utm_source=… must not break the lookup); the raw url
+					// is compared as well, so a stored url with a legitimate
+					// query still matches.
+					_ = h.db.QueryRow(ctx, `
 SELECT id
 FROM graph.nodes
 WHERE url IN ($1, $2) AND deleted_at IS NULL
 ORDER BY updated_at DESC
 LIMIT 1
-`, seed, stripQueryFragment(seed)).Scan(&resolved[i])
+`, seed, stripQueryFragment(seed)).Scan(&canonical)
+				}
+			}
+			if strings.Contains(canonical, "://") {
+				continue
 			}
 		}
 
-		if !strings.HasPrefix(resolved[i], "slack:") {
-			continue
-		}
-		var rootID string
-		if err := h.db.QueryRow(ctx, `
+		if strings.HasPrefix(canonical, "slack:") {
+			var rootID string
+			if err := h.db.QueryRow(ctx, `
 SELECT root.id
 FROM graph.nodes reply
 JOIN graph.nodes root
@@ -317,9 +333,11 @@ JOIN graph.nodes root
 WHERE reply.id = $1
   AND reply.deleted_at IS NULL
 LIMIT 1
-`, resolved[i]).Scan(&rootID); err == nil {
-			resolved[i] = rootID
+`, canonical).Scan(&rootID); err == nil {
+				canonical = rootID
+			}
 		}
+		resolved = append(resolved, canonical)
 	}
 	return resolved
 }
