@@ -747,6 +747,15 @@ export async function fetchTopicRules(): Promise<TopicRules> {
   return res.json();
 }
 
+// PRRef is one PR linked to a Jira ticket (REFERENCES edge, either direction).
+export interface PRRef {
+  node_id: string;
+  title: string;
+  url: string;
+  author: string;
+  created_ms: number;
+}
+
 // GraphNeighbor is one related node reachable from a given node (for "open in Graph").
 export interface GraphNeighbor {
   hop: number;
@@ -779,6 +788,9 @@ export interface GraphNeighbor {
     msg_count?: number;
     participants?: string[];
     participant_count?: number;
+    // ?cards=1, Jira rows only: linked PRs (first 20; pr_count is the full count)
+    pr_count?: number;
+    prs?: PRRef[];
   };
 }
 
@@ -1029,13 +1041,17 @@ export async function graphNeighbors(id: string, depth = 1): Promise<GraphNeighb
 }
 
 // graphNeighborsCards is graphNeighbors with ?cards=1: Slack rows also carry
-// thread_root, root_author, msg_count, participants and participant_count.
-export async function graphNeighborsCards(id: string, depth = 2): Promise<GraphNeighbor[]> {
+// thread_root, root_author, msg_count, participants and participant_count; Jira
+// rows carry pr_count/prs, and seed_prs is set when the seed itself is Jira.
+export async function graphNeighborsCards(
+  id: string,
+  depth = 2,
+): Promise<{ neighbors: GraphNeighbor[]; seed_prs?: { pr_count: number; prs: PRRef[] } }> {
   const seg = encodeURIComponent(id).replace(/%3A/gi, ':');
   const res = await authFetch(`${BASE}/api/graph/node/${seg}/neighbors?depth=${depth}&cards=1`);
   if (!res.ok) throw new Error(`neighbors failed: ${res.status}`);
   const data = await res.json();
-  return data.neighbors ?? [];
+  return { neighbors: data.neighbors ?? [], seed_prs: data.seed_prs };
 }
 
 // HybridSearchResult is one /api/graph/search?match=hybrid row (Slack hits are
@@ -1059,6 +1075,8 @@ export interface HybridSearchResult {
   participant_count?: number;
   first_ts_ms?: number;
   last_ts_ms?: number;
+  pr_count?: number; // Jira only
+  prs?: PRRef[];
 }
 
 export interface HybridSearchResponse {

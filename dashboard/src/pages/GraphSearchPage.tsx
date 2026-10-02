@@ -8,6 +8,7 @@ import {
   parseSlackLink,
   type ClusterSummary,
   type GraphNeighbor,
+  type PRRef,
   type HybridSearchResult,
 } from '../api'
 
@@ -92,6 +93,8 @@ interface Item {
   ev: Ev
   why: string
   jiraKey: string
+  prCount: number // Jira only: linked PRs (full count)
+  prs: PRRef[] // Jira only: first 20
   idx: number // server order (free-text mode)
 }
 
@@ -105,6 +108,7 @@ interface View {
   notice: string
   semErr: boolean
   banner?: { label: string; value: string }
+  seedPRs?: { pr_count: number; prs: PRRef[] }
 }
 
 type Status = { kind: 'idle' } | { kind: 'loading' } | { kind: 'error'; msg: string } | { kind: 'ready'; view: View }
@@ -211,6 +215,8 @@ function buildSeedItems(rows: GraphNeighbor[], seedRoot: string): { items: Item[
         ev: 'hop2',
         why: '',
         jiraKey: nd.type === 'jira' ? nd.node_id.replace(/^jira:/, '') : '',
+        prCount: nd.pr_count || 0,
+        prs: nd.prs || [],
         idx: items.size,
         rank: 99,
       }
@@ -270,6 +276,8 @@ function buildFreeItems(results: HybridSearchResult[]): Item[] {
             ? 'Contains the query words.'
             : 'Semantically close to the query.',
       jiraKey: r.type === 'jira' ? r.node_id.replace(/^jira:/, '') : '',
+      prCount: r.pr_count || 0,
+      prs: r.prs || [],
       idx: out.length,
     })
   }
@@ -443,6 +451,12 @@ const PAGE_CSS = `
 .sp-pp{font-size:10.5px;color:${C.dim}}
 .sp-why{border-left:3px solid var(--evc);padding:6px 10px;background:${C.panel};border-radius:0 4px 4px 0;font-size:12px;margin-top:4px}
 .sp-open{display:inline-block;margin-top:6px;border:1px solid ${C.border};border-radius:4px;padding:2px 8px;width:max-content}
+.sp-prs{font:inherit;font-size:10.5px;color:${C.blue};background:transparent;border:1px solid ${C.border};border-radius:4px;padding:0 6px;cursor:pointer}
+.sp-prs:hover{border-color:${C.green}}
+.sp-prs:focus-visible{outline:2px solid ${C.green};outline-offset:1px}
+.sp-prlist{list-style:none;margin:4px 0 0;padding:0;font-size:12px;display:grid;gap:3px;min-width:0}
+.sp-prlist li{overflow-wrap:anywhere;min-width:0}
+.sp-prlist a{color:${C.blue}}
 .sp-rail{position:sticky;top:64px;display:flex;flex-direction:column;gap:12px;max-height:calc(100vh - 80px);overflow:auto}
 .sp-rail .sp-card{padding:12px 14px}
 .sp-rt{font-size:11px;color:${C.dim};letter-spacing:.06em;text-transform:uppercase;margin-bottom:8px}
@@ -537,6 +551,28 @@ function People({ it, expanded }: { it: Item; expanded: boolean }) {
   )
 }
 
+function PRList({ count, prs }: { count: number; prs: PRRef[] }) {
+  return (
+    <ul className="sp-prlist" onClick={(e) => e.stopPropagation()}>
+      {prs.map((p) => (
+        <li key={p.node_id}>
+          <span>{p.title || p.node_id.replace(/^gh_pr:/, '')}</span>
+          {p.author && <span> · {p.author}</span>}
+          {p.created_ms > 0 && <span> · {fmtDay(p.created_ms)}</span>}{' '}
+          {p.url ? (
+            <a href={p.url} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}>
+              open ↗
+            </a>
+          ) : (
+            <span style={{ color: C.dim2 }}>no link</span>
+          )}
+        </li>
+      ))}
+      {count > prs.length && <li>+{count - prs.length} more</li>}
+    </ul>
+  )
+}
+
 // ── page ─────────────────────────────────────────────────────────────────────
 
 function initialQuery(): string {
@@ -552,6 +588,13 @@ export function GraphSearchPage() {
   const [allThreads, setAllThreads] = useState(false)
   const [showOlder, setShowOlder] = useState(false)
   const [heights, setHeights] = useState<Record<string, number>>({})
+  const [openPRs, setOpenPRs] = useState<Set<string>>(() => new Set())
+  const togglePRs = (key: string) =>
+    setOpenPRs((cur) => {
+      const next = new Set(cur)
+      if (!next.delete(key)) next.add(key)
+      return next
+    })
   const [narrow, setNarrow] = useState(() => window.matchMedia('(max-width: 900px)').matches)
   const gen = useRef(0) // stale-response guard, same pattern as LiveGlobe searchGen
   const listRef = useRef<HTMLDivElement>(null)
@@ -602,7 +645,8 @@ export function GraphSearchPage() {
       }
       const seedRoot = hop0.node_id.startsWith('slack:') ? slackRootOf(hop0.node_id, hop0.thread_ts) : hop0.node_id
       const summaryP = fetchClusterSummary(hop0.node_id, 2).catch(() => null)
-      let rows = await graphNeighborsCards(hop0.node_id, 2)
+      let nb = await graphNeighborsCards(hop0.node_id, 2)
+      let rows = nb.neighbors
       if (stale()) return
       const build = (rs: GraphNeighbor[]): View => {
         const { items, nodeRoot } = buildSeedItems(rs, seedRoot)
@@ -610,6 +654,7 @@ export function GraphSearchPage() {
           mode: 'seed',
           q,
           seed: { id: hop0.node_id, type: hop0.type, title: hop0.title || hop0.node_id },
+          seedPRs: nb.seed_prs,
           items,
           nodeRoot,
           summary: 'loading',
@@ -629,7 +674,8 @@ export function GraphSearchPage() {
       for (let attempt = 0; attempt < 3 && rows.some((r) => r.node.pending_summary); attempt++) {
         await new Promise((r) => setTimeout(r, 12_000))
         if (stale()) return
-        rows = await graphNeighborsCards(hop0.node_id, 2)
+        nb = await graphNeighborsCards(hop0.node_id, 2)
+        rows = nb.neighbors
         if (stale()) return
         view = build(rows)
         setStatus((cur) =>
@@ -761,7 +807,18 @@ export function GraphSearchPage() {
           <span>{v.seed?.type}</span>
           <span>{v.items.length} related items</span>
         </div>
-        <h1>{v.seed?.title}</h1>
+        <h1>
+          {v.seed?.title}
+          {v.seedPRs && v.seedPRs.pr_count > 0 && (
+            <>
+              {' '}
+              <button className="sp-prs" onClick={() => togglePRs('seed')}>
+                ⎇ {v.seedPRs.pr_count}
+              </button>
+            </>
+          )}
+        </h1>
+        {v.seedPRs && v.seedPRs.pr_count > 0 && openPRs.has('seed') && <PRList count={v.seedPRs.pr_count} prs={v.seedPRs.prs} />}
         {s === 'loading' ? (
           <div className="sp-note">summarizing…</div>
         ) : s === 'none' ? null : (
@@ -846,11 +903,23 @@ export function GraphSearchPage() {
               {it.group === 'slack' ? `last reply ${ago(it.last)}` : `${fmtDay(it.last)} · ${ago(it.last)}`}
             </span>
           )}
+          {it.group === 'jira' && it.prCount > 0 && (
+            <button
+              className="sp-prs"
+              onClick={(e) => {
+                e.stopPropagation()
+                togglePRs(it.key)
+              }}
+            >
+              ⎇ {it.prCount}
+            </button>
+          )}
         </div>
         <div className="ti">
           {it.jiraKey && <span className="k">{it.jiraKey} </span>}
           {it.title}
         </div>
+        {it.group === 'jira' && it.prCount > 0 && openPRs.has(it.key) && <PRList count={it.prCount} prs={it.prs} />}
         {it.overview && <div className="ov">{it.overview}</div>}
         {it.group === 'slack' && <People it={it} expanded={open} />}
         {open && (
@@ -985,7 +1054,9 @@ export function GraphSearchPage() {
                       {it.group === 'slack' && it.channel ? `#${it.channel} · ` : ''}
                       {it.title}
                     </span>
-                    <span className="a">{it.last > 0 ? ago(it.last) : ''}</span>
+                    <span className="a">
+                      {it.group === 'jira' && it.prCount > 0 ? `⎇ ${it.prCount}${it.last > 0 ? ` · ${ago(it.last)}` : ''}` : it.last > 0 ? ago(it.last) : ''}
+                    </span>
                   </div>
                 ))}
               </div>
