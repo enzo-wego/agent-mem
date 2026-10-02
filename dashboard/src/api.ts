@@ -773,6 +773,12 @@ export interface GraphNeighbor {
     last_ts_ms?: number; // slack threads: last message time (thread updated)
     pending_summary?: boolean; // summarize job just enqueued; re-poll to get the summary
     via?: string; // hop≥2 rows: title of the hop-1 row this was reached through
+    // ?cards=1, Slack rows only
+    thread_root?: string;
+    root_author?: string;
+    msg_count?: number;
+    participants?: string[];
+    participant_count?: number;
   };
 }
 
@@ -1020,4 +1026,55 @@ export async function graphNeighbors(id: string, depth = 1): Promise<GraphNeighb
   const res = await authFetch(`${BASE}/api/graph/node/${seg}/neighbors?depth=${depth}`);
   const data = await res.json();
   return data.neighbors ?? [];
+}
+
+// graphNeighborsCards is graphNeighbors with ?cards=1: Slack rows also carry
+// thread_root, root_author, msg_count, participants and participant_count.
+export async function graphNeighborsCards(id: string, depth = 2): Promise<GraphNeighbor[]> {
+  const seg = encodeURIComponent(id).replace(/%3A/gi, ':');
+  const res = await authFetch(`${BASE}/api/graph/node/${seg}/neighbors?depth=${depth}&cards=1`);
+  if (!res.ok) throw new Error(`neighbors failed: ${res.status}`);
+  const data = await res.json();
+  return data.neighbors ?? [];
+}
+
+// HybridSearchResult is one /api/graph/search?match=hybrid row (Slack hits are
+// already folded into their thread root).
+export interface HybridSearchResult {
+  node_id: string;
+  id: string;
+  type: string;
+  title: string;
+  url: string;
+  summary: string;
+  score: number;
+  author?: string;
+  created_at: string;
+  match: string[]; // "keyword" and/or "semantic"
+  thread_root?: string;
+  channel?: string;
+  root_author?: string;
+  msg_count?: number;
+  participants?: string[];
+  participant_count?: number;
+  first_ts_ms?: number;
+  last_ts_ms?: number;
+}
+
+export interface HybridSearchResponse {
+  results: HybridSearchResult[];
+  total: number;
+  semantic_error?: string;
+}
+
+// Only the types the /search page shows, so skipped types (entity tags, people,
+// attachments) don't use up the result budget.
+const SEARCH_PAGE_TYPES =
+  'slack,slack_thread,gh_pr,jira,cf,cf_page,gws,gws_doc,gdoc,wegohub,claude_artifact,pagerduty,sentry,datadog';
+
+export async function graphSearchHybrid(q: string, limit = 50): Promise<HybridSearchResponse> {
+  const params = new URLSearchParams({ q, match: 'hybrid', limit: String(limit), types: SEARCH_PAGE_TYPES });
+  const res = await authFetch(`${BASE}/api/graph/search?${params}`);
+  if (!res.ok) throw new Error(`search failed: ${res.status}`);
+  return res.json();
 }
