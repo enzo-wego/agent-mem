@@ -87,6 +87,9 @@ type neighborItem struct {
 		MsgCount         int      `json:"msg_count,omitempty"`
 		Participants     []string `json:"participants,omitempty"`
 		ParticipantCount int      `json:"participant_count,omitempty"`
+		// Opt-in (?cards=1), Jira rows only: linked PRs (REFERENCES either way).
+		PRCount int     `json:"pr_count,omitempty"`
+		PRs     []prRef `json:"prs,omitempty"`
 	} `json:"node"`
 	Edge struct {
 		Kind       string  `json:"kind"`
@@ -482,6 +485,30 @@ ORDER BY f.id`, parentIDs)
 			}
 		}
 	}
+	resp := map[string]any{"neighbors": out}
+	if r.URL.Query().Get("cards") == "1" {
+		visible := func(s *string) bool { return scopeVisible(s, scopeSet, noFilter) }
+		var jiraIDs []string
+		for i := range out {
+			if out[i].Node.Type == "jira" {
+				jiraIDs = append(jiraIDs, out[i].Node.NodeID)
+			}
+		}
+		if strings.HasPrefix(id, "jira:") {
+			jiraIDs = append(jiraIDs, id)
+		}
+		if lists, err := jiraPRs(ctx, h.db, jiraIDs, visible); err == nil {
+			for i := range out {
+				if l, ok := lists[out[i].Node.NodeID]; ok && out[i].Node.Type == "jira" {
+					out[i].Node.PRCount = l.Count
+					out[i].Node.PRs = l.PRs
+				}
+			}
+			if l, ok := lists[id]; ok && strings.HasPrefix(id, "jira:") {
+				resp["seed_prs"] = l
+			}
+		}
+	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{"neighbors": out})
+	json.NewEncoder(w).Encode(resp)
 }

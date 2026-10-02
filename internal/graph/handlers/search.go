@@ -350,6 +350,8 @@ type hybridResult struct {
 	ParticipantCount int                `json:"participant_count,omitempty"`
 	FirstTSMs        int64              `json:"first_ts_ms,omitempty"`
 	LastTSMs         int64              `json:"last_ts_ms,omitempty"`
+	PRCount          int                `json:"pr_count,omitempty"`
+	PRs              []prRef            `json:"prs,omitempty"`
 }
 
 // hybridHit is one raw row from either side of the hybrid query.
@@ -693,6 +695,38 @@ WHERE (channel_id, thread_ts) IN (SELECT unnest($1::text[]), unnest($2::text[]))
 				results[i].ParticipantCount = c.ParticipantCount
 				results[i].FirstTSMs = c.FirstTSMs
 				results[i].LastTSMs = c.LastTSMs
+			}
+		}
+	}
+
+	var jiraIDs []string
+	for _, res := range results {
+		if res.Type == "jira" {
+			jiraIDs = append(jiraIDs, res.NodeID)
+		}
+	}
+	if len(jiraIDs) > 0 {
+		ss, _ := scopeArg.([]string)
+		visible := func(sc *string) bool {
+			if scopeArg == nil || sc == nil || *sc == "" {
+				return true
+			}
+			for _, s := range ss {
+				if s == *sc {
+					return true
+				}
+			}
+			return false
+		}
+		lists, err := jiraPRs(ctx, s.db, jiraIDs, visible)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		for i := range results {
+			if l, ok := lists[results[i].NodeID]; ok && results[i].Type == "jira" {
+				results[i].PRCount = l.Count
+				results[i].PRs = l.PRs
 			}
 		}
 	}
