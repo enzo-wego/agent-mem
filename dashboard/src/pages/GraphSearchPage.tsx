@@ -456,7 +456,7 @@ const PAGE_CSS = `
 .sp-prs:focus-visible{outline:2px solid ${C.green};outline-offset:1px}
 .sp-prlist{list-style:none;margin:4px 0 0;padding:0;font-size:12px;display:grid;gap:3px;min-width:0}
 .sp-prlist li{overflow-wrap:anywhere;min-width:0}
-.sp-prlist a{color:${C.blue}}
+.sp-prlist a{color:${C.blue};white-space:nowrap}
 .sp-rail{position:sticky;top:64px;display:flex;flex-direction:column;gap:12px;max-height:calc(100vh - 80px);overflow:auto}
 .sp-rail .sp-card{padding:12px 14px}
 .sp-rt{font-size:11px;color:${C.dim};letter-spacing:.06em;text-transform:uppercase;margin-bottom:8px}
