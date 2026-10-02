@@ -4,6 +4,7 @@ import {
   graphNeighborsCards,
   graphResolve,
   graphSearchHybrid,
+  graphSubjectQueries,
   parseGraphSeed,
   parseSlackLink,
   type ClusterSummary,
@@ -64,12 +65,13 @@ const GROUP_META = Object.fromEntries(GROUPS.map((g, i) => [g.key, { ...g, slot:
 >
 
 // ── evidence ─────────────────────────────────────────────────────────────────
-type Ev = 'direct' | 'judge' | 'similar' | 'hop2' | 'keyword' | 'semantic' | 'both'
+type Ev = 'direct' | 'judge' | 'similar' | 'hop2' | 'subject' | 'keyword' | 'semantic' | 'both'
 const EV_META: Record<Ev, { label: string; glyph: string; color: string; rank: number }> = {
   direct: { label: 'direct link', glyph: '━', color: C.text, rank: 0 },
   judge: { label: 'judge: same topic', glyph: '┅', color: C.blue, rank: 1 },
   similar: { label: 'similar wording', glyph: '┈', color: C.amber, rank: 2 },
   hop2: { label: 'two hops', glyph: '·', color: C.dim, rank: 3 },
+  subject: { label: 'same subject', glyph: '≋', color: C.purple, rank: 4 },
   both: { label: 'keyword + semantic', glyph: '✦', color: C.green, rank: 0 },
   keyword: { label: 'keyword', glyph: '⌕', color: C.text, rank: 1 },
   semantic: { label: 'semantic', glyph: '≈', color: C.blue, rank: 2 },
@@ -664,6 +666,50 @@ export function GraphSearchPage() {
       }
       let view = build(rows)
       setStatus({ kind: 'ready', view })
+      let subjectItems: Item[] = []
+      if (hop0.node_id.startsWith('jira:')) {
+        setStatus((cur) =>
+          !stale() && cur.kind === 'ready' && cur.view.q === q
+            ? { kind: 'ready', view: { ...cur.view, notice: 'finding same-subject threads…' } }
+            : cur,
+        )
+        void (async () => {
+          try {
+            const { queries, error } = await graphSubjectQueries(hop0.node_id)
+            if (stale() || error || queries.length === 0) return
+            const results = await Promise.all(queries.map((query) => graphSearchHybrid(query, 20, 'slack,slack_thread')))
+            if (stale()) return
+            const seen = new Set<string>()
+            subjectItems = results.flatMap((result, i) =>
+              buildFreeItems(result.results || [])
+                .filter((item) => {
+                  if (item.group !== 'slack' || seen.has(item.key)) return false
+                  seen.add(item.key)
+                  return true
+                })
+                .map((item): Item => ({
+                  ...item,
+                  ev: 'subject',
+                  why: `same subject as the ticket: "${queries[i]}"`,
+                })),
+            )
+            setStatus((cur) => {
+              if (stale() || cur.kind !== 'ready' || cur.view.q !== q) return cur
+              const keys = new Set(cur.view.items.map((item) => item.key))
+              const extra = subjectItems.filter((item) => !keys.has(item.key))
+              return { kind: 'ready', view: { ...cur.view, items: [...cur.view.items, ...extra] } }
+            })
+          } catch {
+            // Subject search is optional; the linked items remain usable on failure.
+          } finally {
+            setStatus((cur) =>
+              !stale() && cur.kind === 'ready' && cur.view.q === q
+                ? { kind: 'ready', view: { ...cur.view, notice: '' } }
+                : cur,
+            )
+          }
+        })()
+      }
       void summaryP.then((s) => {
         if (stale()) return
         setStatus((cur) =>
@@ -678,9 +724,15 @@ export function GraphSearchPage() {
         rows = nb.neighbors
         if (stale()) return
         view = build(rows)
-        setStatus((cur) =>
-          cur.kind === 'ready' && cur.view.q === q ? { kind: 'ready', view: { ...view, summary: cur.view.summary } } : cur,
-        )
+        setStatus((cur) => {
+          if (stale() || cur.kind !== 'ready' || cur.view.q !== q) return cur
+          const keys = new Set(view.items.map((item) => item.key))
+          const extra = subjectItems.filter((item) => !keys.has(item.key))
+          return {
+            kind: 'ready',
+            view: { ...view, items: [...view.items, ...extra], notice: cur.view.notice, summary: cur.view.summary },
+          }
+        })
       }
     } catch (e) {
       if (!stale()) setStatus({ kind: 'error', msg: String((e as Error).message || e) })
@@ -796,7 +848,7 @@ export function GraphSearchPage() {
   const xOf = (g: Group) => 4 + GROUP_META[g].slot * slotW + slotW / 2
   const evClass = (ev: Ev) => (ev === 'judge' || ev === 'semantic' ? ' dashed' : ev === 'similar' ? ' dotted' : ev === 'hop2' ? ' faint' : '')
 
-  const filters = view?.mode === 'free' ? FREE_FILTERS : SEED_FILTERS
+  const filters = view?.mode === 'free' ? FREE_FILTERS : view?.seed?.id.startsWith('jira:') ? [...SEED_FILTERS, 'subject' as Ev] : SEED_FILTERS
   const shownThreads = allThreads ? threads : threads.slice(0, 6)
 
   function briefing(v: View) {

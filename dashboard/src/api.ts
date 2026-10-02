@@ -1054,6 +1054,15 @@ export async function graphNeighborsCards(
   return { neighbors: data.neighbors ?? [], seed_prs: data.seed_prs };
 }
 
+export async function graphSubjectQueries(
+  id: string,
+): Promise<{ queries: string[]; cached?: boolean; error?: string }> {
+  const seg = encodeURIComponent(id).replace(/%3A/gi, ':');
+  const res = await authFetch(`${BASE}/api/graph/node/${seg}/subject-queries`);
+  if (!res.ok) return { queries: [] };
+  return res.json();
+}
+
 // HybridSearchResult is one /api/graph/search?match=hybrid row (Slack hits are
 // already folded into their thread root).
 export interface HybridSearchResult {
@@ -1090,8 +1099,8 @@ export interface HybridSearchResponse {
 const SEARCH_PAGE_TYPES =
   'slack,slack_thread,gh_pr,jira,cf,cf_page,gws,gws_doc,gdoc,wegohub,claude_artifact,pagerduty,sentry,datadog';
 
-export async function graphSearchHybrid(q: string, limit = 50): Promise<HybridSearchResponse> {
-  const params = new URLSearchParams({ q, match: 'hybrid', limit: String(limit), types: SEARCH_PAGE_TYPES });
+export async function graphSearchHybrid(q: string, limit = 50, types = SEARCH_PAGE_TYPES): Promise<HybridSearchResponse> {
+  const params = new URLSearchParams({ q, match: 'hybrid', limit: String(limit), types });
   const res = await authFetch(`${BASE}/api/graph/search?${params}`);
   if (!res.ok) throw new Error(`search failed: ${res.status}`);
   return res.json();
