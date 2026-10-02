@@ -81,6 +81,12 @@ type neighborItem struct {
 		// through — a hop-2 SAME_TOPIC edge confirms against Via, not against
 		// the opened thread.
 		Via string `json:"via,omitempty"`
+		// Opt-in (?cards=1), Slack rows only: thread header data for /search.
+		ThreadRoot       string   `json:"thread_root,omitempty"`
+		RootAuthor       string   `json:"root_author,omitempty"`
+		MsgCount         int      `json:"msg_count,omitempty"`
+		Participants     []string `json:"participants,omitempty"`
+		ParticipantCount int      `json:"participant_count,omitempty"`
 	} `json:"node"`
 	Edge struct {
 		Kind       string  `json:"kind"`
@@ -439,6 +445,40 @@ ORDER BY f.id`, parentIDs)
 				item.Node.Via = firstLine(pm.title, 80)
 				out = append(out, item)
 				added++
+			}
+		}
+	}
+	if r.URL.Query().Get("cards") == "1" {
+		rootOf := make([]string, len(out))
+		var roots []string
+		for i := range out {
+			nd := &out[i].Node
+			if nd.Type != "slack" && nd.Type != "slack_thread" {
+				continue
+			}
+			parts := strings.Split(nd.NodeID, ":")
+			if len(parts) != 3 {
+				continue
+			}
+			ts := nd.ThreadTS
+			if ts == "" {
+				ts = parts[2]
+			}
+			rootOf[i] = "slack:" + parts[1] + ":" + ts
+			roots = append(roots, rootOf[i])
+		}
+		if cards, err := threadCards(ctx, h.db, roots); err == nil {
+			for i := range out {
+				if rootOf[i] == "" {
+					continue
+				}
+				out[i].Node.ThreadRoot = rootOf[i]
+				if c, ok := cards[rootOf[i]]; ok {
+					out[i].Node.RootAuthor = c.RootAuthor
+					out[i].Node.MsgCount = c.MsgCount
+					out[i].Node.Participants = c.Participants
+					out[i].Node.ParticipantCount = c.ParticipantCount
+				}
 			}
 		}
 	}
