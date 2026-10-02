@@ -2249,6 +2249,15 @@ export function LiveGlobePage() {
                 ✕
               </button>
             )}
+            {searchQ.trim() !== '' && (
+              <a
+                href={`/search?q=${encodeURIComponent(searchQ.trim())}`}
+                title="open the full search page"
+                style={{ ...segBtn(false), textDecoration: 'none', display: 'inline-block' }}
+              >
+                ⤢ FULL
+              </a>
+            )}
           </form>
           <button type="button" onClick={() => setPinsOpen(true)} style={segBtn(pinsOpen)}>
             📌 PINS{unseenPinCount > 0 ? ` •${unseenPinCount}` : ''}

@@ -179,6 +179,9 @@ function App() {
             >
               ↗ Live
             </a>
+            <a href="/search" className="text-sm text-green-600 dark:text-green-400 hover:underline">
+              ↗ Search
+            </a>
           </div>
           <div className="flex items-center gap-2">
             <OpenRouterBadge />
