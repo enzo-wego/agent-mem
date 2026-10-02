@@ -19,6 +19,11 @@ type fetchBodyPayload struct {
 	NodeID string `json:"node_id"`
 	URL    string `json:"url"`
 	Source string `json:"source"`
+	// Depth is 0 for jobs from ingestion/resolve/refresh/backfill/dashboard and 1
+	// for fetches enqueued by a fetch_body's reference extraction. Absent = 0.
+	Depth int `json:"depth,omitempty"`
+	// Via is the node_id of the fetch that enqueued this one, for tracing.
+	Via string `json:"via,omitempty"`
 }
 
 // NewFetchBodyHandler returns a HandlerInfo for the "fetch_body" job type.
@@ -37,6 +42,10 @@ func fetchBodyHandler(deps Deps) jobs.Handler {
 		var p fetchBodyPayload
 		if err := json.Unmarshal(payload, &p); err != nil {
 			return fmt.Errorf("%w: fetch_body unmarshal: %v", jobs.ErrFatal, err)
+		}
+		depth := p.Depth
+		if depth < 0 {
+			depth = 0
 		}
 
 		// Resolve the reference: prefer node_id, fall back to url.
@@ -202,9 +211,15 @@ func fetchBodyHandler(deps Deps) jobs.Handler {
 				}
 			}
 
-			// Enqueue fetch_body for target nodes with empty body.
-			for _, f := range extractResult.Findings {
-				enqueueFetchIfEmpty(ctx, deps, f.NodeID, f.Type)
+			// ponytail: the cascade stops at depth 1 by design. Only depth-0 fetches
+			// enqueue fetches for the nodes their body references; a deeper crawl has
+			// to be an explicit, scoped backfill, not a side effect of fetching.
+			if depth < 1 {
+				for _, f := range extractResult.Findings {
+					enqueueFetchIfEmpty(ctx, deps, f.NodeID, f.Type, depth+1, p.NodeID)
+				}
+			} else {
+				deps.Logger.Debug().Str("node_id", body.NodeID).Int("depth", depth).Msg("fetch_body: depth cap reached, references not fetched")
 			}
 		}
 
@@ -245,18 +260,20 @@ func fetchBodyHandler(deps Deps) jobs.Handler {
 				deps.Logger.Warn().Err(uErr).Str("att_node_id", att.NodeID).Msg("fetch_body: upsert attachment edge failed")
 			}
 
-			// Enqueue describe_attachment.
-			descPayload := map[string]string{
-				"node_id":      att.NodeID,
-				"external_url": att.URLPrivate,
-				"mime":         att.MimeType,
-				"source":       fetcher.Source(),
-			}
-			if _, jErr := jobs.Enqueue(ctx, deps.DB, "describe_attachment", descPayload, jobs.EnqueueOptions{
-				Priority:  5,
-				MachineID: deps.MachineID,
-			}); jErr != nil {
-				deps.Logger.Warn().Err(jErr).Str("att_node_id", att.NodeID).Msg("fetch_body: enqueue describe_attachment failed")
+			// Enqueue describe_attachment (not at depth >= 1: cascade cap).
+			if depth < 1 {
+				descPayload := map[string]string{
+					"node_id":      att.NodeID,
+					"external_url": att.URLPrivate,
+					"mime":         att.MimeType,
+					"source":       fetcher.Source(),
+				}
+				if _, jErr := jobs.Enqueue(ctx, deps.DB, "describe_attachment", descPayload, jobs.EnqueueOptions{
+					Priority:  5,
+					MachineID: deps.MachineID,
+				}); jErr != nil {
+					deps.Logger.Warn().Err(jErr).Str("att_node_id", att.NodeID).Msg("fetch_body: enqueue describe_attachment failed")
+				}
 			}
 		}
 
@@ -422,8 +439,11 @@ func pruneStaleEdges(ctx context.Context, deps Deps, fromNodeID string, keepIDs 
 	return err
 }
 
-// enqueueFetchIfEmpty enqueues a fetch_body job for a target node if its body is empty.
-func enqueueFetchIfEmpty(ctx context.Context, deps Deps, nodeID string, nodeType ids.NodeType) {
+// enqueueFetchIfEmpty enqueues a fetch_body job for a target node if its body is
+// empty and no live (queued/running, not parked) fetch_body for it exists. The
+// check and insert are one statement so concurrent workers can't both pass.
+// max_attempts and target_runner are covered by column defaults.
+func enqueueFetchIfEmpty(ctx context.Context, deps Deps, nodeID string, nodeType ids.NodeType, depth int, via string) {
 	var bodyVal *string
 	err := deps.DB.QueryRow(ctx,
 		`SELECT body FROM graph.nodes WHERE id = $1`, nodeID,
@@ -434,12 +454,18 @@ func enqueueFetchIfEmpty(ctx context.Context, deps Deps, nodeID string, nodeType
 	if bodyVal != nil && *bodyVal != "" {
 		return // already has content
 	}
-	if _, jErr := jobs.Enqueue(ctx, deps.DB, "fetch_body", map[string]string{
-		"node_id": nodeID,
-	}, jobs.EnqueueOptions{
-		Priority:  5,
-		MachineID: deps.MachineID,
-	}); jErr != nil {
+	raw, err := json.Marshal(fetchBodyPayload{NodeID: nodeID, Depth: depth, Via: via})
+	if err != nil {
+		return
+	}
+	if _, jErr := deps.DB.Exec(ctx, `
+		INSERT INTO graph.jobs (type, payload, priority, machine_id)
+		SELECT 'fetch_body', $2::jsonb, 5, $3
+		WHERE NOT EXISTS (SELECT 1 FROM graph.jobs
+		                  WHERE type='fetch_body' AND status IN ('queued','running')
+		                    AND payload->>'node_id' = $1
+		                    AND available_at < now() + interval '1 day')`,
+		nodeID, raw, deps.MachineID); jErr != nil {
 		deps.Logger.Warn().Err(jErr).Str("node_id", nodeID).Msg("enqueueFetchIfEmpty: enqueue failed")
 	}
 }
