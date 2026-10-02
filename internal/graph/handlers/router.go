@@ -75,5 +75,6 @@ func Mount(r chi.Router, deps Deps) {
 	r.Delete("/api/graph/pins", pins.delete)
 	r.Get("/api/graph/pins/board", pins.board)
 
+	r.Get("/api/graph/node/{id}/subject-queries", NewSubjectQueries(deps))
 	r.Mount("/api/graph", NewNeighbors(deps.DB))
 }
