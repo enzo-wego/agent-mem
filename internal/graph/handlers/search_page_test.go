@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -633,5 +634,71 @@ VALUES (4242, 'Asker', 'USPASK1', 'test') ON CONFLICT (eeid) DO NOTHING`); err !
 	_, resp, _ = spSearch(t, h, "q=PAN&match=hybrid", "USPASK1")
 	if len(resp.Results) != 0 {
 		t.Errorf("private hit leaked: %v", resultIDs(resp.Results))
+	}
+}
+
+func TestSearch_HybridKeywordTitleBoostOutranksSemantic(t *testing.T) {
+	pool := testDB(t)
+	clearWeightSettings(t, pool)
+	spNode(t, pool, "jira:PAY-A", "jira", "Zebra refund", "zebra refund broke in prod", "", "", "{}", 0, false)
+	spNode(t, pool, "jira:PAY-B", "jira", "Unrelated ledger", "ledger export", "", "", "{}", 0, false)
+	spEmbed(t, pool, "jira:PAY-B", spUnitVec())
+	v := make([]float32, handlers.GraphEmbeddingDims)
+	v[0], v[1] = 0.5, float32(math.Sqrt(0.75))
+	spEmbed(t, pool, "jira:PAY-A", v)
+	h, err := handlers.NewSearchWithEmbedder(pool, fixedSearchEmbedder{vector: spUnitVec()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	query := "q=" + url.QueryEscape("zebra refund") + "&match=hybrid"
+	status, resp, _ := spSearch(t, h, query, "")
+	if status != http.StatusOK {
+		t.Fatalf("status = %d", status)
+	}
+	orderedIDs := func(rs []map[string]any) []string {
+		var ids []string
+		for _, r := range rs {
+			ids = append(ids, r["id"].(string))
+		}
+		return ids
+	}
+	if got, want := orderedIDs(resp.Results), []string{"jira:PAY-A", "jira:PAY-B"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("ids = %v, want %v", got, want)
+	}
+	for i, r := range resp.Results {
+		wantMatch := []string{"semantic"}
+		wantBoost := 0.0
+		if i == 0 {
+			wantMatch = []string{"keyword", "semantic"}
+			wantBoost = 1
+		}
+		if got := matchOf(r); !reflect.DeepEqual(got, wantMatch) {
+			t.Fatalf("%s match = %v, want %v", r["id"], got, wantMatch)
+		}
+		bd := r["score_breakdown"].(map[string]any)
+		if got, want := keysOf(bd), []string{"auth", "edge", "kw", "rec", "sem", "team", "title"}; !reflect.DeepEqual(got, want) {
+			t.Fatalf("%s breakdown keys = %v, want %v", r["id"], got, want)
+		}
+		if bd["kw"].(float64) != wantBoost || bd["title"].(float64) != wantBoost {
+			t.Fatalf("%s breakdown = %v, want kw/title %v", r["id"], bd, wantBoost)
+		}
+		wantScore := 0.50*bd["sem"].(float64) + 0.075*bd["rec"].(float64) +
+			0.15*bd["edge"].(float64) + 0.15*bd["team"].(float64) +
+			0.05*bd["auth"].(float64) + 0.15*bd["kw"].(float64) + 0.20*bd["title"].(float64)
+		if got := r["score"].(float64); math.Abs(got-wantScore) > 1e-9 {
+			t.Fatalf("%s score = %.12f, want %.12f", r["id"], got, wantScore)
+		}
+	}
+	if _, err := pool.Exec(context.Background(), `INSERT INTO public.settings(key,value) VALUES
+		('graph.weights.kw','0'), ('graph.weights.title','0')
+		ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value`); err != nil {
+		t.Fatal(err)
+	}
+	status, resp, _ = spSearch(t, h, query, "")
+	if status != http.StatusOK {
+		t.Fatalf("second search status = %d", status)
+	}
+	if got, want := orderedIDs(resp.Results), []string{"jira:PAY-B", "jira:PAY-A"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("ids with boosts off = %v, want %v", got, want)
 	}
 }

@@ -1045,6 +1045,36 @@ export async function saveJiraUpdates(cfg: JiraUpdatesConfig): Promise<JiraUpdat
   return res.json();
 }
 
+// SearchWeights are the hybrid /search ranking weights (graph.weights.*).
+// Saved values apply on the next search, no restart.
+export interface SearchWeights {
+  hybrid_rec: number;
+  kw: number;
+  title: number;
+}
+
+export async function fetchSearchWeights(): Promise<SearchWeights> {
+  const res = await authFetch(`${BASE}/api/graph/search-weights`);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Unknown error' }));
+    throw new Error(err.error || `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function saveSearchWeights(w: SearchWeights): Promise<SearchWeights> {
+  const res = await authFetch(`${BASE}/api/graph/search-weights`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify(w),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Unknown error' }));
+    throw new Error(err.error || `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
 export async function graphNeighbors(id: string, depth = 1): Promise<GraphNeighbor[]> {
   // Keep ':' literal — the chi path param doesn't decode %3A, so node ids like
   // "jira:PAY-2190" / "slack:C..:ts" must keep their colons unencoded.

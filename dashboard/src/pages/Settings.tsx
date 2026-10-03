@@ -9,6 +9,8 @@ import {
   saveEligibilityGate,
   fetchJiraUpdates,
   saveJiraUpdates,
+  fetchSearchWeights,
+  saveSearchWeights,
   fetchGatewayHealth,
   fetchGatewayConfig,
   updateGatewayConfig,
@@ -18,6 +20,7 @@ import {
   type ChannelFilters,
   type EligibilityGateConfig,
   type JiraUpdatesConfig,
+  type SearchWeights,
   type GatewayHealth,
   type GatewayConfig,
   type GatewayConfigResponse,
@@ -147,6 +150,7 @@ export function SettingsPage() {
       <ChannelFiltersSection />
       <EligibilityGateSection />
       <JiraUpdatesSection />
+      <SearchRankingSection />
 
       {/* Context */}
       <Section title="Context Window">
@@ -628,6 +632,104 @@ function JiraUpdatesSection() {
 
           <button disabled={saving || intervalInvalid} onClick={save} className={btnPrimary}>
             {saving ? 'Saving…' : 'Save Jira freshness'}
+          </button>
+        </>
+      )}
+    </Section>
+  )
+}
+
+function SearchRankingSection() {
+  const [config, setConfig] = useState<SearchWeights | null>(null)
+  const [saving, setSaving] = useState(false)
+  const [toast, setToast] = useState<{ type: 'ok' | 'err'; msg: string } | null>(null)
+
+  useEffect(() => {
+    fetchSearchWeights()
+      .then(setConfig)
+      .catch(() => setToast({ type: 'err', msg: 'Failed to load search ranking settings' }))
+  }, [])
+
+  const save = async () => {
+    if (!config) return
+    setSaving(true)
+    setToast(null)
+    try {
+      setConfig(await saveSearchWeights(config))
+      setToast({ type: 'ok', msg: 'Saved' })
+    } catch (e: unknown) {
+      setToast({ type: 'err', msg: e instanceof Error ? e.message : 'Save failed' })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const invalid =
+    config !== null && Object.values(config).some((value) => !Number.isFinite(value) || value < 0 || value > 1)
+
+  return (
+    <Section title="Search Ranking">
+      <p className="text-sm text-gray-500 dark:text-gray-400">
+        Applies to /search and takes effect on the next search, no restart. Defaults 0.15 / 0.20 / 0.075 come from the 2026-10-03 ranking eval.
+      </p>
+      {toast && (
+        <div className={`text-sm px-3 py-1.5 rounded-md ${toast.type === 'ok' ? 'bg-green-50 text-green-700 dark:bg-green-900/30 dark:text-green-300' : 'bg-red-50 text-red-700 dark:bg-red-900/30 dark:text-red-300'}`}>
+          {toast.msg}
+        </div>
+      )}
+
+      {!config ? (
+        <p className="text-sm text-gray-500">Loading…</p>
+      ) : (
+        <>
+          <Field label="Keyword match boost" hint="Added to a /search result's score when the query text matched its title or body, or a thread's decisions.">
+            <input
+              type="number"
+              min="0"
+              max="1"
+              step="0.005"
+              data-testid="search-weight-kw"
+              value={Number.isNaN(config.kw) ? '' : config.kw}
+              disabled={saving}
+              onChange={(e) => setConfig({ ...config, kw: e.target.valueAsNumber })}
+              className={inputCls}
+            />
+          </Field>
+
+          <Field label="Title overlap boost" hint="Multiplied by the share of query words (3+ letters) that are words of the result title, then added.">
+            <input
+              type="number"
+              min="0"
+              max="1"
+              step="0.005"
+              data-testid="search-weight-title"
+              value={Number.isNaN(config.title) ? '' : config.title}
+              disabled={saving}
+              onChange={(e) => setConfig({ ...config, title: e.target.valueAsNumber })}
+              className={inputCls}
+            />
+          </Field>
+
+          <Field label="Recency weight (hybrid)" hint="Replaces the base recency weight (0.15) for /search only. Lower favours older threads.">
+            <input
+              type="number"
+              min="0"
+              max="1"
+              step="0.005"
+              data-testid="search-weight-hybrid-rec"
+              value={Number.isNaN(config.hybrid_rec) ? '' : config.hybrid_rec}
+              disabled={saving}
+              onChange={(e) => setConfig({ ...config, hybrid_rec: e.target.valueAsNumber })}
+              className={inputCls}
+            />
+          </Field>
+
+          {invalid && (
+            <p className="text-sm text-red-600 dark:text-red-400">Each weight must be between 0 and 1.</p>
+          )}
+
+          <button data-testid="search-weights-save" disabled={saving || invalid} onClick={save} className={btnPrimary}>
+            {saving ? 'Saving…' : 'Save search ranking'}
           </button>
         </>
       )}

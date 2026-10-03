@@ -328,32 +328,40 @@ LIMIT 1`, ref)
 	return eeid
 }
 
+// hybridBreakdown is the hybrid score_breakdown: the five shared components
+// (embedded, so their keys stay top-level) plus the two hybrid-only boosts.
+type hybridBreakdown struct {
+	scoring.Components
+	KW    float64 `json:"kw"`
+	Title float64 `json:"title"`
+}
+
 // hybridResult is the /search?match=hybrid result row. It is a separate struct
 // so default-mode JSON keeps exactly today's key set.
 type hybridResult struct {
-	NodeID           string             `json:"node_id"`
-	ID               string             `json:"id"`
-	Type             string             `json:"type"`
-	Title            string             `json:"title"`
-	URL              string             `json:"url"`
-	Summary          string             `json:"summary"`
-	Decisions        []threadDecision   `json:"decisions,omitempty"`
-	OpenQuestions    []string           `json:"open_questions,omitempty"`
-	Score            float64            `json:"score"`
-	ScoreBreakdown   scoring.Components `json:"score_breakdown"`
-	Author           string             `json:"author,omitempty"`
-	CreatedAt        time.Time          `json:"created_at"`
-	Match            []string           `json:"match"`
-	ThreadRoot       string             `json:"thread_root,omitempty"`
-	Channel          string             `json:"channel,omitempty"`
-	RootAuthor       string             `json:"root_author,omitempty"`
-	MsgCount         int                `json:"msg_count,omitempty"`
-	Participants     []string           `json:"participants,omitempty"`
-	ParticipantCount int                `json:"participant_count,omitempty"`
-	FirstTSMs        int64              `json:"first_ts_ms,omitempty"`
-	LastTSMs         int64              `json:"last_ts_ms,omitempty"`
-	PRCount          int                `json:"pr_count,omitempty"`
-	PRs              []prRef            `json:"prs,omitempty"`
+	NodeID           string           `json:"node_id"`
+	ID               string           `json:"id"`
+	Type             string           `json:"type"`
+	Title            string           `json:"title"`
+	URL              string           `json:"url"`
+	Summary          string           `json:"summary"`
+	Decisions        []threadDecision `json:"decisions,omitempty"`
+	OpenQuestions    []string         `json:"open_questions,omitempty"`
+	Score            float64          `json:"score"`
+	ScoreBreakdown   hybridBreakdown  `json:"score_breakdown"`
+	Author           string           `json:"author,omitempty"`
+	CreatedAt        time.Time        `json:"created_at"`
+	Match            []string         `json:"match"`
+	ThreadRoot       string           `json:"thread_root,omitempty"`
+	Channel          string           `json:"channel,omitempty"`
+	RootAuthor       string           `json:"root_author,omitempty"`
+	MsgCount         int              `json:"msg_count,omitempty"`
+	Participants     []string         `json:"participants,omitempty"`
+	ParticipantCount int              `json:"participant_count,omitempty"`
+	FirstTSMs        int64            `json:"first_ts_ms,omitempty"`
+	LastTSMs         int64            `json:"last_ts_ms,omitempty"`
+	PRCount          int              `json:"pr_count,omitempty"`
+	PRs              []prRef          `json:"prs,omitempty"`
 }
 
 // hybridHit is one raw row from either side of the hybrid query.
@@ -602,6 +610,50 @@ WHERE n.id = ANY($1) AND n.deleted_at IS NULL
 		add(h, false)
 	}
 
+	hw, err := scoring.LoadHybridWeights(ctx, s.db)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	wb := s.weights
+	wb.Rec = hw.Rec // hybrid uses its own, lower recency weight
+
+	chans := make([]string, 0, len(order))
+	tss := make([]string, 0, len(order))
+	seenRoots := map[string]bool{}
+	for _, m := range order {
+		if m.rootID == "" || seenRoots[m.rootID] {
+			continue
+		}
+		seenRoots[m.rootID] = true
+		if c, t, ok := slackRootParts(m.rootID); ok {
+			chans, tss = append(chans, c), append(tss, t)
+		}
+	}
+	type tsum struct {
+		summary, overview string
+		dec, oq           []byte
+	}
+	sums := map[string]tsum{}
+	if len(chans) > 0 {
+		srows, err := s.db.Query(ctx, `
+SELECT channel_id, thread_ts, summary, overview, decisions, open_questions
+FROM graph.thread_summaries
+WHERE (channel_id, thread_ts) IN (SELECT unnest($1::text[]), unnest($2::text[]))`, chans, tss)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		for srows.Next() {
+			var c, t string
+			var ts tsum
+			if err := srows.Scan(&c, &t, &ts.summary, &ts.overview, &ts.dec, &ts.oq); err == nil {
+				sums[c+":"+t] = ts
+			}
+		}
+		srows.Close()
+	}
+
 	now := time.Now()
 	results := make([]hybridResult, 0, len(order))
 	for _, m := range order {
@@ -628,9 +680,21 @@ WHERE n.id = ANY($1) AND n.deleted_at IS NULL
 		if title == "" {
 			title = firstLine(b.body, 120)
 		}
+		if m.rootID != "" {
+			if ch, t, ok := slackRootParts(m.rootID); ok {
+				if ts, ok := sums[ch+":"+t]; ok && ts.summary != "" {
+					title = ts.summary
+				}
+			}
+		}
+		bd := hybridBreakdown{Components: c, Title: scoring.TitleOverlap(q, title)}
+		if m.kw {
+			bd.KW = 1
+		}
+		score := scoring.Combine(wb, c) + hw.KW*bd.KW + hw.Title*bd.Title
 		res := hybridResult{
 			NodeID: b.id, ID: b.id, Type: b.typ, Title: title, URL: b.url,
-			Summary: b.summary, Score: scoring.Combine(s.weights, c), ScoreBreakdown: c,
+			Summary: b.summary, Score: score, ScoreBreakdown: bd,
 			Author: b.author, CreatedAt: b.createdAt, Match: match,
 		}
 		if m.rootID != "" {
@@ -667,34 +731,6 @@ WHERE n.id = ANY($1) AND n.deleted_at IS NULL
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		chans := make([]string, 0, len(slackRoots))
-		tss := make([]string, 0, len(slackRoots))
-		for _, rid := range slackRoots {
-			if c, t, ok := slackRootParts(rid); ok {
-				chans, tss = append(chans, c), append(tss, t)
-			}
-		}
-		type tsum struct {
-			summary, overview string
-			dec, oq           []byte
-		}
-		sums := map[string]tsum{}
-		srows, err := s.db.Query(ctx, `
-SELECT channel_id, thread_ts, summary, overview, decisions, open_questions
-FROM graph.thread_summaries
-WHERE (channel_id, thread_ts) IN (SELECT unnest($1::text[]), unnest($2::text[]))`, chans, tss)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		for srows.Next() {
-			var c, t string
-			var ts tsum
-			if err := srows.Scan(&c, &t, &ts.summary, &ts.overview, &ts.dec, &ts.oq); err == nil {
-				sums[c+":"+t] = ts
-			}
-		}
-		srows.Close()
 		for i := range results {
 			rid := results[i].ThreadRoot
 			if rid == "" {
