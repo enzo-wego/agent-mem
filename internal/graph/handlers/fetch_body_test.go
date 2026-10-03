@@ -74,6 +74,12 @@ var errFatalSentinel = errors.New("fatal")
 func TestFetchBodyJira_CommentAndRemoteLinksBecomeEdges(t *testing.T) {
 	pool := openTestDB(t)
 	truncateGraphHandlerTables(t, pool)
+	// PAY is a fetched project on prod; bare/linked PAY keys must stay linked.
+	if _, err := pool.Exec(context.Background(), `
+INSERT INTO graph.nodes (id, type, natural_key, body, machine_id)
+VALUES ('jira:PAY-1', 'jira', 'PAY-1', 'ticket', 'test')`); err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(func() { truncateGraphHandlerTables(t, pool) })
 	var mode atomic.Int32
 	server := jiraHandlerTestServer(t, &mode)
@@ -88,6 +94,12 @@ func TestFetchBodyJira_CommentAndRemoteLinksBecomeEdges(t *testing.T) {
 func TestFetchBodyJira_FailureKeepsBodyAndEdges(t *testing.T) {
 	pool := openTestDB(t)
 	truncateGraphHandlerTables(t, pool)
+	// PAY is a fetched project on prod; bare/linked PAY keys must stay linked.
+	if _, err := pool.Exec(context.Background(), `
+INSERT INTO graph.nodes (id, type, natural_key, body, machine_id)
+VALUES ('jira:PAY-1', 'jira', 'PAY-1', 'ticket', 'test')`); err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(func() { truncateGraphHandlerTables(t, pool) })
 	var mode atomic.Int32
 	server := jiraHandlerTestServer(t, &mode)

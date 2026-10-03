@@ -58,11 +58,12 @@ type Extractor struct {
 	db  *pgxpool.Pool
 	log zerolog.Logger
 
-	mu          sync.RWMutex
-	aliasMap    map[string]string // lowercase-alias → entity node id
-	aliasPatMap map[string]*regexp.Regexp
-	cachedAt    time.Time
-	cacheTTL    time.Duration
+	mu           sync.RWMutex
+	aliasMap     map[string]string // lowercase-alias → entity node id
+	aliasPatMap  map[string]*regexp.Regexp
+	jiraProjects map[string]bool // Jira project prefixes with at least one fetched ticket
+	cachedAt     time.Time
+	cacheTTL     time.Duration
 }
 
 // New creates an Extractor backed by db.
@@ -74,7 +75,7 @@ func New(db *pgxpool.Pool, log zerolog.Logger) *Extractor {
 	}
 }
 
-// Refresh reloads the entity alias trie from the database unconditionally.
+// Refresh reloads entity aliases and known Jira projects from the database unconditionally.
 // If the Extractor was created with a nil pool, Refresh is a no-op.
 func (e *Extractor) Refresh(ctx context.Context) error {
 	if e.db == nil {
@@ -117,12 +118,46 @@ func (e *Extractor) Refresh(ctx context.Context) error {
 		return fmt.Errorf("extractor: entity rows: %w", err)
 	}
 
+	projectRows, err := e.db.Query(ctx, `
+SELECT DISTINCT split_part(substr(id, 6), '-', 1)
+FROM graph.nodes
+WHERE type = 'jira' AND deleted_at IS NULL AND COALESCE(body, '') <> ''`)
+	if err != nil {
+		return fmt.Errorf("extractor: load jira projects: %w", err)
+	}
+	defer projectRows.Close()
+	jiraProjects := make(map[string]bool)
+	for projectRows.Next() {
+		var prefix string
+		if err := projectRows.Scan(&prefix); err != nil {
+			return fmt.Errorf("extractor: load jira projects: %w", err)
+		}
+		jiraProjects[prefix] = true
+	}
+	if err := projectRows.Err(); err != nil {
+		return fmt.Errorf("extractor: load jira projects: %w", err)
+	}
+
 	e.mu.Lock()
 	e.aliasMap = aliasMap
 	e.aliasPatMap = aliasPatMap
+	e.jiraProjects = jiraProjects
 	e.cachedAt = time.Now()
 	e.mu.Unlock()
 	return nil
+}
+
+// knownJiraProject reports whether a bare key's prefix is a Jira project we
+// have fetched at least one ticket of. An empty set (fresh DB, nil pool)
+// trusts every key, as before.
+func (e *Extractor) knownJiraProject(key string) bool {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	if len(e.jiraProjects) == 0 {
+		return true
+	}
+	prefix, _, _ := strings.Cut(key, "-")
+	return e.jiraProjects[prefix]
 }
 
 // ensureCache refreshes the entity cache if it's stale.
@@ -476,6 +511,9 @@ func (e *Extractor) Extract(ctx context.Context, body string) (Result, error) {
 	bareLines := filterNonCodeLines(cleanBody)
 	for _, m := range bareJiraRe.FindAllStringSubmatch(bareLines, -1) {
 		key := m[1]
+		if !e.knownJiraProject(key) {
+			continue
+		}
 		nodeID, err := ids.Jira(key)
 		if err != nil {
 			continue

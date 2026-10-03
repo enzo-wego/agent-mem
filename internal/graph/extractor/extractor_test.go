@@ -3,6 +3,7 @@ package extractor_test
 import (
 	"context"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -64,6 +65,83 @@ func newExtractor(t *testing.T, pool *pgxpool.Pool) *extractor.Extractor {
 		t.Fatalf("Refresh: %v", err)
 	}
 	return e
+}
+
+func seedFetchedJira(t *testing.T, pool *pgxpool.Pool, id, body string) {
+	t.Helper()
+	_, err := pool.Exec(context.Background(), `
+INSERT INTO graph.nodes (id, type, natural_key, body, machine_id)
+VALUES ($1, 'jira', $2, $3, 'test')
+ON CONFLICT (id) DO UPDATE SET body = EXCLUDED.body, deleted_at = NULL`,
+		id, strings.TrimPrefix(id, "jira:"), body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if _, err := pool.Exec(context.Background(), `DELETE FROM graph.nodes WHERE id = $1`, id); err != nil {
+			t.Error(err)
+		}
+	})
+}
+
+func TestExtract_BareJiraKey_KnownPrefixLinked(t *testing.T) {
+	pool := openTestDB(t)
+	if _, err := pool.Exec(context.Background(), `DELETE FROM graph.nodes WHERE id LIKE 'jira:SHA-%' OR id LIKE 'jira:ZZQ-%'`); err != nil {
+		t.Fatal(err)
+	}
+	seedFetchedJira(t, pool, "jira:PAY-1", "ticket")
+	e := newExtractor(t, pool)
+	result, err := e.Extract(context.Background(), "Fixes PAY-2 today")
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertContains(t, result.Findings, "jira:PAY-2")
+}
+
+func TestExtract_BareJiraKey_UnknownPrefixSkipped(t *testing.T) {
+	pool := openTestDB(t)
+	if _, err := pool.Exec(context.Background(), `DELETE FROM graph.nodes WHERE id LIKE 'jira:SHA-%' OR id LIKE 'jira:ZZQ-%'`); err != nil {
+		t.Fatal(err)
+	}
+	seedFetchedJira(t, pool, "jira:PAY-1", "ticket")
+	e := newExtractor(t, pool)
+	result, err := e.Extract(context.Background(), "Fixes PAY-2, hashed with SHA-256 per RFC-7231")
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertContains(t, result.Findings, "jira:PAY-2")
+	assertNotContains(t, result.Findings, "jira:SHA-256")
+	assertNotContains(t, result.Findings, "jira:RFC-7231")
+}
+
+func TestExtract_JiraURL_UnknownPrefixStillLinked(t *testing.T) {
+	pool := openTestDB(t)
+	if _, err := pool.Exec(context.Background(), `DELETE FROM graph.nodes WHERE id LIKE 'jira:SHA-%' OR id LIKE 'jira:ZZQ-%'`); err != nil {
+		t.Fatal(err)
+	}
+	seedFetchedJira(t, pool, "jira:PAY-1", "ticket")
+	e := newExtractor(t, pool)
+	result, err := e.Extract(context.Background(), "see https://wegomushi.atlassian.net/browse/ZZQ-7")
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertContains(t, result.Findings, "jira:ZZQ-7")
+}
+
+func TestExtract_BareJiraKey_EmptyKnownSetKeepsOldBehavior(t *testing.T) {
+	pool := openTestDB(t)
+	if _, err := pool.Exec(context.Background(), `DELETE FROM graph.nodes WHERE id LIKE 'jira:SHA-%' OR id LIKE 'jira:ZZQ-%'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(context.Background(), `DELETE FROM graph.nodes WHERE type = 'jira'`); err != nil {
+		t.Fatal(err)
+	}
+	e := newExtractor(t, pool)
+	result, err := e.Extract(context.Background(), "hashed with SHA-256")
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertContains(t, result.Findings, "jira:SHA-256")
 }
 
 // -----------------------------------------------------------------------
