@@ -220,7 +220,7 @@ func (e *PermanentError) Error() string {
 func classifySlackAPIError(code string) error {
 	switch code {
 	case "not_authed", "invalid_auth", "account_inactive", "token_revoked",
-		"token_expired", "missing_scope", "channel_not_found",
+		"token_expired", "missing_scope", "channel_not_found", "not_in_channel",
 		"thread_not_found", "message_not_found":
 		return &PermanentError{Code: code}
 	default:

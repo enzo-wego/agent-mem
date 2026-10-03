@@ -202,7 +202,8 @@ LEFT JOIN graph.thread_summaries ts
   ON ts.channel_id = REPLACE(n.scope,'slack:','')
   AND ts.thread_ts = COALESCE(NULLIF(n.metadata->>'thread_ts',''), split_part(n.id,':',3))
 LEFT JOIN graph.slack_channels sc
-  ON sc.slack_channel_id = REPLACE(n.scope,'slack:','')
+  ON sc.slack_channel_id = COALESCE(NULLIF(REPLACE(n.scope,'slack:',''),''),
+                                    CASE WHEN n.id LIKE 'slack:%' THEN split_part(n.id,':',2) END)
 LEFT JOIN LATERAL (
   SELECT (EXTRACT(EPOCH FROM MIN(COALESCE(to_timestamp(NULLIF(m.metadata->>'ts','')::float8), m.created_at, m.first_seen_at))) * 1000)::bigint AS first_ms,
          (EXTRACT(EPOCH FROM MAX(COALESCE(to_timestamp(NULLIF(m.metadata->>'ts','')::float8), m.created_at, m.first_seen_at))) * 1000)::bigint AS last_ms
@@ -221,6 +222,13 @@ WHERE n.id=$1`, n.NodeID)
 			// Hidden from this asker: don't surface it and don't expand through it.
 			if !scopeVisible(scope, scopeSet, noFilter) {
 				continue
+			}
+			// A scope-less stub's channel name came from its node ID. Only show it to an
+			// asker who can see that channel; private channel names stay hidden.
+			if (scope == nil || *scope == "") && !noFilter {
+				if parts := strings.SplitN(item.Node.NodeID, ":", 3); len(parts) == 3 && !scopeSet["slack:"+parts[1]] {
+					item.Node.Channel = ""
+				}
 			}
 			if item.Node.Type == "slack" || item.Node.Type == "slack_thread" {
 				switch {
