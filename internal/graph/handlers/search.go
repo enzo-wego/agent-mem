@@ -510,10 +510,11 @@ WITH hit AS (
            END,
            n.id) AS root_key
   FROM graph.nodes n
+  LEFT JOIN graph.artifact_index ai ON ai.node_id = n.id
   WHERE n.deleted_at IS NULL
     AND ($1::text[] IS NULL OR n.type = ANY($1))
     AND ($2::text[] IS NULL OR n.scope IS NULL OR n.scope = '' OR n.scope = ANY($2))
-    AND (n.title ~* $3 OR n.body ~* $3)
+    AND (n.title ~* $3 OR n.body ~* $3 OR ai.decisions_text ~* $3)
 ), folded AS (
   SELECT DISTINCT ON (root_key) id, ts FROM hit ORDER BY root_key, ts DESC, id
 ), top AS (

@@ -3,13 +3,19 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 	"unicode/utf8"
 
+	"github.com/agent-mem/agent-mem/internal/gemini"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/zerolog"
 
 	"github.com/pgvector/pgvector-go"
@@ -311,5 +317,240 @@ func TestIndexSummaryForSlackRootFallsBackWhenSummaryMissing(t *testing.T) {
 	}
 	if kind != "" {
 		t.Fatalf("summary kind = %q, want empty", kind)
+	}
+}
+
+func TestDecisionsBlock(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		ds   []threadDecision
+		want string
+	}{
+		{"text", []threadDecision{{Text: "Use ledger A"}, {Text: "  Ship\n v2  "}, {Text: "   "}}, "- Use ledger A\n- Ship v2"},
+		{"nil", nil, ""},
+		{"blank", []threadDecision{{Text: " "}}, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := decisionsBlock(tc.ds); got != tc.want {
+				t.Fatalf("decisionsBlock = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestDecisionsBlock_Caps(t *testing.T) {
+	ds := make([]threadDecision, 10)
+	for i := range ds {
+		ds[i].Text = fmt.Sprintf("D%02d", i+1)
+	}
+	want := "- D03\n- D04\n- D05\n- D06\n- D07\n- D08\n- D09\n- D10"
+	if got := decisionsBlock(ds); got != want {
+		t.Fatalf("latest decisions = %q, want %q", got, want)
+	}
+	got := decisionsBlock([]threadDecision{{Text: strings.Repeat("é", 300)}})
+	if want := "- " + strings.Repeat("é", 200); got != want || !utf8.ValidString(got) {
+		t.Fatalf("rune truncation = %q, want %q and valid UTF-8", got, want)
+	}
+	ds = make([]threadDecision, 20)
+	for i := range ds {
+		ds[i].Text = strings.Repeat("x", 500)
+	}
+	if got := decisionsBlock(ds); utf8.RuneCountInString(got) != 1623 {
+		t.Fatalf("block has %d runes, want 1623", utf8.RuneCountInString(got))
+	}
+}
+
+// recordingGemini records every embedding input; the rest is mockGemini.
+type recordingGemini struct {
+	*mockGemini
+	inputs []string
+}
+
+func (r *recordingGemini) EmbedWithOptions(ctx context.Context, text string, o gemini.EmbedOptions) ([]float32, error) {
+	r.inputs = append(r.inputs, text)
+	return r.mockGemini.EmbedWithOptions(ctx, text, o)
+}
+
+func decisionIndexTestDB(t *testing.T) (*pgxpool.Pool, *recordingGemini) {
+	t.Helper()
+	pool := openTestDB(t)
+	truncateGraphHandlerTables(t, pool)
+	cleanup := func() {
+		if _, err := pool.Exec(context.Background(), `DELETE FROM graph.thread_summaries WHERE channel_id = 'CDKW'`); err != nil {
+			t.Fatalf("clean thread summaries: %v", err)
+		}
+	}
+	cleanup()
+	t.Cleanup(cleanup)
+	vector := make([]float32, GraphEmbeddingDims)
+	vector[0] = 1
+	return pool, &recordingGemini{mockGemini: &mockGemini{embedResult: func() ([]float32, error) {
+		return vector, nil
+	}}}
+}
+
+func seedDecisionIndexThread(t *testing.T, pool *pgxpool.Pool) {
+	t.Helper()
+	ctx := context.Background()
+	if _, err := pool.Exec(ctx, `
+INSERT INTO graph.nodes (id, type, natural_key, body, scope, metadata, machine_id)
+VALUES ('slack:CDKW:900.000001', 'slack', 'slack:CDKW:900.000001', 'kickoff about refunds', 'slack:CDKW',
+        '{"ts":"900.000001","thread_ts":"900.000001"}', 'test'),
+       ('slack:CDKW:900.000002', 'slack', 'slack:CDKW:900.000002', 'ok', 'slack:CDKW',
+        '{"ts":"900.000002","thread_ts":"900.000001"}', 'test')`); err != nil {
+		t.Fatalf("seed nodes: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+INSERT INTO graph.thread_summaries (channel_id, thread_ts, signature, summary, overview, decisions)
+VALUES ('CDKW', '900.000001', 'sig', 'WOMBATTOPIC flow', 'Team discussed refunds.',
+        '[{"text":"Use the QUOKKAPAY ledger for partial refunds","by":"Lan","date":"1970-01-01","ts":"900.000002"}]')`); err != nil {
+		t.Fatalf("seed summary: %v", err)
+	}
+}
+
+func runDecisionIndex(t *testing.T, pool *pgxpool.Pool, rec *recordingGemini, nodeID string) {
+	t.Helper()
+	payload, err := json.Marshal(indexArtifactPayload{NodeID: nodeID, Force: true, SkipJudging: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := NewIndexArtifactHandler(Deps{DB: pool, Gemini: rec, Logger: zerolog.Nop(), MachineID: "test"}).
+		Handler(context.Background(), payload); err != nil {
+		t.Fatalf("index artifact: %v", err)
+	}
+}
+
+func decisionIndexSearch(t *testing.T, s *Search, query string) []struct {
+	ID        string           `json:"id"`
+	Summary   string           `json:"summary"`
+	Match     []string         `json:"match"`
+	Decisions []threadDecision `json:"decisions"`
+} {
+	t.Helper()
+	w := httptest.NewRecorder()
+	s.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/graph/search?"+query, nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("search status %d: %s", w.Code, w.Body.String())
+	}
+	var response struct {
+		Results []struct {
+			ID        string           `json:"id"`
+			Summary   string           `json:"summary"`
+			Match     []string         `json:"match"`
+			Decisions []threadDecision `json:"decisions"`
+		} `json:"results"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode search: %v", err)
+	}
+	return response.Results
+}
+
+func TestIndexArtifact_DecisionKeywordFindsThread(t *testing.T) {
+	pool, rec := decisionIndexTestDB(t)
+	seedDecisionIndexThread(t, pool)
+	s, err := NewSearch(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := decisionIndexSearch(t, s, "q=QUOKKAPAY&match=hybrid"); len(got) != 0 {
+		t.Fatalf("before indexing: %v, want no results", got)
+	}
+	runDecisionIndex(t, pool, rec, "slack:CDKW:900.000001")
+	var summary, kind, decisions string
+	var embeddingNull bool
+	if err := pool.QueryRow(context.Background(), `
+SELECT summary, summary_kind, decisions_text, embedding IS NULL
+FROM graph.artifact_index WHERE node_id = 'slack:CDKW:900.000001'`).
+		Scan(&summary, &kind, &decisions, &embeddingNull); err != nil {
+		t.Fatal(err)
+	}
+	if summary != "WOMBATTOPIC flow\n\nTeam discussed refunds." || kind != "thread_summary" ||
+		decisions != "- Use the QUOKKAPAY ledger for partial refunds" || embeddingNull {
+		t.Fatalf("index row: summary=%q kind=%q decisions=%q embeddingNull=%v", summary, kind, decisions, embeddingNull)
+	}
+	wantInputs := []string{"WOMBATTOPIC flow\n\nTeam discussed refunds.\n\nDecisions:\n- Use the QUOKKAPAY ledger for partial refunds"}
+	if !reflect.DeepEqual(rec.inputs, wantInputs) {
+		t.Fatalf("embedding inputs = %q, want %q", rec.inputs, wantInputs)
+	}
+	var jobs, skipJobs int
+	if err := pool.QueryRow(context.Background(), `
+SELECT count(*), count(*) FILTER (WHERE payload->>'skip_judging' = 'true')
+FROM graph.jobs WHERE type = 'link_topics'`).Scan(&jobs, &skipJobs); err != nil {
+		t.Fatal(err)
+	}
+	if jobs != 1 || skipJobs != 1 {
+		t.Fatalf("link_topics jobs=%d skip_judging jobs=%d, want 1 each", jobs, skipJobs)
+	}
+	got := decisionIndexSearch(t, s, "q=QUOKKAPAY&match=hybrid")
+	if len(got) != 1 {
+		t.Fatalf("decision search = %v, want one result", got)
+	}
+	if got[0].ID != "slack:CDKW:900.000001" || !reflect.DeepEqual(got[0].Match, []string{"keyword"}) ||
+		got[0].Summary != "Team discussed refunds." || len(got[0].Decisions) != 1 ||
+		got[0].Decisions[0].Text != "Use the QUOKKAPAY ledger for partial refunds" {
+		t.Fatalf("decision result = %+v", got[0])
+	}
+	if got := decisionIndexSearch(t, s, "q=WOMBATTOPIC&match=hybrid"); len(got) != 0 {
+		t.Fatalf("topic search = %v, want no results", got)
+	}
+}
+
+func TestIndexArtifact_DefaultSearchSummaryHasNoDecisions(t *testing.T) {
+	pool, rec := decisionIndexTestDB(t)
+	seedDecisionIndexThread(t, pool)
+	runDecisionIndex(t, pool, rec, "slack:CDKW:900.000001")
+	s, err := NewSearch(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := decisionIndexSearch(t, s, "q=kickoff")
+	if len(got) != 1 {
+		t.Fatalf("default search = %v, want one result", got)
+	}
+	if got[0].ID != "slack:CDKW:900.000001" || got[0].Summary != "WOMBATTOPIC flow\n\nTeam discussed refunds." ||
+		strings.Contains(got[0].Summary, "QUOKKAPAY") || strings.Contains(got[0].Summary, "Decisions:") {
+		t.Fatalf("default result = %+v", got[0])
+	}
+}
+
+func TestIndexArtifact_ThreadRootWithoutDecisionsWritesEmpty(t *testing.T) {
+	pool, rec := decisionIndexTestDB(t)
+	ctx := context.Background()
+	if _, err := pool.Exec(ctx, `
+INSERT INTO graph.nodes (id, type, natural_key, body, scope, metadata, machine_id)
+VALUES ('slack:CDKW:910.000001', 'slack', 'slack:CDKW:910.000001', 'hello', 'slack:CDKW',
+        '{"ts":"910.000001","thread_ts":"910.000001"}', 'test'),
+       ('jira:PAY-77', 'jira', 'jira:PAY-77', 'Some jira text', NULL, '{}', 'test')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `
+INSERT INTO graph.thread_summaries (channel_id, thread_ts, signature, summary, overview, decisions)
+VALUES ('CDKW', '910.000001', 'sig', 'T', 'O', NULL)`); err != nil {
+		t.Fatal(err)
+	}
+	runDecisionIndex(t, pool, rec, "slack:CDKW:910.000001")
+	var summary string
+	var decisions *string
+	if err := pool.QueryRow(ctx, `
+SELECT summary, decisions_text FROM graph.artifact_index WHERE node_id = 'slack:CDKW:910.000001'`).
+		Scan(&summary, &decisions); err != nil {
+		t.Fatal(err)
+	}
+	if summary != "T\n\nO" || decisions == nil || *decisions != "" {
+		t.Fatalf("root summary=%q decisions=%v, want T\\n\\nO and non-NULL empty", summary, decisions)
+	}
+	if want := []string{"T\n\nO"}; !reflect.DeepEqual(rec.inputs, want) {
+		t.Fatalf("embedding inputs = %q, want %q", rec.inputs, want)
+	}
+	runDecisionIndex(t, pool, rec, "jira:PAY-77")
+	var decisionsNull bool
+	if err := pool.QueryRow(ctx, `
+SELECT decisions_text IS NULL FROM graph.artifact_index WHERE node_id = 'jira:PAY-77'`).
+		Scan(&decisionsNull); err != nil {
+		t.Fatal(err)
+	}
+	if !decisionsNull {
+		t.Fatal("Jira decisions_text must be NULL")
 	}
 }

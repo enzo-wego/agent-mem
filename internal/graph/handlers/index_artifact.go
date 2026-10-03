@@ -87,17 +87,25 @@ WHERE n.id = $1`, p.NodeID,
 		// resource-aware thread summary built by summarize_thread.
 		summary := heuristicSummary(p.NodeID, bodyFull)
 		summaryKind := "heuristic"
+		var decisionsText *string // NULL unless this node embeds a thread summary
 		if (nodeType == "slack" || nodeType == "slack_thread") && threadTs == ownTs && strings.HasPrefix(scope, "slack:") {
 			var topic, overview string
+			var decRaw []byte
 			_ = deps.DB.QueryRow(ctx,
-				`SELECT COALESCE(summary,''), COALESCE(overview,'')
+				`SELECT COALESCE(summary,''), COALESCE(overview,''), decisions
 FROM graph.thread_summaries
 WHERE channel_id=$1 AND thread_ts=$2`,
 				strings.TrimPrefix(scope, "slack:"), threadTs,
-			).Scan(&topic, &overview)
+			).Scan(&topic, &overview, &decRaw)
 			if threadSummary, kind := indexSummaryForSlackRoot(topic, overview); threadSummary != "" {
 				summary = threadSummary
 				summaryKind = kind
+				var decisions []threadDecision
+				if len(decRaw) > 0 {
+					_ = json.Unmarshal(decRaw, &decisions) // NULL or bad JSON: no decisions
+				}
+				dt := decisionsBlock(decisions)
+				decisionsText = &dt
 			}
 		}
 
@@ -143,9 +151,13 @@ SELECT EXISTS (
 			}
 		}
 
+		embedInput := summary
+		if decisionsText != nil && *decisionsText != "" {
+			embedInput += indexDecisionsMarker + *decisionsText
+		}
 		var embedding any
 		if !skipEmbedding {
-			vector, err := deps.Gemini.EmbedWithOptions(ctx, summary, graphEmbeddingOptions())
+			vector, err := deps.Gemini.EmbedWithOptions(ctx, embedInput, graphEmbeddingOptions())
 			if err != nil {
 				return fmt.Errorf("%w: index_artifact embed: %v", jobs.ErrTransient, err)
 			}
@@ -154,20 +166,21 @@ SELECT EXISTS (
 
 		// Step 6: UPSERT graph.artifact_index.
 		const upsertSQL = `
-			INSERT INTO graph.artifact_index (node_id, summary, summary_kind, embedding, identifiers, refreshed_at, machine_id)
-			VALUES ($1, $2, $3, $4, $5, NOW(), $6)
+			INSERT INTO graph.artifact_index (node_id, summary, summary_kind, embedding, identifiers, refreshed_at, machine_id, decisions_text)
+			VALUES ($1, $2, $3, $4, $5, NOW(), $6, $7)
 			ON CONFLICT (node_id) DO UPDATE SET
 				summary      = EXCLUDED.summary,
 				summary_kind = EXCLUDED.summary_kind,
 				embedding    = EXCLUDED.embedding,
 				identifiers  = EXCLUDED.identifiers,
+				decisions_text = EXCLUDED.decisions_text,
 				refreshed_at = NOW()`
 		if indexTx != nil {
 			_, err = indexTx.Exec(ctx, upsertSQL,
-				p.NodeID, summary, summaryKind, embedding, identifiers, deps.MachineID)
+				p.NodeID, summary, summaryKind, embedding, identifiers, deps.MachineID, decisionsText)
 		} else {
 			_, err = deps.DB.Exec(ctx, upsertSQL,
-				p.NodeID, summary, summaryKind, embedding, identifiers, deps.MachineID)
+				p.NodeID, summary, summaryKind, embedding, identifiers, deps.MachineID, decisionsText)
 		}
 		if err != nil {
 			return fmt.Errorf("index_artifact: upsert artifact_index: %w", err)
@@ -185,6 +198,36 @@ SELECT EXISTS (
 		}
 		return nil
 	}
+}
+
+// indexDecisionsMarker joins a thread root's summary and its decisions block in
+// the embedding input. Only the embedding sees it: the stored summary has none.
+const indexDecisionsMarker = "\n\nDecisions:\n"
+
+// The decisions block holds the latest indexMaxDecisions decisions, each cut
+// to indexDecisionRunes runes: at most 8*202 + 7 = 1,623 runes.
+const indexMaxDecisions = 8
+
+const indexDecisionRunes = 200
+
+func decisionsBlock(ds []threadDecision) string {
+	lines := make([]string, 0, indexMaxDecisions)
+	for _, d := range ds {
+		t := truncateRunes(strings.Join(strings.Fields(d.Text), " "), indexDecisionRunes)
+		if t == "" {
+			continue
+		}
+		if len(lines) == indexMaxDecisions {
+			copy(lines, lines[1:])
+			lines[len(lines)-1] = t
+		} else {
+			lines = append(lines, t)
+		}
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	return "- " + strings.Join(lines, "\n- ")
 }
 
 func indexSummaryForSlackRoot(topic, overview string) (summary, kind string) {
