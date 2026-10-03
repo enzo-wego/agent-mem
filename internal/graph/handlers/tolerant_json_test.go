@@ -56,9 +56,9 @@ func TestGenThreadDeepSummaryPreambleWrappedJSON(t *testing.T) {
 			`{"topic":"Checkout failure","overview":"Checkout failed.","highlights":["Failure reported."],"kind":"substantive"}` + "\n```", nil
 	}}
 
-	topic, overview, highlights, kind := genThreadDeepSummary(context.Background(), gem, "transcript")
-	if topic != "Checkout failure" || overview != "Checkout failed." || len(highlights) != 1 || kind != "substantive" {
-		t.Errorf("genThreadDeepSummary() = %q, %q, %v, %q", topic, overview, highlights, kind)
+	ds := genThreadDeepSummary(context.Background(), gem, "transcript")
+	if ds.Topic != "Checkout failure" || ds.Overview != "Checkout failed." || len(ds.Highlights) != 1 || ds.Kind != "substantive" {
+		t.Errorf("genThreadDeepSummary() = %#v", ds)
 	}
 }
 

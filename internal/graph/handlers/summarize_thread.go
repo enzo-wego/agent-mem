@@ -29,6 +29,45 @@ import (
 // a transcript missing everything after line 1 of every multi-line message.
 const threadSummarySigVersion = "v9"
 
+// threadTranscriptBudget caps the transcript sent to the summarizer, in bytes.
+// Over budget, fitTranscript keeps the opening messages and the latest ones.
+// It was 7,000 and head-only, which summarized long threads from their first
+// messages and missed every later decision (agent-mem-8689).
+const threadTranscriptBudget = 40000
+
+// transcriptMarkerFmt marks the messages fitTranscript left out.
+const transcriptMarkerFmt = "[… %d messages omitted …]\n"
+
+// transcriptLine formats one message for the summarizer. n is the 1-based
+// position in the whole thread, so the model can tell how much was omitted;
+// ts lets it cite the deciding message.
+func transcriptLine(n int, date, ts, author, body string) string {
+	return fmt.Sprintf("[%d %s ts=%s] %s: %s\n", n, date, ts, author, flattenLines(body, 2000))
+}
+
+func fitTranscript(lines []string, budget int) string {
+	total := 0
+	for _, line := range lines {
+		total += len(line)
+	}
+	if total <= budget {
+		return strings.Join(lines, "")
+	}
+	head, headUsed := 0, 0
+	for head < len(lines) && headUsed+len(lines[head]) <= budget/4 {
+		headUsed += len(lines[head])
+		head++
+	}
+	markerLen := len(fmt.Sprintf(transcriptMarkerFmt, len(lines)))
+	tailBudget := budget - headUsed - markerLen
+	tail, tailUsed := len(lines), 0
+	for tail > head && tailUsed+len(lines[tail-1]) <= tailBudget {
+		tailUsed += len(lines[tail-1])
+		tail--
+	}
+	return strings.Join(lines[:head], "") + fmt.Sprintf(transcriptMarkerFmt, tail-head) + strings.Join(lines[tail:], "")
+}
+
 // threadSummarySignature builds a thread-summary cache key from the version
 // constant, the ingested message count, and the newest message updated_at (ms).
 // It is the only place the "v<N>:count:ms" format is produced.
@@ -43,9 +82,10 @@ func threadSummarySignature(count int, newestUpdatedMs int64) string {
 // exist for "only the links changed" and cost 1,335 LLM calls/hour for 3 real
 // updates, because it bypassed the dedup and the skip check together.
 type summarizeThreadPayload struct {
-	ChannelID   string `json:"channel_id"`
-	ThreadTs    string `json:"thread_ts"`
-	SkipJudging bool   `json:"skip_judging,omitempty"`
+	ChannelID     string `json:"channel_id"`
+	ThreadTs      string `json:"thread_ts"`
+	SkipJudging   bool   `json:"skip_judging,omitempty"`
+	FillDecisions bool   `json:"fill_decisions,omitempty"`
 }
 
 // NewSummarizeThreadHandler returns the job entry for "summarize_thread": it
@@ -79,7 +119,9 @@ func summarizeThreadHandler(deps Deps) jobs.Handler {
 SELECT COALESCE(NULLIF(n.body,''), n.title, ''), COALESCE(NULLIF(CASE WHEN p.display_name ~ '^[BU][A-Z0-9]{6,}$' THEN '' ELSE p.display_name END,''), NULLIF(n.metadata->'author'->>'display_name',''), ''),
        COALESCE(p.department,''), COALESCE(p.job_title,''),
        COALESCE(dr.domain,''), COALESCE(dr.role_label,''),
-       (EXTRACT(EPOCH FROM n.updated_at) * 1000)::bigint AS upd_ms
+       (EXTRACT(EPOCH FROM n.updated_at) * 1000)::bigint AS upd_ms,
+       COALESCE(NULLIF(n.metadata->>'ts',''), split_part(n.id,':',3)) AS msg_ts,
+       to_char(COALESCE(to_timestamp(NULLIF(n.metadata->>'ts','')::float8), n.first_seen_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS msg_date
 FROM graph.nodes n
 LEFT JOIN graph.people p ON p.id = n.author_person_id
 LEFT JOIN graph.person_derived_roles dr ON dr.eeid = p.eeid
@@ -90,14 +132,15 @@ ORDER BY COALESCE(to_timestamp(NULLIF(n.metadata->>'ts','')::float8), n.first_se
 		if err != nil {
 			return err
 		}
-		var b strings.Builder
+		var lines []string
+		dateOf := map[string]string{}
 		var count int
 		var maxUpdated int64
 		var hasDiscussion bool
 		for rows.Next() {
-			var body, author, dept, jobTitle, domain, role string
+			var body, author, dept, jobTitle, domain, role, ts, date string
 			var upd int64
-			if err := rows.Scan(&body, &author, &dept, &jobTitle, &domain, &role, &upd); err != nil {
+			if err := rows.Scan(&body, &author, &dept, &jobTitle, &domain, &role, &upd, &ts, &date); err != nil {
 				rows.Close()
 				return err
 			}
@@ -111,10 +154,8 @@ ORDER BY COALESCE(to_timestamp(NULLIF(n.metadata->>'ts','')::float8), n.first_se
 			if author == "" {
 				author = "someone"
 			}
-			line := withDept(author, dept, jobTitle, domain, role) + ": " + flattenLines(body, 2000) + "\n"
-			if b.Len()+len(line) <= 7000 {
-				b.WriteString(line)
-			}
+			lines = append(lines, transcriptLine(count, date, ts, withDept(author, dept, jobTitle, domain, role), body))
+			dateOf[ts] = date
 		}
 		rows.Close()
 		if err := rows.Err(); err != nil {
@@ -150,11 +191,12 @@ ORDER BY COALESCE(to_timestamp(NULLIF(n.metadata->>'ts','')::float8), n.first_se
 
 		// Skip when BOTH the messages and the linked-resource titles are unchanged.
 		var existingSig, existingLinkSig string
+		var decisionsMissing bool
 		_ = deps.DB.QueryRow(ctx,
-			`SELECT signature, COALESCE(link_signature,'')
+			`SELECT signature, COALESCE(link_signature,''), decisions IS NULL
 			   FROM graph.thread_summaries WHERE channel_id=$1 AND thread_ts=$2`,
-			p.ChannelID, p.ThreadTs).Scan(&existingSig, &existingLinkSig)
-		if skip, backfill := summarySkip(existingSig, sig, existingLinkSig, linkSig); skip {
+			p.ChannelID, p.ThreadTs).Scan(&existingSig, &existingLinkSig, &decisionsMissing)
+		if skip, backfill := summarySkip(existingSig, sig, existingLinkSig, linkSig); skip && !(p.FillDecisions && decisionsMissing) {
 			if backfill {
 				_, _ = deps.DB.Exec(ctx,
 					`UPDATE graph.thread_summaries SET link_signature=$3
@@ -164,23 +206,25 @@ ORDER BY COALESCE(to_timestamp(NULLIF(n.metadata->>'ts','')::float8), n.first_se
 			return nil
 		}
 
-		topic, overview, highlights, kind := genThreadDeepSummary(ctx, deps.Gemini, resBlock+b.String())
-		if topic == "" && overview == "" {
+		ds := genThreadDeepSummary(ctx, deps.Gemini, resBlock+fitTranscript(lines, threadTranscriptBudget))
+		if ds.Topic == "" && ds.Overview == "" {
 			return nil // transient LLM failure; leave prior summary, retry later
 		}
-		hlJSON, e := json.Marshal(highlights)
+		decJSON, _ := json.Marshal(groundDecisions(ds.Decisions, dateOf))
+		oqJSON, _ := json.Marshal(cleanOpenQuestions(ds.OpenQuestions))
+		hlJSON, e := json.Marshal(ds.Highlights)
 		if e != nil || hlJSON == nil {
 			hlJSON = []byte("[]")
 		}
 		_, err = deps.DB.Exec(ctx,
-			`INSERT INTO graph.thread_summaries(channel_id,thread_ts,signature,link_signature,summary,overview,highlights,kind,updated_at)
-			 VALUES($1,$2,$3,$4,$5,$6,$7,$8,NOW())
+			`INSERT INTO graph.thread_summaries(channel_id,thread_ts,signature,link_signature,summary,overview,highlights,kind,decisions,open_questions,updated_at)
+			 VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NOW())
 			 ON CONFLICT (channel_id,thread_ts) DO UPDATE SET
 			   signature=excluded.signature, link_signature=excluded.link_signature,
 			   summary=excluded.summary,
 			   overview=excluded.overview, highlights=excluded.highlights,
-			   kind=excluded.kind, updated_at=NOW()`,
-			p.ChannelID, p.ThreadTs, sig, linkSig, topic, overview, hlJSON, kind)
+			   kind=excluded.kind, decisions=excluded.decisions, open_questions=excluded.open_questions, updated_at=NOW()`,
+			p.ChannelID, p.ThreadTs, sig, linkSig, ds.Topic, ds.Overview, hlJSON, ds.Kind, decJSON, oqJSON)
 		if err == nil {
 			if _, jErr := jobs.Enqueue(ctx, deps.DB, "index_artifact", map[string]any{
 				"node_id":      ids.SlackMessage(p.ChannelID, p.ThreadTs),
@@ -281,11 +325,21 @@ ORDER BY 1`, channelID, threadTs)
 	return resBlock.String()
 }
 
-// genThreadDeepSummary asks the LLM for a one-line topic label PLUS a short
-// overview, chronological highlights, and a kind classification (substantive
-// vs chatter) for a single Slack thread. Returns ("","",nil,"") on error.
-func genThreadDeepSummary(ctx context.Context, g GeminiClient, transcript string) (string, string, []string, string) {
-	const sys = `You are given one Slack thread (messages oldest first, as "author: text").
+// threadDeepSummary is what the summarizer returns for one thread. Decisions
+// are raw model output: the handler grounds them (groundDecisions) before
+// storing.
+type threadDeepSummary struct {
+	Topic, Overview, Kind string
+	Highlights            []string
+	Decisions             []threadDecision
+	OpenQuestions         []string
+}
+
+func genThreadDeepSummary(ctx context.Context, g GeminiClient, transcript string) threadDeepSummary {
+	const sys = `You are given one Slack thread, messages oldest first, each line as
+"[n YYYY-MM-DD ts=<ts>] author: text". A very long thread may have a gap marked
+"[… N messages omitted …]" between the opening messages and the latest ones; the
+latest messages carry the current state.
 An author may be written as "Name (Department)" — when you name that person, keep
 their team label exactly as given on first mention, e.g. "Hazwan (Flights · Senior Engineer)
 reported…". Never invent a department or job title that isn't given.
@@ -294,11 +348,19 @@ what the thread is about (name the ticket/doc), but summarize the thread's
 discussion, not the resources themselves. EXCEPTION: if the thread is only a
 shared link with no discussion, describe the linked resource itself (from its
 title and excerpt) instead of saying no context was provided.
-Summarize it so a teammate understands it quickly and deeply. Respond as JSON:
+Summarize it so a teammate can understand it quickly and act on it. Respond as JSON:
 {"topic":"short factual label, max 10 words, no trailing period",
- "overview":"2-3 sentences: what was raised and the current state/outcome",
- "highlights":["chronological key points / decisions, each one short line, max 6 items"],
+ "overview":"2-3 sentences: what was raised and the CURRENT state/outcome, as of the latest messages",
+ "decisions":[{"text":"one line: what was decided or agreed, in present tense","by":"the person's name as written, without the team label","date":"YYYY-MM-DD","ts":"the ts of the message where it was decided"}],
+ "open_questions":["one line each: what is still unresolved as of the latest messages"],
+ "highlights":["chronological key points, each one short line, max 6 items"],
  "kind":"substantive|chatter"}
+
+DECISIONS are things settled: agreed, approved, confirmed, final, no longer
+required. List every decision, oldest first. When a later decision replaces an
+earlier one, list only the later one. Copy ts exactly from the line where the
+decision was made. A question answered later in the thread is not open. Return
+[] for decisions or open_questions when there are none.
 
 kind is "chatter" ONLY for threads with no work content at all: leave/on-call/
 absence notices, greetings, thanks, and social acknowledgements that carry no
@@ -311,34 +373,36 @@ is "substantive", however short.
 STRICT GROUNDING — follow exactly:
 - Use ONLY facts, names, and ids that literally appear in the thread.
 - KEEP concrete identifiers verbatim — payment/order ids (pxx6xgkdtl), ticket
-  keys, error codes. Put the central one in the overview; downstream linking
-  depends on it surviving summarization.
+  keys, error codes, API paths and field names. Put the central one in the
+  overview; downstream linking depends on it surviving summarization.
 - NEVER invent ticket ids, people, dates, fixes, or outcomes.
 - Do NOT assume the issue was resolved/deployed unless the text says so.
 - If the thread is thin or inconclusive, write a short overview and return fewer
-  (or zero) highlights rather than filling gaps.
+  (or zero) highlights and decisions rather than filling gaps.
 No markdown, no quotes around the whole thing.`
 	out, err := g.Generate(ctx, sys, transcript)
 	if err != nil || out == "" {
-		return "", "", nil, ""
+		return threadDeepSummary{}
 	}
 	var parsed struct {
-		Topic      string   `json:"topic"`
-		Overview   string   `json:"overview"`
-		Highlights []string `json:"highlights"`
-		Kind       string   `json:"kind"`
+		Topic         string           `json:"topic"`
+		Overview      string           `json:"overview"`
+		Highlights    []string         `json:"highlights"`
+		Kind          string           `json:"kind"`
+		Decisions     []threadDecision `json:"decisions"`
+		OpenQuestions []string         `json:"open_questions"`
 	}
 	if json.Unmarshal(llmjson.ExtractJSON(out), &parsed) != nil {
 		// Non-JSON prose reply (see prose() in cluster_summary.go): keep it as the
 		// overview so the thread still summarizes and caches instead of retrying
 		// forever. Topic label stays empty; callers fall back to the thread's title.
-		return "", prose(out), nil, ""
+		return threadDeepSummary{Overview: prose(out)}
 	}
 	kind := parsed.Kind
 	if kind != "chatter" {
 		kind = "substantive" // anything unexpected defaults to visible
 	}
-	return firstLine(parsed.Topic, 90), strings.TrimSpace(parsed.Overview), parsed.Highlights, kind
+	return threadDeepSummary{Topic: firstLine(parsed.Topic, 90), Overview: strings.TrimSpace(parsed.Overview), Highlights: parsed.Highlights, Kind: kind, Decisions: parsed.Decisions, OpenQuestions: parsed.OpenQuestions}
 }
 
 // BackfillMissingThreadSummaries enqueues summarize_thread for threads that
@@ -483,6 +547,11 @@ func BackfillStaleThreadSummaries(ctx context.Context, db *pgxpool.Pool, limit i
 // burst of replies doesn't pile up duplicate LLM jobs. Errors are ignored
 // (best-effort; the /topics endpoint re-enqueues on the next miss).
 func enqueueSummarizeThread(ctx context.Context, db *pgxpool.Pool, channelID, threadTs string, skipJudging bool) {
+	enqueueSummarize(ctx, db, summarizeThreadPayload{ChannelID: channelID, ThreadTs: threadTs, SkipJudging: skipJudging})
+}
+
+func enqueueSummarize(ctx context.Context, db *pgxpool.Pool, p summarizeThreadPayload) {
+	channelID, threadTs := p.ChannelID, p.ThreadTs
 	if channelID == "" || threadTs == "" {
 		return
 	}
@@ -501,7 +570,5 @@ SELECT EXISTS(
 	if exists {
 		return
 	}
-	_, _ = jobs.Enqueue(ctx, db, "summarize_thread", summarizeThreadPayload{
-		ChannelID: channelID, ThreadTs: threadTs, SkipJudging: skipJudging,
-	}, jobs.EnqueueOptions{Priority: 6})
+	_, _ = jobs.Enqueue(ctx, db, "summarize_thread", p, jobs.EnqueueOptions{Priority: 6})
 }

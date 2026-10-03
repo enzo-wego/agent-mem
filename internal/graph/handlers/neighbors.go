@@ -61,14 +61,16 @@ type neighborsHandler struct {
 
 type neighborItem struct {
 	Node struct {
-		NodeID   string `json:"node_id"`
-		Type     string `json:"type"`
-		URL      string `json:"url"`
-		Title    string `json:"title"`
-		Overview string `json:"overview,omitempty"` // slack threads: 2-3 sentence summary, for the expanded row
-		Channel  string `json:"channel"`            // slack only: human channel name (e.g. payments-dev), for display
-		ThreadTS string `json:"thread_ts"`          // slack only; lets the UI collapse a thread's messages into one row
-		TSMs     int64  `json:"ts_ms"`              // node time (slack message ts, else first_seen_at), epoch millis
+		NodeID        string           `json:"node_id"`
+		Type          string           `json:"type"`
+		URL           string           `json:"url"`
+		Title         string           `json:"title"`
+		Overview      string           `json:"overview,omitempty"` // slack threads: 2-3 sentence summary, for the expanded row
+		Decisions     []threadDecision `json:"decisions,omitempty"`
+		OpenQuestions []string         `json:"open_questions,omitempty"`
+		Channel       string           `json:"channel"`   // slack only: human channel name (e.g. payments-dev), for display
+		ThreadTS      string           `json:"thread_ts"` // slack only; lets the UI collapse a thread's messages into one row
+		TSMs          int64            `json:"ts_ms"`     // node time (slack message ts, else first_seen_at), epoch millis
 		// Slack threads only: first/last message time across the whole thread,
 		// computed server-side because SIMILAR rows are leaves (one node in the
 		// payload) so the client can't derive the span itself. 0 when unknown.
@@ -136,6 +138,7 @@ func (h *neighborsHandler) serve(w http.ResponseWriter, r *http.Request) {
 	lazySummarized := 0
 
 	seen := map[string]bool{id: true}
+	decisionsSent := map[string]bool{}
 	frontier := []struct {
 		id  string
 		hop int
@@ -186,6 +189,7 @@ func (h *neighborsHandler) serve(w http.ResponseWriter, r *http.Request) {
 			// body — so a row shows readable text (and a whole thread one label),
 			// never a raw slack:CHANNEL:TS id.
 			var title, body, threadSummary string
+			var decRaw, oqRaw []byte
 			var scope *string
 			row := h.db.QueryRow(ctx, `
 SELECT n.id, n.type, COALESCE(n.url,''), COALESCE(n.title,''),
@@ -193,6 +197,7 @@ SELECT n.id, n.type, COALESCE(n.url,''), COALESCE(n.title,''),
        COALESCE(n.metadata->>'thread_ts',''),
        COALESCE(ts.summary,''),
        COALESCE(ts.overview,''),
+       ts.decisions, ts.open_questions,
        COALESCE(sc.name,''),
        (EXTRACT(EPOCH FROM COALESCE(n.created_at, to_timestamp(NULLIF(n.metadata->>'ts','')::float8), n.first_seen_at)) * 1000)::bigint,
        n.scope,
@@ -215,7 +220,7 @@ LEFT JOIN LATERAL (
 ) tspan ON TRUE
 WHERE n.id=$1`, n.NodeID)
 			if err := row.Scan(&item.Node.NodeID, &item.Node.Type, &item.Node.URL,
-				&title, &body, &item.Node.ThreadTS, &threadSummary, &item.Node.Overview, &item.Node.Channel, &item.Node.TSMs, &scope,
+				&title, &body, &item.Node.ThreadTS, &threadSummary, &item.Node.Overview, &decRaw, &oqRaw, &item.Node.Channel, &item.Node.TSMs, &scope,
 				&item.Node.FirstTSMs, &item.Node.LastTSMs); err != nil {
 				continue
 			}
@@ -246,6 +251,12 @@ WHERE n.id=$1`, n.NodeID)
 						if parts := strings.Split(item.Node.NodeID, ":"); len(parts) == 3 {
 							rootTs = parts[2]
 						}
+					}
+					channel := strings.TrimPrefix(*scope, "slack:")
+					key := channel + ":" + rootTs
+					if !decisionsSent[key] {
+						item.Node.Decisions, item.Node.OpenQuestions = decodeThreadDecisions(channel, rootTs, decRaw, oqRaw)
+						decisionsSent[key] = true
 					}
 					if u := slackPermalink("slack:" + strings.TrimPrefix(*scope, "slack:") + ":" + rootTs); u != "" {
 						item.Node.URL = u

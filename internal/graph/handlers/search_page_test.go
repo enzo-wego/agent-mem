@@ -455,6 +455,96 @@ func TestSearch_HybridFoldsRepliesToThreadRoot(t *testing.T) {
 	}
 }
 
+func TestSearch_HybridServesThreadDecisions(t *testing.T) {
+	pool := testDB(t)
+	spChannel(t, pool, "CSP2", "pan-chat")
+	alice := spPerson(t, pool, "Alice", "USPA2", false)
+	const th = "200.000001"
+	root := spMsg(t, pool, "CSP2", th, th, "kickoff", alice, "", false)
+	spMsg(t, pool, "CSP2", "201.000001", th, "PAN decision", alice, "", false)
+	spThreadSummary(t, pool, "CSP2", th, "PAN thread summary", "PAN overview")
+	if _, err := pool.Exec(context.Background(), `
+UPDATE graph.thread_summaries SET decisions = $3, open_questions = $4
+WHERE channel_id = $1 AND thread_ts = $2`, "CSP2", th,
+		`[{"text":"Use PAN","by":"Alice","date":"2026-10-03","ts":"201.000001"}]`, `["Who owns rollout?"]`); err != nil {
+		t.Fatal(err)
+	}
+	const oldTh = "300.000001"
+	oldRoot := spMsg(t, pool, "CSP2", oldTh, oldTh, "PAN legacy thread", alice, "", false)
+	spThreadSummary(t, pool, "CSP2", oldTh, "PAN legacy summary", "PAN legacy overview")
+	h, err := handlers.NewSearch(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, resp, _ := spSearch(t, h, "q=PAN&match=hybrid", "")
+	if len(resp.Results) != 2 {
+		t.Fatalf("want two threads, got %v", resultIDs(resp.Results))
+	}
+	for _, r := range resp.Results {
+		switch r["id"] {
+		case root:
+			decisions, ok := r["decisions"].([]any)
+			if !ok || len(decisions) != 1 {
+				t.Fatalf("decisions = %v", r["decisions"])
+			}
+			decision := decisions[0].(map[string]any)
+			if decision["url"] != "https://wego.slack.com/archives/CSP2/p201000001?thread_ts=200.000001&cid=CSP2" {
+				t.Errorf("decision url = %v", decision["url"])
+			}
+			if !reflect.DeepEqual(r["open_questions"], []any{"Who owns rollout?"}) {
+				t.Errorf("open_questions = %v", r["open_questions"])
+			}
+		case oldRoot:
+			for _, key := range []string{"decisions", "open_questions"} {
+				if _, ok := r[key]; ok {
+					t.Errorf("legacy thread has %s: %v", key, r[key])
+				}
+			}
+		default:
+			t.Errorf("unexpected thread: %v", r["id"])
+		}
+	}
+}
+
+func TestNeighbors_ThreadDecisionsOncePerThread(t *testing.T) {
+	pool := testDB(t)
+	seedCardsFixture(t, pool)
+	spThreadSummary(t, pool, "CSP1", "100.000001", "s", "o")
+	if _, err := pool.Exec(context.Background(), `
+UPDATE graph.thread_summaries SET decisions = $3
+WHERE channel_id = $1 AND thread_ts = $2`, "CSP1", "100.000001",
+		`[{"text":"Use PAN","by":"Bob","date":"2026-10-03","ts":"102.000001"}]`); err != nil {
+		t.Fatal(err)
+	}
+	for _, query := range []string{"depth=2", "cards=1&depth=2"} {
+		t.Run(query, func(t *testing.T) {
+			rows, _ := spNeighbors(t, pool, "jira:PAY-9", query)
+			slackRows, carriers := 0, 0
+			for _, row := range rows {
+				if row.Node["type"] != "slack" || row.Node["thread_ts"] != "100.000001" {
+					continue
+				}
+				slackRows++
+				raw, ok := row.Node["decisions"]
+				if !ok {
+					continue
+				}
+				carriers++
+				decisions, ok := raw.([]any)
+				if !ok || len(decisions) != 1 {
+					t.Fatalf("decisions = %v", raw)
+				}
+				if got := decisions[0].(map[string]any)["url"]; got != "https://wego.slack.com/archives/CSP1/p102000001?thread_ts=100.000001&cid=CSP1" {
+					t.Errorf("decision url = %v", got)
+				}
+			}
+			if slackRows < 2 || carriers != 1 {
+				t.Errorf("Slack rows = %d, decision carriers = %d; want at least 2 and exactly 1", slackRows, carriers)
+			}
+		})
+	}
+}
+
 func TestSearch_HybridMergesSemanticAndKeyword(t *testing.T) {
 	pool := testDB(t)
 	spNode(t, pool, "jira:PAY-Z", "jira", "Z", "PAN handling", "", "", "{}", 0, false)

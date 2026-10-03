@@ -337,6 +337,8 @@ type hybridResult struct {
 	Title            string             `json:"title"`
 	URL              string             `json:"url"`
 	Summary          string             `json:"summary"`
+	Decisions        []threadDecision   `json:"decisions,omitempty"`
+	OpenQuestions    []string           `json:"open_questions,omitempty"`
 	Score            float64            `json:"score"`
 	ScoreBreakdown   scoring.Components `json:"score_breakdown"`
 	Author           string             `json:"author,omitempty"`
@@ -672,10 +674,13 @@ WHERE n.id = ANY($1) AND n.deleted_at IS NULL
 				chans, tss = append(chans, c), append(tss, t)
 			}
 		}
-		type tsum struct{ summary, overview string }
+		type tsum struct {
+			summary, overview string
+			dec, oq           []byte
+		}
 		sums := map[string]tsum{}
 		srows, err := s.db.Query(ctx, `
-SELECT channel_id, thread_ts, summary, overview
+SELECT channel_id, thread_ts, summary, overview, decisions, open_questions
 FROM graph.thread_summaries
 WHERE (channel_id, thread_ts) IN (SELECT unnest($1::text[]), unnest($2::text[]))`, chans, tss)
 		if err != nil {
@@ -685,7 +690,7 @@ WHERE (channel_id, thread_ts) IN (SELECT unnest($1::text[]), unnest($2::text[]))
 		for srows.Next() {
 			var c, t string
 			var ts tsum
-			if err := srows.Scan(&c, &t, &ts.summary, &ts.overview); err == nil {
+			if err := srows.Scan(&c, &t, &ts.summary, &ts.overview, &ts.dec, &ts.oq); err == nil {
 				sums[c+":"+t] = ts
 			}
 		}
@@ -703,6 +708,7 @@ WHERE (channel_id, thread_ts) IN (SELECT unnest($1::text[]), unnest($2::text[]))
 				if ts.overview != "" {
 					results[i].Summary = ts.overview
 				}
+				results[i].Decisions, results[i].OpenQuestions = decodeThreadDecisions(ch, t, ts.dec, ts.oq)
 			}
 			if c, ok := cards[rid]; ok {
 				results[i].Channel = c.Channel
