@@ -303,6 +303,16 @@ func (h *Resolve) canonicalizeSeeds(ctx context.Context, seeds []string) []strin
 					}
 				}
 				if canonical == seed {
+					// GitHub PR links canonicalize by repo and number even when the node has
+					// no stored url (940 of 1706 gh_pr nodes on 2026-10-03). Only host+path is
+					// matched, so /files, ?query and #fragment don't matter.
+					if parsed, err := url.Parse(seed); err == nil && parsed.Hostname() == "github.com" {
+						if prID := nodeIDFromURL(parsed.Host+parsed.Path, "github"); prID != "" {
+							canonical = prID
+						}
+					}
+				}
+				if canonical == seed {
 					// Non-Slack: match the bare stored url too (tracking params
 					// like ?utm_source=… must not break the lookup); the raw url
 					// is compared as well, so a stored url with a legitimate

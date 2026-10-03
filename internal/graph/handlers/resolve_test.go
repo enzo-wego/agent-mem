@@ -14,6 +14,46 @@ import (
 	"github.com/agent-mem/agent-mem/internal/graph/handlers"
 )
 
+func TestResolve_GitHubPRURLWithoutStoredURL(t *testing.T) {
+	pool := testDB(t)
+	seedNode(t, pool, "gh_pr:wego/payments#2348", "gh_pr", "Payment fix")
+	seedBody(t, pool, "gh_pr:wego/payments#2348", "Fix payment handling.")
+	resp := resolveSeeds(t, pool, "https://github.com/wego/payments/pull/2348")
+	requireArtifact(t, resp, "gh_pr:wego/payments#2348", 0)
+}
+
+func TestResolve_GitHubPRFilesURL(t *testing.T) {
+	pool := testDB(t)
+	seedNode(t, pool, "gh_pr:wego/payments#2348", "gh_pr", "Payment fix")
+	seedBody(t, pool, "gh_pr:wego/payments#2348", "Fix payment handling.")
+	resp := resolveSeeds(t, pool, "https://github.com/wego/payments/pull/2348/files?w=1#diff-abc")
+	requireArtifact(t, resp, "gh_pr:wego/payments#2348", 0)
+}
+
+func TestResolve_GitHubNonPRURLUnchanged(t *testing.T) {
+	pool := testDB(t)
+	const readmeURL = "https://github.com/wego/payments/blob/main/README.md"
+	const otherURL = "https://github.com/other/repo/pull/7"
+	seedNode(t, pool, "gws:ghreadme", "gws", "README")
+	seedNodeURL(t, pool, "gws:ghreadme", readmeURL)
+	seedBody(t, pool, "gws:ghreadme", "Repository documentation.")
+	seedNode(t, pool, "gh_pr:other/repo#7", "gh_pr", "Other fix")
+	seedNodeURL(t, pool, "gh_pr:other/repo#7", otherURL)
+	seedBody(t, pool, "gh_pr:other/repo#7", "Other repository fix.")
+	for _, tc := range []struct{ url, id string }{
+		{readmeURL, "gws:ghreadme"},
+		{otherURL, "gh_pr:other/repo#7"},
+	} {
+		resp := resolveSeeds(t, pool, tc.url)
+		requireArtifact(t, resp, tc.id, 0)
+		for _, artifact := range resp.Artifacts {
+			if strings.HasPrefix(artifact.NodeID, "gh_pr:wego/") {
+				t.Fatalf("unexpected wego PR artifact: %s", artifact.NodeID)
+			}
+		}
+	}
+}
+
 func TestResolve_SeedExpandsAndHydrates(t *testing.T) {
 	pool := testDB(t)
 	// Seed: thread A → references PAY-2128 → references PR 1960.
