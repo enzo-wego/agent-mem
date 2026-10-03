@@ -197,7 +197,11 @@ func fetchBodyHandler(deps Deps) jobs.Handler {
 		}
 
 		// Step 7: reconcile edges from extractor findings.
-		extractResult, err := deps.Extractor.Extract(ctx, plainText)
+		extractText := plainText
+		if body.Type == ids.TypeGHPR {
+			extractText = stripPRBoilerplate(ctx, deps.DB, body.NodeID, plainText)
+		}
+		extractResult, err := deps.Extractor.Extract(ctx, extractText)
 		if err != nil {
 			deps.Logger.Warn().Err(err).Msg("fetch_body: extractor failed; skipping edge reconciliation")
 		} else {
