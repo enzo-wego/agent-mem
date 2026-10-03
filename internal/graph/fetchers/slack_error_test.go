@@ -18,6 +18,7 @@ func TestClassifySlackAPIError(t *testing.T) {
 		{name: "token expired", code: "token_expired", permanent: true},
 		{name: "missing scope", code: "missing_scope", permanent: true},
 		{name: "channel not found", code: "channel_not_found", permanent: true},
+		{name: "not in channel", code: "not_in_channel", permanent: true},
 		{name: "thread not found", code: "thread_not_found", permanent: true},
 		{name: "message not found", code: "message_not_found", permanent: true},
 		{name: "rate limited", code: "ratelimited", permanent: false},
