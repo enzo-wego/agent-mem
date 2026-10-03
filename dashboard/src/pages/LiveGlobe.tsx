@@ -33,9 +33,11 @@ import {
   type PinnedThread,
   type BoardEpicGroup,
   type OpenRouterUsage,
+  type ThreadDecision,
 } from '../api'
 import { applyGroupNames, assignCountries, continentOf, nameOf } from '../continents'
 import ClusterGraph from './ClusterGraph'
+import ThreadDecisions from '../ThreadDecisions'
 
 // ── worldmonitor palette ──────────────────────────────────────────────────────
 const C = {
@@ -393,6 +395,8 @@ function edgeStrength(kind: string): number {
 // stays aligned.
 function collapseThreads(neighbors: GraphNeighbor[]): GraphNeighbor[] {
   const bestByThread = new Map<string, GraphNeighbor>()
+  const decisionsByThread = new Map<string, ThreadDecision[]>()
+  const questionsByThread = new Map<string, string[]>()
   const out: GraphNeighbor[] = []
   for (const n of neighbors) {
     const tt = slackThreadKey(n)
@@ -400,10 +404,26 @@ function collapseThreads(neighbors: GraphNeighbor[]): GraphNeighbor[] {
       out.push(n)
       continue
     }
+    if (!decisionsByThread.has(tt) && (n.node.decisions?.length ?? 0) > 0) {
+      decisionsByThread.set(tt, n.node.decisions!)
+    }
+    if (!questionsByThread.has(tt) && (n.node.open_questions?.length ?? 0) > 0) {
+      questionsByThread.set(tt, n.node.open_questions!)
+    }
     const prev = bestByThread.get(tt)
     if (!prev || edgeStrength(n.edge.kind) < edgeStrength(prev.edge.kind)) bestByThread.set(tt, n)
   }
-  return [...out, ...bestByThread.values()]
+  return [
+    ...out,
+    ...[...bestByThread.entries()].map(([tt, best]) => ({
+      ...best,
+      node: {
+        ...best.node,
+        decisions: best.node.decisions ?? decisionsByThread.get(tt),
+        open_questions: best.node.open_questions ?? questionsByThread.get(tt),
+      },
+    })),
+  ]
 }
 
 // Group neighbors by friendly type label. Slack messages sharing a thread collapse
@@ -2974,8 +2994,8 @@ export function LiveGlobePage() {
                           gap: 6,
                         }}
                       >
-                        {/* Deep thread summary (overview + highlights), Slack-only. */}
-                        {(t.overview || (t.highlights && t.highlights.length > 0)) && (
+                        {/* Deep thread summary and settled decisions, Slack-only. */}
+                        {(t.overview || (t.highlights && t.highlights.length > 0) || (t.decisions?.length ?? 0) > 0 || (t.open_questions?.length ?? 0) > 0) && (
                           <div
                             style={{
                               display: 'flex',
@@ -3019,6 +3039,7 @@ export function LiveGlobePage() {
                                 ))}
                               </ul>
                             )}
+                            <ThreadDecisions decisions={t.decisions} openQuestions={t.open_questions} text={C.text} dim={C.dim} accent={C.green} fontSize={10} />
                           </div>
                         )}
                         {loadingThread && <div style={{ color: C.dim, fontSize: 10 }}>Loading…</div>}
@@ -4053,6 +4074,8 @@ export function LiveGlobePage() {
                       ts_ms: graphTopic.first_ms,
                       first_ts_ms: graphTopic.first_ms,
                       last_ts_ms: graphTopic.last_ms,
+                      decisions: graphTopic.decisions,
+                      open_questions: graphTopic.open_questions,
                     },
                     edge: { kind: 'ROOT' },
                   }
@@ -4264,6 +4287,7 @@ export function LiveGlobePage() {
                           <div style={{ color: C.text, whiteSpace: 'pre-wrap' }}>
                             {n.node.overview || n.node.title || 'No summary yet — it may still be generating.'}
                           </div>
+                          {isSlack && <ThreadDecisions decisions={n.node.decisions} openQuestions={n.node.open_questions} text={C.text} dim={C.dim} accent={C.green} fontSize={10} />}
                           <div style={{ color: C.dim, fontSize: 10 }}>
                             {pinnedRow ? 'This is the thread you opened.' : edgeKindTooltip(n.edge)}
                           </div>

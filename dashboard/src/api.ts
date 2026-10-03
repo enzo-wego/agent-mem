@@ -703,6 +703,16 @@ export async function fetchChannelMessages(
   return res.json();
 }
 
+// ThreadDecision is one settled point of a Slack thread; url (server-built)
+// opens the message where it was decided.
+export interface ThreadDecision {
+  text: string;
+  by: string;
+  date: string; // YYYY-MM-DD
+  ts: string;
+  url?: string;
+}
+
 // ChannelTopic is one thread/standalone rollup with a one-line topic summary.
 export interface ChannelTopic {
   thread_ts: string;
@@ -710,6 +720,8 @@ export interface ChannelTopic {
   summary: string;
   overview?: string; // deep 2-3 sentence summary (threads only)
   highlights?: string[]; // chronological key points (threads only)
+  decisions?: ThreadDecision[];
+  open_questions?: string[];
   is_thread: boolean;
   msg_count: number;
   participants: string[];
@@ -775,6 +787,8 @@ export interface GraphNeighbor {
     url: string;
     title: string;
     overview?: string; // slack threads: 2-3 sentence summary, for the expanded row
+    decisions?: ThreadDecision[];
+    open_questions?: string[];
     channel?: string;
     thread_ts?: string;
     ts_ms?: number;
@@ -1072,6 +1086,8 @@ export interface HybridSearchResult {
   title: string;
   url: string;
   summary: string;
+  decisions?: ThreadDecision[];
+  open_questions?: string[];
   score: number;
   author?: string;
   created_at: string;

@@ -11,7 +11,9 @@ import {
   type GraphNeighbor,
   type PRRef,
   type HybridSearchResult,
+  type ThreadDecision,
 } from '../api'
+import ThreadDecisions from '../ThreadDecisions'
 
 // ── palette (copied from LiveGlobe.tsx:41-54; panel2/border2/grid and the per-
 // resource colours come from the approved mockup's dark tokens) ───────────────
@@ -85,6 +87,8 @@ interface Item {
   title: string
   url: string
   overview: string
+  decisions: ThreadDecision[]
+  openQuestions: string[]
   channel: string
   rootAuthor: string
   participants: string[]
@@ -207,6 +211,8 @@ function buildSeedItems(rows: GraphNeighbor[], seedRoot: string): { items: Item[
         title: nd.title || '',
         url: nd.url || '',
         overview: nd.overview || '',
+        decisions: nd.decisions || [],
+        openQuestions: nd.open_questions || [],
         channel: nd.channel || '',
         rootAuthor: nd.root_author || '',
         participants: nd.participants || [],
@@ -226,6 +232,8 @@ function buildSeedItems(rows: GraphNeighbor[], seedRoot: string): { items: Item[
     } else {
       if (nd.node_id === key && nd.title) it.title = nd.title
       it.overview = it.overview || nd.overview || ''
+      if (it.decisions.length === 0) it.decisions = nd.decisions || []
+      if (it.openQuestions.length === 0) it.openQuestions = nd.open_questions || []
       it.channel = it.channel || nd.channel || ''
       it.first = it.first && first ? Math.min(it.first, first) : it.first || first
       it.last = Math.max(it.last, last)
@@ -263,6 +271,8 @@ function buildFreeItems(results: HybridSearchResult[]): Item[] {
       title: r.title || '',
       url: r.url || '',
       overview: r.summary || '',
+      decisions: r.decisions || [],
+      openQuestions: r.open_questions || [],
       channel: r.channel || '',
       rootAuthor: r.root_author || '',
       participants: r.participants || [],
@@ -944,6 +954,7 @@ export function GraphSearchPage() {
               {it.rootAuthor && <span>started by {it.rootAuthor}</span>}
               {it.first > 0 && <span>{fmtDT(it.first)}</span>}
               {it.msgCount > 0 && <span>{it.msgCount} msgs</span>}
+              {it.decisions.length > 0 && <span>{it.decisions.length} decision{it.decisions.length === 1 ? '' : 's'}</span>}
             </>
           ) : (
             <span>
@@ -976,6 +987,7 @@ export function GraphSearchPage() {
         {it.group === 'slack' && <People it={it} expanded={open} />}
         {open && (
           <>
+            {it.group === 'slack' && <ThreadDecisions decisions={it.decisions} openQuestions={it.openQuestions} text={C.text} dim={C.dim} accent={C.green} />}
             <div className="sp-why">
               <b style={{ color: em.color }}>why is this here · </b>
               {it.why}
