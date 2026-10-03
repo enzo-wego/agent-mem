@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -15,7 +16,7 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-const subjectQueriesPrompt = `From the Jira ticket below, write 2 or 3 short search queries (3 to 7 words each) that would find the Slack threads where this work's requirement or acceptance was discussed with stakeholders. Use the subject's own words: the product area, the document or artefact, the team asking. Never include the ticket key, URLs, people's names, dates or status words. Reply with a JSON array of strings only.`
+const subjectQueriesPrompt = `From the Jira ticket below, write 5 short search queries (3 to 7 words each) that would find the Slack threads where this work was discussed: the requirement, questions from stakeholders, reviews and follow-ups. Cover different angles: the product area, the specific artefact or document, the concrete technical terms (formulas, fields, tax names, systems), and the team asking. Use words people would type in chat. Never include the ticket key, URLs, people's names, dates or status words. Reply with a JSON array of strings only.`
 
 type subjectQueriesResponse struct {
 	Queries []string `json:"queries"`
@@ -44,7 +45,7 @@ func NewSubjectQueries(deps Deps) http.HandlerFunc {
 		}
 		body = truncateRunes(body, 4000)
 		sum := sha256.Sum256([]byte(title + "\n" + body))
-		sig := "v1:" + hex.EncodeToString(sum[:])[:16]
+		sig := "v2:" + hex.EncodeToString(sum[:])[:16]
 		resp := subjectQueriesResponse{Queries: []string{}}
 		var cached []byte
 		err = deps.DB.QueryRow(r.Context(), `SELECT queries FROM graph.subject_queries WHERE node_id=$1 AND signature=$2`, id, sig).Scan(&cached)
@@ -81,6 +82,18 @@ func NewSubjectQueries(deps Deps) http.HandlerFunc {
 		}
 		resp.Queries = parseSubjectQueries(reply, strings.TrimPrefix(id, "jira:"))
 		if len(resp.Queries) > 0 {
+			if titleQuery := subjectTitleQuery(title); titleQuery != "" {
+				duplicate := false
+				for _, query := range resp.Queries {
+					if strings.EqualFold(query, titleQuery) {
+						duplicate = true
+						break
+					}
+				}
+				if !duplicate {
+					resp.Queries = append(resp.Queries, titleQuery)
+				}
+			}
 			queries, err := json.Marshal(resp.Queries)
 			if err != nil {
 				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not encode subject queries"})
@@ -111,7 +124,7 @@ func parseSubjectQueries(reply, ticketKey string) []string {
 	if json.Unmarshal([]byte(reply), &queries) != nil {
 		return out
 	}
-	seen := make(map[string]bool, 3)
+	seen := make(map[string]bool, 5)
 	key := strings.ToLower(ticketKey)
 	for _, query := range queries {
 		query = strings.TrimSpace(query)
@@ -122,9 +135,23 @@ func parseSubjectQueries(reply, ticketKey string) []string {
 		}
 		seen[lower] = true
 		out = append(out, query)
-		if len(out) == 3 {
+		if len(out) == 5 {
 			break
 		}
 	}
 	return out
+}
+
+var subjectTitleTags = regexp.MustCompile(`\[[^\]]*\]`)
+var subjectTitleKeys = regexp.MustCompile(`\b[A-Z]{2,10}-\d+\b`)
+
+func subjectTitleQuery(title string) string {
+	title = subjectTitleTags.ReplaceAllString(title, "")
+	title = subjectTitleKeys.ReplaceAllString(title, "")
+	title = strings.Trim(strings.Join(strings.Fields(title), " "), " :-")
+	words := len(strings.Fields(title))
+	if words < 2 || words > 12 {
+		return ""
+	}
+	return title
 }

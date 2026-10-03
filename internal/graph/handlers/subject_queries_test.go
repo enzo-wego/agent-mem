@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/agent-mem/agent-mem/internal/gemini"
@@ -100,7 +101,7 @@ func TestSubjectQueries_GeneratesAndCaches(t *testing.T) {
 	subjectFixture(t, pool)
 	f := &subjectLLM{reply: `["IN GST test cases finance","Deloitte test case PDFs review"]`}
 	r := subjectRouter(pool, f)
-	want := []string{"IN GST test cases finance", "Deloitte test case PDFs review"}
+	want := []string{"IN GST test cases finance", "Deloitte test case PDFs review", "IN GST"}
 	first := subjectGet(t, r, "jira:PAY-9", 200)
 	subjectWantQueries(t, first, want)
 	if first.Cached || f.calls != 1 {
@@ -110,6 +111,13 @@ func TestSubjectQueries_GeneratesAndCaches(t *testing.T) {
 	subjectWantQueries(t, second, want)
 	if !second.Cached || f.calls != 1 {
 		t.Fatalf("second cached=%v calls=%d", second.Cached, f.calls)
+	}
+	var sig string
+	if err := pool.QueryRow(context.Background(), `SELECT signature FROM graph.subject_queries WHERE node_id='jira:PAY-9'`).Scan(&sig); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(sig, "v2:") {
+		t.Fatalf("signature=%q, want v2:", sig)
 	}
 }
 func TestSubjectQueries_BodyChangeRegenerates(t *testing.T) {
@@ -123,16 +131,24 @@ func TestSubjectQueries_BodyChangeRegenerates(t *testing.T) {
 	}
 	f.reply = `["GST invoice rounding review"]`
 	resp := subjectGet(t, r, "jira:PAY-9", 200)
-	subjectWantQueries(t, resp, []string{"GST invoice rounding review"})
+	subjectWantQueries(t, resp, []string{"GST invoice rounding review", "IN GST"})
 	if resp.Cached || f.calls != 2 {
 		t.Fatalf("cached=%v calls=%d", resp.Cached, f.calls)
 	}
 }
 func TestSubjectQueries_FiltersBadQueries(t *testing.T) {
-	pool := subjectDB(t)
-	subjectFixture(t, pool)
-	f := &subjectLLM{reply: "```json\n[\"PAY-9 status\",\"a\",\"IN GST test cases finance\",\"in gst test cases finance\",\"x y z w\"]\n```"}
-	subjectWantQueries(t, subjectGet(t, subjectRouter(pool, f), "jira:PAY-9", 200), []string{"IN GST test cases finance", "x y z w"})
+	t.Run("bad queries", func(t *testing.T) {
+		pool := subjectDB(t)
+		subjectFixture(t, pool)
+		f := &subjectLLM{reply: "```json\n[\"PAY-9 status\",\"a\",\"IN GST test cases finance\",\"in gst test cases finance\",\"x y z w\"]\n```"}
+		subjectWantQueries(t, subjectGet(t, subjectRouter(pool, f), "jira:PAY-9", 200), []string{"IN GST test cases finance", "x y z w", "IN GST"})
+	})
+	t.Run("five query cap", func(t *testing.T) {
+		pool := subjectDB(t)
+		subjectFixture(t, pool)
+		f := &subjectLLM{reply: `["GST rounding review","Finance invoice fields","Deloitte document feedback","Tax formula correction","Stakeholder requirement questions","Invoice currency conversion","Finance extraction discussion"]`}
+		subjectWantQueries(t, subjectGet(t, subjectRouter(pool, f), "jira:PAY-9", 200), []string{"GST rounding review", "Finance invoice fields", "Deloitte document feedback", "Tax formula correction", "Stakeholder requirement questions", "IN GST"})
+	})
 }
 func TestSubjectQueries_LLMErrorIsEmptyNotCached(t *testing.T) {
 	for _, llmErr := range []error{errors.New("LLM failed"), context.DeadlineExceeded, fmt.Errorf("wrapped: %w", llmgateway.ErrCapped)} {
@@ -149,7 +165,7 @@ func TestSubjectQueries_LLMErrorIsEmptyNotCached(t *testing.T) {
 			subjectNoCache(t, pool)
 			f.err = nil
 			f.reply = `["IN GST test cases finance"]`
-			subjectWantQueries(t, subjectGet(t, r, "jira:PAY-9", 200), []string{"IN GST test cases finance"})
+			subjectWantQueries(t, subjectGet(t, r, "jira:PAY-9", 200), []string{"IN GST test cases finance", "IN GST"})
 			if f.calls != 2 {
 				t.Fatalf("calls=%d", f.calls)
 			}
@@ -201,7 +217,7 @@ func TestSubjectQueries_NilLLM(t *testing.T) {
 	}
 	subjectNoCache(t, pool)
 	sum := sha256.Sum256([]byte("IN GST\nFinance requirements"))
-	sig := "v1:" + hex.EncodeToString(sum[:])[:16]
+	sig := "v2:" + hex.EncodeToString(sum[:])[:16]
 	if _, err := pool.Exec(context.Background(), `INSERT INTO graph.subject_queries (node_id, signature, queries) VALUES ('jira:PAY-9',$1,'["IN GST test cases finance"]')`, sig); err != nil {
 		t.Fatal(err)
 	}
@@ -212,4 +228,18 @@ func TestSubjectQueries_NilLLM(t *testing.T) {
 	}
 	subjectGet(t, r, "jira:NOPE-1", 404)
 	subjectGet(t, r, "slack:C1:1", 400)
+}
+
+func TestSubjectQueries_AppendsTitleQuery(t *testing.T) {
+	pool := subjectDB(t)
+	spNode(t, pool, "jira:PAY-9001", "jira", "PAY-9001: Finance GST test cases", "body", "", "", "{}", 0, false)
+	f := &subjectLLM{reply: `["GST rounding review thread"]`}
+	subjectWantQueries(t, subjectGet(t, subjectRouter(pool, f), "jira:PAY-9001", 200), []string{"GST rounding review thread", "Finance GST test cases"})
+}
+
+func TestSubjectQueries_TitleQueryDeduped(t *testing.T) {
+	pool := subjectDB(t)
+	subjectFixture(t, pool)
+	f := &subjectLLM{reply: `["in gst", "GST invoice rounding review"]`}
+	subjectWantQueries(t, subjectGet(t, subjectRouter(pool, f), "jira:PAY-9", 200), []string{"in gst", "GST invoice rounding review"})
 }
