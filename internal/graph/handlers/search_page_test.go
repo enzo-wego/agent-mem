@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -363,6 +364,57 @@ func TestSearch_HybridKeywordWordBoundary(t *testing.T) {
 	_, resp, _ = spSearch(t, h, "q="+url.QueryEscape("#payments")+"&match=hybrid", "")
 	if ids := resultIDs(resp.Results); !reflect.DeepEqual(ids, []string{"jira:PAY-4"}) {
 		t.Errorf("#payments results = %v", ids)
+	}
+}
+
+func TestSearch_HybridKeywordCapCountsThreadsNotReplies(t *testing.T) {
+	pool := testDB(t)
+	spChannel(t, pool, "CCAP1", "cap-chat")
+	author := spPerson(t, pool, "Alice", "UCAP1", false)
+	want := map[string]bool{}
+	for i := 1; i <= 3; i++ {
+		ts := fmt.Sprintf("%d.000001", i*100)
+		root := spMsg(t, pool, "CCAP1", ts, ts, "kickoff", author, "", false)
+		want[root] = true
+		_, err := pool.Exec(context.Background(), `
+INSERT INTO graph.nodes (id, type, natural_key, body, scope, metadata, author_person_id, created_at, machine_id)
+SELECT 'slack:CCAP1:' || ($1::int + r)::text || '.000001', 'slack',
+       'slack:CCAP1:' || ($1::int + r)::text || '.000001', 'ZEBRACAP reply', 'slack:CCAP1',
+       jsonb_build_object('ts', ($1::int + r)::text || '.000001', 'thread_ts', $2::text),
+       $3, TIMESTAMPTZ '2026-09-01' + r * INTERVAL '1 minute', 'test'
+FROM generate_series(1,70) AS r`, i*100, ts, author)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := 1; i <= 5; i++ {
+		ts := fmt.Sprintf("%d.000001", i+1000)
+		root := spMsg(t, pool, "CCAP1", ts, ts, "ZEBRACAP old thread", author, "", false)
+		want[root] = true
+		if _, err := pool.Exec(context.Background(), `
+UPDATE graph.nodes SET created_at = TIMESTAMPTZ '2025-01-01' + $2::int * INTERVAL '1 day'
+WHERE id = $1`, root, i); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h, err := handlers.NewSearch(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, resp, _ := spSearch(t, h, "q=ZEBRACAP&match=hybrid&limit=100", "")
+	if len(resp.Results) != 8 {
+		t.Fatalf("want 8 threads, got %v", resultIDs(resp.Results))
+	}
+	got := map[string]bool{}
+	for _, result := range resp.Results {
+		root, ok := result["thread_root"].(string)
+		if !ok {
+			t.Fatalf("missing thread_root: %v", result)
+		}
+		got[root] = true
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("thread roots = %v, want %v", got, want)
 	}
 }
 

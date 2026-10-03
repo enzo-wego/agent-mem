@@ -488,16 +488,33 @@ LIMIT $4`, pgvector.NewVector(vec), typesArg, scopeArg, limit*3)
 	var kwHits []hybridHit
 	if kw := hybridKeywordRegexp(q); kw != "" {
 		rows, err := s.db.Query(ctx, `
+WITH hit AS (
+  SELECT n.id,
+         COALESCE(n.created_at, n.first_seen_at) AS ts,
+         COALESCE(
+           CASE WHEN n.type IN ('slack','slack_thread') AND n.scope LIKE 'slack:%' THEN
+             'slack:' || substr(n.scope, 7) || ':' ||
+             COALESCE(NULLIF(n.metadata->>'thread_ts',''),
+                      CASE WHEN array_length(string_to_array(n.id, ':'), 1) = 3
+                           THEN split_part(n.id, ':', 3) END)
+           END,
+           n.id) AS root_key
+  FROM graph.nodes n
+  WHERE n.deleted_at IS NULL
+    AND ($1::text[] IS NULL OR n.type = ANY($1))
+    AND ($2::text[] IS NULL OR n.scope IS NULL OR n.scope = '' OR n.scope = ANY($2))
+    AND (n.title ~* $3 OR n.body ~* $3)
+), folded AS (
+  SELECT DISTINCT ON (root_key) id, ts FROM hit ORDER BY root_key, ts DESC, id
+), top AS (
+  SELECT id, ts FROM folded ORDER BY ts DESC, id LIMIT 200
+)
 SELECT `+strings.Replace(hybridCols, "%s", "0.5", 1)+`
-FROM graph.nodes n
+FROM top
+JOIN graph.nodes n ON n.id = top.id
 LEFT JOIN graph.artifact_index ai ON ai.node_id = n.id
 LEFT JOIN graph.people p ON p.id = n.author_person_id
-WHERE n.deleted_at IS NULL
-  AND ($1::text[] IS NULL OR n.type = ANY($1))
-  AND ($2::text[] IS NULL OR n.scope IS NULL OR n.scope = '' OR n.scope = ANY($2))
-  AND (n.title ~* $3 OR n.body ~* $3)
-ORDER BY COALESCE(n.created_at, n.first_seen_at) DESC
-LIMIT 200`, typesArg, scopeArg, kw)
+ORDER BY top.ts DESC, n.id`, typesArg, scopeArg, kw)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
