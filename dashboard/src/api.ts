@@ -1250,6 +1250,7 @@ export interface HybridSearchResponse {
   results: HybridSearchResult[];
   total: number;
   semantic_error?: string;
+  arm_errors?: Record<string, string>;
 }
 
 // Only the types the /search page shows, so skipped types (entity tags, people,

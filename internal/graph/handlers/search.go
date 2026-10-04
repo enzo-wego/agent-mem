@@ -253,7 +253,29 @@ func (s *Search) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	wg.Wait()
 	if hybrid {
-		// arm_errors covers only the requested arms.
+		// arm_errors covers only the requested arms. A missing embedder is a
+		// skip, not a failure; if every non-skipped arm failed, fail the request.
+		active, failed := 0, 0
+		var msgs []string
+		for arm := range wanted {
+			if !wanted[arm] {
+				continue
+			}
+			msg, bad := armErrs[arm]
+			if bad && msg == "no embedder configured" {
+				continue
+			}
+			active++
+			if bad {
+				failed++
+				msgs = append(msgs, arm+": "+msg)
+			}
+		}
+		if active > 0 && failed == active {
+			sort.Strings(msgs)
+			http.Error(w, "search failed: "+strings.Join(msgs, "; "), http.StatusInternalServerError)
+			return
+		}
 		for arm := range armErrs {
 			if !wanted[arm] {
 				delete(armErrs, arm)
