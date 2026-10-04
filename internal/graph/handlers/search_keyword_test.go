@@ -83,6 +83,22 @@ func TestKeywordArm_Scoring(t *testing.T) {
 		}
 	})
 
+	t.Run("body_only", func(t *testing.T) {
+		truncateGraphHandlerTables(t, pool)
+		seedKeywordNode(t, pool, "jira:B-body", "plain one", "", "")
+		if _, err := pool.Exec(ctx, `UPDATE graph.nodes SET body = 'the narwhal appears only in this body' WHERE id = 'jira:B-body'`); err != nil {
+			t.Fatal(err)
+		}
+		seedKeywordNode(t, pool, "jira:B-sum", "plain two", "", "narwhal summary mention")
+		hits, err := keywordArm(ctx, pool, "narwhal", unfiltered, 30)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(hits) != 2 || hits[0].ID != "jira:B-sum" || hits[1].ID != "jira:B-body" || hits[1].Score != 0 {
+			t.Fatalf("hits = %+v, want summary node first, then body-only node at score 0", hits)
+		}
+	})
+
 	t.Run("acl_filtered", func(t *testing.T) {
 		truncateGraphHandlerTables(t, pool)
 		seedKeywordNode(t, pool, "jira:OK-title", "gnu migration", "slack:OK", "")
@@ -116,8 +132,10 @@ func TestKeywordArm_UsesGINIndex(t *testing.T) {
 	truncateGraphHandlerTables(t, pool)
 	ctx := context.Background()
 
-	if _, err := pool.Exec(ctx, `INSERT INTO graph.nodes (id, type, natural_key, title, metadata, machine_id)
-		SELECT 'fill:' || i, 'jira', 'fill:' || i, 'filler title ' || i, '{}', 'test' FROM generate_series(1, 5000) i`); err != nil {
+	if _, err := pool.Exec(ctx, `INSERT INTO graph.nodes (id, type, natural_key, title, body, metadata, machine_id)
+		SELECT 'fill:' || i, 'jira', 'fill:' || i, 'filler title ' || i,
+		       CASE WHEN i <= 3 THEN 'body zqxjtoken marker' ELSE 'filler body number ' || i END, '{}', 'test'
+		FROM generate_series(1, 5000) i`); err != nil {
 		t.Fatalf("seed nodes: %v", err)
 	}
 	if _, err := pool.Exec(ctx, `INSERT INTO graph.artifact_index (node_id, summary, summary_kind, machine_id)
@@ -132,6 +150,9 @@ func TestKeywordArm_UsesGINIndex(t *testing.T) {
 	// settled index (autovacuum does this in production).
 	if _, err := pool.Exec(ctx, `SELECT gin_clean_pending_list('graph.idx_artifact_index_tsv'::regclass)`); err != nil {
 		t.Fatalf("flush pending list: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `SELECT gin_clean_pending_list('graph.idx_nodes_body_tsv'::regclass)`); err != nil {
+		t.Fatalf("flush body pending list: %v", err)
 	}
 	for _, q := range []string{`ANALYZE graph.artifact_index`, `ANALYZE graph.nodes`} {
 		if _, err := pool.Exec(ctx, q); err != nil {
@@ -155,7 +176,9 @@ func TestKeywordArm_UsesGINIndex(t *testing.T) {
 	}
 	text := strings.Join(plan, "\n")
 	t.Log("\n" + text)
-	if !strings.Contains(text, "idx_artifact_index_tsv") {
-		t.Fatalf("plan does not use idx_artifact_index_tsv")
+	for _, idx := range []string{"idx_artifact_index_tsv", "idx_nodes_body_tsv"} {
+		if !strings.Contains(text, "Bitmap Index Scan on "+idx) {
+			t.Fatalf("plan has no bitmap index scan on %s", idx)
+		}
 	}
 }

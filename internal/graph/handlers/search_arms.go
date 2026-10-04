@@ -75,12 +75,15 @@ LIMIT $2`, append([]any{pgvector.NewVector(vec), limit}, f.args()...)...)
 var ilikeEscaper = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
 
 // keywordArmSQL is the complete keyword-arm statement. Candidates come from
-// two index-friendly sources (the GIN index on artifact_index.tsv, and a title
-// ILIKE), UNIONed, so neither match kind forces a sequential scan through an
-// OR across a join. The candidate arm repeats the tsquery expression instead
-// of joining the tq CTE: a CTE scan is not a parameter, so the planner could
-// not use the GIN index through it. Parameters: $1 websearch query, $2 limit, $3-$5 the
-// filter arrays, $6 the ILIKE-escaped query.
+// three index-friendly sources (the GIN index on artifact_index.tsv, a title
+// ILIKE, and the GIN index on the first 20k characters of nodes.body), UNIONed,
+// so no match kind forces a sequential scan through an OR across a join. The
+// candidate arm repeats the tsquery expression instead of joining the tq CTE:
+// a CTE scan is not a parameter, so the planner could not use the GIN index
+// through it. The body expression must match idx_nodes_body_tsv exactly. The
+// artifact_index join is a LEFT JOIN so nodes without an index row qualify.
+// Parameters: $1 websearch query, $2 limit, $3-$5 the filter arrays, $6 the
+// ILIKE-escaped query.
 func keywordArmSQL(f searchFilter) string {
 	return `
 WITH tq AS (SELECT websearch_to_tsquery('simple', $1) AS q),
@@ -88,6 +91,9 @@ candidates AS (
   SELECT node_id AS id FROM graph.artifact_index WHERE tsv @@ websearch_to_tsquery('simple', $1)
   UNION
   SELECT id FROM graph.nodes WHERE title ILIKE '%' || $6 || '%' ESCAPE '\'
+  UNION
+  -- ponytail: body hits are not ranked by body relevance; add ts_rank_cd over the body expression if eval shows body-only hits ordered badly.
+  SELECT id FROM graph.nodes WHERE to_tsvector('simple'::regconfig, left(coalesce(body, ''), 20000)) @@ websearch_to_tsquery('simple', $1)
 )
 SELECT n.id,
        COALESCE(ts_rank_cd(ai.tsv, tq.q), 0)
