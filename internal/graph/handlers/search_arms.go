@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/pgvector/pgvector-go"
 
@@ -31,6 +32,8 @@ type armHit struct {
 	ID    string
 	Score float64
 	At    time.Time
+	// Key is the Slack thread key, set only by the folded (hybrid) arms.
+	Key string
 }
 
 // searchFilter is the WHERE every arm shares: soft-deleted rows out, optional
@@ -54,19 +57,25 @@ func (f searchFilter) args() []any { return []any{f.types, f.scope, f.epic} }
 
 // semanticArm orders indexed nodes by cosine to the query vector.
 func semanticArm(ctx context.Context, db *pgxpool.Pool, vec []float32, f searchFilter, limit int) ([]armHit, error) {
-	rows, err := db.Query(ctx, `
+	rows, err := semanticRows(ctx, db, vec, f, limit, "")
+	if err != nil {
+		return nil, err
+	}
+	return scanHits(rows)
+}
+
+// semanticRows runs the semantic query; extra is an optional additional
+// select-list expression (", <expr>") appended after the three base columns.
+func semanticRows(ctx context.Context, db *pgxpool.Pool, vec []float32, f searchFilter, limit int, extra string) (pgx.Rows, error) {
+	return db.Query(ctx, `
 SELECT n.id, 1.0 - (ai.embedding <=> $1) AS cosine,
-       COALESCE(n.created_at, n.first_seen_at)
+       COALESCE(n.created_at, n.first_seen_at)`+extra+`
 FROM graph.artifact_index ai
 JOIN graph.nodes n ON n.id = ai.node_id
 WHERE ai.embedding IS NOT NULL
   AND `+f.sql(3, 4, 5)+`
 ORDER BY ai.embedding <=> $1
 LIMIT $2`, append([]any{pgvector.NewVector(vec), limit}, f.args()...)...)
-	if err != nil {
-		return nil, err
-	}
-	return scanHits(rows)
 }
 
 // ilikeEscaper escapes the LIKE metacharacters so a query such as "50%" is
@@ -85,19 +94,9 @@ var ilikeEscaper = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
 // Parameters: $1 websearch query, $2 limit, $3-$5 the filter arrays, $6 the
 // ILIKE-escaped query.
 func keywordArmSQL(f searchFilter) string {
-	return `
-WITH tq AS (SELECT websearch_to_tsquery('simple', $1) AS q),
-candidates AS (
-  SELECT node_id AS id FROM graph.artifact_index WHERE tsv @@ websearch_to_tsquery('simple', $1)
-  UNION
-  SELECT id FROM graph.nodes WHERE title ILIKE '%' || $6 || '%' ESCAPE '\'
-  UNION
-  -- ponytail: body hits are not ranked by body relevance; add ts_rank_cd over the body expression if eval shows body-only hits ordered badly.
-  SELECT id FROM graph.nodes WHERE to_tsvector('simple'::regconfig, left(coalesce(body, ''), 20000)) @@ websearch_to_tsquery('simple', $1)
-)
+	return keywordCTE + `
 SELECT n.id,
-       COALESCE(ts_rank_cd(ai.tsv, tq.q), 0)
-         + CASE WHEN n.title ILIKE '%' || $6 || '%' ESCAPE '\' THEN 0.5 ELSE 0 END AS rank,
+       ` + keywordRankSQL + `,
        COALESCE(n.created_at, n.first_seen_at)
 FROM candidates c
 JOIN graph.nodes n ON n.id = c.id
@@ -107,6 +106,22 @@ WHERE ` + f.sql(3, 4, 5) + `
 ORDER BY rank DESC, n.updated_at DESC
 LIMIT $2`
 }
+
+// keywordCTE is the shared tq + candidates prefix of the keyword statements.
+const keywordCTE = `
+WITH tq AS (SELECT websearch_to_tsquery('simple', $1) AS q),
+candidates AS (
+  SELECT node_id AS id FROM graph.artifact_index WHERE tsv @@ websearch_to_tsquery('simple', $1)
+  UNION
+  SELECT id FROM graph.nodes WHERE title ILIKE '%' || $6 || '%' ESCAPE '\'
+  UNION
+  -- ponytail: body hits are not ranked by body relevance; add ts_rank_cd over the body expression if eval shows body-only hits ordered badly.
+  SELECT id FROM graph.nodes WHERE to_tsvector('simple'::regconfig, left(coalesce(body, ''), 20000)) @@ websearch_to_tsquery('simple', $1)
+)`
+
+// keywordRankSQL is the keyword score: ts_rank_cd plus a flat title bonus.
+const keywordRankSQL = `COALESCE(ts_rank_cd(ai.tsv, tq.q), 0)
+         + CASE WHEN n.title ILIKE '%' || $6 || '%' ESCAPE '\' THEN 0.5 ELSE 0 END AS rank`
 
 // keywordArmArgs binds keywordArmSQL's parameters.
 func keywordArmArgs(q string, f searchFilter, limit int) []any {

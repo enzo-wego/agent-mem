@@ -2,7 +2,9 @@ package handlers
 
 import (
 	"context"
+	"fmt"
 	"math"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -180,5 +182,44 @@ func TestKeywordArm_UsesGINIndex(t *testing.T) {
 		if !strings.Contains(text, "Bitmap Index Scan on "+idx) {
 			t.Fatalf("plan has no bitmap index scan on %s", idx)
 		}
+	}
+}
+
+func TestKeywordArm_FoldOrder(t *testing.T) {
+	pool := openTestDB(t)
+	truncateGraphHandlerTables(t, pool)
+	ctx := context.Background()
+	// Six threads, budget three. Thread i's root summary repeats the term i
+	// times, so lexicographically earlier thread ids score lower; each thread
+	// also has a reply that matches only by body (score 0).
+	for i := 1; i <= 6; i++ {
+		root := fmt.Sprintf("slack:CFO:%d.000001", i)
+		reply := fmt.Sprintf("slack:CFO:%d.000002", i)
+		for _, id := range []string{root, reply} {
+			if _, err := pool.Exec(ctx, `INSERT INTO graph.nodes (id, type, natural_key, body, scope, metadata, machine_id)
+				VALUES ($1, 'slack', $1, 'flaxseed body', 'slack:CFO', jsonb_build_object('thread_ts', $2::text), 'test')`,
+				id, fmt.Sprintf("%d.000001", i)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if _, err := pool.Exec(ctx, `INSERT INTO graph.artifact_index (node_id, summary, summary_kind, machine_id)
+			VALUES ($1, repeat('flaxseed filler ', $2::int), 'heuristic', 'test')`, root, i); err != nil {
+			t.Fatal(err)
+		}
+	}
+	hits, err := keywordArmFolded(ctx, pool, "flaxseed", searchFilter{}, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, h := range hits {
+		got = append(got, h.Key)
+		if h.ID != h.Key {
+			t.Errorf("best member of %s = %s, want the root (highest score)", h.Key, h.ID)
+		}
+	}
+	want := []string{"slack:CFO:6.000001", "slack:CFO:5.000001", "slack:CFO:4.000001"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("threads = %v, want the three highest-scoring %v in rank order (scores %+v)", got, want, hits)
 	}
 }

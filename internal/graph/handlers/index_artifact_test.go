@@ -491,8 +491,9 @@ FROM graph.jobs WHERE type = 'link_topics'`).Scan(&jobs, &skipJobs); err != nil 
 		got[0].Decisions[0].Text != "Use the QUOKKAPAY ledger for partial refunds" {
 		t.Fatalf("decision result = %+v", got[0])
 	}
-	if got := decisionIndexSearch(t, s, "q=WOMBATTOPIC&match=hybrid"); len(got) != 0 {
-		t.Fatalf("topic search = %v, want no results", got)
+	// The summary is indexed by design: a summary-only word finds the thread too.
+	if got := decisionIndexSearch(t, s, "q=WOMBATTOPIC&match=hybrid"); len(got) != 1 || got[0].ID != "slack:CDKW:900.000001" {
+		t.Fatalf("topic search = %v, want the thread", got)
 	}
 }
 

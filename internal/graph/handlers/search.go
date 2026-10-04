@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -13,7 +12,6 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/pgvector/pgvector-go"
 
 	"github.com/agent-mem/agent-mem/internal/gemini"
 	"github.com/agent-mem/agent-mem/internal/graph/acl"
@@ -39,24 +37,17 @@ type Search struct {
 	exp    *bfs.Expander
 	// now is injectable so the temporal window parser is testable.
 	now func() time.Time
-	// weights feed match=hybrid's scoring.Combine.
-	weights scoring.Weights
 }
 
 // NewSearch creates a Search handler. embed may be nil: the semantic and
 // graph arms are then skipped and reported in arm_errors.
 func NewSearch(db *pgxpool.Pool) (*Search, error) {
-	w, err := scoring.LoadWeights(context.Background(), db)
-	if err != nil {
-		return nil, err
-	}
 	return &Search{
-		weights: w,
-		db:      db,
-		embed:   nil, // wired at server level via NewSearchWithEmbedder
-		aclBld:  acl.NewBuilder(db, 5*time.Minute),
-		exp:     bfs.NewExpander(db),
-		now:     time.Now,
+		db:     db,
+		embed:  nil, // wired at server level via NewSearchWithEmbedder
+		aclBld: acl.NewBuilder(db, 5*time.Minute),
+		exp:    bfs.NewExpander(db),
+		now:    time.Now,
 	}, nil
 }
 
@@ -102,8 +93,14 @@ type searchResponse struct {
 	Query string `json:"query"`
 }
 
-// maxSearchLimit caps ?limit; per-arm budgets are limit*3 like before.
-const maxSearchLimit = 50
+// Result limits per mode. ?limit is clamped to the mode's maximum; absent or
+// non-positive falls back to its default. Per-arm budgets are limit*3.
+const (
+	defaultSearchLimit = 10
+	maxSearchLimit     = 50
+	hybridSearchLimit  = 50
+	maxHybridLimit     = 100
+)
 
 func (s *Search) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
@@ -113,9 +110,13 @@ func (s *Search) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "q required", http.StatusBadRequest)
 		return
 	}
-	limit, _ := strconv.Atoi(qv.Get("limit"))
-	if limit <= 0 || limit > maxSearchLimit {
-		limit = 10
+	hybrid := qv.Get("match") == "hybrid"
+	limit, maxLimit := defaultSearchLimit, maxSearchLimit
+	if hybrid {
+		limit, maxLimit = hybridSearchLimit, maxHybridLimit
+	}
+	if n, _ := strconv.Atoi(qv.Get("limit")); n > 0 {
+		limit = min(n, maxLimit)
 	}
 	budget := limit * 3
 	epicKeys, err := epicScopeFromQuery(qv)
@@ -127,6 +128,13 @@ func (s *Search) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
+	}
+	if hybrid {
+		if qv.Get("arms") != "" {
+			http.Error(w, "match=hybrid and arms are exclusive", http.StatusBadRequest)
+			return
+		}
+		wanted = map[string]bool{armSemantic: true, armKeyword: true}
 	}
 
 	// Time window: explicit since/until win; otherwise a phrase in q.
@@ -153,13 +161,6 @@ func (s *Search) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		typesArg = t
 	}
 	filter := searchFilter{types: typesArg, scope: scopeArg, epic: epicScopeArg(epicKeys)}
-
-	// match=hybrid keeps main's regex-keyword + semantic path until the search
-	// unification; it has no epic filter or timezone handling.
-	if qv.Get("match") == "hybrid" {
-		s.serveHybrid(w, r, q, splitCSV(qv.Get("types")), scopeArg, askerEEID)
-		return
-	}
 
 	// One embedding of the topic (time phrase removed) serves the semantic
 	// and temporal arms. A query that was only a time phrase has no topic.
@@ -219,7 +220,11 @@ func (s *Search) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if runSemantic {
 		run(armSemantic, func() ([]armHit, error) {
-			hits, err := semanticArm(ctx, s.db, vec, filter, budget)
+			arm := semanticArm
+			if hybrid {
+				arm = semanticArmFolded
+			}
+			hits, err := arm(ctx, s.db, vec, filter, budget)
 			if err != nil {
 				if runGraph {
 					record(armGraph, nil, fmt.Errorf("semantic seeds unavailable: %w", err))
@@ -235,6 +240,9 @@ func (s *Search) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if runKeyword {
 		run(armKeyword, func() ([]armHit, error) {
+			if hybrid {
+				return keywordArmFolded(ctx, s.db, rest, filter, budget)
+			}
 			return keywordArm(ctx, s.db, rest, filter, budget)
 		})
 	}
@@ -244,6 +252,18 @@ func (s *Search) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	wg.Wait()
+	if hybrid {
+		// arm_errors covers only the requested arms.
+		for arm := range armErrs {
+			if !wanted[arm] {
+				delete(armErrs, arm)
+			}
+		}
+		if err := canonicalizeThreads(ctx, s.db, lists, filter); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
 
 	// Fuse by rank, then load node metadata for the fused set (applying the
 	// filter once more so graph-arm neighbours obey type/ACL/epic scope).
@@ -279,6 +299,27 @@ func (s *Search) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		results = results[:limit]
 	}
 
+	if hybrid {
+		rows, err := hybridDisplay(ctx, s.db, results, scopeArg)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		resp := hybridResponse{Results: rows, Total: len(rows), Arms: []string{}, Query: rest,
+			ArmErrors: nilIfEmpty(armErrs), SemanticError: armErrs[armSemantic]}
+		for _, arm := range allArms {
+			if _, ok := lists[arm]; ok {
+				resp.Arms = append(resp.Arms, arm)
+			}
+		}
+		if hasWindow {
+			resp.Window = &searchWindow{Start: win.Start, End: win.End}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+		return
+	}
+
 	resp := searchResponse{Results: results, Total: len(results), Arms: []string{}, Query: rest}
 	for _, arm := range allArms {
 		if _, ok := lists[arm]; ok {
@@ -296,6 +337,13 @@ func (s *Search) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
+}
+
+func nilIfEmpty(m map[string]string) map[string]string {
+	if len(m) == 0 {
+		return nil
+	}
+	return m
 }
 
 // hydrateResults loads the fused ids in one query and computes the boosted
@@ -611,475 +659,4 @@ LIMIT 1`, ref)
 	var eeid int
 	row.Scan(&eeid)
 	return eeid
-}
-
-// hybridBreakdown is the hybrid score_breakdown: the five shared components
-// (embedded, so their keys stay top-level) plus the two hybrid-only boosts.
-type hybridBreakdown struct {
-	scoring.Components
-	KW    float64 `json:"kw"`
-	Title float64 `json:"title"`
-}
-
-// hybridResult is the /search?match=hybrid result row. It is a separate struct
-// so default-mode JSON keeps exactly today's key set.
-type hybridResult struct {
-	NodeID           string           `json:"node_id"`
-	ID               string           `json:"id"`
-	Type             string           `json:"type"`
-	Title            string           `json:"title"`
-	URL              string           `json:"url"`
-	Summary          string           `json:"summary"`
-	Decisions        []threadDecision `json:"decisions,omitempty"`
-	OpenQuestions    []string         `json:"open_questions,omitempty"`
-	Score            float64          `json:"score"`
-	ScoreBreakdown   hybridBreakdown  `json:"score_breakdown"`
-	Author           string           `json:"author,omitempty"`
-	CreatedAt        time.Time        `json:"created_at"`
-	Match            []string         `json:"match"`
-	ThreadRoot       string           `json:"thread_root,omitempty"`
-	Channel          string           `json:"channel,omitempty"`
-	RootAuthor       string           `json:"root_author,omitempty"`
-	MsgCount         int              `json:"msg_count,omitempty"`
-	Participants     []string         `json:"participants,omitempty"`
-	ParticipantCount int              `json:"participant_count,omitempty"`
-	FirstTSMs        int64            `json:"first_ts_ms,omitempty"`
-	LastTSMs         int64            `json:"last_ts_ms,omitempty"`
-	PRCount          int              `json:"pr_count,omitempty"`
-	PRs              []prRef          `json:"prs,omitempty"`
-}
-
-// hybridHit is one raw row from either side of the hybrid query.
-type hybridHit struct {
-	id, typ, title, url, summary, author, scope, threadTS, body string
-	cosine                                                      float64
-	updatedAt, createdAt                                        time.Time
-	depth                                                       int16
-	isBot                                                       bool
-	eeid                                                        int
-}
-
-const hybridCols = `n.id, n.type, COALESCE(n.title,''), COALESCE(n.url,''),
-       COALESCE(ai.summary,''),
-       COALESCE(p.display_name,''),
-       %s AS cosine,
-       n.updated_at,
-       COALESCE(n.created_at, n.first_seen_at) AS created_at,
-       COALESCE(p.depth_from_root, 0),
-       COALESCE(p.is_bot, false),
-       COALESCE(p.eeid, 0),
-       COALESCE(n.scope,''), COALESCE(n.metadata->>'thread_ts',''), LEFT(COALESCE(n.body,''),200)`
-
-// hybridKeywordRegexp builds the word-boundary keyword pattern: \m / \M are
-// added only when the query starts / ends with a word character, so "PAN" does
-// not match "company" but "#payments" and "c++" still match.
-func hybridKeywordRegexp(q string) string {
-	q = strings.TrimSpace(q)
-	if q == "" {
-		return ""
-	}
-	isWord := func(r rune) bool {
-		return r == '_' || (r >= '0' && r <= '9') || (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z')
-	}
-	rs := []rune(q)
-	kw := regexp.QuoteMeta(q)
-	if isWord(rs[0]) {
-		kw = `\m` + kw
-	}
-	if isWord(rs[len(rs)-1]) {
-		kw += `\M`
-	}
-	return kw
-}
-
-func scanHybridHits(rows interface {
-	Next() bool
-	Scan(...any) error
-	Close()
-	Err() error
-}) ([]hybridHit, error) {
-	defer rows.Close()
-	var hits []hybridHit
-	for rows.Next() {
-		var h hybridHit
-		if err := rows.Scan(&h.id, &h.typ, &h.title, &h.url, &h.summary, &h.author,
-			&h.cosine, &h.updatedAt, &h.createdAt, &h.depth, &h.isBot, &h.eeid,
-			&h.scope, &h.threadTS, &h.body); err != nil {
-			continue
-		}
-		hits = append(hits, h)
-	}
-	return hits, rows.Err()
-}
-
-func isSlackType(t string) bool { return t == "slack" || t == "slack_thread" }
-
-// hybridRootID maps a Slack hit to its thread root id (channel id from scope).
-func hybridRootID(h hybridHit) string {
-	if !isSlackType(h.typ) || !strings.HasPrefix(h.scope, "slack:") {
-		return ""
-	}
-	ts := h.threadTS
-	if ts == "" {
-		parts := strings.Split(h.id, ":")
-		if len(parts) != 3 {
-			return ""
-		}
-		ts = parts[2]
-	}
-	return "slack:" + strings.TrimPrefix(h.scope, "slack:") + ":" + ts
-}
-
-// serveHybrid is the opt-in keyword+semantic search used by the /search page.
-func (s *Search) serveHybrid(w http.ResponseWriter, r *http.Request, q string, typesFilter []string, scopeArg any, askerEEID int) {
-	ctx := r.Context()
-	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	if limit <= 0 {
-		limit = 50
-	}
-	if limit > 100 {
-		limit = 100
-	}
-	var typesArg any
-	if len(typesFilter) > 0 {
-		typesArg = typesFilter
-	}
-
-	// Semantic side: only with an embedder, and no ILIKE fallback if it fails.
-	var semHits []hybridHit
-	semanticErr := ""
-	if s.embed != nil {
-		vec, err := s.embed.EmbedWithOptions(ctx, q, graphEmbeddingOptions())
-		if err != nil {
-			semanticErr = err.Error()
-		} else {
-			rows, err := s.db.Query(ctx, `
-SELECT `+strings.Replace(hybridCols, "%s", "1.0 - (ai.embedding <=> $1)", 1)+`
-FROM graph.artifact_index ai
-JOIN graph.nodes n ON n.id = ai.node_id
-LEFT JOIN graph.people p ON p.id = n.author_person_id
-WHERE n.deleted_at IS NULL
-  AND ai.embedding IS NOT NULL
-  AND ($2::text[] IS NULL OR n.type = ANY($2))
-  AND ($3::text[] IS NULL OR n.scope IS NULL OR n.scope = '' OR n.scope = ANY($3))
-ORDER BY ai.embedding <=> $1
-LIMIT $4`, pgvector.NewVector(vec), typesArg, scopeArg, limit*3)
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-			semHits, err = scanHybridHits(rows)
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-		}
-	}
-
-	// Keyword side.
-	// ponytail: unindexed word-boundary regex over graph.nodes title/body.
-	// Measured in prod 2026-10-02: 49,762 nodes / 140 MB body = 0.47-0.94 s.
-	// Ceiling: when this exceeds ~2 s, add a pg_trgm GIN index on n.body/n.title.
-	var kwHits []hybridHit
-	if kw := hybridKeywordRegexp(q); kw != "" {
-		rows, err := s.db.Query(ctx, `
-WITH hit AS (
-  SELECT n.id,
-         COALESCE(n.created_at, n.first_seen_at) AS ts,
-         COALESCE(
-           CASE WHEN n.type IN ('slack','slack_thread') AND n.scope LIKE 'slack:%' THEN
-             'slack:' || substr(n.scope, 7) || ':' ||
-             COALESCE(NULLIF(n.metadata->>'thread_ts',''),
-                      CASE WHEN array_length(string_to_array(n.id, ':'), 1) = 3
-                           THEN split_part(n.id, ':', 3) END)
-           END,
-           n.id) AS root_key
-  FROM graph.nodes n
-  LEFT JOIN graph.artifact_index ai ON ai.node_id = n.id
-  WHERE n.deleted_at IS NULL
-    AND ($1::text[] IS NULL OR n.type = ANY($1))
-    AND ($2::text[] IS NULL OR n.scope IS NULL OR n.scope = '' OR n.scope = ANY($2))
-    AND (n.title ~* $3 OR n.body ~* $3 OR ai.decisions_text ~* $3)
-), folded AS (
-  SELECT DISTINCT ON (root_key) id, ts FROM hit ORDER BY root_key, ts DESC, id
-), top AS (
-  SELECT id, ts FROM folded ORDER BY ts DESC, id LIMIT 200
-)
-SELECT `+strings.Replace(hybridCols, "%s", "0.5", 1)+`
-FROM top
-JOIN graph.nodes n ON n.id = top.id
-LEFT JOIN graph.artifact_index ai ON ai.node_id = n.id
-LEFT JOIN graph.people p ON p.id = n.author_person_id
-ORDER BY top.ts DESC, n.id`, typesArg, scopeArg, kw)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		kwHits, err = scanHybridHits(rows)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-	}
-
-	// Fold Slack hits into their thread root when the root exists and is visible.
-	rootSet := map[string]bool{}
-	var rootIDs []string
-	for _, hs := range [][]hybridHit{semHits, kwHits} {
-		for _, h := range hs {
-			if rid := hybridRootID(h); rid != "" && !rootSet[rid] {
-				rootSet[rid] = true
-				rootIDs = append(rootIDs, rid)
-			}
-		}
-	}
-	roots := map[string]hybridHit{}
-	if len(rootIDs) > 0 {
-		rows, err := s.db.Query(ctx, `
-SELECT `+strings.Replace(hybridCols, "%s", "0.5", 1)+`
-FROM graph.nodes n
-LEFT JOIN graph.artifact_index ai ON ai.node_id = n.id
-LEFT JOIN graph.people p ON p.id = n.author_person_id
-WHERE n.id = ANY($1) AND n.deleted_at IS NULL
-  AND ($2::text[] IS NULL OR n.scope IS NULL OR n.scope = '' OR n.scope = ANY($2))`,
-			rootIDs, scopeArg)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		rh, err := scanHybridHits(rows)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		for _, h := range rh {
-			roots[h.id] = h
-		}
-	}
-
-	type merged struct {
-		base    hybridHit // the root node when folded, else the hit itself
-		rootID  string    // thread root id for Slack results
-		kw, sem bool
-		maxCos  float64
-	}
-	byKey := map[string]*merged{}
-	var order []*merged
-	add := func(h hybridHit, sem bool) {
-		key := h.id
-		base := h
-		rid := hybridRootID(h)
-		if rid != "" {
-			if root, ok := roots[rid]; ok {
-				key, base = rid, root
-			}
-		}
-		m := byKey[key]
-		if m == nil {
-			m = &merged{base: base, rootID: rid}
-			byKey[key] = m
-			order = append(order, m)
-		}
-		if sem {
-			m.sem = true
-			if h.cosine > m.maxCos {
-				m.maxCos = h.cosine
-			}
-		} else {
-			m.kw = true
-		}
-	}
-	for _, h := range semHits {
-		add(h, true)
-	}
-	for _, h := range kwHits {
-		add(h, false)
-	}
-
-	hw, err := scoring.LoadHybridWeights(ctx, s.db)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	wb := s.weights
-	wb.Rec = hw.Rec // hybrid uses its own, lower recency weight
-
-	chans := make([]string, 0, len(order))
-	tss := make([]string, 0, len(order))
-	seenRoots := map[string]bool{}
-	for _, m := range order {
-		if m.rootID == "" || seenRoots[m.rootID] {
-			continue
-		}
-		seenRoots[m.rootID] = true
-		if c, t, ok := slackRootParts(m.rootID); ok {
-			chans, tss = append(chans, c), append(tss, t)
-		}
-	}
-	type tsum struct {
-		summary, overview string
-		dec, oq           []byte
-	}
-	sums := map[string]tsum{}
-	if len(chans) > 0 {
-		srows, err := s.db.Query(ctx, `
-SELECT channel_id, thread_ts, summary, overview, decisions, open_questions
-FROM graph.thread_summaries
-WHERE (channel_id, thread_ts) IN (SELECT unnest($1::text[]), unnest($2::text[]))`, chans, tss)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		for srows.Next() {
-			var c, t string
-			var ts tsum
-			if err := srows.Scan(&c, &t, &ts.summary, &ts.overview, &ts.dec, &ts.oq); err == nil {
-				sums[c+":"+t] = ts
-			}
-		}
-		srows.Close()
-	}
-
-	now := time.Now()
-	results := make([]hybridResult, 0, len(order))
-	for _, m := range order {
-		cos := 0.5
-		if m.sem {
-			cos = m.maxCos
-		}
-		b := m.base
-		c := scoring.Components{
-			Sem:  scoring.Semantic(cos),
-			Rec:  scoring.Recency(b.updatedAt, now, 30*24*time.Hour),
-			Edge: 0,
-			Team: personScoreForSearch(ctx, s.db, askerEEID, b.eeid),
-			Auth: scoring.Authority(b.depth, 6),
-		}
-		var match []string
-		if m.kw {
-			match = append(match, "keyword")
-		}
-		if m.sem {
-			match = append(match, "semantic")
-		}
-		title := b.title
-		if title == "" {
-			title = firstLine(b.body, 120)
-		}
-		if m.rootID != "" {
-			if ch, t, ok := slackRootParts(m.rootID); ok {
-				if ts, ok := sums[ch+":"+t]; ok && ts.summary != "" {
-					title = ts.summary
-				}
-			}
-		}
-		bd := hybridBreakdown{Components: c, Title: scoring.TitleOverlap(q, title)}
-		if m.kw {
-			bd.KW = 1
-		}
-		score := scoring.Combine(wb, c) + hw.KW*bd.KW + hw.Title*bd.Title
-		res := hybridResult{
-			NodeID: b.id, ID: b.id, Type: b.typ, Title: title, URL: b.url,
-			Summary: b.summary, Score: score, ScoreBreakdown: bd,
-			Author: b.author, CreatedAt: b.createdAt, Match: match,
-		}
-		if m.rootID != "" {
-			res.ThreadRoot = m.rootID
-			if res.URL == "" {
-				res.URL = slackPermalink(m.rootID)
-			}
-		} else {
-			ms := b.createdAt.UnixMilli()
-			res.FirstTSMs, res.LastTSMs = ms, ms
-		}
-		results = append(results, res)
-	}
-	sort.SliceStable(results, func(i, j int) bool {
-		if results[i].Score != results[j].Score {
-			return results[i].Score > results[j].Score
-		}
-		return results[i].CreatedAt.After(results[j].CreatedAt)
-	})
-	if len(results) > limit {
-		results = results[:limit]
-	}
-
-	// Slack enrichment for the kept results only: one query each.
-	var slackRoots []string
-	for _, res := range results {
-		if res.ThreadRoot != "" {
-			slackRoots = append(slackRoots, res.ThreadRoot)
-		}
-	}
-	if len(slackRoots) > 0 {
-		cards, err := threadCards(ctx, s.db, slackRoots)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		for i := range results {
-			rid := results[i].ThreadRoot
-			if rid == "" {
-				continue
-			}
-			ch, t, _ := slackRootParts(rid)
-			if ts, ok := sums[ch+":"+t]; ok {
-				if ts.summary != "" {
-					results[i].Title = ts.summary
-				}
-				if ts.overview != "" {
-					results[i].Summary = ts.overview
-				}
-				results[i].Decisions, results[i].OpenQuestions = decodeThreadDecisions(ch, t, ts.dec, ts.oq)
-			}
-			if c, ok := cards[rid]; ok {
-				results[i].Channel = c.Channel
-				results[i].RootAuthor = c.RootAuthor
-				results[i].MsgCount = c.MsgCount
-				results[i].Participants = c.Participants
-				results[i].ParticipantCount = c.ParticipantCount
-				results[i].FirstTSMs = c.FirstTSMs
-				results[i].LastTSMs = c.LastTSMs
-			}
-		}
-	}
-
-	var jiraIDs []string
-	for _, res := range results {
-		if res.Type == "jira" {
-			jiraIDs = append(jiraIDs, res.NodeID)
-		}
-	}
-	if len(jiraIDs) > 0 {
-		ss, _ := scopeArg.([]string)
-		visible := func(sc *string) bool {
-			if scopeArg == nil || sc == nil || *sc == "" {
-				return true
-			}
-			for _, s := range ss {
-				if s == *sc {
-					return true
-				}
-			}
-			return false
-		}
-		lists, err := jiraPRs(ctx, s.db, jiraIDs, visible)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		for i := range results {
-			if l, ok := lists[results[i].NodeID]; ok && results[i].Type == "jira" {
-				results[i].PRCount = l.Count
-				results[i].PRs = l.PRs
-			}
-		}
-	}
-
-	resp := map[string]any{"results": results, "total": len(results)}
-	if semanticErr != "" {
-		resp["semantic_error"] = semanticErr
-	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
 }
