@@ -3,10 +3,14 @@ package handlers
 import (
 	"encoding/json"
 	"net/http"
+	"regexp"
 	"strings"
 
 	"github.com/agent-mem/agent-mem/internal/graph/jobs"
 )
+
+// reEpicBriefKey is the Jira key shape of an epic the brief job accepts.
+var reEpicBriefKey = regexp.MustCompile(`^[A-Z][A-Z0-9]+-[0-9]+$`)
 
 // enqueuableTypes is the allowlist of job types the admin enqueue endpoint may
 // trigger. Kept narrow (maintenance/refresh jobs) so the API-key boundary can't
@@ -51,7 +55,7 @@ func NewJobsEnqueueHandler(deps Deps) http.Handler {
 			// A real build spends LLM calls and writes briefs: the canary
 			// path is dry-run-only; the scheduled path enqueues real runs.
 			var p refreshEpicBriefPayload
-			if err := json.Unmarshal(payload, &p); err != nil || !p.DryRun || strings.TrimSpace(p.EpicKey) == "" {
+			if err := json.Unmarshal(payload, &p); err != nil || !p.DryRun || !reEpicBriefKey.MatchString(strings.ToUpper(strings.TrimSpace(p.EpicKey))) {
 				http.Error(w, `{"error":"refresh_epic_brief is only enqueuable as a dry run with an epic_key"}`, http.StatusBadRequest)
 				return
 			}

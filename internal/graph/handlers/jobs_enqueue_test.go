@@ -33,6 +33,7 @@ func TestJobsEnqueue_EpicBriefDryRunOnly(t *testing.T) {
 		{"no_dry_run", `{"epic_key":"PAY-1"}`, 400, 0},
 		{"dry_run_false", `{"epic_key":"PAY-1","dry_run":false}`, 400, 0},
 		{"no_epic_key", `{"dry_run":true}`, 400, 0},
+		{"non_jira_key", `{"epic_key":"business:payments","dry_run":true}`, 400, 0},
 		{"dry_run_ok", `{"epic_key":"PAY-1","dry_run":true}`, 200, 1},
 	}
 	for _, c := range cases {
