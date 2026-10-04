@@ -86,7 +86,7 @@ func TestParse(t *testing.T) {
 }
 
 func TestWindowProximity(t *testing.T) {
-	w := Window{d(2026, 8, 1), d(2026, 9, 1)}
+	w := Window{Start: d(2026, 8, 1), End: d(2026, 9, 1)}
 	if p := w.Proximity(w.Centre()); p != 1 {
 		t.Errorf("centre = %v, want 1", p)
 	}
@@ -102,7 +102,7 @@ func TestWindowProximity(t *testing.T) {
 }
 
 func TestRoundRobin(t *testing.T) {
-	w := Window{d(2026, 8, 1), d(2026, 8, 9)} // 8 days → one day per bucket
+	w := Window{Start: d(2026, 8, 1), End: d(2026, 8, 9)} // 8 days → one day per bucket
 	in := []Dated{
 		{"a1", d(2026, 8, 1), 0.9},
 		{"a2", d(2026, 8, 1), 0.8},
@@ -123,5 +123,41 @@ func TestRoundRobin(t *testing.T) {
 	}
 	if out := RoundRobin(in[:1], w, 8); len(out) != 1 {
 		t.Errorf("single item passthrough failed")
+	}
+}
+
+func TestWindowProximity_OpenNeutral(t *testing.T) {
+	closed := Window{Start: d(2026, 9, 1), End: d(2026, 9, 28)}
+	open := Window{Start: d(2026, 9, 1), End: d(2026, 9, 28), Open: true}
+	item := d(2026, 9, 27)
+	if p := open.Proximity(item); p != 0.5 {
+		t.Errorf("open = %v, want 0.5", p)
+	}
+	if p := closed.Proximity(item); p == 0.5 {
+		t.Errorf("closed = %v, want centre-based (not 0.5)", p)
+	}
+}
+
+func TestParse_OpenFlag(t *testing.T) {
+	cases := []struct {
+		name, q string
+		open    bool
+	}{
+		{"this_month", "alerts this month", true},
+		{"since_month", "alerts since August", true},
+		{"last_month", "alerts last month", false},
+		{"today", "alerts today", false},
+		{"iso_range", "alerts 2026-09-01 to 2026-09-10", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			w, _, ok := Parse(tc.q, now, time.UTC)
+			if !ok {
+				t.Fatal("no match")
+			}
+			if w.Open != tc.open {
+				t.Errorf("Open = %v, want %v", w.Open, tc.open)
+			}
+		})
 	}
 }

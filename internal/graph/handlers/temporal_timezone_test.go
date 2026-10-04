@@ -166,3 +166,32 @@ func TestSearch_TimezoneWiring(t *testing.T) {
 		t.Fatalf("UTC yesterday: %v", got)
 	}
 }
+
+func TestSearchWindow_APIOpenFlag(t *testing.T) {
+	s := &Search{}
+	now := time.Date(2026, 10, 4, 6, 0, 0, 0, time.UTC)
+	cases := []struct {
+		name, qs string
+		open     bool
+	}{
+		{"since_only", "since=2026-09-01", true},
+		{"until_only", "until=2026-09-01", true},
+		{"both", "since=2026-08-01&until=2026-09-01", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			qv := map[string][]string{}
+			for _, kv := range strings.Split(tc.qs, "&") {
+				p := strings.SplitN(kv, "=", 2)
+				qv[p[0]] = []string{p[1]}
+			}
+			w, _, has, err := s.window(qv, "q", now, time.UTC)
+			if err != nil || !has {
+				t.Fatalf("err=%v has=%v", err, has)
+			}
+			if w.Open != tc.open {
+				t.Errorf("Open = %v, want %v", w.Open, tc.open)
+			}
+		})
+	}
+}

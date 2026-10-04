@@ -13,6 +13,11 @@ import (
 // Window is a half-open [Start, End) interval.
 type Window struct {
 	Start, End time.Time
+	// Open marks a window with no real far edge ("this month", "since …",
+	// since-only/until-only API calls): End is "now" or a placeholder, so
+	// distance from the centre says nothing about relevance. Proximity is
+	// neutral for it; Start/End still filter.
+	Open bool
 }
 
 // Centre is the midpoint of the window.
@@ -21,8 +26,12 @@ func (w Window) Centre() time.Time {
 }
 
 // Proximity maps t to [0,1]: 1 at the window centre, 0 at either edge and
-// beyond. 0.5 for a zero-length window (avoids a divide by zero).
+// beyond. 0.5 for a zero-length window (avoids a divide by zero) and for an
+// Open window.
 func (w Window) Proximity(t time.Time) float64 {
+	if w.Open {
+		return 0.5
+	}
 	half := float64(w.End.Sub(w.Start)) / 2
 	if half <= 0 {
 		return 0.5
@@ -117,7 +126,7 @@ func Parse(q string, now time.Time, loc *time.Location) (w Window, rest string, 
 					}
 					s = time.Date(y, mo, 1, 0, 0, 0, 0, loc)
 				}
-				return Window{s, dayStart(now).AddDate(0, 0, 1)}, true
+				return Window{Start: s, End: dayStart(now).AddDate(0, 0, 1), Open: true}, true
 			})
 		},
 		func() (hit, bool) {
@@ -127,7 +136,7 @@ func Parse(q string, now time.Time, loc *time.Location) (w Window, rest string, 
 				if e1 != nil || e2 != nil || b.Before(a) {
 					return Window{}, false
 				}
-				return Window{a, b.AddDate(0, 0, 1)}, true
+				return Window{Start: a, End: b.AddDate(0, 0, 1)}, true
 			})
 		},
 		func() (hit, bool) {
@@ -136,7 +145,7 @@ func Parse(q string, now time.Time, loc *time.Location) (w Window, rest string, 
 				if err != nil {
 					return Window{}, false
 				}
-				return Window{a, a.AddDate(0, 0, 1)}, true
+				return Window{Start: a, End: a.AddDate(0, 0, 1)}, true
 			})
 		},
 		func() (hit, bool) {
@@ -168,7 +177,9 @@ func Parse(q string, now time.Time, loc *time.Location) (w Window, rest string, 
 		},
 		func() (hit, bool) {
 			return try(reThis, func(m []string) (Window, bool) {
-				return thisWindow(strings.ToLower(m[1]), now), true
+				w := thisWindow(strings.ToLower(m[1]), now)
+				w.Open = true
+				return w, true
 			})
 		},
 		func() (hit, bool) {
@@ -176,7 +187,7 @@ func Parse(q string, now time.Time, loc *time.Location) (w Window, rest string, 
 				qn, _ := strconv.Atoi(m[1])
 				y, _ := strconv.Atoi(m[2])
 				s := time.Date(y, time.Month((qn-1)*3+1), 1, 0, 0, 0, 0, loc)
-				return Window{s, s.AddDate(0, 3, 0)}, true
+				return Window{Start: s, End: s.AddDate(0, 3, 0)}, true
 			})
 		},
 		func() (hit, bool) {
@@ -185,7 +196,7 @@ func Parse(q string, now time.Time, loc *time.Location) (w Window, rest string, 
 				if strings.EqualFold(m[1], "yesterday") {
 					d = d.AddDate(0, 0, -1)
 				}
-				return Window{d, d.AddDate(0, 0, 1)}, true
+				return Window{Start: d, End: d.AddDate(0, 0, 1)}, true
 			})
 		},
 	}
@@ -211,7 +222,7 @@ func dayStart(t time.Time) time.Time {
 
 func monthWindow(y int, m time.Month, loc *time.Location) Window {
 	s := time.Date(y, m, 1, 0, 0, 0, 0, loc)
-	return Window{s, s.AddDate(0, 1, 0)}
+	return Window{Start: s, End: s.AddDate(0, 1, 0)}
 }
 
 // weekStart is the Monday 00:00 in t's location on or before t.
@@ -232,16 +243,16 @@ func lastWindow(unit string, now time.Time) Window {
 	switch unit {
 	case "week":
 		e := weekStart(now)
-		return Window{e.AddDate(0, 0, -7), e}
+		return Window{Start: e.AddDate(0, 0, -7), End: e}
 	case "month":
 		e := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
-		return Window{e.AddDate(0, -1, 0), e}
+		return Window{Start: e.AddDate(0, -1, 0), End: e}
 	case "quarter":
 		e := quarterStart(now)
-		return Window{e.AddDate(0, -3, 0), e}
+		return Window{Start: e.AddDate(0, -3, 0), End: e}
 	default: // year
 		e := time.Date(now.Year(), 1, 1, 0, 0, 0, 0, now.Location())
-		return Window{e.AddDate(-1, 0, 0), e}
+		return Window{Start: e.AddDate(-1, 0, 0), End: e}
 	}
 }
 
@@ -250,12 +261,12 @@ func thisWindow(unit string, now time.Time) Window {
 	e := dayStart(now).AddDate(0, 0, 1)
 	switch unit {
 	case "week":
-		return Window{weekStart(now), e}
+		return Window{Start: weekStart(now), End: e}
 	case "month":
-		return Window{time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location()), e}
+		return Window{Start: time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location()), End: e}
 	case "quarter":
-		return Window{quarterStart(now), e}
+		return Window{Start: quarterStart(now), End: e}
 	default: // year
-		return Window{time.Date(now.Year(), 1, 1, 0, 0, 0, 0, now.Location()), e}
+		return Window{Start: time.Date(now.Year(), 1, 1, 0, 0, 0, 0, now.Location()), End: e}
 	}
 }

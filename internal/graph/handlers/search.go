@@ -376,7 +376,8 @@ func (s *Search) window(qv map[string][]string, q string, now time.Time, loc *ti
 		}
 		return w, rest, true, nil
 	}
-	win := temporal.Window{Start: time.Unix(0, 0).UTC(), End: now.Add(24 * time.Hour)}
+	// One bound only leaves the other a placeholder: the window is open.
+	win := temporal.Window{Start: time.Unix(0, 0).UTC(), End: now.Add(24 * time.Hour), Open: since == "" || until == ""}
 	if since != "" {
 		t, _, err := parseWhen(since, loc)
 		if err != nil {
