@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -68,24 +69,50 @@ LIMIT $2`, append([]any{pgvector.NewVector(vec), limit}, f.args()...)...)
 	return scanHits(rows)
 }
 
+// ilikeEscaper escapes the LIKE metacharacters so a query such as "50%" is
+// matched literally. strings.Replacer scans once, so an inserted backslash is
+// never escaped again.
+var ilikeEscaper = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+
+// keywordArmSQL is the complete keyword-arm statement. Candidates come from
+// two index-friendly sources (the GIN index on artifact_index.tsv, and a title
+// ILIKE), UNIONed, so neither match kind forces a sequential scan through an
+// OR across a join. The candidate arm repeats the tsquery expression instead
+// of joining the tq CTE: a CTE scan is not a parameter, so the planner could
+// not use the GIN index through it. Parameters: $1 websearch query, $2 limit, $3-$5 the
+// filter arrays, $6 the ILIKE-escaped query.
+func keywordArmSQL(f searchFilter) string {
+	return `
+WITH tq AS (SELECT websearch_to_tsquery('simple', $1) AS q),
+candidates AS (
+  SELECT node_id AS id FROM graph.artifact_index WHERE tsv @@ websearch_to_tsquery('simple', $1)
+  UNION
+  SELECT id FROM graph.nodes WHERE title ILIKE '%' || $6 || '%' ESCAPE '\'
+)
+SELECT n.id,
+       COALESCE(ts_rank_cd(ai.tsv, tq.q), 0)
+         + CASE WHEN n.title ILIKE '%' || $6 || '%' ESCAPE '\' THEN 0.5 ELSE 0 END AS rank,
+       COALESCE(n.created_at, n.first_seen_at)
+FROM candidates c
+JOIN graph.nodes n ON n.id = c.id
+CROSS JOIN tq
+LEFT JOIN graph.artifact_index ai ON ai.node_id = n.id
+WHERE ` + f.sql(3, 4, 5) + `
+ORDER BY rank DESC, n.updated_at DESC
+LIMIT $2`
+}
+
+// keywordArmArgs binds keywordArmSQL's parameters.
+func keywordArmArgs(q string, f searchFilter, limit int) []any {
+	return append([]any{q, limit}, append(f.args(), ilikeEscaper.Replace(q))...)
+}
+
 // keywordArm matches websearch syntax against artifact_index.tsv (summary +
 // identifiers, 'simple' config so ticket keys survive) and, as a second cheap
 // signal, the node title. Ranked by ts_rank_cd with a flat bonus for a title
 // hit so an exact title beats a passing mention in a summary.
 func keywordArm(ctx context.Context, db *pgxpool.Pool, q string, f searchFilter, limit int) ([]armHit, error) {
-	rows, err := db.Query(ctx, `
-WITH tq AS (SELECT websearch_to_tsquery('simple', $1) AS q)
-SELECT n.id,
-       COALESCE(ts_rank_cd(ai.tsv, tq.q), 0)
-         + CASE WHEN n.title ILIKE '%' || $1 || '%' THEN 0.5 ELSE 0 END AS rank,
-       COALESCE(n.created_at, n.first_seen_at)
-FROM graph.nodes n
-CROSS JOIN tq
-LEFT JOIN graph.artifact_index ai ON ai.node_id = n.id
-WHERE (ai.tsv @@ tq.q OR n.title ILIKE '%' || $1 || '%')
-  AND `+f.sql(3, 4, 5)+`
-ORDER BY rank DESC, n.updated_at DESC
-LIMIT $2`, append([]any{q, limit}, f.args()...)...)
+	rows, err := db.Query(ctx, keywordArmSQL(f), keywordArmArgs(q, f, limit)...)
 	if err != nil {
 		return nil, err
 	}
