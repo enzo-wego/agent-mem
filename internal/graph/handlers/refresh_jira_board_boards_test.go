@@ -45,6 +45,8 @@ func TestRefreshJiraBoard_UnknownProjectNoOp(t *testing.T) {
 	t.Cleanup(func() {
 		if hadPrev {
 			_, _ = pool.Exec(ctx, `UPDATE settings SET value=$2 WHERE key=$1`, businessRootProjectKey, prev)
+		} else {
+			_, _ = pool.Exec(ctx, `DELETE FROM settings WHERE key=$1`, businessRootProjectKey)
 		}
 	})
 
