@@ -17,6 +17,7 @@ var reEpicBriefKey = regexp.MustCompile(`^[A-Z][A-Z0-9]+-[0-9]+$`)
 // be used to inject arbitrary work.
 var enqueuableTypes = map[string]bool{
 	"backfill_created_at":      true,
+	"backfill_artifact_tsv":    true, // payload: {batch} (default 500, 1-5000)
 	"refresh_jira_board":       true,
 	"refresh_jira_updates":     true,
 	"refresh_slack_channels":   true,
