@@ -344,20 +344,15 @@ func NewIngestContentHandler(deps Deps) http.Handler {
 				deps.Logger.Warn().Err(edgeErr).Str("att_node_id", attNodeID).Msg("ingest_content: upsert attachment edge failed")
 			}
 
-			// Enqueue describe_attachment job.
+			// Describe only when this attachment has no body or job in flight.
 			descPayload := map[string]string{
 				"node_id":      attNodeID,
 				"external_url": f.URLPrivate,
 				"mime":         f.MimeType,
 				"source":       req.Source,
 			}
-			jid, jErr := jobs.Enqueue(ctx, deps.DB, "describe_attachment", descPayload, jobs.EnqueueOptions{
-				Priority:  5,
-				MachineID: deps.MachineID,
-			})
-			if jErr != nil {
-				deps.Logger.Warn().Err(jErr).Str("att_node_id", attNodeID).Msg("ingest_content: enqueue describe_attachment failed")
-			} else {
+			jid, queued := enqueueDescribeIfNeeded(ctx, deps, attNodeID, descPayload)
+			if queued {
 				attachmentsRegistered = append(attachmentsRegistered, attachmentRegisteredView{
 					NodeID:  attNodeID,
 					Outcome: "queued_for_describe",
@@ -366,6 +361,11 @@ func NewIngestContentHandler(deps Deps) http.Handler {
 					ID:       jid,
 					Type:     "describe_attachment",
 					Priority: 5,
+				})
+			} else {
+				attachmentsRegistered = append(attachmentsRegistered, attachmentRegisteredView{
+					NodeID:  attNodeID,
+					Outcome: "describe_skipped",
 				})
 			}
 		}

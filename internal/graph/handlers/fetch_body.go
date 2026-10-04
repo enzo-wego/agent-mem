@@ -7,8 +7,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-
 	"github.com/agent-mem/agent-mem/internal/graph/extractor"
 	"github.com/agent-mem/agent-mem/internal/graph/fetchers"
 	"github.com/agent-mem/agent-mem/internal/graph/identity"
@@ -282,7 +280,7 @@ func fetchBodyHandler(deps Deps) jobs.Handler {
 
 			// Describe only for depth-0, non-metadata-only fetches (cascade cap).
 			if p.Depth < 1 && !p.SkipAttachments {
-				enqueueDescribeIfNeeded(ctx, deps, att.NodeID, map[string]string{
+				_, _ = enqueueDescribeIfNeeded(ctx, deps, att.NodeID, map[string]string{
 					"node_id":      att.NodeID,
 					"external_url": att.URLPrivate,
 					"mime":         att.MimeType,
@@ -481,58 +479,5 @@ func enqueueFetchIfEmpty(ctx context.Context, deps Deps, nodeID string, nodeType
 		                    AND available_at < now() + interval '1 day')`,
 		nodeID, raw, deps.MachineID); jErr != nil {
 		deps.Logger.Warn().Err(jErr).Str("node_id", nodeID).Msg("enqueueFetchIfEmpty: enqueue failed")
-	}
-}
-
-// describeEligibilityCheck reports whether an attachment must NOT be described:
-// it already has a non-empty body, or a describe_attachment job for it is
-// queued or running. One statement, so both conditions share a snapshot.
-// Replaceable in tests.
-var describeEligibilityCheck = func(ctx context.Context, tx pgx.Tx, attID string) (bool, error) {
-	var skip bool
-	err := tx.QueryRow(ctx, `
-SELECT EXISTS (SELECT 1 FROM graph.artifact_bodies WHERE node_id = $1 AND COALESCE(body_full,'') <> '')
-    OR EXISTS (SELECT 1 FROM graph.jobs
-               WHERE type = 'describe_attachment' AND status IN ('queued','running')
-                 AND payload->>'node_id' = $1)`, attID).Scan(&skip)
-	return skip, err
-}
-
-// enqueueDescribeIfNeeded enqueues describe_attachment for attID unless it is
-// already described or already in flight. The check and the enqueue run in one
-// transaction under a per-attachment advisory lock, so concurrent fetches cannot
-// both see "nothing queued". It fails closed: any error before the enqueue means
-// no job; a Commit error leaves the outcome unknown and is never retried.
-func enqueueDescribeIfNeeded(ctx context.Context, deps Deps, attID string, payload map[string]string) {
-	tx, err := deps.DB.Begin(ctx)
-	if err != nil {
-		deps.Logger.Warn().Err(err).Str("att_node_id", attID).Msg("fetch_body: describe_attachment begin failed; not enqueued")
-		return
-	}
-	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('describe_attachment:' || $1))`, attID); err != nil {
-		_ = tx.Rollback(ctx)
-		deps.Logger.Warn().Err(err).Str("att_node_id", attID).Msg("fetch_body: describe_attachment lock failed; not enqueued")
-		return
-	}
-	skip, err := describeEligibilityCheck(ctx, tx, attID)
-	if err != nil {
-		_ = tx.Rollback(ctx)
-		deps.Logger.Warn().Err(err).Str("att_node_id", attID).Msg("fetch_body: describe_attachment eligibility check failed; not enqueued")
-		return
-	}
-	if skip {
-		_ = tx.Rollback(ctx)
-		return
-	}
-	if _, err := jobs.Enqueue(ctx, tx, "describe_attachment", payload, jobs.EnqueueOptions{
-		Priority:  5,
-		MachineID: deps.MachineID,
-	}); err != nil {
-		_ = tx.Rollback(ctx)
-		deps.Logger.Warn().Err(err).Str("att_node_id", attID).Msg("fetch_body: enqueue describe_attachment failed")
-		return
-	}
-	if err := tx.Commit(ctx); err != nil {
-		deps.Logger.Warn().Err(err).Str("att_node_id", attID).Msg("fetch_body: describe_attachment commit failed; outcome unknown, not retried")
 	}
 }

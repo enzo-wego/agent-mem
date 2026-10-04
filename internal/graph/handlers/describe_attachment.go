@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/agent-mem/agent-mem/internal/graph/jobs"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/pgvector/pgvector-go"
 	"github.com/rs/zerolog"
@@ -38,6 +39,63 @@ func NewDescribeAttachmentHandler(deps Deps) jobs.Entry {
 		Lease:    120 * time.Second,
 		UsesLLM:  true,
 	}
+}
+
+// describeEligibilityCheck reports whether an attachment must NOT be described:
+// it already has a non-empty body, or a describe_attachment job for it is
+// queued or running. One statement, so both conditions share a snapshot.
+// Replaceable in tests.
+var describeEligibilityCheck = func(ctx context.Context, tx pgx.Tx, attID string) (bool, error) {
+	var skip bool
+	err := tx.QueryRow(ctx, `
+SELECT EXISTS (SELECT 1 FROM graph.artifact_bodies WHERE node_id = $1 AND COALESCE(body_full,'') <> '')
+    OR EXISTS (SELECT 1 FROM graph.jobs
+               WHERE type = 'describe_attachment' AND status IN ('queued','running')
+                 AND payload->>'node_id' = $1)`, attID).Scan(&skip)
+	return skip, err
+}
+
+// enqueueDescribeIfNeeded enqueues describe_attachment for attID unless it is
+// already described or already in flight. The check and the enqueue run in one
+// transaction under a per-attachment advisory lock, so concurrent producers cannot
+// both see "nothing queued". Only a committed enqueue returns a job ID and true;
+// every skip or error returns zero and false. A Commit error leaves the outcome
+// unknown and is never retried.
+func enqueueDescribeIfNeeded(ctx context.Context, deps Deps, attID string, payload map[string]string) (jobID int64, queued bool) {
+	tx, err := deps.DB.Begin(ctx)
+	if err != nil {
+		deps.Logger.Warn().Err(err).Str("att_node_id", attID).Msg("describe_attachment: begin failed; not enqueued")
+		return 0, false
+	}
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('describe_attachment:' || $1))`, attID); err != nil {
+		_ = tx.Rollback(ctx)
+		deps.Logger.Warn().Err(err).Str("att_node_id", attID).Msg("describe_attachment: lock failed; not enqueued")
+		return 0, false
+	}
+	skip, err := describeEligibilityCheck(ctx, tx, attID)
+	if err != nil {
+		_ = tx.Rollback(ctx)
+		deps.Logger.Warn().Err(err).Str("att_node_id", attID).Msg("describe_attachment: eligibility check failed; not enqueued")
+		return 0, false
+	}
+	if skip {
+		_ = tx.Rollback(ctx)
+		return 0, false
+	}
+	jobID, err = jobs.Enqueue(ctx, tx, "describe_attachment", payload, jobs.EnqueueOptions{
+		Priority:  5,
+		MachineID: deps.MachineID,
+	})
+	if err != nil {
+		_ = tx.Rollback(ctx)
+		deps.Logger.Warn().Err(err).Str("att_node_id", attID).Msg("describe_attachment: enqueue failed")
+		return 0, false
+	}
+	if err := tx.Commit(ctx); err != nil {
+		deps.Logger.Warn().Err(err).Str("att_node_id", attID).Msg("describe_attachment: commit failed; outcome unknown, not retried")
+		return 0, false
+	}
+	return jobID, true
 }
 
 // isDocumentMime returns true for PDF and office document MIME types handled by LiteParse.

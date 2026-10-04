@@ -273,30 +273,52 @@ func TestEnqueueDescribe_Eligibility(t *testing.T) {
 			t.Errorf("describe_attachment jobs = %d, want %d", got, n)
 		}
 	}
-	run := func(deps Deps) { enqueueDescribeIfNeeded(context.Background(), deps, att, descPayload(att)) }
+	run := func(t *testing.T, pool *pgxpool.Pool, deps Deps, wantQueued bool) {
+		t.Helper()
+		jobID, queued := enqueueDescribeIfNeeded(context.Background(), deps, att, descPayload(att))
+		if queued != wantQueued {
+			t.Errorf("queued = %v, want %v", queued, wantQueued)
+		}
+		if !queued {
+			if jobID != 0 {
+				t.Errorf("skipped/error job ID = %d, want 0", jobID)
+			}
+			return
+		}
+		var committedID int64
+		if err := pool.QueryRow(context.Background(), `
+			SELECT id FROM graph.jobs
+			WHERE type='describe_attachment' AND payload->>'node_id'=$1`, att).
+			Scan(&committedID); err != nil {
+			t.Fatalf("committed describe job: %v", err)
+		}
+		if jobID <= 0 || jobID != committedID {
+			t.Errorf("job ID = %d, want committed ID %d", jobID, committedID)
+		}
+	}
 
 	t.Run("queued", func(t *testing.T) {
 		pool, deps := setup(t)
 		insertJob(t, pool, "queued")
-		run(deps)
+		run(t, pool, deps, false)
 		want(t, pool, 1)
 	})
 	t.Run("running", func(t *testing.T) {
 		pool, deps := setup(t)
 		insertJob(t, pool, "running")
-		run(deps)
+		run(t, pool, deps, false)
 		want(t, pool, 1)
 	})
 	t.Run("described", func(t *testing.T) {
 		pool, deps := setup(t)
 		seedAttBody(t, pool, att, "a description")
-		run(deps)
+		run(t, pool, deps, false)
 		want(t, pool, 0)
 	})
 	t.Run("empty_body", func(t *testing.T) {
 		pool, deps := setup(t)
 		seedAttBody(t, pool, att, "")
-		run(deps)
+		run(t, pool, deps, true)
 		want(t, pool, 1)
 	})
 	t.Run("check_error", func(t *testing.T) {
@@ -306,7 +328,54 @@ func TestEnqueueDescribe_Eligibility(t *testing.T) {
 			return false, context.DeadlineExceeded
 		}
 		t.Cleanup(func() { describeEligibilityCheck = orig })
-		run(deps)
+		run(t, pool, deps, false)
+		want(t, pool, 0)
+	})
+	t.Run("begin_error", func(t *testing.T) {
+		pool, deps := setup(t)
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		jobID, queued := enqueueDescribeIfNeeded(ctx, deps, att, descPayload(att))
+		if queued || jobID != 0 {
+			t.Errorf("cancelled begin returned (%d, %v), want (0, false)", jobID, queued)
+		}
+		want(t, pool, 0)
+	})
+	t.Run("enqueue_error", func(t *testing.T) {
+		pool, deps := setup(t)
+		orig := describeEligibilityCheck
+		describeEligibilityCheck = func(ctx context.Context, tx pgx.Tx, attID string) (bool, error) {
+			// The existing seam closes the transaction, so the real enqueue
+			// fails without adding a production seam or changing graph schema.
+			if err := tx.Rollback(ctx); err != nil {
+				t.Fatalf("close transaction: %v", err)
+			}
+			return false, nil
+		}
+		t.Cleanup(func() { describeEligibilityCheck = orig })
+		run(t, pool, deps, false)
+		want(t, pool, 0)
+	})
+	t.Run("commit_error", func(t *testing.T) {
+		pool, deps := setup(t)
+		orig := describeEligibilityCheck
+		describeEligibilityCheck = func(ctx context.Context, tx pgx.Tx, attID string) (bool, error) {
+			// A temporary deferred constraint rejects Commit after the real
+			// enqueue succeeds. Rollback also removes the temporary table.
+			// This covers a rejected commit, not connection-loss ambiguity.
+			if _, err := tx.Exec(ctx, `
+				CREATE TEMP TABLE describe_commit_failure (
+					value integer UNIQUE DEFERRABLE INITIALLY DEFERRED
+				)`); err != nil {
+				t.Fatalf("create deferred constraint: %v", err)
+			}
+			if _, err := tx.Exec(ctx, `INSERT INTO describe_commit_failure VALUES (1), (1)`); err != nil {
+				t.Fatalf("seed deferred violation: %v", err)
+			}
+			return false, nil
+		}
+		t.Cleanup(func() { describeEligibilityCheck = orig })
+		run(t, pool, deps, false)
 		want(t, pool, 0)
 	})
 	// Proves the eligibility check sees work committed after the transaction
@@ -326,7 +395,7 @@ func TestEnqueueDescribe_Eligibility(t *testing.T) {
 			return orig(ctx, tx, attID)
 		}
 		t.Cleanup(func() { describeEligibilityCheck = orig })
-		run(deps)
+		run(t, pool, deps, false)
 		want(t, pool, 1) // only the pre-existing (now done) job
 		var queued int
 		_ = pool.QueryRow(context.Background(), `SELECT count(*) FROM graph.jobs WHERE type='describe_attachment' AND status='queued'`).Scan(&queued)
