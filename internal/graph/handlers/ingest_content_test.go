@@ -248,3 +248,59 @@ func TestIngestContent_WithFiles_EnqueuesDescribeJobs(t *testing.T) {
 		t.Errorf("expected at least 1 describe_attachment job, got %d", jobCount)
 	}
 }
+
+func TestIngestContent_JiraKeepsMetadata(t *testing.T) {
+	pool := openTestDB(t)
+	truncateGraphHandlerTables(t, pool)
+	ctx := context.Background()
+
+	deps := Deps{
+		DB:          pool,
+		Logger:      zerolog.Nop(),
+		MachineID:   "test-machine",
+		Fetchers:    fetchers.NewRegistry(fetchers.Config{}, zerolog.Nop()),
+		Normalizers: normalizer.NewRegistry(),
+		Extractor:   extractor.New(pool, zerolog.Nop()),
+		Identity:    identity.NewService(pool, zerolog.Nop()),
+	}
+	handler := NewIngestContentHandler(deps)
+
+	ingest := func(bodyTS string) {
+		t.Helper()
+		w := postJSON(t, handler, map[string]any{
+			"source":        "jira",
+			"canonical_url": "https://wego.atlassian.net/browse/PAY-2500",
+			"title":         "PAY-2500 something",
+			"body":          "issue body " + bodyTS,
+			"metadata": map[string]any{
+				"key":         "PAY-2500",
+				"project_key": "PAY",
+				"body_ts":     bodyTS,
+			},
+		})
+		if w.Code != http.StatusOK {
+			t.Fatalf("ingest %s: %d %s", bodyTS, w.Code, w.Body.String())
+		}
+	}
+
+	ingest("2026-05-01T00:00:00Z")
+	// Round-0 metadata written by fetch_body.
+	if _, err := pool.Exec(ctx, `UPDATE graph.nodes SET metadata = metadata || '{"status":"In Progress","labels":["a"]}'::jsonb WHERE id = 'jira:PAY-2500'`); err != nil {
+		t.Fatal(err)
+	}
+	ingest("2026-06-01T00:00:00Z")
+
+	var status, metaBodyTS, body string
+	if err := pool.QueryRow(ctx, `SELECT COALESCE(metadata->>'status',''), COALESCE(metadata->>'body_ts',''), body FROM graph.nodes WHERE id = 'jira:PAY-2500'`).Scan(&status, &metaBodyTS, &body); err != nil {
+		t.Fatal(err)
+	}
+	if body != "issue body 2026-06-01T00:00:00Z" {
+		t.Fatalf("body = %q: the newer ingest did not apply", body)
+	}
+	if status != "In Progress" {
+		t.Errorf("status = %q, want In Progress kept across a newer ingest", status)
+	}
+	if metaBodyTS != "2026-06-01T00:00:00Z" {
+		t.Errorf("metadata.body_ts = %q, want the newer ingest's keys merged in", metaBodyTS)
+	}
+}

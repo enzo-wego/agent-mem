@@ -523,7 +523,9 @@ func upsertNodeOutcome(
 			created_at       = COALESCE(graph.nodes.created_at, EXCLUDED.created_at),
 			author_person_id = COALESCE(EXCLUDED.author_person_id, graph.nodes.author_person_id),
 			scope            = EXCLUDED.scope,
-			metadata         = EXCLUDED.metadata,
+			metadata         = CASE WHEN graph.nodes.type = 'jira'
+			                        THEN graph.nodes.metadata || EXCLUDED.metadata
+			                        ELSE EXCLUDED.metadata END,
 			updated_at       = NOW(),
 			machine_id       = EXCLUDED.machine_id
 		WHERE EXCLUDED.body_ts >= graph.nodes.body_ts`,
