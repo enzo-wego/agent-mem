@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/url"
@@ -9,6 +10,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/agent-mem/agent-mem/internal/graph/acl"
 )
 
 // epicMemberLimit caps members listed per type. Slack replies are folded into
@@ -51,11 +54,56 @@ type epicResponse struct {
 // activity window from the epic's own membership row, plus the standing brief
 // (graph.epic_briefs) when one exists. A key with no membership rows is a 404
 // (unknown epic or the rebuild has not run yet).
+//
+// Access control: a request carrying a non-empty X-Asker-User sees only what
+// that asker can read. An unresolvable header fails closed to public-only.
 type Epic struct {
-	db *pgxpool.Pool
+	db     *pgxpool.Pool
+	aclBld *acl.Builder
 }
 
-func NewEpic(db *pgxpool.Pool) *Epic { return &Epic{db: db} }
+func NewEpic(db *pgxpool.Pool) *Epic {
+	return &Epic{db: db, aclBld: acl.NewBuilder(db, 5*time.Minute)}
+}
+
+// epicSourceScopes maps node id -> scope for the given ids, including
+// soft-deleted rows. Ids without a row are absent. Replaceable in tests.
+var epicSourceScopes = func(ctx context.Context, db *pgxpool.Pool, ids []string) (map[string]*string, error) {
+	rows, err := db.Query(ctx, `SELECT id, scope FROM graph.nodes WHERE id = ANY($1)`, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make(map[string]*string, len(ids))
+	for rows.Next() {
+		var id string
+		var scope *string
+		if err := rows.Scan(&id, &scope); err != nil {
+			return nil, err
+		}
+		out[id] = scope
+	}
+	return out, rows.Err()
+}
+
+// briefSourcesVisible reports whether every source of a stored brief is
+// readable by the asker. A query error or a source with no row withholds.
+func briefSourcesVisible(ctx context.Context, db *pgxpool.Pool, sources []string, scopeSet map[string]bool) bool {
+	if len(sources) == 0 {
+		return true
+	}
+	scopes, err := epicSourceScopes(ctx, db, sources)
+	if err != nil {
+		return false
+	}
+	for _, id := range sources {
+		sc, ok := scopes[id]
+		if !ok || !scopeVisible(sc, scopeSet, false) {
+			return false
+		}
+	}
+	return true
+}
 
 func (h *Epic) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
@@ -76,27 +124,44 @@ func (h *Epic) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		key = strings.ToUpper(key)
 	}
 
+	header := strings.TrimSpace(r.Header.Get("X-Asker-User"))
+	noFilter := header == ""
+	var scopeSet map[string]bool
+	if !noFilter {
+		eeid, set := askerScopeSet(ctx, h.db, h.aclBld, header)
+		if eeid == 0 {
+			set = map[string]bool{"public": true} // unresolved asker: fail closed
+		}
+		scopeSet = set
+	}
+
 	resp := epicResponse{
 		EpicKey: key, NodeID: nodeID, Business: business,
 		Members: map[string][]epicMember{}, ByVia: map[string]int{},
 	}
+	var epicScope *string
 	err := h.db.QueryRow(ctx, `
 SELECT COALESCE(n.title,''), COALESCE(n.url,''), COALESCE(n.metadata->>'status',''),
-       m.first_at, m.last_at
+       m.first_at, m.last_at, n.scope
 FROM graph.epic_membership m
 JOIN graph.nodes n ON n.id = m.node_id
 WHERE m.epic_key = $1 AND m.node_id = $2`, key, nodeID).Scan(
-		&resp.Title, &resp.URL, &resp.Status, &resp.FirstAt, &resp.LastAt)
-	if err != nil {
+		&resp.Title, &resp.URL, &resp.Status, &resp.FirstAt, &resp.LastAt, &epicScope)
+	if err != nil || !scopeVisible(epicScope, scopeSet, noFilter) {
 		http.Error(w, "unknown epic "+key, http.StatusNotFound)
 		return
+	}
+
+	if !noFilter {
+		// The window aggregates over all members regardless of scope.
+		resp.FirstAt, resp.LastAt = nil, nil
 	}
 
 	rows, err := h.db.Query(ctx, `
 SELECT n.id, n.type, COALESCE(n.title,''), COALESCE(n.url,''), m.via, m.confidence,
        COALESCE(n.metadata->>'status',''), COALESCE(n.created_at, n.first_seen_at),
        (n.type IN ('slack','slack_thread')
-        AND COALESCE(NULLIF(n.metadata->>'thread_ts',''), split_part(n.id,':',3)) <> split_part(n.id,':',3)) AS is_reply
+        AND COALESCE(NULLIF(n.metadata->>'thread_ts',''), split_part(n.id,':',3)) <> split_part(n.id,':',3)) AS is_reply, n.scope
 FROM graph.epic_membership m
 JOIN graph.nodes n ON n.id = m.node_id AND n.deleted_at IS NULL
 WHERE m.epic_key = $1 AND m.node_id <> $2
@@ -112,9 +177,13 @@ ORDER BY m.last_at DESC NULLS LAST, n.id`, key, nodeID)
 			typ     string
 			created time.Time
 			isReply bool
+			scope   *string
 		)
 		if err := rows.Scan(&m.NodeID, &typ, &m.Title, &m.URL, &m.Via, &m.Confidence,
-			&m.Status, &created, &isReply); err != nil {
+			&m.Status, &created, &isReply, &scope); err != nil {
+			continue
+		}
+		if !scopeVisible(scope, scopeSet, noFilter) {
 			continue
 		}
 		resp.Total++
@@ -137,7 +206,8 @@ ORDER BY m.last_at DESC NULLS LAST, n.id`, key, nodeID)
 		http.Error(w, rows.Err().Error(), http.StatusInternalServerError)
 		return
 	}
-	if br, ok := loadEpicBrief(ctx, h.db, key); ok && br.Brief != "" {
+	if br, ok := loadEpicBrief(ctx, h.db, key); ok && br.Brief != "" &&
+		(noFilter || briefSourcesVisible(ctx, h.db, br.Sources, scopeSet)) {
 		resp.Brief, resp.Highlights, resp.OpenItems = br.Brief, br.Highlights, br.OpenItems
 		u := br.UpdatedAt
 		resp.BriefUpdatedAt = &u
