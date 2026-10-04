@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"github.com/agent-mem/agent-mem/internal/graph/jobs"
 )
@@ -20,6 +21,7 @@ var enqueuableTypes = map[string]bool{
 	"derive_person_roles":      true,
 	"import_bamboohr":          true, // payload: {csv_path} or {csv_bytes}
 	"merge_identities_by_name": true,
+	"refresh_epic_brief":       true, // dry run with an epic_key only
 }
 
 type jobsEnqueueRequest struct {
@@ -44,6 +46,15 @@ func NewJobsEnqueueHandler(deps Deps) http.Handler {
 		payload := []byte(req.Payload)
 		if len(payload) == 0 {
 			payload = []byte("{}")
+		}
+		if req.Type == "refresh_epic_brief" {
+			// A real build spends LLM calls and writes briefs: the canary
+			// path is dry-run-only; the scheduled path enqueues real runs.
+			var p refreshEpicBriefPayload
+			if err := json.Unmarshal(payload, &p); err != nil || !p.DryRun || strings.TrimSpace(p.EpicKey) == "" {
+				http.Error(w, `{"error":"refresh_epic_brief is only enqueuable as a dry run with an epic_key"}`, http.StatusBadRequest)
+				return
+			}
 		}
 		id, err := jobs.EnqueueRaw(r.Context(), deps.DB, req.Type, payload,
 			jobs.EnqueueOptions{MachineID: deps.MachineID})
