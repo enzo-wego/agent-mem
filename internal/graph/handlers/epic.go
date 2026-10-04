@@ -163,6 +163,16 @@ WHERE m.epic_key = $1 AND m.node_id = $2`, epicKey, epicNode).Scan(
 		if e := h.db.QueryRow(ctx, `SELECT epic_key FROM graph.jira_epic_map WHERE issue_key = $1 AND epic_key <> ''`,
 			requested).Scan(&epicKey); e == nil && !strings.EqualFold(epicKey, requested) {
 			epicKey = strings.ToUpper(epicKey)
+			if !noFilter {
+				// The alias reveals that the requested issue exists and
+				// its epic: the issue's own node must be visible too.
+				var issueScope *string
+				if se := h.db.QueryRow(ctx, `SELECT scope FROM graph.nodes WHERE id = $1`, "jira:"+requested).Scan(&issueScope); se != nil ||
+					!scopeVisible(issueScope, scopeSet, false) {
+					http.Error(w, "unknown epic "+requested, http.StatusNotFound)
+					return
+				}
+			}
 			if err = lookup(epicKey, "jira:"+epicKey); err == nil {
 				key, nodeID = epicKey, "jira:"+epicKey
 				resp.EpicKey, resp.NodeID, resp.ResolvedFrom = key, nodeID, requested

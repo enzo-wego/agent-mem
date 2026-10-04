@@ -63,6 +63,17 @@ func TestEpicEndpoint_ResolvesIssueKey(t *testing.T) {
 			t.Fatalf("allowed asker: status %d resp %+v", code, resp)
 		}
 	})
+	t.Run("alias_issue_denied", func(t *testing.T) {
+		aclExec(t, pool, `UPDATE graph.nodes SET scope=$1::text WHERE id = 'jira:PAY-1234'`, aclPriv)
+		t.Cleanup(func() { aclExec(t, pool, `UPDATE graph.nodes SET scope=NULL WHERE id = 'jira:PAY-1234'`) })
+		code, body, _, _ := aclGet(t, "PAY-1234", "plain@example.com")
+		if code != 404 || strings.TrimSpace(body) != "unknown epic PAY-1234" || strings.Contains(body, "PAY-1000") {
+			t.Fatalf("status %d body %q", code, body)
+		}
+		if code, _, resp, _ := aclGet(t, "PAY-1234", "priv@example.com"); code != 200 || resp.ResolvedFrom != "PAY-1234" {
+			t.Fatalf("allowed asker: status %d resp %+v", code, resp)
+		}
+	})
 	t.Run("alias_unresolved_asker", func(t *testing.T) {
 		code, _, resp, m := aclGet(t, "PAY-1234", "nobody@example.com")
 		if code != 200 || resp.Total != 1 || len(resp.Members["slack"]) != 0 || len(resp.Members["jira"]) != 1 {
