@@ -119,6 +119,24 @@ func keywordArm(ctx context.Context, db *pgxpool.Pool, q string, f searchFilter,
 	return scanHits(rows)
 }
 
+// epicSelfIDSQL is the node id of an epic's own membership row: the business
+// root for its own key, 'jira:<key>' for every other epic.
+func epicSelfIDSQL(alias string) string {
+	return fmt.Sprintf("CASE WHEN %[1]s.epic_key = '%[2]s' THEN '%[2]s' ELSE 'jira:' || %[1]s.epic_key END", alias, businessRootID)
+}
+
+// directWindowSQL is the one rule for "node n is in window [$2,$3)" shared by
+// the temporal arm and graph expansion. Ordinary nodes match on their own
+// event time. Epic self nodes and the business root never match on time
+// (stub epics carry a placeholder first_seen_at); they match only when their
+// epic window overlaps.
+var directWindowSQL = `(
+  (NOT EXISTS (SELECT 1 FROM graph.epic_membership es WHERE es.node_id = n.id AND es.node_id = ` + epicSelfIDSQL("es") + `)
+   AND COALESCE(n.created_at, n.first_seen_at) >= $2 AND COALESCE(n.created_at, n.first_seen_at) < $3)
+  OR EXISTS (SELECT 1 FROM graph.epic_membership es WHERE es.node_id = n.id AND es.node_id = ` + epicSelfIDSQL("es") + `
+             AND es.first_at < $3 AND es.last_at >= $2)
+)`
+
 const (
 	temporalCandidates = 60
 	temporalBuckets    = 8
@@ -144,11 +162,11 @@ FROM graph.nodes n
 LEFT JOIN graph.artifact_index ai ON ai.node_id = n.id
 WHERE `+f.sql(5, 6, 7)+`
   AND (
-    (COALESCE(n.created_at, n.first_seen_at) >= $2 AND COALESCE(n.created_at, n.first_seen_at) < $3)
+    `+directWindowSQL+`
     OR EXISTS (
       SELECT 1 FROM graph.epic_membership em
       JOIN graph.epic_membership ep
-        ON ep.epic_key = em.epic_key AND ep.node_id = 'jira:' || em.epic_key
+        ON ep.epic_key = em.epic_key AND ep.node_id = `+epicSelfIDSQL("ep")+`
       WHERE em.node_id = n.id AND ep.first_at < $3 AND ep.last_at >= $2)
   )
 ORDER BY cosine DESC, at DESC
@@ -214,8 +232,7 @@ func nodesInWindow(ctx context.Context, db *pgxpool.Pool, ids []string, w tempor
 SELECT n.id, COALESCE(n.created_at, n.first_seen_at) AS at
 FROM graph.nodes n
 WHERE n.id = ANY($1)
-  AND COALESCE(n.created_at, n.first_seen_at) >= $2
-  AND COALESCE(n.created_at, n.first_seen_at) < $3
+  AND `+directWindowSQL+`
   AND `+f.sql(4, 5, 6), append([]any{ids, w.Start, w.End}, f.args()...)...)
 	if err != nil {
 		return nil, err

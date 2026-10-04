@@ -170,16 +170,24 @@ func TestRebuildEpicHierarchy_Fixture(t *testing.T) {
 		t.Errorf("0.6 topic neighbour must not reach the business root")
 	}
 
-	// Epic window on the epic's own row spans all members.
-	var first, last *string
-	if err := pool.QueryRow(context.Background(), `
-SELECT (SELECT MIN(COALESCE(n.created_at, n.first_seen_at))::text FROM graph.epic_membership mm JOIN graph.nodes n ON n.id=mm.node_id WHERE mm.epic_key='PAY-100'),
-       m.first_at::text
-FROM graph.epic_membership m WHERE m.node_id='jira:PAY-100' AND m.epic_key='PAY-100'`).Scan(&first, &last); err != nil {
+	// Epic window on the epic's own row spans the members' real created_at
+	// (never placeholder first_seen_at): date two members, rebuild, compare.
+	if _, err := pool.Exec(context.Background(),
+		`UPDATE graph.nodes SET created_at = '2026-08-03T00:00:00Z' WHERE id = 'jira:PAY-101';
+		 UPDATE graph.nodes SET created_at = '2026-08-20T00:00:00Z' WHERE id = 'jira:PAY-102'`); err != nil {
 		t.Fatal(err)
 	}
-	if first == nil || last == nil || *first != *last {
-		t.Errorf("epic window first_at = %v, want members' min %v", last, first)
+	if err := rebuildEpicHierarchy(context.Background(), pool, "test", "PAY", map[string]int{"PAY-100": 0}); err != nil {
+		t.Fatalf("rebuild dated: %v", err)
+	}
+	var first, last string
+	if err := pool.QueryRow(context.Background(), `
+SELECT first_at::text, last_at::text FROM graph.epic_membership
+WHERE node_id='jira:PAY-100' AND epic_key='PAY-100'`).Scan(&first, &last); err != nil {
+		t.Fatal(err)
+	}
+	if first != "2026-08-03 00:00:00+00" || last != "2026-08-20 00:00:00+00" {
+		t.Errorf("epic window = [%s, %s], want [2026-08-03, 2026-08-20]", first, last)
 	}
 
 	// Re-run is idempotent and drops a row whose mapping disappeared.
@@ -227,6 +235,13 @@ func TestEpicEndpoint_Fixture(t *testing.T) {
 	seedEpicFixture(t, pool)
 	if err := rebuildEpicHierarchy(context.Background(), pool, "test", "PAY", map[string]int{"PAY-100": 0}); err != nil {
 		t.Fatalf("rebuild: %v", err)
+	}
+
+	if _, err := pool.Exec(context.Background(), `UPDATE graph.nodes SET created_at = '2026-08-03T00:00:00Z' WHERE id = 'jira:PAY-101'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := rebuildEpicHierarchy(context.Background(), pool, "test", "PAY", map[string]int{"PAY-100": 0}); err != nil {
+		t.Fatalf("rebuild dated: %v", err)
 	}
 
 	r := chi.NewRouter()

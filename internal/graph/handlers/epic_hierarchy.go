@@ -284,19 +284,24 @@ UPDATE graph.epic_membership m
 SET first_at = COALESCE(n.created_at, n.first_seen_at),
     last_at  = COALESCE(n.created_at, n.first_seen_at)
 FROM graph.nodes n WHERE n.id = m.node_id`, nil},
+		// The epic's own row (or the root's) takes MIN/MAX of the dated members'
+		// real created_at, excluding the self row and the root. Placeholder
+		// first_seen_at never leaks in; no qualifying member → NULL window.
 		{"epic_windows", `
 UPDATE graph.epic_membership m
 SET first_at = w.first_at, last_at = w.last_at
 FROM (
-  SELECT mm.epic_key,
-         MIN(COALESCE(n.created_at, n.first_seen_at)) AS first_at,
-         MAX(COALESCE(n.created_at, n.first_seen_at)) AS last_at
-  FROM graph.epic_membership mm
-  JOIN graph.nodes n ON n.id = mm.node_id
-  GROUP BY mm.epic_key
+  SELECT s.epic_key, s.node_id,
+         MIN(n.created_at) AS first_at,
+         MAX(n.created_at) AS last_at
+  FROM graph.epic_membership s
+  LEFT JOIN graph.epic_membership mm
+    ON mm.epic_key = s.epic_key AND mm.node_id <> s.node_id AND mm.node_id <> $1
+  LEFT JOIN graph.nodes n ON n.id = mm.node_id
+  WHERE s.node_id = CASE WHEN s.epic_key = $1 THEN $1 ELSE 'jira:' || s.epic_key END
+  GROUP BY s.epic_key, s.node_id
 ) w
-WHERE m.epic_key = w.epic_key
-  AND m.node_id = CASE WHEN m.epic_key = $1 THEN $1 ELSE 'jira:' || m.epic_key END`, []any{businessRootID}},
+WHERE m.epic_key = w.epic_key AND m.node_id = w.node_id`, []any{businessRootID}},
 	}
 	for _, st := range steps {
 		if _, err := tx.Exec(ctx, st.sql, st.args...); err != nil {
