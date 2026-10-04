@@ -13,7 +13,7 @@ import (
 )
 
 // businessRootID is the graph node every board epic hangs off (seeded by
-// migration 20260927103606). graph.epic_membership uses it as epic_key for
+// migration 20261004104729). graph.epic_membership uses it as epic_key for
 // the "everything payments" tier, and /search, /resolve, /neighbors accept
 // `business=payments` to scope to it.
 const businessRootID = "business:payments"
