@@ -335,7 +335,9 @@ func refreshEpicBriefHandler(deps Deps) jobs.Handler {
 			return fmt.Errorf("%w: refresh_epic_brief: epic_key required", jobs.ErrFatal)
 		}
 		if deps.Gemini == nil {
-			return nil
+			// Misconfiguration, not a data condition: marking the job done
+			// would hide the outage (same pattern as notify_watch_channels).
+			return fmt.Errorf("%w: refresh_epic_brief: no LLM client configured", jobs.ErrFatal)
 		}
 		log := deps.Logger.With().Str("epic", p.EpicKey).Bool("dry_run", p.DryRun).Logger()
 		// A dry run is the canary: it works even while the feature is off.
@@ -443,6 +445,10 @@ ON CONFLICT (epic_key) DO UPDATE SET
 // Returns how many jobs were enqueued.
 func enqueueEpicBriefs(ctx context.Context, deps Deps, project string) int {
 	if !epicBriefsEnabled(ctx, deps.DB) {
+		return 0
+	}
+	if deps.Gemini == nil {
+		deps.Logger.Warn().Msg("enqueue epic briefs: no LLM client configured; enqueueing nothing")
 		return 0
 	}
 	rows, err := deps.DB.Query(ctx, `
