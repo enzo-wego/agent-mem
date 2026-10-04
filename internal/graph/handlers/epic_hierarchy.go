@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -341,6 +342,15 @@ func (h *Channels) putBusinessRoot(w http.ResponseWriter, r *http.Request) {
 	cfg.Project = strings.ToUpper(strings.TrimSpace(cfg.Project))
 	if !businessRootProjectRe.MatchString(cfg.Project) {
 		writeError(w, http.StatusBadRequest, "project must be a Jira project key like PAY")
+		return
+	}
+	if _, ok := businessRootBoards[cfg.Project]; !ok {
+		keys := make([]string, 0, len(businessRootBoards))
+		for k := range businessRootBoards {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		writeError(w, http.StatusBadRequest, "no Jira board configured for "+cfg.Project+"; supported: "+strings.Join(keys, ", "))
 		return
 	}
 	if _, err := h.db.Exec(r.Context(), `
