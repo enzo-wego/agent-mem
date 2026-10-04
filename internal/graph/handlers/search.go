@@ -139,7 +139,7 @@ func (s *Search) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Time window: explicit since/until win; otherwise a phrase in q.
 	now := s.now()
-	win, rest, hasWindow, err := s.window(qv, q, now, temporalLocation(ctx, s.db))
+	win, rest, hasWindow, err := s.window(qv, q, now, temporalLocation(ctx, s.db), !hybrid)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -425,7 +425,7 @@ WHERE n.id = ANY($1)
 // window resolves the temporal window: explicit ?since/?until (RFC3339 or
 // YYYY-MM-DD; a date-only `until` is inclusive) override a phrase parsed out
 // of q. rest is q with the phrase removed (unchanged when since/until set).
-func (s *Search) window(qv map[string][]string, q string, now time.Time, loc *time.Location) (temporal.Window, string, bool, error) {
+func (s *Search) window(qv map[string][]string, q string, now time.Time, loc *time.Location, parseQ bool) (temporal.Window, string, bool, error) {
 	get := func(k string) string {
 		if v, ok := qv[k]; ok && len(v) > 0 {
 			return strings.TrimSpace(v[0])
@@ -434,6 +434,9 @@ func (s *Search) window(qv map[string][]string, q string, now time.Time, loc *ti
 	}
 	since, until := get("since"), get("until")
 	if since == "" && until == "" {
+		if !parseQ {
+			return temporal.Window{}, q, false, nil
+		}
 		w, rest, ok := temporal.Parse(q, now, loc)
 		if !ok {
 			return temporal.Window{}, q, false, nil

@@ -187,7 +187,7 @@ func TestSearchWindow_APIOpenFlag(t *testing.T) {
 				p := strings.SplitN(kv, "=", 2)
 				qv[p[0]] = []string{p[1]}
 			}
-			w, _, has, err := s.window(qv, "q", now, time.UTC)
+			w, _, has, err := s.window(qv, "q", now, time.UTC, true)
 			if err != nil || !has {
 				t.Fatalf("err=%v has=%v", err, has)
 			}
