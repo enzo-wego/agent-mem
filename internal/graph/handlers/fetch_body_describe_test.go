@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -203,6 +204,27 @@ func TestEnqueueDescribe_Concurrent(t *testing.T) {
 	const att = "jira_attachment:7001"
 	seedUndescribed(t, pool, att)
 
+	orig := describeEligibilityCheck
+	describeEligibilityCheck = func(ctx context.Context, tx pgx.Tx, attID string) (bool, error) {
+		time.Sleep(50 * time.Millisecond)
+		return orig(ctx, tx, attID)
+	}
+	t.Cleanup(func() { describeEligibilityCheck = orig })
+
+	// Warm the pool so all goroutines hold a connection before the sleep;
+	// otherwise lazy dialing staggers them and the race window can close.
+	var warm []*pgxpool.Conn
+	for i := 0; i < int(pool.Config().MaxConns) && i < 8; i++ {
+		c, err := pool.Acquire(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		warm = append(warm, c)
+	}
+	for _, c := range warm {
+		c.Release()
+	}
+
 	var wg sync.WaitGroup
 	start := make(chan struct{})
 	for i := 0; i < 8; i++ {
@@ -276,6 +298,9 @@ func TestEnqueueDescribe_Eligibility(t *testing.T) {
 		run(deps)
 		want(t, pool, 0)
 	})
+	// Proves the eligibility check sees work committed after the transaction
+	// began (READ COMMITTED, no snapshot reuse). The single-statement property
+	// is held by the code, not by this test.
 	t.Run("completed_between", func(t *testing.T) {
 		pool, deps := setup(t)
 		insertJob(t, pool, "running")
