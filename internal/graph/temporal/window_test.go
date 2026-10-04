@@ -65,7 +65,8 @@ func TestParse(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			start, end, rest, ok := Parse(tc.q, now)
+			w, rest, ok := Parse(tc.q, now, time.UTC)
+			start, end := w.Start, w.End
 			if ok != tc.ok {
 				t.Fatalf("ok = %v, want %v", ok, tc.ok)
 			}

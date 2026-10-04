@@ -63,6 +63,8 @@ func Mount(r chi.Router, deps Deps) {
 	r.Put("/api/graph/eligibility-gate", channels.putEligibilityGate)
 	r.Get("/api/graph/business-root", channels.getBusinessRoot)
 	r.Put("/api/graph/business-root", channels.putBusinessRoot)
+	r.Get("/api/graph/temporal-timezone", channels.getTemporalTimezone)
+	r.Put("/api/graph/temporal-timezone", channels.putTemporalTimezone)
 	r.Get("/api/graph/boost-alphas", channels.getBoostAlphas)
 	r.Put("/api/graph/boost-alphas", channels.putBoostAlphas)
 	r.Get("/api/graph/epic-briefs", channels.getEpicBriefsConfig)

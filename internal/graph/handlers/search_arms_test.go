@@ -63,6 +63,26 @@ VALUES ($1, $2, 'heuristic', $3, 'test')`, id, summary, v); err != nil {
 	}
 }
 
+// useUTCWindows pins the temporal timezone to UTC for the test, so window
+// assertions do not depend on the Asia/Ho_Chi_Minh default.
+func useUTCWindows(t *testing.T, pool *pgxpool.Pool) {
+	t.Helper()
+	ctx := context.Background()
+	const key = "graph.temporal.timezone"
+	var prev string
+	had := pool.QueryRow(ctx, `SELECT value FROM settings WHERE key=$1`, key).Scan(&prev) == nil
+	if _, err := pool.Exec(ctx, `INSERT INTO settings(key,value) VALUES($1,'UTC') ON CONFLICT(key) DO UPDATE SET value='UTC'`, key); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if had {
+			_, _ = pool.Exec(ctx, `UPDATE settings SET value=$2 WHERE key=$1`, key, prev)
+		} else {
+			_, _ = pool.Exec(ctx, `DELETE FROM settings WHERE key=$1`, key)
+		}
+	})
+}
+
 func setCreated(t *testing.T, pool *pgxpool.Pool, id string, at time.Time) {
 	t.Helper()
 	if _, err := pool.Exec(context.Background(), `UPDATE graph.nodes SET created_at = $2 WHERE id = $1`, id, at); err != nil {
@@ -104,6 +124,7 @@ func seedArmsFixture(t *testing.T, pool *pgxpool.Pool) (query []float32) {
 
 func TestSearch_FourArmsFusedOrder(t *testing.T) {
 	pool := testDB(t)
+	useUTCWindows(t, pool)
 	query := seedArmsFixture(t, pool)
 	h, err := handlers.NewSearchWithEmbedder(pool, fixedSearchEmbedder{vector: query})
 	if err != nil {
@@ -179,6 +200,7 @@ func TestSearch_FourArmsFusedOrder(t *testing.T) {
 
 func TestSearch_ArmSelectionAndExplicitWindow(t *testing.T) {
 	pool := testDB(t)
+	useUTCWindows(t, pool)
 	query := seedArmsFixture(t, pool)
 	h, err := handlers.NewSearchWithEmbedder(pool, fixedSearchEmbedder{vector: query})
 	if err != nil {

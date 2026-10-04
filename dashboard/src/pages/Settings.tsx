@@ -9,6 +9,8 @@ import {
   saveEligibilityGate,
   fetchBusinessRoot,
   saveBusinessRoot,
+  fetchTemporalTimezone,
+  saveTemporalTimezone,
   fetchBoostAlphas,
   saveBoostAlphas,
   type BoostAlphas,
@@ -153,6 +155,7 @@ export function SettingsPage() {
       <EligibilityGateSection />
       <BusinessRootSection />
       <BoostAlphasSection />
+      <TimeZoneSection />
       <EpicBriefsSection />
 
       {/* Context */}
@@ -599,6 +602,53 @@ function BusinessRootSection() {
       ) : (
         <Field label="Jira project" hint="Project whose epics form the business:payments subtree (PART_OF edges and epic membership). Rebuilt by refresh_jira_board every 6h.">
           <EditableField value={project} saving={saving} onSave={save} placeholder="PAY" />
+        </Field>
+      )}
+    </Section>
+  )
+}
+
+// --- Time zone ---
+
+function TimeZoneSection() {
+  const [tz, setTz] = useState<string | null>(null)
+  const [effective, setEffective] = useState<string | undefined>(undefined)
+  const [saving, setSaving] = useState(false)
+  const [toast, setToast] = useState<{ type: 'ok' | 'err'; msg: string } | null>(null)
+
+  useEffect(() => {
+    fetchTemporalTimezone()
+      .then((cfg) => { setTz(cfg.timezone); setEffective(cfg.effective) })
+      .catch(() => setToast({ type: 'err', msg: 'Failed to load time zone' }))
+  }, [])
+
+  const save = async (v: string) => {
+    setSaving(true)
+    setToast(null)
+    try {
+      const updated = await saveTemporalTimezone({ timezone: v })
+      setTz(updated.timezone)
+      setEffective(updated.effective)
+      setToast({ type: 'ok', msg: 'Saved — applies to the next search' })
+    } catch (e: unknown) {
+      setToast({ type: 'err', msg: e instanceof Error ? e.message : 'Save failed' })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Section title="Time zone">
+      {toast && (
+        <div className={`text-sm px-3 py-1.5 rounded-md ${toast.type === 'ok' ? 'bg-green-50 text-green-700 dark:bg-green-900/30 dark:text-green-300' : 'bg-red-50 text-red-700 dark:bg-red-900/30 dark:text-red-300'}`}>
+          {toast.msg}
+        </div>
+      )}
+      {tz === null ? (
+        <p className="text-sm text-gray-500">Loading…</p>
+      ) : (
+        <Field label="IANA zone" hint={`Day boundaries for "today", "yesterday", "this month" and date-only since/until in search. Effective: ${effective ?? tz}.`}>
+          <EditableField value={tz} saving={saving} onSave={save} placeholder="Asia/Ho_Chi_Minh" />
         </Field>
       )}
     </Section>

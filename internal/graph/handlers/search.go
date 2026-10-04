@@ -122,7 +122,7 @@ func (s *Search) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Time window: explicit since/until win; otherwise a phrase in q.
 	now := s.now()
-	win, rest, hasWindow, err := s.window(qv, q, now)
+	win, rest, hasWindow, err := s.window(qv, q, now, temporalLocation(ctx, s.db))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -361,7 +361,7 @@ WHERE n.id = ANY($1)
 // window resolves the temporal window: explicit ?since/?until (RFC3339 or
 // YYYY-MM-DD; a date-only `until` is inclusive) override a phrase parsed out
 // of q. rest is q with the phrase removed (unchanged when since/until set).
-func (s *Search) window(qv map[string][]string, q string, now time.Time) (temporal.Window, string, bool, error) {
+func (s *Search) window(qv map[string][]string, q string, now time.Time, loc *time.Location) (temporal.Window, string, bool, error) {
 	get := func(k string) string {
 		if v, ok := qv[k]; ok && len(v) > 0 {
 			return strings.TrimSpace(v[0])
@@ -370,22 +370,22 @@ func (s *Search) window(qv map[string][]string, q string, now time.Time) (tempor
 	}
 	since, until := get("since"), get("until")
 	if since == "" && until == "" {
-		start, end, rest, ok := temporal.Parse(q, now)
+		w, rest, ok := temporal.Parse(q, now, loc)
 		if !ok {
 			return temporal.Window{}, q, false, nil
 		}
-		return temporal.Window{Start: start, End: end}, rest, true, nil
+		return w, rest, true, nil
 	}
 	win := temporal.Window{Start: time.Unix(0, 0).UTC(), End: now.Add(24 * time.Hour)}
 	if since != "" {
-		t, _, err := parseWhen(since)
+		t, _, err := parseWhen(since, loc)
 		if err != nil {
 			return temporal.Window{}, q, false, fmt.Errorf("since: %w", err)
 		}
 		win.Start = t
 	}
 	if until != "" {
-		t, dateOnly, err := parseWhen(until)
+		t, dateOnly, err := parseWhen(until, loc)
 		if err != nil {
 			return temporal.Window{}, q, false, fmt.Errorf("until: %w", err)
 		}
@@ -400,12 +400,13 @@ func (s *Search) window(qv map[string][]string, q string, now time.Time) (tempor
 	return win, q, true, nil
 }
 
-// parseWhen accepts RFC3339 or YYYY-MM-DD; dateOnly reports the latter.
-func parseWhen(s string) (t time.Time, dateOnly bool, err error) {
+// parseWhen accepts RFC3339 (keeps its own offset) or YYYY-MM-DD (midnight in
+// loc); dateOnly reports the latter.
+func parseWhen(s string, loc *time.Location) (t time.Time, dateOnly bool, err error) {
 	if t, err = time.Parse(time.RFC3339, s); err == nil {
-		return t.UTC(), false, nil
+		return t, false, nil
 	}
-	if t, err = time.Parse("2006-01-02", s); err == nil {
+	if t, err = time.ParseInLocation("2006-01-02", s, loc); err == nil {
 		return t, true, nil
 	}
 	return time.Time{}, false, fmt.Errorf("want RFC3339 or YYYY-MM-DD, got %q", s)

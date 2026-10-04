@@ -1015,6 +1015,35 @@ export async function saveBusinessRoot(cfg: BusinessRootConfig): Promise<Busines
   return res.json();
 }
 
+// ── Time zone for search time windows ────────────────────────────────────────
+
+export interface TemporalTimezone {
+  timezone: string; // stored value (default when unset)
+  effective?: string; // zone actually used (UTC when the stored value is invalid)
+}
+
+export async function fetchTemporalTimezone(): Promise<TemporalTimezone> {
+  const res = await authFetch(`${BASE}/api/graph/temporal-timezone`);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Unknown error' }));
+    throw new Error(err.error || `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function saveTemporalTimezone(cfg: TemporalTimezone): Promise<TemporalTimezone> {
+  const res = await authFetch(`${BASE}/api/graph/temporal-timezone`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ timezone: cfg.timezone }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Unknown error' }));
+    throw new Error(err.error || `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
 // ── Search boost alphas (four-arm retrieval) ─────────────────────────────────
 
 export interface BoostAlphas {

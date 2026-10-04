@@ -7,9 +7,10 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	_ "time/tzdata" // the runtime image may ship no zoneinfo; embed Go's copy
 )
 
-// Window is a half-open [Start, End) interval in UTC.
+// Window is a half-open [Start, End) interval.
 type Window struct {
 	Start, End time.Time
 }
@@ -71,8 +72,8 @@ var (
 // date, "<month> <year>", bare month, "last …", "this …", "Qn YYYY",
 // yesterday/today. ok is false when nothing matched. Bare month names resolve
 // to the most recent occurrence not after now.
-func Parse(q string, now time.Time) (start, end time.Time, rest string, ok bool) {
-	now = now.UTC()
+func Parse(q string, now time.Time, loc *time.Location) (w Window, rest string, ok bool) {
+	now = now.In(loc)
 	type hit struct {
 		loc []int
 		w   Window
@@ -101,7 +102,7 @@ func Parse(q string, now time.Time) (start, end time.Time, rest string, ok bool)
 				var s time.Time
 				switch {
 				case m[1] != "":
-					d, err := parseISO(m[1])
+					d, err := parseISO(m[1], loc)
 					if err != nil {
 						return Window{}, false
 					}
@@ -114,15 +115,15 @@ func Parse(q string, now time.Time) (start, end time.Time, rest string, ok bool)
 					} else if mo > now.Month() {
 						y--
 					}
-					s = time.Date(y, mo, 1, 0, 0, 0, 0, time.UTC)
+					s = time.Date(y, mo, 1, 0, 0, 0, 0, loc)
 				}
 				return Window{s, dayStart(now).AddDate(0, 0, 1)}, true
 			})
 		},
 		func() (hit, bool) {
 			return try(reISORange, func(m []string) (Window, bool) {
-				a, e1 := parseISO(m[1])
-				b, e2 := parseISO(m[2])
+				a, e1 := parseISO(m[1], loc)
+				b, e2 := parseISO(m[2], loc)
 				if e1 != nil || e2 != nil || b.Before(a) {
 					return Window{}, false
 				}
@@ -131,7 +132,7 @@ func Parse(q string, now time.Time) (start, end time.Time, rest string, ok bool)
 		},
 		func() (hit, bool) {
 			return try(reISODate, func(m []string) (Window, bool) {
-				a, err := parseISO(m[1])
+				a, err := parseISO(m[1], loc)
 				if err != nil {
 					return Window{}, false
 				}
@@ -141,7 +142,7 @@ func Parse(q string, now time.Time) (start, end time.Time, rest string, ok bool)
 		func() (hit, bool) {
 			return try(reMonthYr, func(m []string) (Window, bool) {
 				y, _ := strconv.Atoi(m[2])
-				return monthWindow(y, months[strings.ToLower(m[1])]), true
+				return monthWindow(y, months[strings.ToLower(m[1])], loc), true
 			})
 		},
 		func() (hit, bool) {
@@ -157,7 +158,7 @@ func Parse(q string, now time.Time) (start, end time.Time, rest string, ok bool)
 				if mo > now.Month() {
 					y--
 				}
-				return monthWindow(y, mo), true
+				return monthWindow(y, mo, loc), true
 			})
 		},
 		func() (hit, bool) {
@@ -174,7 +175,7 @@ func Parse(q string, now time.Time) (start, end time.Time, rest string, ok bool)
 			return try(reQuarter, func(m []string) (Window, bool) {
 				qn, _ := strconv.Atoi(m[1])
 				y, _ := strconv.Atoi(m[2])
-				s := time.Date(y, time.Month((qn-1)*3+1), 1, 0, 0, 0, 0, time.UTC)
+				s := time.Date(y, time.Month((qn-1)*3+1), 1, 0, 0, 0, 0, loc)
 				return Window{s, s.AddDate(0, 3, 0)}, true
 			})
 		},
@@ -195,25 +196,25 @@ func Parse(q string, now time.Time) (start, end time.Time, rest string, ok bool)
 		}
 		rest = strings.TrimSpace(q[:h.loc[0]] + " " + q[h.loc[1]:])
 		rest = strings.Join(strings.Fields(rest), " ")
-		return h.w.Start, h.w.End, rest, true
+		return h.w, rest, true
 	}
-	return time.Time{}, time.Time{}, q, false
+	return Window{}, q, false
 }
 
-func parseISO(s string) (time.Time, error) {
-	return time.Parse("2006-01-02", s)
+func parseISO(s string, loc *time.Location) (time.Time, error) {
+	return time.ParseInLocation("2006-01-02", s, loc)
 }
 
 func dayStart(t time.Time) time.Time {
-	return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC)
+	return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, t.Location())
 }
 
-func monthWindow(y int, m time.Month) Window {
-	s := time.Date(y, m, 1, 0, 0, 0, 0, time.UTC)
+func monthWindow(y int, m time.Month, loc *time.Location) Window {
+	s := time.Date(y, m, 1, 0, 0, 0, 0, loc)
 	return Window{s, s.AddDate(0, 1, 0)}
 }
 
-// weekStart is the Monday 00:00 UTC on or before t.
+// weekStart is the Monday 00:00 in t's location on or before t.
 func weekStart(t time.Time) time.Time {
 	d := dayStart(t)
 	off := (int(d.Weekday()) + 6) % 7
@@ -222,7 +223,7 @@ func weekStart(t time.Time) time.Time {
 
 func quarterStart(t time.Time) time.Time {
 	m := time.Month((int(t.Month())-1)/3*3 + 1)
-	return time.Date(t.Year(), m, 1, 0, 0, 0, 0, time.UTC)
+	return time.Date(t.Year(), m, 1, 0, 0, 0, 0, t.Location())
 }
 
 // lastWindow is the previous complete calendar unit (last week = the Monday
@@ -233,13 +234,13 @@ func lastWindow(unit string, now time.Time) Window {
 		e := weekStart(now)
 		return Window{e.AddDate(0, 0, -7), e}
 	case "month":
-		e := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+		e := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
 		return Window{e.AddDate(0, -1, 0), e}
 	case "quarter":
 		e := quarterStart(now)
 		return Window{e.AddDate(0, -3, 0), e}
 	default: // year
-		e := time.Date(now.Year(), 1, 1, 0, 0, 0, 0, time.UTC)
+		e := time.Date(now.Year(), 1, 1, 0, 0, 0, 0, now.Location())
 		return Window{e.AddDate(-1, 0, 0), e}
 	}
 }
@@ -251,10 +252,10 @@ func thisWindow(unit string, now time.Time) Window {
 	case "week":
 		return Window{weekStart(now), e}
 	case "month":
-		return Window{time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC), e}
+		return Window{time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location()), e}
 	case "quarter":
 		return Window{quarterStart(now), e}
 	default: // year
-		return Window{time.Date(now.Year(), 1, 1, 0, 0, 0, 0, time.UTC), e}
+		return Window{time.Date(now.Year(), 1, 1, 0, 0, 0, 0, now.Location()), e}
 	}
 }
