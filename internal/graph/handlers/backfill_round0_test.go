@@ -33,11 +33,13 @@ func TestBackfillJiraMetadata_EnqueuesMissingPaced(t *testing.T) {
 		t.Fatalf("seed job: %v", err)
 	}
 
-	matched, enqueued, remaining := BackfillJiraMetadata(ctx, pool, zerolog.Nop(), "test", 1, 10*time.Second, false)
+	r := BackfillJiraMetadata(ctx, pool, zerolog.Nop(), "test", jiraBackfillParams{Limit: 1, Spacing: 10 * time.Second})
+	matched, enqueued, remaining := r.Matched, r.Enqueued, r.Remaining
 	if matched != 1 || enqueued != 1 || remaining != 1 {
 		t.Fatalf("page 1: matched=%d enqueued=%d remaining=%d, want 1/1/1", matched, enqueued, remaining)
 	}
-	matched, enqueued, remaining = BackfillJiraMetadata(ctx, pool, zerolog.Nop(), "test", 10, 10*time.Second, false)
+	r = BackfillJiraMetadata(ctx, pool, zerolog.Nop(), "test", jiraBackfillParams{Limit: 10, Spacing: 10 * time.Second})
+	matched, enqueued, remaining = r.Matched, r.Enqueued, r.Remaining
 	if matched != 1 || enqueued != 1 || remaining != 0 {
 		t.Fatalf("page 2: matched=%d enqueued=%d remaining=%d, want 1/1/0", matched, enqueued, remaining)
 	}
@@ -67,7 +69,7 @@ func TestBackfillJiraMetadata_EnqueuesMissingPaced(t *testing.T) {
 	}
 
 	// force re-fetches PAY-2 too.
-	matched, _, _ = BackfillJiraMetadata(ctx, pool, zerolog.Nop(), "test", 10, 10*time.Second, true)
+	matched = BackfillJiraMetadata(ctx, pool, zerolog.Nop(), "test", jiraBackfillParams{Limit: 10, Spacing: 10 * time.Second, Force: true}).Matched
 	if matched != 1 {
 		t.Errorf("force matched = %d, want 1 (PAY-2)", matched)
 	}
@@ -78,7 +80,7 @@ func TestBackfillJiraMetadata_EnqueuesMissingPaced(t *testing.T) {
 		('jira:PAY-1', 'jira', 'PAY-1', '{}', 'test'), ('jira:PAY-2', 'jira', 'PAY-2', '{}', 'test')`); err != nil {
 		t.Fatal(err)
 	}
-	BackfillJiraMetadata(ctx, pool, zerolog.Nop(), "test", 10, 10*time.Second, false)
+	BackfillJiraMetadata(ctx, pool, zerolog.Nop(), "test", jiraBackfillParams{Limit: 10, Spacing: 10 * time.Second})
 	var span float64
 	if err := pool.QueryRow(ctx, `SELECT EXTRACT(EPOCH FROM max(available_at) - min(available_at)) FROM graph.jobs WHERE type='fetch_body'`).Scan(&span); err != nil {
 		t.Fatal(err)

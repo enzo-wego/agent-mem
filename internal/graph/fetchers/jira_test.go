@@ -3,6 +3,7 @@ package fetchers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -142,6 +143,28 @@ func TestJiraFetcher_404(t *testing.T) {
 	_, err := f.Fetch(context.Background(), "jira:PAY-1")
 	if err == nil {
 		t.Fatal("expected error for 404")
+	}
+}
+
+func TestJiraFetcher_NotFoundIsPermanent(t *testing.T) {
+	for _, tc := range []struct {
+		status    int
+		permanent bool
+	}{
+		{http.StatusNotFound, true},
+		{http.StatusGone, true},
+		{http.StatusForbidden, false},
+	} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, "nope", tc.status)
+		}))
+		cfg := Config{JiraEmail: "u", JiraToken: "t", JiraBaseURL: srv.URL, HTTPClient: srv.Client()}
+		_, err := newJiraFetcher(cfg, noLogger()).Fetch(context.Background(), "jira:PAY-1")
+		srv.Close()
+		var pe *PermanentError
+		if got := errors.As(err, &pe); got != tc.permanent {
+			t.Errorf("status %d: PermanentError = %v, want %v (err %v)", tc.status, got, tc.permanent, err)
+		}
 	}
 }
 

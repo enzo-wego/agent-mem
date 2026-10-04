@@ -94,6 +94,11 @@ func (f *jiraFetcher) Fetch(ctx context.Context, node string) (FetchedBody, erro
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		// A deleted or moved issue never comes back through retry. 403 stays
+		// retryable: a permission change can fix it.
+		if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusGone {
+			return FetchedBody{}, &PermanentError{Code: fmt.Sprintf("jira_http_%d", resp.StatusCode)}
+		}
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
 		return FetchedBody{}, fmt.Errorf("jira fetcher status %d: %s", resp.StatusCode, string(body))
 	}

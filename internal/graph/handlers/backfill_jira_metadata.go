@@ -19,17 +19,25 @@ type backfillJiraMetadataRequest struct {
 	// SpacingSeconds spreads the jobs' available_at so the Jira fetcher is not
 	// hit with the whole batch at once (default 2s → 500 jobs over ~17 min).
 	SpacingSeconds int `json:"spacing_seconds"`
-	// Force re-fetches nodes that already carry metadata.status.
+	// Force re-fetches nodes that already carry metadata.status. Force pages
+	// by node id: follow next_after_id until it comes back empty.
 	Force bool `json:"force"`
+	// AfterID (force mode only) returns only nodes with id > after_id.
+	AfterID string `json:"after_id"`
+	// RetryFailed re-queues nodes whose latest fetch_body job failed; without
+	// it those nodes are skipped (they would otherwise be re-picked forever).
+	RetryFailed bool `json:"retry_failed"`
 }
 
 // backfillJiraMetadataResponse is the response body.
 type backfillJiraMetadataResponse struct {
-	Status    string `json:"status"`
-	Matched   int    `json:"matched"`
-	Enqueued  int    `json:"enqueued"`
-	Remaining int    `json:"remaining"`
-	Limit     int    `json:"limit"`
+	Status        string `json:"status"`
+	Matched       int    `json:"matched"`
+	Enqueued      int    `json:"enqueued"`
+	Remaining     int    `json:"remaining"`
+	Limit         int    `json:"limit"`
+	NextAfterID   string `json:"next_after_id"`
+	EnqueueErrors int    `json:"enqueue_errors,omitempty"`
 }
 
 const (
@@ -62,35 +70,97 @@ func NewBackfillJiraMetadataHandler(deps Deps) http.Handler {
 			spacing = time.Duration(req.SpacingSeconds) * time.Second
 		}
 
-		matched, enqueued, remaining := BackfillJiraMetadata(r.Context(), deps.DB, deps.Logger, deps.MachineID, limit, spacing, req.Force)
+		res := BackfillJiraMetadata(r.Context(), deps.DB, deps.Logger, deps.MachineID, jiraBackfillParams{
+			Limit:       limit,
+			Spacing:     spacing,
+			Force:       req.Force,
+			AfterID:     req.AfterID,
+			RetryFailed: req.RetryFailed,
+		})
 		writeJSON(w, http.StatusAccepted, backfillJiraMetadataResponse{
-			Status:    "ok",
-			Matched:   matched,
-			Enqueued:  enqueued,
-			Remaining: remaining,
-			Limit:     limit,
+			Status:        "ok",
+			Matched:       res.Matched,
+			Enqueued:      res.Enqueued,
+			Remaining:     res.Remaining,
+			Limit:         limit,
+			NextAfterID:   res.NextAfterID,
+			EnqueueErrors: res.EnqueueErrors,
 		})
 	})
 }
 
-// BackfillJiraMetadata enqueues fetch_body for up to limit Jira nodes that do
-// not yet carry metadata.status (all of them when force), oldest first, each
-// job's available_at spaced by spacing. Nodes with a fetch_body already
-// queued/running are skipped. Returns candidates seen, jobs enqueued, and the
-// count still missing after this page.
-func BackfillJiraMetadata(ctx context.Context, db jobs.DB, log zerolog.Logger, machineID string, limit int, spacing time.Duration, force bool) (matched, enqueued, remaining int) {
-	rows, err := db.Query(ctx, `
-SELECT id FROM graph.nodes
-WHERE type = 'jira' AND deleted_at IS NULL
-  AND ($2 OR NOT (metadata ? 'status'))
-  AND NOT EXISTS (
+// jiraBackfillParams are the inputs of BackfillJiraMetadata.
+type jiraBackfillParams struct {
+	Limit       int
+	Spacing     time.Duration
+	Force       bool
+	AfterID     string // force mode only
+	RetryFailed bool
+}
+
+// jiraBackfillResult is what BackfillJiraMetadata reports.
+type jiraBackfillResult struct {
+	Matched, Enqueued, Remaining, EnqueueErrors int
+	// NextAfterID is the force-mode cursor: the last id of the page, or "" when
+	// the page was short (done). Empty outside force mode.
+	NextAfterID string
+}
+
+// enqueueFetchBodyForBackfill is a seam so a test can fail one enqueue.
+var enqueueFetchBodyForBackfill = func(ctx context.Context, db jobs.DB, nodeID, machineID string, availableAt time.Time) error {
+	_, err := jobs.Enqueue(ctx, db, "fetch_body", fetchBodyPayload{NodeID: nodeID, SkipAttachments: true}, jobs.EnqueueOptions{
+		Priority:    7,
+		AvailableAt: availableAt,
+		MachineID:   machineID,
+	})
+	return err
+}
+
+// jiraBackfillQueuedOrRunning excludes nodes with a fetch_body in flight.
+// jiraBackfillLatestNotFailed excludes nodes whose most recent fetch_body job
+// (highest id) failed; callers OR it with retry_failed to opt back in.
+const (
+	jiraBackfillQueuedOrRunning = `NOT EXISTS (
     SELECT 1 FROM graph.jobs j
-    WHERE j.type = 'fetch_body' AND j.status IN ('queued','running') AND j.payload->>'node_id' = graph.nodes.id)
-ORDER BY first_seen_at ASC, id ASC
-LIMIT $1`, limit, force)
+    WHERE j.type = 'fetch_body' AND j.status IN ('queued','running') AND j.payload->>'node_id' = n.id)`
+	jiraBackfillLatestNotFailed = `NOT EXISTS (
+    SELECT 1 FROM (
+      SELECT j.status FROM graph.jobs j
+      WHERE j.type = 'fetch_body' AND j.payload->>'node_id' = n.id
+      ORDER BY j.id DESC LIMIT 1) lj
+    WHERE lj.status = 'failed')`
+)
+
+// $1 limit, $2 force, $3 after_id, $4 retry_failed. The cursor applies only in
+// force mode; non-force pages order by first_seen_at, force pages by id only.
+const jiraBackfillPageSQL = `
+SELECT n.id FROM graph.nodes n
+WHERE n.type = 'jira' AND n.deleted_at IS NULL
+  AND ($2 OR NOT (n.metadata ? 'status'))
+  AND (NOT $2 OR n.id > $3)
+  AND ` + jiraBackfillQueuedOrRunning + `
+  AND ($4 OR ` + jiraBackfillLatestNotFailed + `)
+ORDER BY CASE WHEN $2 THEN NULL ELSE n.first_seen_at END ASC, n.id ASC
+LIMIT $1`
+
+const jiraBackfillRemainingSQL = `
+SELECT count(*) FROM graph.nodes n
+WHERE n.type = 'jira' AND n.deleted_at IS NULL AND NOT (n.metadata ? 'status')
+  AND ` + jiraBackfillQueuedOrRunning + `
+  AND ($1 OR ` + jiraBackfillLatestNotFailed + `)`
+
+// BackfillJiraMetadata enqueues fetch_body for up to p.Limit Jira nodes that do
+// not yet carry metadata.status (all of them when p.Force), each job's
+// available_at spaced by p.Spacing. Non-force pages are oldest-first; force
+// pages are by id with a cursor (see jiraBackfillResult.NextAfterID). Nodes
+// with a fetch_body queued/running are skipped, and so are nodes whose latest
+// fetch_body failed unless p.RetryFailed.
+func BackfillJiraMetadata(ctx context.Context, db jobs.DB, log zerolog.Logger, machineID string, p jiraBackfillParams) jiraBackfillResult {
+	var res jiraBackfillResult
+	rows, err := db.Query(ctx, jiraBackfillPageSQL, p.Limit, p.Force, p.AfterID, p.RetryFailed)
 	if err != nil {
 		log.Warn().Err(err).Msg("backfill_jira_metadata: select failed")
-		return 0, 0, 0
+		return res
 	}
 	var ids []string
 	for rows.Next() {
@@ -98,33 +168,42 @@ LIMIT $1`, limit, force)
 		if err := rows.Scan(&id); err != nil {
 			rows.Close()
 			log.Warn().Err(err).Msg("backfill_jira_metadata: scan failed")
-			return 0, 0, 0
+			return res
 		}
 		ids = append(ids, id)
 	}
 	rows.Close()
-	matched = len(ids)
+	res.Matched = len(ids)
 
+	lastEnqueued := p.AfterID
+	stopped := false
 	now := time.Now()
 	for i, id := range ids {
-		if _, e := jobs.Enqueue(ctx, db, "fetch_body", fetchBodyPayload{NodeID: id, SkipAttachments: true}, jobs.EnqueueOptions{
-			Priority:    7,
-			AvailableAt: now.Add(time.Duration(i) * spacing),
-			MachineID:   machineID,
-		}); e != nil {
+		if e := enqueueFetchBodyForBackfill(ctx, db, id, machineID, now.Add(time.Duration(i)*p.Spacing)); e != nil {
 			log.Warn().Err(e).Str("node_id", id).Msg("backfill_jira_metadata: enqueue fetch_body failed")
+			if p.Force {
+				// Stop here so the cursor retries this node.
+				res.EnqueueErrors = 1
+				stopped = true
+				break
+			}
 			continue
 		}
-		enqueued++
+		res.Enqueued++
+		lastEnqueued = id
 	}
 
-	_ = db.QueryRow(ctx, `
-SELECT count(*) FROM graph.nodes
-WHERE type = 'jira' AND deleted_at IS NULL AND NOT (metadata ? 'status')
-  AND NOT EXISTS (
-    SELECT 1 FROM graph.jobs j
-    WHERE j.type = 'fetch_body' AND j.status IN ('queued','running') AND j.payload->>'node_id' = graph.nodes.id)`).Scan(&remaining)
+	if p.Force {
+		switch {
+		case stopped:
+			res.NextAfterID = lastEnqueued
+		case len(ids) >= p.Limit:
+			res.NextAfterID = ids[len(ids)-1]
+		}
+	}
 
-	log.Info().Int("matched", matched).Int("enqueued", enqueued).Int("remaining", remaining).Msg("backfill_jira_metadata: done")
-	return matched, enqueued, remaining
+	_ = db.QueryRow(ctx, jiraBackfillRemainingSQL, p.RetryFailed).Scan(&res.Remaining)
+
+	log.Info().Int("matched", res.Matched).Int("enqueued", res.Enqueued).Int("remaining", res.Remaining).Msg("backfill_jira_metadata: done")
+	return res
 }

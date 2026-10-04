@@ -161,7 +161,7 @@ func TestBackfillJiraMetadata_SetsSkipAttachments(t *testing.T) {
 	seedJiraStub(t, pool, "PAY-3100")
 	seedJiraStub(t, pool, "PAY-3101")
 
-	_, enq, _ := BackfillJiraMetadata(context.Background(), pool, zerolog.Nop(), "test", 10, 0, false)
+	enq := BackfillJiraMetadata(context.Background(), pool, zerolog.Nop(), "test", jiraBackfillParams{Limit: 10}).Enqueued
 	if enq != 2 {
 		t.Fatalf("enqueued = %d, want 2", enq)
 	}
