@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/agent-mem/agent-mem/internal/graph/acl"
+	"github.com/agent-mem/agent-mem/internal/graph/bfs"
 )
 
 const (
@@ -262,12 +263,20 @@ func TestAskerUnresolved_NoMetadataLeak(t *testing.T) {
 		}
 	})
 	t.Run("neighbors_root_query_error", func(t *testing.T) {
-		ctx, cancel := context.WithCancel(context.Background())
-		cancel()
-		req := httptest.NewRequest(http.MethodGet, "/api/graph/node/"+url.QueryEscape(askerRoot)+"/neighbors", nil).WithContext(ctx)
-		req.Header.Set("X-Asker-User", "nobody@example.com")
-		w := httptest.NewRecorder()
-		h.ServeHTTP(w, req)
+		closedPool := openTestDB(t)
+		closedPool.Close()
+		// Keep expansion and ACL building healthy: ignoring the root-query
+		// error must reach a 200 response, not another database failure.
+		handler := &neighborsHandler{
+			db:     closedPool,
+			exp:    bfs.NewExpander(pool),
+			aclBld: acl.NewBuilder(pool, 5*time.Minute),
+		}
+		r := chi.NewRouter()
+		r.Get("/api/graph/node/{id}/neighbors", handler.serve)
+		// A nonempty header keeps the root guard enabled even when the
+		// identity lookup fails on the closed pool.
+		w := askerRequest(t, r, "/api/graph/node/"+url.QueryEscape(askerRoot)+"/neighbors?kind=REFERENCES", "nobody@example.com")
 		if w.Code != http.StatusInternalServerError {
 			t.Fatalf("root query error: status=%d body=%s", w.Code, w.Body.String())
 		}
