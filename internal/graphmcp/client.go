@@ -32,6 +32,20 @@ type ResolveRequest struct {
 	Depth         int      `json:"depth"`
 	BudgetTokens  int      `json:"budget_tokens"`
 	IncludeBodies bool     `json:"include_bodies"`
+	Epic          []string `json:"epic,omitempty"`
+	Business      string   `json:"business,omitempty"`
+}
+
+// SearchRequest is the query for /api/graph/search.
+type SearchRequest struct {
+	Q        string
+	Types    []string
+	Limit    int
+	Epic     []string
+	Business string
+	Since    string
+	Until    string
+	Arms     []string
 }
 
 // NewClient creates a worker API client.
@@ -59,15 +73,35 @@ func NewClient(rawBaseURL, apiKey string, httpClient *http.Client) (*Client, err
 }
 
 // Search searches graph nodes.
-func (c *Client) Search(ctx context.Context, query string, types []string, limit int) (map[string]any, error) {
+func (c *Client) Search(ctx context.Context, req SearchRequest) (map[string]any, error) {
 	values := url.Values{
-		"q":     []string{query},
-		"limit": []string{strconv.Itoa(limit)},
+		"q":     []string{req.Q},
+		"limit": []string{strconv.Itoa(req.Limit)},
 	}
-	if len(types) > 0 {
-		values.Set("types", strings.Join(types, ","))
+	if len(req.Types) > 0 {
+		values.Set("types", strings.Join(req.Types, ","))
+	}
+	for _, e := range req.Epic {
+		values.Add("epic", e)
+	}
+	if req.Business != "" {
+		values.Set("business", req.Business)
+	}
+	if req.Since != "" {
+		values.Set("since", req.Since)
+	}
+	if req.Until != "" {
+		values.Set("until", req.Until)
+	}
+	if len(req.Arms) > 0 {
+		values.Set("arms", strings.Join(req.Arms, ","))
 	}
 	return c.doJSON(ctx, http.MethodGet, "/api/graph/search", values, nil)
+}
+
+// Epic returns an epic's (or the business root's) members and window.
+func (c *Client) Epic(ctx context.Context, key string) (map[string]any, error) {
+	return c.doJSON(ctx, http.MethodGet, "/api/graph/epic/"+url.PathEscape(key), nil, nil)
 }
 
 // Node fetches a graph node by ID or URL.

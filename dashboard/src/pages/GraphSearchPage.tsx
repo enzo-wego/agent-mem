@@ -113,6 +113,7 @@ interface View {
   summary: ClusterSummary | 'loading' | 'none'
   notice: string
   semErr: boolean
+  kwErr?: string
   banner?: { label: string; value: string }
   seedPRs?: { pr_count: number; prs: PRRef[] }
 }
@@ -621,7 +622,7 @@ export function GraphSearchPage() {
         if (stale()) return
         const items = buildFreeItems(res.results || [])
         if (items.length === 0) {
-          setStatus({ kind: 'ready', view: { mode: 'free', q, items, nodeRoot: {}, summary: 'none', notice, semErr: !!res.semantic_error } })
+          setStatus({ kind: 'ready', view: { mode: 'free', q, items, nodeRoot: {}, summary: 'none', notice, semErr: false, kwErr: res.arm_errors?.keyword } })
           return
         }
         setStatus({
@@ -634,6 +635,7 @@ export function GraphSearchPage() {
             summary: 'none',
             notice,
             semErr: !!res.semantic_error,
+            kwErr: res.arm_errors?.keyword,
             banner: pickBanner(res.results || []),
           },
         })
@@ -1169,7 +1171,8 @@ export function GraphSearchPage() {
           {view && (
             <>
               {view.notice && <div className="sp-note">{view.notice}</div>}
-              {view.semErr && <div className="sp-note">semantic search unavailable, showing keyword matches</div>}
+              {view.kwErr && <div className="sp-note">keyword search failed: {view.kwErr}</div>}
+              {view.semErr && view.items.length > 0 && <div className="sp-note">semantic search unavailable, showing keyword matches</div>}
               {view.mode === 'seed' ? (
                 briefing(view)
               ) : (

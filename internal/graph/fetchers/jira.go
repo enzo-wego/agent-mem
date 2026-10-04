@@ -3,6 +3,7 @@ package fetchers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -98,6 +99,15 @@ type jiraRemoteLink struct {
 	} `json:"object"`
 }
 
+// jiraStatusError carries the HTTP status so Fetch can decide which section's
+// failures are permanent.
+type jiraStatusError struct {
+	Status int
+	Body   string
+}
+
+func (e *jiraStatusError) Error() string { return fmt.Sprintf("status %d: %s", e.Status, e.Body) }
+
 // getJSON keeps authentication and failure handling identical for every section.
 func (f *jiraFetcher) getJSON(ctx context.Context, apiURL string, dest any) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
@@ -113,7 +123,7 @@ func (f *jiraFetcher) getJSON(ctx context.Context, apiURL string, dest any) erro
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
-		return fmt.Errorf("status %d: %s", resp.StatusCode, body)
+		return &jiraStatusError{Status: resp.StatusCode, Body: string(body)}
 	}
 	if err := json.NewDecoder(resp.Body).Decode(dest); err != nil {
 		return fmt.Errorf("decode response: %w", err)
@@ -159,12 +169,23 @@ func (f *jiraFetcher) Fetch(ctx context.Context, node string) (FetchedBody, erro
 	}
 
 	baseURL := strings.TrimRight(f.cfg.JiraBaseURL, "/")
-	apiURL := fmt.Sprintf("%s/rest/api/3/issue/%s?fields=summary,description,status,assignee,reporter,creator,labels,created,updated,attachment,issuelinks", baseURL, key)
-	var issue jiraIssueResponse
-	if err := f.getJSON(ctx, apiURL, &issue); err != nil {
+	apiURL := fmt.Sprintf("%s/rest/api/3/issue/%s?fields=summary,description,status,issuetype,assignee,reporter,creator,labels,created,updated,resolutiondate,parent,attachment,issuelinks", baseURL, key)
+	var issueRaw json.RawMessage
+	if err := f.getJSON(ctx, apiURL, &issueRaw); err != nil {
+		// A deleted or moved issue never comes back through retry. 403 stays
+		// retryable: a permission change can fix it. Only the issue call is
+		// permanent; a 404 on comments/remote links stays transient, as on main.
+		var se *jiraStatusError
+		if errors.As(err, &se) && (se.Status == http.StatusNotFound || se.Status == http.StatusGone) {
+			return FetchedBody{}, fmt.Errorf("jira fetcher: %w", &PermanentError{Code: fmt.Sprintf("jira_http_%d", se.Status)})
+		}
 		return FetchedBody{}, fmt.Errorf("jira fetcher: %w", err)
 	}
 
+	var issue jiraIssueResponse
+	if err := json.Unmarshal(issueRaw, &issue); err != nil {
+		return FetchedBody{}, fmt.Errorf("jira fetcher: decode response: %w", err)
+	}
 	content := jiraADFContent(issue.Fields.Description)
 	held := 0
 	for start := 0; ; {
@@ -226,13 +247,34 @@ func (f *jiraFetcher) Fetch(ctx context.Context, node string) (FetchedBody, erro
 	if content == nil {
 		content = []json.RawMessage{}
 	}
-	raw, err := json.Marshal(struct {
+	doc, err := json.Marshal(struct {
 		Type    string            `json:"type"`
 		Version int               `json:"version"`
 		Content []json.RawMessage `json:"content"`
 	}{Type: "doc", Version: 1, Content: content})
 	if err != nil {
 		return FetchedBody{}, fmt.Errorf("jira fetcher: encode ADF: %w", err)
+	}
+
+	// Raw keeps the full issue shape ({"key", "fields": {...}}) so the normalizer
+	// lifts metadata from fields.*; only fields.description is replaced by the
+	// composite document (description + comments + links).
+	var envelope struct {
+		Fields map[string]json.RawMessage `json:"fields"`
+	}
+	if err := json.Unmarshal(issueRaw, &envelope); err != nil {
+		return FetchedBody{}, fmt.Errorf("jira fetcher: decode response: %w", err)
+	}
+	if envelope.Fields == nil {
+		envelope.Fields = map[string]json.RawMessage{}
+	}
+	envelope.Fields["description"] = doc
+	raw, err := json.Marshal(struct {
+		Key    string                     `json:"key"`
+		Fields map[string]json.RawMessage `json:"fields"`
+	}{Key: issue.Key, Fields: envelope.Fields})
+	if err != nil {
+		return FetchedBody{}, fmt.Errorf("jira fetcher: encode raw: %w", err)
 	}
 
 	bodyTS := ParseJiraTime(issue.Fields.Updated)

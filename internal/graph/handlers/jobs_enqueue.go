@@ -3,15 +3,21 @@ package handlers
 import (
 	"encoding/json"
 	"net/http"
+	"regexp"
+	"strings"
 
 	"github.com/agent-mem/agent-mem/internal/graph/jobs"
 )
+
+// reEpicBriefKey is the Jira key shape of an epic the brief job accepts.
+var reEpicBriefKey = regexp.MustCompile(`^[A-Z][A-Z0-9]+-[0-9]+$`)
 
 // enqueuableTypes is the allowlist of job types the admin enqueue endpoint may
 // trigger. Kept narrow (maintenance/refresh jobs) so the API-key boundary can't
 // be used to inject arbitrary work.
 var enqueuableTypes = map[string]bool{
 	"backfill_created_at":      true,
+	"backfill_artifact_tsv":    true, // payload: {batch} (default 500, 1-5000)
 	"refresh_jira_board":       true,
 	"refresh_jira_updates":     true,
 	"refresh_slack_channels":   true,
@@ -21,6 +27,7 @@ var enqueuableTypes = map[string]bool{
 	"derive_person_roles":      true,
 	"import_bamboohr":          true, // payload: {csv_path} or {csv_bytes}
 	"merge_identities_by_name": true,
+	"refresh_epic_brief":       true, // dry run with an epic_key only
 }
 
 type jobsEnqueueRequest struct {
@@ -45,6 +52,15 @@ func NewJobsEnqueueHandler(deps Deps) http.Handler {
 		payload := []byte(req.Payload)
 		if len(payload) == 0 {
 			payload = []byte("{}")
+		}
+		if req.Type == "refresh_epic_brief" {
+			// A real build spends LLM calls and writes briefs: the canary
+			// path is dry-run-only; the scheduled path enqueues real runs.
+			var p refreshEpicBriefPayload
+			if err := json.Unmarshal(payload, &p); err != nil || !p.DryRun || !reEpicBriefKey.MatchString(strings.ToUpper(strings.TrimSpace(p.EpicKey))) {
+				http.Error(w, `{"error":"refresh_epic_brief is only enqueuable as a dry run with an epic_key"}`, http.StatusBadRequest)
+				return
+			}
 		}
 		id, err := jobs.EnqueueRaw(r.Context(), deps.DB, req.Type, payload,
 			jobs.EnqueueOptions{MachineID: deps.MachineID})

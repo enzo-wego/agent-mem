@@ -28,10 +28,22 @@ func cascadeRun(t *testing.T, pool *pgxpool.Pool, srv *httptest.Server, payload 
 	}
 }
 
+// seedFetchedPAY marks PAY as a fetched Jira project, as on prod: the bare-key
+// extractor only keeps keys whose project has at least one fetched ticket.
+func seedFetchedPAY(t *testing.T, pool *pgxpool.Pool) {
+	t.Helper()
+	if _, err := pool.Exec(context.Background(), `
+INSERT INTO graph.nodes (id, type, natural_key, body, machine_id)
+VALUES ('jira:PAY-1', 'jira', 'PAY-1', 'ticket', 'test')`); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func cascadeSetup(t *testing.T) (*pgxpool.Pool, *httptest.Server) {
 	t.Helper()
 	pool := openTestDB(t)
 	truncateGraphHandlerTables(t, pool)
+	seedFetchedPAY(t, pool)
 	t.Cleanup(func() { truncateGraphHandlerTables(t, pool) })
 	var mode atomic.Int32
 	srv := jiraHandlerTestServer(t, &mode)
@@ -147,6 +159,7 @@ func TestFetchBodyCascade_NoDuplicateWhileQueued(t *testing.T) {
 	}
 
 	truncateGraphHandlerTables(t, pool)
+	seedFetchedPAY(t, pool)
 	insert("2099-01-01")
 	cascadeRun(t, pool, srv, `{"node_id":"jira:TEST-1"}`)
 	if n := cascadeCount(t, pool, countQ); n != 2 {

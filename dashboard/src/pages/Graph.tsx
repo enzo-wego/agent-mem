@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import ForceGraph2D from 'react-force-graph-2d'
-import { graphSearch, graphResolve, graphNode, graphNeighbors, graphSlackUsers, type GraphNode, type ResolveArtifact } from '../api'
+import { graphSearch, graphResolve, graphNode, graphNeighbors, graphSlackUsers, SEARCH_ARMS, type GraphNode, type ResolveArtifact, type ScoreBreakdown } from '../api'
 
 // Slack user-id → display name, loaded once from /api/graph/slack-users.
 let slackUserMap: Record<string, string> = {}
@@ -124,6 +124,30 @@ function NodeDetailPanel({ nodeId, onClose }: { nodeId: string; onClose: () => v
   )
 }
 
+// One chip per retrieval arm: "keyword #1" when the arm ranked the node, a
+// dimmed "graph –" when it did not. Only rendered for four-arm search results
+// (score_breakdown.ranks present); resolve artifacts have no ranks.
+function ArmRankChips({ breakdown }: { breakdown?: ScoreBreakdown }) {
+  const ranks = breakdown?.ranks
+  if (!ranks) return null
+  return (
+    <span className="inline-flex gap-1" title={`rrf ${breakdown?.rrf?.toFixed(4) ?? '–'}`}>
+      {SEARCH_ARMS.map((arm) => {
+        const r = ranks[arm]
+        return r ? (
+          <span key={arm} className="text-[10px] px-1.5 py-0.5 rounded bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300">
+            {arm} #{r}
+          </span>
+        ) : (
+          <span key={arm} className="text-[10px] px-1.5 py-0.5 rounded bg-gray-50 dark:bg-gray-900 text-gray-300 dark:text-gray-600">
+            {arm} –
+          </span>
+        )
+      })}
+    </span>
+  )
+}
+
 function SearchResultCard({ node, onVisualize }: { node: GraphNode; onVisualize?: (id: string) => void }) {
   const [expanded, setExpanded] = useState(false)
 
@@ -131,6 +155,7 @@ function SearchResultCard({ node, onVisualize }: { node: GraphNode; onVisualize?
     <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
       <div className="flex items-center gap-2 mb-2 flex-wrap">
         <TypeBadge type={node.type} />
+        <ArmRankChips breakdown={node.score_breakdown} />
         {node.author && (
           <span className="text-xs bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400 px-2 py-0.5 rounded-full">
             {node.author}

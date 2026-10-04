@@ -21,6 +21,7 @@ type recordedCall struct {
 	kinds   []string
 	node    string
 	resolve ResolveRequest
+	search  SearchRequest
 }
 
 type recordingGraphClient struct {
@@ -36,8 +37,12 @@ func (c *recordingGraphClient) record(call recordedCall) (map[string]any, error)
 	return map[string]any{"tool": call.name, "ok": true}, nil
 }
 
-func (c *recordingGraphClient) Search(_ context.Context, query string, types []string, limit int) (map[string]any, error) {
-	return c.record(recordedCall{name: "graph_search", query: query, types: types, limit: limit})
+func (c *recordingGraphClient) Search(_ context.Context, req SearchRequest) (map[string]any, error) {
+	return c.record(recordedCall{name: "graph_search", query: req.Q, types: req.Types, limit: req.Limit, search: req})
+}
+
+func (c *recordingGraphClient) Epic(_ context.Context, key string) (map[string]any, error) {
+	return c.record(recordedCall{name: "graph_epic", id: key})
 }
 
 func (c *recordingGraphClient) Node(_ context.Context, id, rawURL string) (map[string]any, error) {
@@ -79,7 +84,7 @@ func connectTestClient(t *testing.T, graphClient GraphClient) *mcp.ClientSession
 	return clientSession
 }
 
-func TestServer_ListsExactlySixGraphToolsWithSchemas(t *testing.T) {
+func TestServer_ListsExactlySevenGraphToolsWithSchemas(t *testing.T) {
 	session := connectTestClient(t, &recordingGraphClient{})
 	result, err := session.ListTools(context.Background(), nil)
 	if err != nil {
@@ -100,6 +105,7 @@ func TestServer_ListsExactlySixGraphToolsWithSchemas(t *testing.T) {
 	sort.Strings(names)
 	want := []string{
 		"graph_cluster_summary",
+		"graph_epic",
 		"graph_neighbors",
 		"graph_node",
 		"graph_person",
@@ -122,10 +128,14 @@ func TestServer_AppliesDefaultsAndForwardsEveryTool(t *testing.T) {
 		{Name: "graph_neighbors", Arguments: map[string]any{"id": "jira:PAY-2223"}},
 		{Name: "graph_cluster_summary", Arguments: map[string]any{"node": "jira:PAY-2223"}},
 		{Name: "graph_resolve", Arguments: map[string]any{
-			"seeds": []string{"https://github.com/wego/payments/pull/2198"},
-			"query": "is WithRebateRepo safe to remove?",
+			"seeds":    []string{"https://github.com/wego/payments/pull/2198"},
+			"query":    "is WithRebateRepo safe to remove?",
+			"epic":     []string{"PAY-2307"},
+			"business": "payments",
 		}},
 		{Name: "graph_person", Arguments: map[string]any{"q": "Lei"}},
+		{Name: "graph_epic", Arguments: map[string]any{"key": "PAY-2307"}},
+		{Name: "graph_search", Arguments: map[string]any{"q": "GST", "epic": []string{"PAY-2307"}, "business": "payments"}},
 	}
 	for _, call := range calls {
 		result, err := session.CallTool(ctx, call)
@@ -140,10 +150,10 @@ func TestServer_AppliesDefaultsAndForwardsEveryTool(t *testing.T) {
 		}
 	}
 
-	if len(graphClient.calls) != 6 {
-		t.Fatalf("worker calls = %d, want 6", len(graphClient.calls))
+	if len(graphClient.calls) != 8 {
+		t.Fatalf("worker calls = %d, want 8", len(graphClient.calls))
 	}
-	if got := graphClient.calls[0].limit; got != 10 {
+	if got := graphClient.calls[0].search.Limit; got != 10 {
 		t.Errorf("search limit = %d, want 10", got)
 	}
 	if got := graphClient.calls[2].depth; got != 1 {
@@ -156,9 +166,18 @@ func TestServer_AppliesDefaultsAndForwardsEveryTool(t *testing.T) {
 	if resolve.Depth != 2 || resolve.BudgetTokens != 4000 || !resolve.IncludeBodies {
 		t.Errorf("resolve defaults = %#v", resolve)
 	}
+	if stringSlice(resolve.Epic) != stringSlice([]string{"PAY-2307"}) || resolve.Business != "payments" {
+		t.Errorf("resolve scope not forwarded: %#v", resolve)
+	}
 	person := graphClient.calls[5]
 	if person.name != "graph_person" || person.query != "Lei" || person.limit != 5 {
 		t.Errorf("person defaults = %#v", person)
+	}
+	if epic := graphClient.calls[6]; epic.name != "graph_epic" || epic.id != "PAY-2307" {
+		t.Errorf("epic call = %#v", epic)
+	}
+	if s := graphClient.calls[7].search; stringSlice(s.Epic) != stringSlice([]string{"PAY-2307"}) || s.Business != "payments" {
+		t.Errorf("search scope not forwarded: %#v", s)
 	}
 }
 
@@ -177,6 +196,7 @@ func TestServer_ValidationAndWorkerErrorsBecomeToolErrors(t *testing.T) {
 		{"graph_resolve", map[string]any{"seeds": []string{}, "query": "x"}},
 		{"graph_person", map[string]any{"q": " "}},
 		{"graph_person", map[string]any{"q": "Lei", "limit": 21}},
+		{"graph_epic", map[string]any{"key": " "}},
 	}
 	for _, test := range invalid {
 		result, err := session.CallTool(context.Background(), &mcp.CallToolParams{Name: test.name, Arguments: test.args})
@@ -207,7 +227,7 @@ type cancellationGraphClient struct {
 	done    chan struct{}
 }
 
-func (c *cancellationGraphClient) Search(ctx context.Context, _ string, _ []string, _ int) (map[string]any, error) {
+func (c *cancellationGraphClient) Search(ctx context.Context, _ SearchRequest) (map[string]any, error) {
 	close(c.started)
 	<-ctx.Done()
 	close(c.done)

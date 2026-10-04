@@ -67,6 +67,7 @@ func RegisterAll(reg *jobs.Registry, deps Deps) {
 	reg.Register("refresh_jira_board", NewRefreshJiraBoardHandler(deps))
 	reg.Register("refresh_jira_updates", NewRefreshJiraUpdatesHandler(deps))
 	reg.Register("backfill_created_at", NewBackfillCreatedAtHandler(deps))
+	reg.Register("backfill_artifact_tsv", NewBackfillArtifactTSVHandler(deps))
 	reg.Register("merge_identities_by_name", NewMergeIdentitiesByNameHandler(deps))
 	reg.Register("import_bamboohr", NewImportBambooHRHandler(deps))
 	reg.Register("recompute_person_distance", jobs.Entry{
@@ -78,6 +79,7 @@ func RegisterAll(reg *jobs.Registry, deps Deps) {
 	})
 	reg.Register("backfill_slack_channel", NewBackfillSlackChannelHandler(deps))
 	reg.Register("summarize_thread", NewSummarizeThreadHandler(deps))
+	reg.Register("refresh_epic_brief", NewRefreshEpicBriefHandler(deps))
 	reg.Register("link_topics", NewLinkTopicsHandler(deps))
 	reg.Register("backfill_identifiers", NewBackfillIdentifiersHandler(deps))
 	reg.Register("backfill_slack_thread", NewBackfillSlackThreadHandler(deps))

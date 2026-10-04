@@ -214,7 +214,7 @@ type PermanentError struct {
 }
 
 func (e *PermanentError) Error() string {
-	return fmt.Sprintf("slack fetcher: API error: %s", e.Code)
+	return fmt.Sprintf("fetcher: permanent error: %s", e.Code)
 }
 
 func classifySlackAPIError(code string) error {

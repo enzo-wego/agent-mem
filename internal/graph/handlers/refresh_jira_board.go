@@ -24,9 +24,10 @@ import (
 // when a second board matters.
 const jiraBoardProject = "PAY"
 
-// jiraBoardID is the PAY board (board 193). Its Agile epic list gives the
-// swimlane order the /live board section mirrors.
-const jiraBoardID = 193
+// businessRootBoards maps a business-root Jira project to its Agile board.
+// The board's epic list gives the swimlane order the /live board section
+// mirrors. A project without an entry cannot be the business root.
+var businessRootBoards = map[string]int{"PAY": 193}
 
 // boardEpicNoRank sorts epics that are not on the board (and the no-epic group)
 // after every ranked epic. Matches the migration's DEFAULT.
@@ -124,14 +125,14 @@ func parseBoardEpicPage(body []byte) (keys []string, isLast bool, err error) {
 	return keys, page.IsLast, nil
 }
 
-// fetchBoardEpicRanks walks GET /rest/agile/1.0/board/193/epic and returns
+// fetchBoardEpicRanks walks GET /rest/agile/1.0/board/<id>/epic and returns
 // epicKey→rank (0-based, in board order). Best-effort: on any error it returns
 // what it has so far — unranked epics fall back to boardEpicNoRank and sort last.
-func fetchBoardEpicRanks(ctx context.Context, client *http.Client, baseURL, email, token string) (map[string]int, error) {
+func fetchBoardEpicRanks(ctx context.Context, client *http.Client, baseURL, email, token string, boardID int) (map[string]int, error) {
 	ranks := map[string]int{}
 	startAt := 0
 	for {
-		url := fmt.Sprintf("%s/rest/agile/1.0/board/%d/epic?startAt=%d&maxResults=50", baseURL, jiraBoardID, startAt)
+		url := fmt.Sprintf("%s/rest/agile/1.0/board/%d/epic?startAt=%d&maxResults=50", baseURL, boardID, startAt)
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 		if err != nil {
 			return ranks, err
@@ -229,13 +230,13 @@ type sprintListPage struct {
 // the whole backlog.) The bool is false on fetch failure so callers fall back
 // to showing every referenced epic and a transient Jira error can't blank the
 // /live board section.
-func fetchActiveSprintEpics(ctx context.Context, client *http.Client, baseURL, email, token string, epicKeys []string) (map[string]bool, bool) {
+func fetchActiveSprintEpics(ctx context.Context, client *http.Client, baseURL, email, token string, boardID int, epicKeys []string) (map[string]bool, bool) {
 	live := map[string]bool{}
 	if len(epicKeys) == 0 {
 		return live, true
 	}
 	body, ok := jiraGet(ctx, client,
-		fmt.Sprintf("%s/rest/agile/1.0/board/%d/sprint?state=active&maxResults=50", baseURL, jiraBoardID),
+		fmt.Sprintf("%s/rest/agile/1.0/board/%d/sprint?state=active&maxResults=50", baseURL, boardID),
 		email, token)
 	if !ok {
 		return live, false
@@ -255,7 +256,7 @@ func fetchActiveSprintEpics(ctx context.Context, client *http.Client, baseURL, e
 				"startAt":    {strconv.Itoa(startAt)},
 			}
 			b, ok := jiraGet(ctx, client,
-				fmt.Sprintf("%s/rest/agile/1.0/board/%d/sprint/%d/issue?%s", baseURL, jiraBoardID, s.ID, q.Encode()),
+				fmt.Sprintf("%s/rest/agile/1.0/board/%d/sprint/%d/issue?%s", baseURL, boardID, s.ID, q.Encode()),
 				email, token)
 			if !ok {
 				return live, false
@@ -301,12 +302,20 @@ func refreshJiraBoardHandler(deps Deps) jobs.Handler {
 			return fmt.Errorf("%w: refresh_jira_board: AGENT_MEM_JIRA_BASE_URL/EMAIL/TOKEN not set", jobs.ErrFatal)
 		}
 
+		project := businessRootProject(ctx, deps.DB)
+		boardID, ok := businessRootBoards[project]
+		if !ok {
+			// No board for this project: fetching PAY's board against another
+			// project's issues would delete every PAY PART_OF edge. Do nothing.
+			deps.Logger.Warn().Str("project", project).Msg("refresh_jira_board: no Jira board configured for business root project; skipping")
+			return nil
+		}
 		// The graph is the source of which issues matter: only keys some Slack
 		// thread (or other artifact) actually references.
 		krows, err := deps.DB.Query(ctx,
 			`SELECT DISTINCT natural_key FROM graph.nodes
 			 WHERE type='jira' AND natural_key LIKE $1 AND deleted_at IS NULL`,
-			jiraBoardProject+"-%")
+			project+"-%")
 		if err != nil {
 			return fmt.Errorf("load jira keys: %w", err)
 		}
@@ -323,7 +332,7 @@ func refreshJiraBoardHandler(deps Deps) jobs.Handler {
 		}
 
 		client := &http.Client{Timeout: 30 * time.Second}
-		ranks, err := fetchBoardEpicRanks(ctx, client, baseURL, email, token)
+		ranks, err := fetchBoardEpicRanks(ctx, client, baseURL, email, token, boardID)
 		if err != nil {
 			deps.Logger.Warn().Err(err).Msg("refresh_jira_board: board epic order fetch failed; ranks default to end")
 		}
@@ -369,7 +378,7 @@ func refreshJiraBoardHandler(deps Deps) jobs.Handler {
 		for k := range epicSet {
 			epicKeys = append(epicKeys, k)
 		}
-		onBoard, boardOK := fetchActiveSprintEpics(ctx, client, baseURL, email, token, epicKeys)
+		onBoard, boardOK := fetchActiveSprintEpics(ctx, client, baseURL, email, token, boardID, epicKeys)
 		if !boardOK {
 			deps.Logger.Warn().Msg("refresh_jira_board: active-sprint fetch failed; showing all referenced epics")
 		}
@@ -401,6 +410,17 @@ ON CONFLICT (issue_key) DO UPDATE SET
 			total++
 		}
 		deps.Logger.Info().Int("issues", total).Int("live_epics", len(onBoard)).Msg("refresh_jira_board: epic map refreshed")
+		// Round 1: PART_OF edges and the membership table hang off the epic map
+		// just written, so they are rebuilt in the same run (6h cadence).
+		if err := rebuildEpicHierarchy(ctx, deps.DB, deps.MachineID, project, ranks); err != nil {
+			return fmt.Errorf("epic hierarchy: %w", err)
+		}
+		// Round 3: one refresh_epic_brief per on-board epic whose members or
+		// member summaries changed since its brief. Not self-rescheduling —
+		// this 6h tick is its only trigger.
+		if n := enqueueEpicBriefs(ctx, deps, project); n > 0 {
+			deps.Logger.Info().Int("enqueued", n).Msg("refresh_jira_board: epic briefs enqueued")
+		}
 		return nil
 	}
 }

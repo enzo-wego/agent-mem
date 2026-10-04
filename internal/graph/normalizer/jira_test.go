@@ -98,6 +98,66 @@ func TestJiraNormalizer(t *testing.T) {
 	}
 }
 
+func TestJiraNormalizer_IssuePayloadLiftsMetadata(t *testing.T) {
+	n := NewJiraNormalizer()
+	input := `{"key":"PAY-2307","fields":{
+		"summary":"India GST",
+		"description":{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"GST invoice body"}]}]},
+		"status":{"name":"In Progress"},
+		"issuetype":{"name":"Epic"},
+		"created":"2026-01-02T03:04:05.000+0000",
+		"updated":"2026-02-03T04:05:06.000+0000",
+		"resolutiondate":null,
+		"labels":["gst","india"],
+		"assignee":{"accountId":"acc-9"},
+		"parent":null
+	}}`
+	res, err := n.Normalize(context.Background(), []byte(input), nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.Text != "GST invoice body" {
+		t.Errorf("Text = %q", res.Text)
+	}
+	want := map[string]any{
+		"status":              "In Progress",
+		"issuetype":           "Epic",
+		"created":             "2026-01-02T03:04:05.000+0000",
+		"updated":             "2026-02-03T04:05:06.000+0000",
+		"resolutiondate":      nil,
+		"assignee_account_id": "acc-9",
+		"parent_key":          nil,
+	}
+	for k, v := range want {
+		got, ok := res.Metadata[k]
+		if !ok {
+			t.Errorf("Metadata missing key %q (absent values must be present as nil)", k)
+			continue
+		}
+		if got != v {
+			t.Errorf("Metadata[%q] = %#v, want %#v", k, got, v)
+		}
+	}
+	if labels, _ := res.Metadata["labels"].([]string); strings.Join(labels, ",") != "gst,india" {
+		t.Errorf("labels = %#v", res.Metadata["labels"])
+	}
+
+	// Issue with a null description still yields metadata and no text.
+	res, err = n.Normalize(context.Background(), []byte(`{"key":"PAY-1","fields":{"description":null,"status":{"name":"Done"},"parent":{"key":"PAY-2307"}}}`), nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.Text != "" || res.Metadata["status"] != "Done" || res.Metadata["parent_key"] != "PAY-2307" {
+		t.Errorf("null description: text=%q meta=%#v", res.Text, res.Metadata)
+	}
+
+	// Bare ADF (legacy shape) yields no metadata.
+	res, _ = n.Normalize(context.Background(), []byte(`{"type":"doc","content":[]}`), nil)
+	if res.Metadata != nil {
+		t.Errorf("bare ADF metadata = %#v, want nil", res.Metadata)
+	}
+}
+
 func TestJiraNormalize_CodeBlockThenParagraph(t *testing.T) {
 	raw := `{"type":"doc","content":[{"type":"codeBlock","content":[{"type":"text","text":"code"}]},{"type":"paragraph","content":[{"type":"text","text":"--- comment by Jane @ now ---"}]}]}`
 	res, err := NewJiraNormalizer().Normalize(context.Background(), []byte(raw), nil)

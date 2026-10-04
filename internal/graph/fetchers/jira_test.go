@@ -3,6 +3,7 @@ package fetchers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -60,6 +61,7 @@ func TestJiraFetcher_HappyPath(t *testing.T) {
 	adfBytes, _ := json.Marshal(adf)
 	resp.Fields.Description = adfBytes
 
+	var gotFields string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		checkJiraAuth(t, r, "user@example.com", "token-abc")
 		if strings.HasSuffix(r.URL.Path, "/comment") {
@@ -74,6 +76,7 @@ func TestJiraFetcher_HappyPath(t *testing.T) {
 			http.Error(w, "bad accept", http.StatusBadRequest)
 			return
 		}
+		gotFields = r.URL.Query().Get("fields")
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(resp)
 	}))
@@ -102,8 +105,20 @@ func TestJiraFetcher_HappyPath(t *testing.T) {
 	if body.ContentType != "application/json" {
 		t.Errorf("content type = %q", body.ContentType)
 	}
-	if len(body.Raw) == 0 {
-		t.Error("raw body is empty")
+	for _, want := range []string{"issuetype", "resolutiondate", "parent", "status", "labels"} {
+		if !strings.Contains(","+gotFields+",", ","+want+",") {
+			t.Errorf("fields param %q missing %q", gotFields, want)
+		}
+	}
+	// Raw is the full issue JSON so the normalizer can lift metadata from fields.
+	var raw struct {
+		Key    string `json:"key"`
+		Fields struct {
+			Description map[string]any `json:"description"`
+		} `json:"fields"`
+	}
+	if err := json.Unmarshal(body.Raw, &raw); err != nil || raw.Key != "PAY-2128" || raw.Fields.Description["type"] != "doc" {
+		t.Errorf("raw = %s (err %v); want full issue JSON with ADF description", body.Raw, err)
 	}
 }
 
@@ -155,6 +170,28 @@ func TestJiraFetcher_404(t *testing.T) {
 	_, err := f.Fetch(context.Background(), "jira:PAY-1")
 	if err == nil {
 		t.Fatal("expected error for 404")
+	}
+}
+
+func TestJiraFetcher_NotFoundIsPermanent(t *testing.T) {
+	for _, tc := range []struct {
+		status    int
+		permanent bool
+	}{
+		{http.StatusNotFound, true},
+		{http.StatusGone, true},
+		{http.StatusForbidden, false},
+	} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, "nope", tc.status)
+		}))
+		cfg := Config{JiraEmail: "u", JiraToken: "t", JiraBaseURL: srv.URL, HTTPClient: srv.Client()}
+		_, err := newJiraFetcher(cfg, noLogger()).Fetch(context.Background(), "jira:PAY-1")
+		srv.Close()
+		var pe *PermanentError
+		if got := errors.As(err, &pe); got != tc.permanent {
+			t.Errorf("status %d: PermanentError = %v, want %v (err %v)", tc.status, got, tc.permanent, err)
+		}
 	}
 }
 
@@ -486,5 +523,62 @@ func TestJiraFetch_RemoteLinkErrorFails(t *testing.T) {
 				t.Errorf("routes = %v, want %v", routes, want)
 			}
 		})
+	}
+}
+
+// Fetch followed by normalize must keep the composite text (comments, links)
+// and still lift the issue metadata from the preserved fields.
+func TestJiraFetchNormalize_KeepsTextAndMetadata(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		checkJiraAuth(t, r, "u", "t")
+		switch r.URL.Path {
+		case "/rest/api/3/issue/TEST-1":
+			json.NewEncoder(w).Encode(map[string]any{"key": "TEST-1", "fields": map[string]any{
+				"summary":     "s",
+				"description": jiraTestDoc("the description"),
+				"status":      map[string]any{"name": "In Progress"},
+				"issuetype":   map[string]any{"name": "Story"},
+				"parent":      map[string]any{"key": "TEST-9"},
+				"assignee":    map[string]any{"accountId": "acc-1"},
+				"updated":     "2026-09-30T10:00:00Z",
+			}})
+		case "/rest/api/3/issue/TEST-1/comment":
+			json.NewEncoder(w).Encode(map[string]any{"total": 1, "comments": []any{jiraTestComment(1)}})
+		case "/rest/api/3/issue/TEST-1/remotelink":
+			json.NewEncoder(w).Encode([]any{map[string]any{"object": map[string]any{"url": "https://example.com/x", "title": "Doc"}}})
+		default:
+			t.Errorf("unexpected route %s", r.URL.Path)
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	f := newJiraFetcher(Config{JiraEmail: "u", JiraToken: "t", JiraBaseURL: srv.URL, HTTPClient: srv.Client()}, noLogger())
+	body, err := f.Fetch(context.Background(), "jira:TEST-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw struct {
+		Fields struct {
+			Parent struct {
+				Key string `json:"key"`
+			} `json:"parent"`
+		} `json:"fields"`
+	}
+	if err := json.Unmarshal(body.Raw, &raw); err != nil || raw.Fields.Parent.Key != "TEST-9" {
+		t.Fatalf("Raw lost fields.parent.key: %s (err %v)", body.Raw, err)
+	}
+	res, err := normalizer.NewJiraNormalizer().Normalize(context.Background(), body.Raw, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"the description", "comment 001", "Link: Doc (https://example.com/x)"} {
+		if !strings.Contains(res.Text, want) {
+			t.Errorf("text %q missing %q", res.Text, want)
+		}
+	}
+	for k, want := range map[string]any{"status": "In Progress", "issuetype": "Story", "parent_key": "TEST-9", "assignee_account_id": "acc-1"} {
+		if res.Metadata[k] != want {
+			t.Errorf("Metadata[%q] = %#v, want %#v", k, res.Metadata[k], want)
+		}
 	}
 }

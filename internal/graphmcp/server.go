@@ -10,18 +10,28 @@ import (
 
 // GraphClient is the worker API surface exposed through MCP.
 type GraphClient interface {
-	Search(context.Context, string, []string, int) (map[string]any, error)
+	Search(context.Context, SearchRequest) (map[string]any, error)
 	Node(context.Context, string, string) (map[string]any, error)
 	Neighbors(context.Context, string, int, []string) (map[string]any, error)
 	ClusterSummary(context.Context, string, int) (map[string]any, error)
 	Resolve(context.Context, ResolveRequest) (map[string]any, error)
 	Person(context.Context, string, int) (map[string]any, error)
+	Epic(context.Context, string) (map[string]any, error)
 }
 
 type SearchInput struct {
-	Q     string   `json:"q" jsonschema:"Natural-language or keyword query to search for"`
-	Types []string `json:"types,omitempty" jsonschema:"Optional graph node types to include"`
-	Limit int      `json:"limit,omitempty" jsonschema:"Maximum results, from 1 to 50; defaults to 10"`
+	Q        string   `json:"q" jsonschema:"Natural-language or keyword query to search for; a time phrase such as 'in August' or 'last week' is parsed into a window"`
+	Types    []string `json:"types,omitempty" jsonschema:"Optional graph node types to include"`
+	Limit    int      `json:"limit,omitempty" jsonschema:"Maximum results, from 1 to 50; defaults to 10"`
+	Epic     []string `json:"epic,omitempty" jsonschema:"Optional Jira epic keys (e.g. PAY-2307) to scope results to"`
+	Business string   `json:"business,omitempty" jsonschema:"Optional business root to scope results to; currently only 'payments'"`
+	Since    string   `json:"since,omitempty" jsonschema:"Optional window start, RFC3339 or YYYY-MM-DD; overrides any time phrase in q"`
+	Until    string   `json:"until,omitempty" jsonschema:"Optional window end, RFC3339 or YYYY-MM-DD (a date is inclusive)"`
+	Arms     []string `json:"arms,omitempty" jsonschema:"Optional retrieval arms to run: semantic, keyword, graph, temporal; defaults to all"`
+}
+
+type EpicInput struct {
+	Key string `json:"key" jsonschema:"Jira epic key such as PAY-2307, or 'payments' for the whole Payments business root"`
 }
 
 type NodeInput struct {
@@ -46,11 +56,13 @@ type PersonInput struct {
 }
 
 type ResolveInput struct {
-	Seeds         []string `json:"seeds" jsonschema:"One to twenty graph node IDs or exact source URLs"`
+	Seeds         []string `json:"seeds" jsonschema:"One to twenty graph node IDs, exact source URLs, or epic:<KEY> to start from a whole epic"`
 	Query         string   `json:"query" jsonschema:"Question the resolved context should answer"`
 	Depth         int      `json:"depth,omitempty" jsonschema:"Traversal depth from 1 to 3; defaults to 2"`
 	BudgetTokens  int      `json:"budget_tokens,omitempty" jsonschema:"Approximate context budget from 500 to 16000 tokens; defaults to 4000"`
 	IncludeBodies *bool    `json:"include_bodies,omitempty" jsonschema:"Include artifact bodies; defaults to true"`
+	Epic          []string `json:"epic,omitempty" jsonschema:"Optional Jira epic keys to scope the expanded context to (seeds are exempt)"`
+	Business      string   `json:"business,omitempty" jsonschema:"Optional business root to scope to; currently only 'payments'"`
 }
 
 // NewServer creates an MCP server exposing the worker's graph read APIs.
@@ -74,7 +86,11 @@ func NewServer(client GraphClient, version string) *mcp.Server {
 		if input.Limit < 1 || input.Limit > 50 {
 			return nil, nil, fmt.Errorf("limit must be between 1 and 50")
 		}
-		output, err := client.Search(ctx, input.Q, input.Types, input.Limit)
+		output, err := client.Search(ctx, SearchRequest{
+			Q: input.Q, Types: input.Types, Limit: input.Limit,
+			Epic: input.Epic, Business: input.Business,
+			Since: input.Since, Until: input.Until, Arms: input.Arms,
+		})
 		return nil, output, err
 	})
 
@@ -161,6 +177,8 @@ func NewServer(client GraphClient, version string) *mcp.Server {
 			Depth:         depth,
 			BudgetTokens:  input.BudgetTokens,
 			IncludeBodies: includeBodies,
+			Epic:          input.Epic,
+			Business:      input.Business,
 		})
 		return nil, output, err
 	})
@@ -181,6 +199,21 @@ func NewServer(client GraphClient, version string) *mcp.Server {
 			return nil, nil, fmt.Errorf("limit must be between 1 and 20")
 		}
 		output, err := client.Person(ctx, input.Q, input.Limit)
+		return nil, output, err
+	})
+
+	mcp.AddTool(server, &mcp.Tool{
+		Name: "graph_epic",
+		Description: "List a Jira epic's members (issues, Slack threads, pull requests, documents) grouped by type, " +
+			"each with how it joined (via: epic_self, key, topic_link, eligible), the epic's activity window, " +
+			"and its standing brief (brief, highlights, open_items citing member node ids; brief_updated_at) when one exists. " +
+			"Use key 'payments' for the whole Payments business root.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, input EpicInput) (*mcp.CallToolResult, map[string]any, error) {
+		input.Key = strings.TrimSpace(input.Key)
+		if input.Key == "" {
+			return nil, nil, fmt.Errorf("key must not be empty")
+		}
+		output, err := client.Epic(ctx, input.Key)
 		return nil, output, err
 	})
 

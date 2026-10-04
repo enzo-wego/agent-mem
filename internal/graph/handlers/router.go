@@ -25,6 +25,8 @@ func Mount(r chi.Router, deps Deps) {
 	r.Post("/api/graph/backfill/slack", NewBackfillSlackHandler(deps).ServeHTTP)
 	r.Post("/api/graph/backfill/attachments", NewBackfillAttachmentsHandler(deps).ServeHTTP)
 	r.Post("/api/graph/backfill/stale-summaries", NewBackfillStaleSummariesHandler(deps).ServeHTTP)
+	r.Post("/api/graph/backfill/jira-metadata", NewBackfillJiraMetadataHandler(deps).ServeHTTP)
+	r.Post("/api/graph/backfill/subtree-index", NewBackfillSubtreeIndexHandler(deps).ServeHTTP)
 	r.Post("/api/graph/backfill/thread-decisions", NewBackfillThreadDecisionsHandler(deps).ServeHTTP)
 	r.Get("/api/graph/topic-rules", NewTopicRulesHandler().ServeHTTP)
 
@@ -40,6 +42,9 @@ func Mount(r chi.Router, deps Deps) {
 
 	resolve, _ := NewResolve(deps.DB)
 	r.Method("POST", "/api/graph/resolve", resolve)
+
+	// Epic (or business root) members grouped by type, with the activity window.
+	r.Method("GET", "/api/graph/epic/{key}", NewEpic(deps.DB))
 
 	r.Method("GET", "/api/graph/slack-users", NewSlackUsersHandler(deps))
 	r.Method("GET", "/api/graph/slack-user", NewSlackUserHandler(deps))
@@ -57,12 +62,17 @@ func Mount(r chi.Router, deps Deps) {
 	r.Put("/api/graph/channel-filters", channels.putChannelFilters)
 	r.Get("/api/graph/eligibility-gate", channels.getEligibilityGate)
 	r.Put("/api/graph/eligibility-gate", channels.putEligibilityGate)
+	r.Get("/api/graph/business-root", channels.getBusinessRoot)
+	r.Put("/api/graph/business-root", channels.putBusinessRoot)
+	r.Get("/api/graph/temporal-timezone", channels.getTemporalTimezone)
+	r.Put("/api/graph/temporal-timezone", channels.putTemporalTimezone)
+	r.Get("/api/graph/boost-alphas", channels.getBoostAlphas)
+	r.Put("/api/graph/boost-alphas", channels.putBoostAlphas)
+	r.Get("/api/graph/epic-briefs", channels.getEpicBriefsConfig)
+	r.Put("/api/graph/epic-briefs", channels.putEpicBriefsConfig)
 	jiraUpdates := NewJiraUpdatesHandler(deps)
 	r.Method("GET", "/api/graph/jira-updates", jiraUpdates)
 	r.Method("PUT", "/api/graph/jira-updates", jiraUpdates)
-	searchWeights := NewSearchWeightsHandler(deps)
-	r.Method("GET", "/api/graph/search-weights", searchWeights)
-	r.Method("PUT", "/api/graph/search-weights", searchWeights)
 
 	// Topic subscriptions (hot-topic enzobot alerts).
 	subs := NewSubscriptions(deps)

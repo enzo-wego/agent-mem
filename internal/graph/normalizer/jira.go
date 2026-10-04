@@ -14,8 +14,11 @@ func NewJiraNormalizer() *JiraNormalizer { return &JiraNormalizer{} }
 
 func (n *JiraNormalizer) Source() string { return "jira" }
 
-// Normalize walks the ADF tree and emits plain text. If the input is not valid
-// ADF JSON, it falls back to returning the raw bytes as text.
+// Normalize accepts either a bare ADF document (the issue description) or a
+// full REST issue payload (`{"key":…,"fields":{…}}`). For the latter it walks
+// `fields.description` as ADF and lifts the fields later rounds filter on into
+// Result.Metadata (see jiraFieldMetadata). If the input is not valid JSON, it
+// falls back to returning the raw bytes as text.
 func (n *JiraNormalizer) Normalize(_ context.Context, raw []byte, _ map[string]any) (Result, error) {
 	if len(raw) == 0 {
 		return Result{}, nil
@@ -27,11 +30,70 @@ func (n *JiraNormalizer) Normalize(_ context.Context, raw []byte, _ map[string]a
 		return Result{Text: string(raw)}, nil
 	}
 
+	var meta map[string]any
+	if fields, ok := doc["fields"].(map[string]any); ok {
+		meta = jiraFieldMetadata(fields)
+		doc, _ = fields["description"].(map[string]any)
+		if doc == nil {
+			return Result{Metadata: meta}, nil
+		}
+	}
+
 	var b strings.Builder
 	var mentions []Mention
 	walkADF(doc, &b, &mentions)
 
-	return Result{Text: strings.TrimSpace(b.String()), Mentions: mentions}, nil
+	return Result{Text: strings.TrimSpace(b.String()), Mentions: mentions, Metadata: meta}, nil
+}
+
+// jiraFieldMetadata lifts the issue fields the graph keeps on the node. Every
+// key is always present (nil when the issue lacks the value) so a jsonb merge
+// clears a resolution/parent/assignee that was removed at the source instead
+// of keeping the stale value.
+func jiraFieldMetadata(fields map[string]any) map[string]any {
+	name := func(key string) any {
+		obj, _ := fields[key].(map[string]any)
+		if s, ok := obj["name"].(string); ok && s != "" {
+			return s
+		}
+		return nil
+	}
+	str := func(key string) any {
+		if s, ok := fields[key].(string); ok && s != "" {
+			return s
+		}
+		return nil
+	}
+	labels := []string{}
+	if raw, ok := fields["labels"].([]any); ok {
+		for _, l := range raw {
+			if s, ok := l.(string); ok && s != "" {
+				labels = append(labels, s)
+			}
+		}
+	}
+	var assignee any
+	if a, ok := fields["assignee"].(map[string]any); ok {
+		if id, ok := a["accountId"].(string); ok && id != "" {
+			assignee = id
+		}
+	}
+	var parent any
+	if p, ok := fields["parent"].(map[string]any); ok {
+		if k, ok := p["key"].(string); ok && k != "" {
+			parent = k
+		}
+	}
+	return map[string]any{
+		"status":              name("status"),
+		"issuetype":           name("issuetype"),
+		"created":             str("created"),
+		"updated":             str("updated"),
+		"resolutiondate":      str("resolutiondate"),
+		"labels":              labels,
+		"assignee_account_id": assignee,
+		"parent_key":          parent,
+	}
 }
 
 // walkADF recursively walks an ADF node represented as map[string]any.

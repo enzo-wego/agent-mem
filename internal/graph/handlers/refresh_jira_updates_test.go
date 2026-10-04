@@ -239,6 +239,25 @@ func TestJiraUpdates_Candidates(t *testing.T) {
 	}
 }
 
+func TestJiraUpdates_FutureDatedJobDoesNotSwallowRefresh(t *testing.T) {
+	pool := jiraUpdatesDB(t, map[string]string{jiraUpdatesKeyCursor: "2026-09-29T04:00:00Z"})
+	older := jiraUpdT.Add(-time.Hour)
+	seedJiraNodes(t, pool, seedNode{key: "PAY-1", body: "b", bodyTS: tp(older), updatedAt: older})
+	ctx := context.Background()
+	// A metadata-backfill job: depth 1, parked an hour ahead.
+	if _, err := pool.Exec(ctx, `INSERT INTO graph.jobs (type, payload, status, machine_id, available_at)
+		VALUES ('fetch_body', '{"node_id":"jira:PAY-1","depth":1}'::jsonb, 'queued', 'other', now() + interval '1 hour')`); err != nil {
+		t.Fatalf("seed job: %v", err)
+	}
+	f := &fakeJira{pages: []string{issuesJSON("PAY-1", jiraUpd)}}
+	f.start(t)
+	runJiraUpdates(t, ctx, pool)
+
+	if got := queuedFetchNodes(t, pool, "jira-updates"); strings.Join(got, ",") != "jira:PAY-1" {
+		t.Fatalf("depth-0 refresh queued = %v, want [jira:PAY-1]", got)
+	}
+}
+
 func TestJiraUpdates_Pagination(t *testing.T) {
 	pool := jiraUpdatesDB(t, map[string]string{jiraUpdatesKeyCursor: "2026-09-29T04:00:00Z"})
 	older := jiraUpdT.Add(-time.Hour)

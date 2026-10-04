@@ -418,17 +418,35 @@ export interface GraphNode {
   body?: string;
   scope?: string;
   score?: number;
-  score_breakdown?: Record<string, number>;
+  score_breakdown?: ScoreBreakdown;
   author?: string;
   summary?: string;
   updated_at?: string;
   created_at?: string;
 }
 
+// Per-node scoring detail. rrf/ranks/temporal come from the four-arm search
+// (semantic, keyword, graph, temporal); resolve only fills the five components.
+export interface ScoreBreakdown {
+  sem: number;
+  rec: number;
+  edge: number;
+  team: number;
+  auth: number;
+  temporal?: number;
+  rrf?: number;
+  ranks?: Record<string, number>;
+}
+
+export const SEARCH_ARMS = ['semantic', 'keyword', 'graph', 'temporal'] as const;
+
 export interface GraphSearchResponse {
   results: GraphNode[];
   query: string;
   total: number;
+  arms?: string[];
+  arm_errors?: Record<string, string>;
+  window?: { start: string; end: string };
 }
 
 export async function graphSearch(query: string, types?: string[], limit = 20): Promise<GraphSearchResponse> {
@@ -923,6 +941,8 @@ export interface BoardEpicGroup {
   threads: PinnedThread[];
   last_ms: number;
   active_count: number; // threads with a new message inside the active window
+  brief?: string; // standing epic brief (graph.epic_briefs); absent until refresh_epic_brief writes one
+  brief_updated_at?: string;
 }
 
 export async function fetchBoardPins(): Promise<{ groups: BoardEpicGroup[]; activeHours: number }> {
@@ -1011,6 +1031,34 @@ export async function saveEligibilityGate(cfg: EligibilityGateConfig): Promise<E
   return res.json();
 }
 
+// ── Business root (Payments epic hierarchy) ───────────────────────────────────
+
+export interface BusinessRootConfig {
+  project: string; // Jira project key whose epics hang off business:payments
+}
+
+export async function fetchBusinessRoot(): Promise<BusinessRootConfig> {
+  const res = await authFetch(`${BASE}/api/graph/business-root`);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Unknown error' }));
+    throw new Error(err.error || `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function saveBusinessRoot(cfg: BusinessRootConfig): Promise<BusinessRootConfig> {
+  const res = await authFetch(`${BASE}/api/graph/business-root`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify(cfg),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Unknown error' }));
+    throw new Error(err.error || `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
 export interface JiraUpdatesConfig {
   enabled: boolean;
   interval_minutes: number;
@@ -1045,16 +1093,15 @@ export async function saveJiraUpdates(cfg: JiraUpdatesConfig): Promise<JiraUpdat
   return res.json();
 }
 
-// SearchWeights are the hybrid /search ranking weights (graph.weights.*).
-// Saved values apply on the next search, no restart.
-export interface SearchWeights {
-  hybrid_rec: number;
-  kw: number;
-  title: number;
+// ── Time zone for search time windows ────────────────────────────────────────
+
+export interface TemporalTimezone {
+  timezone: string; // stored value (default when unset)
+  effective?: string; // zone actually used (UTC when the stored value is invalid)
 }
 
-export async function fetchSearchWeights(): Promise<SearchWeights> {
-  const res = await authFetch(`${BASE}/api/graph/search-weights`);
+export async function fetchTemporalTimezone(): Promise<TemporalTimezone> {
+  const res = await authFetch(`${BASE}/api/graph/temporal-timezone`);
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: 'Unknown error' }));
     throw new Error(err.error || `HTTP ${res.status}`);
@@ -1062,11 +1109,47 @@ export async function fetchSearchWeights(): Promise<SearchWeights> {
   return res.json();
 }
 
-export async function saveSearchWeights(w: SearchWeights): Promise<SearchWeights> {
-  const res = await authFetch(`${BASE}/api/graph/search-weights`, {
+export async function saveTemporalTimezone(cfg: TemporalTimezone): Promise<TemporalTimezone> {
+  const res = await authFetch(`${BASE}/api/graph/temporal-timezone`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json', ...authHeaders() },
-    body: JSON.stringify(w),
+    body: JSON.stringify({ timezone: cfg.timezone }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Unknown error' }));
+    throw new Error(err.error || `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+// ── Search boost alphas (four-arm retrieval) ─────────────────────────────────
+
+export interface BoostAlphas {
+  rec: number;
+  team: number;
+  temporal: number;
+  auth: number;
+}
+
+export interface BoostAlphasConfig {
+  alphas: BoostAlphas;
+  legacy_weights: Record<string, number>; // graph.weights.*, still used by resolve
+}
+
+export async function fetchBoostAlphas(): Promise<BoostAlphasConfig> {
+  const res = await authFetch(`${BASE}/api/graph/boost-alphas`);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Unknown error' }));
+    throw new Error(err.error || `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function saveBoostAlphas(alphas: BoostAlphas): Promise<BoostAlphasConfig> {
+  const res = await authFetch(`${BASE}/api/graph/boost-alphas`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ alphas }),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: 'Unknown error' }));
@@ -1082,6 +1165,35 @@ export async function graphNeighbors(id: string, depth = 1): Promise<GraphNeighb
   const res = await authFetch(`${BASE}/api/graph/node/${seg}/neighbors?depth=${depth}`);
   const data = await res.json();
   return data.neighbors ?? [];
+}
+
+// ── Epic briefs (round 3: refresh_epic_brief job) ────────────────────────────
+
+export interface EpicBriefsConfig {
+  enabled: boolean; // graph.epic_briefs.enabled — gates enqueue and every queued job
+  min_interval_minutes: number; // graph.epic_briefs.min_interval_minutes — floor between rebuilds per epic
+}
+
+export async function fetchEpicBriefsConfig(): Promise<EpicBriefsConfig> {
+  const res = await authFetch(`${BASE}/api/graph/epic-briefs`);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Unknown error' }));
+    throw new Error(err.error || `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function saveEpicBriefsConfig(cfg: EpicBriefsConfig): Promise<EpicBriefsConfig> {
+  const res = await authFetch(`${BASE}/api/graph/epic-briefs`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify(cfg),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Unknown error' }));
+    throw new Error(err.error || `HTTP ${res.status}`);
+  }
+  return res.json();
 }
 
 // graphNeighborsCards is graphNeighbors with ?cards=1: Slack rows also carry
@@ -1138,6 +1250,7 @@ export interface HybridSearchResponse {
   results: HybridSearchResult[];
   total: number;
   semantic_error?: string;
+  arm_errors?: Record<string, string>;
 }
 
 // Only the types the /search page shows, so skipped types (entity tags, people,

@@ -66,7 +66,7 @@ func (s *Server) handleSessionStart(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Build and inject context from past observations
-	contextMD, err := s.contextBld.BuildContext(r.Context(), project)
+	contextMD, err := s.contextBld.BuildContext(r.Context(), project, payload.CWD)
 	if err != nil {
 		log.Warn().Err(err).Str("project", project).Msg("Failed to build context")
 		w.WriteHeader(http.StatusOK)

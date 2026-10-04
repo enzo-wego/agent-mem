@@ -7,10 +7,18 @@ import {
   saveChannelFilters,
   fetchEligibilityGate,
   saveEligibilityGate,
+  fetchBusinessRoot,
+  saveBusinessRoot,
+  fetchTemporalTimezone,
+  saveTemporalTimezone,
+  fetchBoostAlphas,
+  saveBoostAlphas,
+  type BoostAlphas,
+  fetchEpicBriefsConfig,
+  saveEpicBriefsConfig,
+  type EpicBriefsConfig,
   fetchJiraUpdates,
   saveJiraUpdates,
-  fetchSearchWeights,
-  saveSearchWeights,
   fetchGatewayHealth,
   fetchGatewayConfig,
   updateGatewayConfig,
@@ -20,7 +28,6 @@ import {
   type ChannelFilters,
   type EligibilityGateConfig,
   type JiraUpdatesConfig,
-  type SearchWeights,
   type GatewayHealth,
   type GatewayConfig,
   type GatewayConfigResponse,
@@ -149,8 +156,11 @@ export function SettingsPage() {
       {/* Channel Filters (graph memory) */}
       <ChannelFiltersSection />
       <EligibilityGateSection />
+      <BusinessRootSection />
+      <BoostAlphasSection />
+      <TimeZoneSection />
+      <EpicBriefsSection />
       <JiraUpdatesSection />
-      <SearchRankingSection />
 
       {/* Context */}
       <Section title="Context Window">
@@ -557,6 +567,250 @@ function ChannelFiltersSection() {
   )
 }
 
+// --- Business root ---
+
+function BusinessRootSection() {
+  const [project, setProject] = useState<string | null>(null)
+  const [saving, setSaving] = useState(false)
+  const [toast, setToast] = useState<{ type: 'ok' | 'err'; msg: string } | null>(null)
+
+  useEffect(() => {
+    fetchBusinessRoot()
+      .then((cfg) => setProject(cfg.project))
+      .catch(() => setToast({ type: 'err', msg: 'Failed to load business root' }))
+  }, [])
+
+  const save = async (v: string) => {
+    setSaving(true)
+    setToast(null)
+    try {
+      const updated = await saveBusinessRoot({ project: v })
+      setProject(updated.project)
+      setToast({ type: 'ok', msg: 'Saved — applies on the next refresh_jira_board run' })
+    } catch (e: unknown) {
+      setToast({ type: 'err', msg: e instanceof Error ? e.message : 'Save failed' })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Section title="Business Root (Payments)">
+      {toast && (
+        <div className={`text-sm px-3 py-1.5 rounded-md ${toast.type === 'ok' ? 'bg-green-50 text-green-700 dark:bg-green-900/30 dark:text-green-300' : 'bg-red-50 text-red-700 dark:bg-red-900/30 dark:text-red-300'}`}>
+          {toast.msg}
+        </div>
+      )}
+      {project === null ? (
+        <p className="text-sm text-gray-500">Loading…</p>
+      ) : (
+        <Field label="Jira project" hint="Project whose epics form the business:payments subtree (PART_OF edges and epic membership). Rebuilt by refresh_jira_board every 6h.">
+          <EditableField value={project} saving={saving} onSave={save} placeholder="PAY" />
+        </Field>
+      )}
+    </Section>
+  )
+}
+
+// --- Time zone ---
+
+function TimeZoneSection() {
+  const [tz, setTz] = useState<string | null>(null)
+  const [effective, setEffective] = useState<string | undefined>(undefined)
+  const [saving, setSaving] = useState(false)
+  const [toast, setToast] = useState<{ type: 'ok' | 'err'; msg: string } | null>(null)
+
+  useEffect(() => {
+    fetchTemporalTimezone()
+      .then((cfg) => { setTz(cfg.timezone); setEffective(cfg.effective) })
+      .catch(() => setToast({ type: 'err', msg: 'Failed to load time zone' }))
+  }, [])
+
+  const save = async (v: string) => {
+    setSaving(true)
+    setToast(null)
+    try {
+      const updated = await saveTemporalTimezone({ timezone: v })
+      setTz(updated.timezone)
+      setEffective(updated.effective)
+      setToast({ type: 'ok', msg: 'Saved — applies to the next search' })
+    } catch (e: unknown) {
+      setToast({ type: 'err', msg: e instanceof Error ? e.message : 'Save failed' })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Section title="Time zone">
+      {toast && (
+        <div className={`text-sm px-3 py-1.5 rounded-md ${toast.type === 'ok' ? 'bg-green-50 text-green-700 dark:bg-green-900/30 dark:text-green-300' : 'bg-red-50 text-red-700 dark:bg-red-900/30 dark:text-red-300'}`}>
+          {toast.msg}
+        </div>
+      )}
+      {tz === null ? (
+        <p className="text-sm text-gray-500">Loading…</p>
+      ) : (
+        <Field label="IANA zone" hint={`Day boundaries for "today", "yesterday", "this month" and date-only since/until in search. Effective: ${effective ?? tz}.`}>
+          <EditableField value={tz} saving={saving} onSave={save} placeholder="Asia/Ho_Chi_Minh" />
+        </Field>
+      )}
+    </Section>
+  )
+}
+
+// --- Epic briefs ---
+
+function EpicBriefsSection() {
+  const [cfg, setCfg] = useState<EpicBriefsConfig | null>(null)
+  const [saving, setSaving] = useState(false)
+  const [toast, setToast] = useState<{ type: 'ok' | 'err'; msg: string } | null>(null)
+
+  useEffect(() => {
+    fetchEpicBriefsConfig()
+      .then(setCfg)
+      .catch(() => setToast({ type: 'err', msg: 'Failed to load epic briefs config' }))
+  }, [])
+
+  const save = async (patch: Partial<EpicBriefsConfig>) => {
+    if (!cfg) return
+    setSaving(true)
+    setToast(null)
+    try {
+      const updated = await saveEpicBriefsConfig({ ...cfg, ...patch })
+      setCfg(updated)
+      setToast({ type: 'ok', msg: 'Saved — applies on the next refresh_jira_board run and to queued jobs' })
+    } catch (e: unknown) {
+      setToast({ type: 'err', msg: e instanceof Error ? e.message : 'Save failed' })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Section title="Epic Briefs">
+      {toast && (
+        <div className={`text-sm px-3 py-1.5 rounded-md ${toast.type === 'ok' ? 'bg-green-50 text-green-700 dark:bg-green-900/30 dark:text-green-300' : 'bg-red-50 text-red-700 dark:bg-red-900/30 dark:text-red-300'}`}>
+          {toast.msg}
+        </div>
+      )}
+      {cfg === null ? (
+        <p className="text-sm text-gray-500">Loading…</p>
+      ) : (
+        <>
+          <Field
+            label="Enabled (graph.epic_briefs.enabled)"
+            hint="refresh_jira_board enqueues one refresh_epic_brief job (1 LLM call, summary tier) per on-board epic whose members or member summaries changed. Off by default: canary with dry_run jobs first."
+          >
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={cfg.enabled}
+                disabled={saving}
+                onChange={(e) => save({ enabled: e.target.checked })}
+                className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+              />
+              <span className={`text-sm font-medium ${cfg.enabled ? 'text-green-600 dark:text-green-400' : 'text-gray-500 dark:text-gray-400'}`}>
+                {cfg.enabled ? 'Enabled' : 'Disabled'}
+              </span>
+            </label>
+          </Field>
+          <Field
+            label="Minimum interval, minutes (graph.epic_briefs.min_interval_minutes)"
+            hint="A brief younger than this is not rebuilt even when its members changed; the next 6h board refresh re-enqueues it. 1–1440."
+          >
+            <EditableField
+              value={String(cfg.min_interval_minutes)}
+              saving={saving}
+              onSave={(v) => {
+                const n = Number(v)
+                if (!Number.isInteger(n) || n < 1 || n > 1440) {
+                  setToast({ type: 'err', msg: 'Interval must be an integer between 1 and 1440' })
+                  return
+                }
+                void save({ min_interval_minutes: n })
+              }}
+              placeholder="60"
+            />
+          </Field>
+        </>
+      )}
+    </Section>
+  )
+}
+
+// --- Search boost alphas ---
+
+const BOOST_ALPHA_FIELDS: { key: keyof BoostAlphas; label: string; hint: string }[] = [
+  { key: 'rec', label: 'Recency (graph.boost.alpha.rec)', hint: '30-day half-life on updated_at.' },
+  { key: 'team', label: 'Team affinity (graph.boost.alpha.team)', hint: 'Asker ↔ author closeness; 0.1 when no asker.' },
+  { key: 'temporal', label: 'Temporal proximity (graph.boost.alpha.temporal)', hint: 'Distance to the query window centre; neutral without a window.' },
+  { key: 'auth', label: 'Authority (graph.boost.alpha.auth)', hint: 'Author depth from the org root.' },
+]
+
+function BoostAlphasSection() {
+  const [alphas, setAlphas] = useState<BoostAlphas | null>(null)
+  const [legacy, setLegacy] = useState<Record<string, number>>({})
+  const [saving, setSaving] = useState(false)
+  const [toast, setToast] = useState<{ type: 'ok' | 'err'; msg: string } | null>(null)
+
+  useEffect(() => {
+    fetchBoostAlphas()
+      .then((cfg) => { setAlphas(cfg.alphas); setLegacy(cfg.legacy_weights) })
+      .catch(() => setToast({ type: 'err', msg: 'Failed to load boost alphas' }))
+  }, [])
+
+  const save = async (key: keyof BoostAlphas, raw: string) => {
+    if (!alphas) return
+    const v = Number(raw)
+    if (!Number.isFinite(v) || v < 0 || v > 1) {
+      setToast({ type: 'err', msg: 'Alpha must be a number between 0 and 1' })
+      return
+    }
+    setSaving(true)
+    setToast(null)
+    try {
+      const updated = await saveBoostAlphas({ ...alphas, [key]: v })
+      setAlphas(updated.alphas)
+      setToast({ type: 'ok', msg: 'Saved — applies to the next search' })
+    } catch (e: unknown) {
+      setToast({ type: 'err', msg: e instanceof Error ? e.message : 'Save failed' })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Section title="Search Boosts (four-arm retrieval)">
+      <p className="text-xs text-gray-400 dark:text-gray-500">
+        /api/graph/search fuses the semantic, keyword, graph and temporal arms by reciprocal rank, then multiplies by
+        1 + α·(component − 0.5) per boost. 0 disables a boost; 0.2 lets it move a score by ±10%.
+      </p>
+      {toast && (
+        <div className={`text-sm px-3 py-1.5 rounded-md ${toast.type === 'ok' ? 'bg-green-50 text-green-700 dark:bg-green-900/30 dark:text-green-300' : 'bg-red-50 text-red-700 dark:bg-red-900/30 dark:text-red-300'}`}>
+          {toast.msg}
+        </div>
+      )}
+      {alphas === null ? (
+        <p className="text-sm text-gray-500">Loading…</p>
+      ) : (
+        <>
+          {BOOST_ALPHA_FIELDS.map((f) => (
+            <Field key={f.key} label={f.label} hint={f.hint}>
+              <EditableField value={String(alphas[f.key])} saving={saving} onSave={(v) => save(f.key, v)} placeholder="0.2" />
+            </Field>
+          ))}
+          <Field label="Legacy weights (graph.weights.*)" hint="Read-only. Still used by /api/graph/resolve's additive score; search no longer reads them.">
+            <p className="text-sm font-mono text-gray-500 dark:text-gray-400">
+              {Object.entries(legacy).map(([k, v]) => `${k}=${v}`).join('  ')}
+            </p>
+          </Field>
+        </>
+      )}
+    </Section>
+  )
+}
+
 // --- Jira freshness poll ---
 
 function JiraUpdatesSection() {
@@ -632,104 +886,6 @@ function JiraUpdatesSection() {
 
           <button disabled={saving || intervalInvalid} onClick={save} className={btnPrimary}>
             {saving ? 'Saving…' : 'Save Jira freshness'}
-          </button>
-        </>
-      )}
-    </Section>
-  )
-}
-
-function SearchRankingSection() {
-  const [config, setConfig] = useState<SearchWeights | null>(null)
-  const [saving, setSaving] = useState(false)
-  const [toast, setToast] = useState<{ type: 'ok' | 'err'; msg: string } | null>(null)
-
-  useEffect(() => {
-    fetchSearchWeights()
-      .then(setConfig)
-      .catch(() => setToast({ type: 'err', msg: 'Failed to load search ranking settings' }))
-  }, [])
-
-  const save = async () => {
-    if (!config) return
-    setSaving(true)
-    setToast(null)
-    try {
-      setConfig(await saveSearchWeights(config))
-      setToast({ type: 'ok', msg: 'Saved' })
-    } catch (e: unknown) {
-      setToast({ type: 'err', msg: e instanceof Error ? e.message : 'Save failed' })
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  const invalid =
-    config !== null && Object.values(config).some((value) => !Number.isFinite(value) || value < 0 || value > 1)
-
-  return (
-    <Section title="Search Ranking">
-      <p className="text-sm text-gray-500 dark:text-gray-400">
-        Applies to /search and takes effect on the next search, no restart. Defaults 0.15 / 0.20 / 0.075 come from the 2026-10-03 ranking eval.
-      </p>
-      {toast && (
-        <div className={`text-sm px-3 py-1.5 rounded-md ${toast.type === 'ok' ? 'bg-green-50 text-green-700 dark:bg-green-900/30 dark:text-green-300' : 'bg-red-50 text-red-700 dark:bg-red-900/30 dark:text-red-300'}`}>
-          {toast.msg}
-        </div>
-      )}
-
-      {!config ? (
-        <p className="text-sm text-gray-500">Loading…</p>
-      ) : (
-        <>
-          <Field label="Keyword match boost" hint="Added to a /search result's score when the query text matched its title or body, or a thread's decisions.">
-            <input
-              type="number"
-              min="0"
-              max="1"
-              step="0.005"
-              data-testid="search-weight-kw"
-              value={Number.isNaN(config.kw) ? '' : config.kw}
-              disabled={saving}
-              onChange={(e) => setConfig({ ...config, kw: e.target.valueAsNumber })}
-              className={inputCls}
-            />
-          </Field>
-
-          <Field label="Title overlap boost" hint="Multiplied by the share of query words (3+ letters) that are words of the result title, then added.">
-            <input
-              type="number"
-              min="0"
-              max="1"
-              step="0.005"
-              data-testid="search-weight-title"
-              value={Number.isNaN(config.title) ? '' : config.title}
-              disabled={saving}
-              onChange={(e) => setConfig({ ...config, title: e.target.valueAsNumber })}
-              className={inputCls}
-            />
-          </Field>
-
-          <Field label="Recency weight (hybrid)" hint="Replaces the base recency weight (0.15) for /search only. Lower favours older threads.">
-            <input
-              type="number"
-              min="0"
-              max="1"
-              step="0.005"
-              data-testid="search-weight-hybrid-rec"
-              value={Number.isNaN(config.hybrid_rec) ? '' : config.hybrid_rec}
-              disabled={saving}
-              onChange={(e) => setConfig({ ...config, hybrid_rec: e.target.valueAsNumber })}
-              className={inputCls}
-            />
-          </Field>
-
-          {invalid && (
-            <p className="text-sm text-red-600 dark:text-red-400">Each weight must be between 0 and 1.</p>
-          )}
-
-          <button data-testid="search-weights-save" disabled={saving || invalid} onClick={save} className={btnPrimary}>
-            {saving ? 'Saving…' : 'Save search ranking'}
           </button>
         </>
       )}

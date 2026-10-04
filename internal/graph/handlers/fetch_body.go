@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/agent-mem/agent-mem/internal/graph/extractor"
 	"github.com/agent-mem/agent-mem/internal/graph/fetchers"
 	"github.com/agent-mem/agent-mem/internal/graph/identity"
@@ -19,6 +21,10 @@ type fetchBodyPayload struct {
 	NodeID string `json:"node_id"`
 	URL    string `json:"url"`
 	Source string `json:"source"`
+	// SkipAttachments makes the fetch metadata-only: attachment nodes and edges
+	// are still upserted but no describe_attachment job is enqueued. It is copied
+	// into every child fetch_body this fetch enqueues.
+	SkipAttachments bool `json:"skip_attachments,omitempty"`
 	// Depth is 0 for jobs from ingestion/resolve/refresh/backfill/dashboard and 1
 	// for fetches enqueued by a fetch_body's reference extraction. Absent = 0.
 	Depth int `json:"depth,omitempty"`
@@ -78,12 +84,14 @@ func fetchBodyHandler(deps Deps) jobs.Handler {
 		norm, normOK := deps.Normalizers.For(fetcher.Source())
 		var plainText string
 		var mentions []string
+		var normMeta map[string]any
 		if normOK {
 			result, err := norm.Normalize(ctx, body.Raw, body.Metadata)
 			if err != nil {
 				deps.Logger.Warn().Err(err).Str("node_id", body.NodeID).Msg("fetch_body: normalizer error; using empty text")
 			} else {
 				plainText = result.Text
+				normMeta = result.Metadata
 				for _, m := range result.Mentions {
 					mentions = append(mentions, m.ExternalID)
 				}
@@ -128,12 +136,20 @@ func fetchBodyHandler(deps Deps) jobs.Handler {
 		naturalKey, _ := ids.ParseNaturalKey(body.NodeID)
 		scope := deriveScope(fetcher.Source(), body.Metadata)
 
-		// Build metadata JSON. graph.nodes.metadata is NOT NULL, so default to
-		// an empty object — sources that don't populate Metadata (jira, confluence,
-		// github, …) would otherwise pass an explicit NULL and fail the upsert.
+		// Build metadata JSON: the fetcher's metadata plus whatever the normalizer
+		// lifted from the body (Jira status/issuetype/…). graph.nodes.metadata is
+		// NOT NULL, so default to an empty object — sources that populate neither
+		// (confluence, github, …) would otherwise pass an explicit NULL and fail.
 		metaJSON := []byte("{}")
-		if body.Metadata != nil {
-			if b, mErr := json.Marshal(body.Metadata); mErr == nil {
+		if len(body.Metadata) > 0 || len(normMeta) > 0 {
+			merged := make(map[string]any, len(body.Metadata)+len(normMeta))
+			for k, v := range body.Metadata {
+				merged[k] = v
+			}
+			for k, v := range normMeta {
+				merged[k] = v
+			}
+			if b, mErr := json.Marshal(merged); mErr == nil {
 				metaJSON = b
 			}
 		}
@@ -162,7 +178,7 @@ func fetchBodyHandler(deps Deps) jobs.Handler {
 				created_at       = COALESCE(graph.nodes.created_at, EXCLUDED.created_at),
 				author_person_id = COALESCE(EXCLUDED.author_person_id, graph.nodes.author_person_id),
 				scope            = EXCLUDED.scope,
-				metadata         = EXCLUDED.metadata,
+				metadata         = graph.nodes.metadata || EXCLUDED.metadata,
 				updated_at       = NOW(),
 				machine_id       = EXCLUDED.machine_id
 			WHERE graph.nodes.body_ts IS NULL OR EXCLUDED.body_ts >= graph.nodes.body_ts`,
@@ -220,7 +236,7 @@ func fetchBodyHandler(deps Deps) jobs.Handler {
 			// to be an explicit, scoped backfill, not a side effect of fetching.
 			if depth < 1 {
 				for _, f := range extractResult.Findings {
-					enqueueFetchIfEmpty(ctx, deps, f.NodeID, f.Type, depth+1, p.NodeID)
+					enqueueFetchIfEmpty(ctx, deps, f.NodeID, f.Type, depth+1, p.NodeID, p.SkipAttachments)
 				}
 			} else {
 				deps.Logger.Debug().Str("node_id", body.NodeID).Int("depth", depth).Msg("fetch_body: depth cap reached, references not fetched")
@@ -264,20 +280,14 @@ func fetchBodyHandler(deps Deps) jobs.Handler {
 				deps.Logger.Warn().Err(uErr).Str("att_node_id", att.NodeID).Msg("fetch_body: upsert attachment edge failed")
 			}
 
-			// Enqueue describe_attachment (not at depth >= 1: cascade cap).
-			if depth < 1 {
-				descPayload := map[string]string{
+			// Describe only for depth-0, non-metadata-only fetches (cascade cap).
+			if p.Depth < 1 && !p.SkipAttachments {
+				enqueueDescribeIfNeeded(ctx, deps, att.NodeID, map[string]string{
 					"node_id":      att.NodeID,
 					"external_url": att.URLPrivate,
 					"mime":         att.MimeType,
 					"source":       fetcher.Source(),
-				}
-				if _, jErr := jobs.Enqueue(ctx, deps.DB, "describe_attachment", descPayload, jobs.EnqueueOptions{
-					Priority:  5,
-					MachineID: deps.MachineID,
-				}); jErr != nil {
-					deps.Logger.Warn().Err(jErr).Str("att_node_id", att.NodeID).Msg("fetch_body: enqueue describe_attachment failed")
-				}
+				})
 			}
 		}
 
@@ -447,7 +457,7 @@ func pruneStaleEdges(ctx context.Context, deps Deps, fromNodeID string, keepIDs 
 // empty and no live (queued/running, not parked) fetch_body for it exists. The
 // check and insert are one statement so concurrent workers can't both pass.
 // max_attempts and target_runner are covered by column defaults.
-func enqueueFetchIfEmpty(ctx context.Context, deps Deps, nodeID string, nodeType ids.NodeType, depth int, via string) {
+func enqueueFetchIfEmpty(ctx context.Context, deps Deps, nodeID string, nodeType ids.NodeType, depth int, via string, skipAttachments bool) {
 	var bodyVal *string
 	err := deps.DB.QueryRow(ctx,
 		`SELECT body FROM graph.nodes WHERE id = $1`, nodeID,
@@ -458,7 +468,7 @@ func enqueueFetchIfEmpty(ctx context.Context, deps Deps, nodeID string, nodeType
 	if bodyVal != nil && *bodyVal != "" {
 		return // already has content
 	}
-	raw, err := json.Marshal(fetchBodyPayload{NodeID: nodeID, Depth: depth, Via: via})
+	raw, err := json.Marshal(fetchBodyPayload{NodeID: nodeID, Depth: depth, Via: via, SkipAttachments: skipAttachments})
 	if err != nil {
 		return
 	}
@@ -471,5 +481,58 @@ func enqueueFetchIfEmpty(ctx context.Context, deps Deps, nodeID string, nodeType
 		                    AND available_at < now() + interval '1 day')`,
 		nodeID, raw, deps.MachineID); jErr != nil {
 		deps.Logger.Warn().Err(jErr).Str("node_id", nodeID).Msg("enqueueFetchIfEmpty: enqueue failed")
+	}
+}
+
+// describeEligibilityCheck reports whether an attachment must NOT be described:
+// it already has a non-empty body, or a describe_attachment job for it is
+// queued or running. One statement, so both conditions share a snapshot.
+// Replaceable in tests.
+var describeEligibilityCheck = func(ctx context.Context, tx pgx.Tx, attID string) (bool, error) {
+	var skip bool
+	err := tx.QueryRow(ctx, `
+SELECT EXISTS (SELECT 1 FROM graph.artifact_bodies WHERE node_id = $1 AND COALESCE(body_full,'') <> '')
+    OR EXISTS (SELECT 1 FROM graph.jobs
+               WHERE type = 'describe_attachment' AND status IN ('queued','running')
+                 AND payload->>'node_id' = $1)`, attID).Scan(&skip)
+	return skip, err
+}
+
+// enqueueDescribeIfNeeded enqueues describe_attachment for attID unless it is
+// already described or already in flight. The check and the enqueue run in one
+// transaction under a per-attachment advisory lock, so concurrent fetches cannot
+// both see "nothing queued". It fails closed: any error before the enqueue means
+// no job; a Commit error leaves the outcome unknown and is never retried.
+func enqueueDescribeIfNeeded(ctx context.Context, deps Deps, attID string, payload map[string]string) {
+	tx, err := deps.DB.Begin(ctx)
+	if err != nil {
+		deps.Logger.Warn().Err(err).Str("att_node_id", attID).Msg("fetch_body: describe_attachment begin failed; not enqueued")
+		return
+	}
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('describe_attachment:' || $1))`, attID); err != nil {
+		_ = tx.Rollback(ctx)
+		deps.Logger.Warn().Err(err).Str("att_node_id", attID).Msg("fetch_body: describe_attachment lock failed; not enqueued")
+		return
+	}
+	skip, err := describeEligibilityCheck(ctx, tx, attID)
+	if err != nil {
+		_ = tx.Rollback(ctx)
+		deps.Logger.Warn().Err(err).Str("att_node_id", attID).Msg("fetch_body: describe_attachment eligibility check failed; not enqueued")
+		return
+	}
+	if skip {
+		_ = tx.Rollback(ctx)
+		return
+	}
+	if _, err := jobs.Enqueue(ctx, tx, "describe_attachment", payload, jobs.EnqueueOptions{
+		Priority:  5,
+		MachineID: deps.MachineID,
+	}); err != nil {
+		_ = tx.Rollback(ctx)
+		deps.Logger.Warn().Err(err).Str("att_node_id", attID).Msg("fetch_body: enqueue describe_attachment failed")
+		return
+	}
+	if err := tx.Commit(ctx); err != nil {
+		deps.Logger.Warn().Err(err).Str("att_node_id", attID).Msg("fetch_body: describe_attachment commit failed; outcome unknown, not retried")
 	}
 }

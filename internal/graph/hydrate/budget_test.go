@@ -97,6 +97,42 @@ func TestHydrate_StopsAtBudget(t *testing.T) {
 	}
 }
 
+// When every body overshoots the budget, the top candidate comes back
+// truncated to the budget instead of an empty bundle; when a smaller one
+// fits later in the list, the oversized top hit is still skipped.
+func TestHydrate_NothingFitsReturnsTruncatedTop(t *testing.T) {
+	ctx := context.Background()
+	pool := testDB(t)
+	seedNode(t, pool, "big", "slack_thread", "big thread")
+	seedBody(t, pool, "big", strings.Repeat("é", 2000)) // 4000 bytes ≈ 1001 tokens
+	seedNode(t, pool, "big2", "slack_thread", "second big thread")
+	seedBody(t, pool, "big2", strings.Repeat("x", 3000))
+
+	out, _, err := hydrate.Greedy(ctx, pool, []hydrate.Candidate{{NodeID: "big", Score: 0.9}, {NodeID: "big2", Score: 0.5}}, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out) != 1 || out[0].NodeID != "big" {
+		t.Fatalf("want only the truncated top hit, got %+v", out)
+	}
+	if len(out[0].Body) > 400 || out[0].Tokens > 101 {
+		t.Errorf("body not truncated to budget: %d bytes, %d tokens", len(out[0].Body), out[0].Tokens)
+	}
+	if !strings.HasSuffix(out[0].Body, "é") {
+		t.Errorf("truncation split a rune: %q", out[0].Body[len(out[0].Body)-3:])
+	}
+
+	seedNode(t, pool, "small", "slack_thread", "small thread")
+	seedBody(t, pool, "small", "fits")
+	out, _, err = hydrate.Greedy(ctx, pool, []hydrate.Candidate{{NodeID: "big", Score: 0.9}, {NodeID: "small", Score: 0.5}}, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out) != 1 || out[0].NodeID != "small" {
+		t.Errorf("a fitting candidate must win over the truncation fallback, got %+v", out)
+	}
+}
+
 // A slack thread whose n.title is empty must hydrate with the title from
 // graph.thread_summaries, so the opened-node header shows readable text instead
 // of the raw slack:CHANNEL:TS id.

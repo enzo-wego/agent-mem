@@ -4,6 +4,7 @@ package hydrate
 import (
 	"context"
 	"errors"
+	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -26,14 +27,19 @@ type Hydrated struct {
 	Tokens int
 }
 
-// Greedy hydrates candidates in score order, stopping when the next
-// candidate would push past budgetTokens. Returns hydrated entries plus
-// any node_ids whose body wasn't in cache (caller enqueues fetch_body).
+// Greedy hydrates candidates in score order, skipping any whose body would
+// push past budgetTokens. When no body fits at all, the top candidate is
+// returned with its body truncated to the budget rather than an empty list.
+// Returns hydrated entries plus any node_ids whose body wasn't in cache
+// (caller enqueues fetch_body).
 //
 // Token approximation: 1 token ≈ 4 chars (rough rule for English).
 func Greedy(ctx context.Context, db *pgxpool.Pool, cands []Candidate, budgetTokens int) ([]Hydrated, []string, error) {
 	var out []Hydrated
 	var missed []string
+	// first is the best-scored candidate that had a body but did not fit;
+	// it is the truncation fallback when used stays 0.
+	var first *Hydrated
 	used := 0
 	for _, c := range cands {
 		// Slack thread titles live in graph.thread_summaries, not n.title (often
@@ -91,6 +97,9 @@ WHERE n.id = $1 AND n.deleted_at IS NULL
 			// body near the front used to break the loop and return NOTHING.
 			// A 16KB Slack thread root (4032 tokens vs a 4000 budget) emptied
 			// the whole /api/graph/resolve response.
+			if first == nil {
+				first = &Hydrated{NodeID: c.NodeID, Title: title, Type: typ, URL: url, Score: c.Score, Body: *body, Tokens: tokens}
+			}
 			continue
 		}
 		out = append(out, Hydrated{
@@ -104,5 +113,25 @@ WHERE n.id = $1 AND n.deleted_at IS NULL
 		})
 		used += tokens
 	}
+	if used == 0 && first != nil {
+		// Nothing fit: better a truncated top hit than an empty bundle.
+		first.Body = truncateRunes(first.Body, budgetTokens*4)
+		first.Tokens = len(first.Body)/4 + 1
+		out = append(out, *first)
+	}
 	return out, missed, nil
+}
+
+// truncateRunes cuts s to at most n bytes without splitting a UTF-8 sequence.
+func truncateRunes(s string, n int) string {
+	if n <= 0 {
+		return ""
+	}
+	if len(s) <= n {
+		return s
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n]
 }
