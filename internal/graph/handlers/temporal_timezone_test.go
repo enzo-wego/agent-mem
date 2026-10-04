@@ -79,7 +79,7 @@ func TestTemporalTimezoneSetting(t *testing.T) {
 	put := func(name string) int {
 		w := httptest.NewRecorder()
 		h.putTemporalTimezone(w, httptest.NewRequest("PUT", "/api/graph/temporal-timezone", strings.NewReader(`{"timezone":"`+name+`"}`)))
-		if name == "Mars/Base" && !strings.Contains(w.Body.String(), "unknown timezone Mars/Base") {
+		if (name == "Mars/Base" || name == "Local") && !strings.Contains(w.Body.String(), "unknown timezone "+name) {
 			t.Errorf("body = %s", w.Body.String())
 		}
 		return w.Code
@@ -94,8 +94,10 @@ func TestTemporalTimezoneSetting(t *testing.T) {
 		}
 	})
 	t.Run("put_invalid", func(t *testing.T) {
-		if code := put("Mars/Base"); code != http.StatusBadRequest {
-			t.Fatalf("code %d", code)
+		for _, name := range []string{"Mars/Base", "Local"} {
+			if code := put(name); code != http.StatusBadRequest {
+				t.Fatalf("%s: code %d", name, code)
+			}
 		}
 	})
 	t.Run("absent_defaults", func(t *testing.T) {

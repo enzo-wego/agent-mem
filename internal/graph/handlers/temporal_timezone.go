@@ -74,7 +74,8 @@ func (h *Channels) putTemporalTimezone(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "timezone required")
 		return
 	}
-	if _, err := time.LoadLocation(cfg.Timezone); err != nil {
+	// "Local" loads as the container zone, not a configured one.
+	if _, err := time.LoadLocation(cfg.Timezone); err != nil || strings.EqualFold(cfg.Timezone, "Local") {
 		writeError(w, http.StatusBadRequest, "unknown timezone "+cfg.Timezone)
 		return
 	}
