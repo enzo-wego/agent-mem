@@ -299,6 +299,7 @@ func TestBackfillSubtreeIndex_Converges(t *testing.T) {
 	}
 	if _, err := pool.Exec(ctx, `INSERT INTO graph.thread_summaries (channel_id, thread_ts, signature, summary, kind, updated_at) VALUES
 		('C1', '300.0', 's', 'thanks all', 'chatter', now()),
+		('C1', '100.0', 's', '', 'substantive', now()),
 		('C1', '200.0', 's', 'Refund flow for GST', 'substantive', now())`); err != nil {
 		t.Fatalf("seed summaries: %v", err)
 	}
