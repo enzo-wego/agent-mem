@@ -107,7 +107,7 @@ LIMIT $1`, limit, force)
 
 	now := time.Now()
 	for i, id := range ids {
-		if _, e := jobs.Enqueue(ctx, db, "fetch_body", fetchBodyPayload{NodeID: id}, jobs.EnqueueOptions{
+		if _, e := jobs.Enqueue(ctx, db, "fetch_body", fetchBodyPayload{NodeID: id, SkipAttachments: true}, jobs.EnqueueOptions{
 			Priority:    7,
 			AvailableAt: now.Add(time.Duration(i) * spacing),
 			MachineID:   machineID,
