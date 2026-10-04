@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
+
+	"github.com/agent-mem/agent-mem/internal/graph/jobs"
 )
 
 func TestBackfillJiraMetadata_EnqueuesMissingPaced(t *testing.T) {
@@ -161,6 +163,9 @@ func TestBackfillSubtreeIndex_SelectsPaySubtreeWithoutEmbedding(t *testing.T) {
 		('slack:C1:500.0', 'slack', 'C1:500.0', 'slack:C1', '{"thread_ts":"500.0"}', 'test', now() - interval '1 day')`); err != nil {
 		t.Fatalf("seed nodes: %v", err)
 	}
+	if _, err := pool.Exec(ctx, `UPDATE graph.nodes SET body = 'body ' || id`); err != nil {
+		t.Fatalf("seed bodies: %v", err)
+	}
 	// PR#1 and reply 100.1 reference PAY issues; PR#2 references OPS only.
 	if _, err := pool.Exec(ctx, `
 		INSERT INTO graph.edges (from_node_id, to_node_id, kind, machine_id) VALUES
@@ -222,6 +227,144 @@ func TestBackfillSubtreeIndex_SelectsPaySubtreeWithoutEmbedding(t *testing.T) {
 	want := "slack:C1:200.0,slack:C1:100.1,gh_pr:wego/pay#1"
 	if strings.Join(got, ",") != want {
 		t.Errorf("enqueued = %v\nwant %s", got, want)
+	}
+}
+
+func TestBackfillSubtreeIndex_SkipsEmptyBody(t *testing.T) {
+	pool := openTestDB(t)
+	truncateGraphHandlerTables(t, pool)
+	ctx := context.Background()
+	if _, err := pool.Exec(ctx, `INSERT INTO graph.nodes (id, type, natural_key, scope, metadata, machine_id, body) VALUES
+		('jira:PAY-1', 'jira', 'PAY-1', 'jira', '{}', 'test', NULL),
+		('jira:PAY-2', 'jira', 'PAY-2', 'jira', '{}', 'test', '')`); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	matched, enqueued, remaining := BackfillSubtreeIndex(ctx, pool, zerolog.Nop(), "test", "PAY", 10)
+	if matched != 0 || enqueued != 0 || remaining != 0 {
+		t.Fatalf("matched=%d enqueued=%d remaining=%d, want 0/0/0", matched, enqueued, remaining)
+	}
+}
+
+func TestBackfillSubtreeIndex_SmallLimitProgresses(t *testing.T) {
+	pool := openTestDB(t)
+	truncateGraphHandlerTables(t, pool)
+	ctx := context.Background()
+	// 5 empty-body issues are newer than the one indexable issue, so a
+	// limit-5 page that did not filter them would never reach it.
+	if _, err := pool.Exec(ctx, `INSERT INTO graph.nodes (id, type, natural_key, scope, metadata, machine_id, body, created_at)
+		SELECT 'jira:PAY-' || g, 'jira', 'PAY-' || g, 'jira', '{}', 'test', '', now() - interval '1 hour' * g
+		FROM generate_series(1, 5) g`); err != nil {
+		t.Fatalf("seed empty: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO graph.nodes (id, type, natural_key, scope, metadata, machine_id, body, created_at)
+		VALUES ('jira:PAY-99', 'jira', 'PAY-99', 'jira', '{}', 'test', 'real body', now() - interval '30 day')`); err != nil {
+		t.Fatalf("seed indexable: %v", err)
+	}
+	matched, enqueued, remaining := BackfillSubtreeIndex(ctx, pool, zerolog.Nop(), "test", "PAY", 5)
+	if matched != 1 || enqueued != 1 || remaining != 0 {
+		t.Fatalf("matched=%d enqueued=%d remaining=%d, want 1/1/0", matched, enqueued, remaining)
+	}
+	var id string
+	if err := pool.QueryRow(ctx, `SELECT payload->>'node_id' FROM graph.jobs WHERE type='index_artifact'`).Scan(&id); err != nil || id != "jira:PAY-99" {
+		t.Fatalf("enqueued node = %q (%v), want jira:PAY-99", id, err)
+	}
+}
+
+func TestBackfillSubtreeIndex_Converges(t *testing.T) {
+	pool := openTestDB(t)
+	truncateGraphHandlerTables(t, pool)
+	ctx := context.Background()
+	if _, err := pool.Exec(ctx, `DELETE FROM graph.thread_summaries`); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := pool.Exec(ctx, `INSERT INTO graph.nodes (id, type, natural_key, scope, metadata, machine_id, body, created_at) VALUES
+		('jira:PAY-1', 'jira', 'PAY-1', 'jira', '{}', 'test', '',                  now() - interval '10 day'),
+		('jira:PAY-2', 'jira', 'PAY-2', 'jira', '{}', 'test', 'issue two body',    now() - interval '9 day'),
+		('jira:PAY-3', 'jira', 'PAY-3', 'jira', '{}', 'test', 'issue three body',  now() - interval '8 day'),
+		('jira:OPS-9', 'jira', 'OPS-9', 'jira', '{}', 'test', 'dedup twin body',   now() - interval '8 day'),
+		('slack:C1:100.0', 'slack', 'C1:100.0', 'slack:C1', '{"thread_ts":"100.0"}', 'test', 'root without summary', now() - interval '7 day'),
+		('slack:C1:100.1', 'slack', 'C1:100.1', 'slack:C1', '{"thread_ts":"100.0"}', 'test', 'a reply',              now() - interval '7 day'),
+		('slack:C1:300.0', 'slack', 'C1:300.0', 'slack:C1', '{"thread_ts":"300.0"}', 'test', 'thanks all',           now() - interval '6 day'),
+		('slack:C1:200.0', 'slack', 'C1:200.0', 'slack:C1', '{"thread_ts":"200.0"}', 'test', 'refund flow root',     now() - interval '5 day'),
+		('slack:C1:600.0', 'slack', 'C1:600.0', 'slack:C1', '{"thread_ts":"600.0"}', 'test', 'dup heuristic root',   now() - interval '4 day')`); err != nil {
+		t.Fatalf("seed nodes: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO graph.edges (from_node_id, to_node_id, kind, machine_id) VALUES
+		('slack:C1:100.1', 'jira:PAY-1', 'REFERENCES', 'test'),
+		('slack:C1:600.0', 'jira:PAY-1', 'REFERENCES', 'test')`); err != nil {
+		t.Fatalf("seed edges: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO graph.thread_summaries (channel_id, thread_ts, signature, summary, kind, updated_at) VALUES
+		('C1', '300.0', 's', 'thanks all', 'chatter', now()),
+		('C1', '200.0', 's', 'Refund flow for GST', 'substantive', now())`); err != nil {
+		t.Fatalf("seed summaries: %v", err)
+	}
+	// 600.0: heuristic row, NULL embedding, identical summary embedded on OPS-9.
+	dupSummary := heuristicSummary("slack:C1:600.0", "dup heuristic root")
+	if _, err := pool.Exec(ctx, `INSERT INTO graph.artifact_index (node_id, summary, summary_kind, embedding, refreshed_at, machine_id) VALUES
+		('jira:OPS-9', $1, 'heuristic', array_fill(0.1, ARRAY[3072])::halfvec, now(), 'test'),
+		('slack:C1:600.0', $1, 'heuristic', NULL, now(), 'test'),
+		('slack:C1:200.0', 'refund flow root', 'heuristic', NULL, now() - interval '1 hour', 'test'),
+		('jira:PAY-3', 'old llm summary', 'llm', NULL, now() - interval '1 hour', 'test')`, dupSummary); err != nil {
+		t.Fatalf("seed index: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE graph.thread_summaries SET updated_at = now() WHERE thread_ts = '200.0'`); err != nil {
+		t.Fatal(err)
+	}
+
+	matched, enqueued, remaining := BackfillSubtreeIndex(ctx, pool, zerolog.Nop(), "test", "PAY", 500)
+	// PAY-2 (no row), PAY-3 (non-heuristic NULL embedding), 200.0 (stale
+	// heuristic root), 100.1 (referrer, no row).
+	if matched != 4 || enqueued != 4 || remaining != 0 {
+		t.Fatalf("matched=%d enqueued=%d remaining=%d, want 4/4/0", matched, enqueued, remaining)
+	}
+	var notForced int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM graph.jobs WHERE type='index_artifact' AND (payload->>'force') IS DISTINCT FROM 'true'`).Scan(&notForced); err != nil || notForced != 0 {
+		t.Fatalf("jobs without force=true: %d (%v)", notForced, err)
+	}
+
+	gemini := &mockGemini{embedResult: func() ([]float32, error) {
+		v := make([]float32, GraphEmbeddingDims)
+		v[0] = 1
+		return v, nil
+	}}
+	deps := Deps{DB: pool, Gemini: gemini, Logger: zerolog.Nop(), MachineID: "test"}
+	h := NewIndexArtifactHandler(deps)
+	for {
+		j, err := jobs.Claim(ctx, pool, "index_artifact", time.Minute, "test-worker", "any")
+		if err != nil {
+			t.Fatalf("claim: %v", err)
+		}
+		if j == nil {
+			break
+		}
+		if err := h.Handler(ctx, j.Payload); err != nil {
+			t.Fatalf("handler for job %d: %v", j.ID, err)
+		}
+		if err := jobs.Complete(ctx, pool, j.ID); err != nil {
+			t.Fatalf("complete: %v", err)
+		}
+	}
+
+	for _, id := range []string{"jira:PAY-2", "jira:PAY-3"} {
+		var isNull bool
+		if err := pool.QueryRow(ctx, `SELECT embedding IS NULL FROM graph.artifact_index WHERE node_id=$1`, id).Scan(&isNull); err != nil || isNull {
+			t.Errorf("%s: embedding null=%v err=%v, want non-NULL", id, isNull, err)
+		}
+	}
+	var kind string
+	if err := pool.QueryRow(ctx, `SELECT summary_kind FROM graph.artifact_index WHERE node_id='slack:C1:200.0'`).Scan(&kind); err != nil || kind != "thread_summary" {
+		t.Errorf("stale root summary_kind = %q (%v), want thread_summary", kind, err)
+	}
+	var open int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM graph.jobs WHERE type='index_artifact' AND status IN ('queued','running')`).Scan(&open); err != nil || open != 0 {
+		t.Fatalf("open index_artifact jobs = %d (%v), want 0", open, err)
+	}
+
+	matched, enqueued, remaining = BackfillSubtreeIndex(ctx, pool, zerolog.Nop(), "test", "PAY", 500)
+	if matched != 0 || enqueued != 0 || remaining != 0 {
+		t.Fatalf("second run matched=%d enqueued=%d remaining=%d, want 0/0/0", matched, enqueued, remaining)
 	}
 }
 

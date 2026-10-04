@@ -83,11 +83,17 @@ func NewBackfillSubtreeIndexHandler(deps Deps) http.Handler {
 	})
 }
 
-// subtreeIndexCandidatesSQL selects subtree nodes lacking an embedding, newest
-// first, excluding those with an index_artifact job already queued/running. A
-// NULL embedding on a heuristic-kind row is index_artifact's deliberate
-// shared-representative dedup, not a gap, so only Slack rows (whose summary
-// kind can upgrade to thread_summary) count in that state.
+// subtreeIndexCandidatesSQL selects subtree nodes that index_artifact can
+// still make progress on, newest first, excluding those with an
+// index_artifact job already queued/running. Backfill policy:
+//  1. nodes with an empty body are skipped (index_artifact writes no row);
+//  2. a non-empty-body node with no artifact_index row is a candidate;
+//  3. a row with a NULL embedding is a candidate only when it is not
+//     heuristic (a NULL embedding on a heuristic row is index_artifact's
+//     deliberate shared-representative dedup, not a gap);
+//  4. a heuristic Slack thread root is a candidate only when its thread
+//     summary is newer than the index row, i.e. re-indexing can upgrade it.
+//
 // $1 = project key, $2 = limit (NULL for the remaining count).
 const subtreeIndexCandidatesSQL = `
 WITH issues AS (
@@ -100,7 +106,7 @@ referrers AS (
   WHERE e.kind = 'REFERENCES'
 ),
 roots AS (
-  SELECT n.id
+  SELECT n.id, ts.updated_at AS ts_updated_at
   FROM graph.nodes n
   JOIN graph.thread_summaries ts
     ON ts.channel_id = REPLACE(n.scope, 'slack:', '')
@@ -116,9 +122,13 @@ cands AS (
 SELECT c.id
 FROM cands c
 JOIN graph.nodes n ON n.id = c.id AND n.deleted_at IS NULL
+LEFT JOIN graph.artifact_bodies ab ON ab.node_id = c.id
 LEFT JOIN graph.artifact_index ai ON ai.node_id = c.id
-WHERE (ai.node_id IS NULL
-       OR (ai.embedding IS NULL AND (ai.summary_kind <> 'heuristic' OR n.type = 'slack')))
+LEFT JOIN roots r ON r.id = c.id
+WHERE COALESCE(ab.body_full, n.body, '') <> ''
+  AND (ai.node_id IS NULL
+       OR (ai.embedding IS NULL AND ai.summary_kind <> 'heuristic')
+       OR (ai.summary_kind = 'heuristic' AND r.id IS NOT NULL AND r.ts_updated_at > ai.refreshed_at))
   AND NOT EXISTS (
     SELECT 1 FROM graph.jobs j
     WHERE j.type = 'index_artifact' AND j.status IN ('queued','running') AND j.payload->>'node_id' = c.id)
@@ -148,9 +158,11 @@ func BackfillSubtreeIndex(ctx context.Context, db jobs.DB, log zerolog.Logger, m
 	matched = len(ids)
 
 	for _, id := range ids {
+		// force: the 24h freshness guard would otherwise return early for a
+		// recently refreshed row whose embedding is still missing.
 		if _, e := jobs.Enqueue(ctx, db, "index_artifact", map[string]any{
 			"node_id": id,
-			"force":   false,
+			"force":   true,
 		}, jobs.EnqueueOptions{
 			Priority:  backfillSubtreeIndexPriority,
 			MachineID: machineID,
