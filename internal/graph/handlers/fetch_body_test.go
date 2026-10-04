@@ -17,6 +17,7 @@ import (
 	"github.com/agent-mem/agent-mem/internal/graph/extractor"
 	"github.com/agent-mem/agent-mem/internal/graph/fetchers"
 	"github.com/agent-mem/agent-mem/internal/graph/identity"
+	"github.com/agent-mem/agent-mem/internal/graph/jobs"
 	"github.com/agent-mem/agent-mem/internal/graph/normalizer"
 )
 
@@ -114,8 +115,15 @@ VALUES ('jira:PAY-1', 'jira', 'PAY-1', 'ticket', 'test')`); err != nil {
 	for i, name := range []string{"remote_404", "remote_500", "comment_empty_page"} {
 		t.Run(name, func(t *testing.T) {
 			mode.Store(int32(i + 1))
-			if err := h.Handler(context.Background(), payload); err == nil {
+			err := h.Handler(context.Background(), payload)
+			if err == nil {
 				t.Fatal("expected fetch failure")
+			}
+			// A failing sub-call (comments/remote links) is retryable, never
+			// permanent: only a 404/410 on the issue itself is.
+			var permanent *fetchers.PermanentError
+			if errors.As(err, &permanent) || errors.Is(err, jobs.ErrFatal) || !errors.Is(err, jobs.ErrTransient) {
+				t.Fatalf("sub-call failure must be transient, not permanent/fatal: %v", err)
 			}
 			if after := jiraHandlerSnapshot(t, pool); after != before {
 				t.Fatalf("failed fetch changed persisted body, body_ts or edges\nbefore: %s\nafter: %s", before, after)

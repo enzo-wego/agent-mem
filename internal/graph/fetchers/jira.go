@@ -3,6 +3,7 @@ package fetchers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -98,6 +99,15 @@ type jiraRemoteLink struct {
 	} `json:"object"`
 }
 
+// jiraStatusError carries the HTTP status so Fetch can decide which section's
+// failures are permanent.
+type jiraStatusError struct {
+	Status int
+	Body   string
+}
+
+func (e *jiraStatusError) Error() string { return fmt.Sprintf("status %d: %s", e.Status, e.Body) }
+
 // getJSON keeps authentication and failure handling identical for every section.
 func (f *jiraFetcher) getJSON(ctx context.Context, apiURL string, dest any) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
@@ -112,13 +122,8 @@ func (f *jiraFetcher) getJSON(ctx context.Context, apiURL string, dest any) erro
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		// A deleted or moved issue never comes back through retry. 403 stays
-		// retryable: a permission change can fix it.
-		if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusGone {
-			return &PermanentError{Code: fmt.Sprintf("jira_http_%d", resp.StatusCode)}
-		}
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
-		return fmt.Errorf("status %d: %s", resp.StatusCode, body)
+		return &jiraStatusError{Status: resp.StatusCode, Body: string(body)}
 	}
 	if err := json.NewDecoder(resp.Body).Decode(dest); err != nil {
 		return fmt.Errorf("decode response: %w", err)
@@ -167,6 +172,13 @@ func (f *jiraFetcher) Fetch(ctx context.Context, node string) (FetchedBody, erro
 	apiURL := fmt.Sprintf("%s/rest/api/3/issue/%s?fields=summary,description,status,issuetype,assignee,reporter,creator,labels,created,updated,resolutiondate,parent,attachment,issuelinks", baseURL, key)
 	var issueRaw json.RawMessage
 	if err := f.getJSON(ctx, apiURL, &issueRaw); err != nil {
+		// A deleted or moved issue never comes back through retry. 403 stays
+		// retryable: a permission change can fix it. Only the issue call is
+		// permanent; a 404 on comments/remote links stays transient, as on main.
+		var se *jiraStatusError
+		if errors.As(err, &se) && (se.Status == http.StatusNotFound || se.Status == http.StatusGone) {
+			return FetchedBody{}, fmt.Errorf("jira fetcher: %w", &PermanentError{Code: fmt.Sprintf("jira_http_%d", se.Status)})
+		}
 		return FetchedBody{}, fmt.Errorf("jira fetcher: %w", err)
 	}
 
