@@ -129,7 +129,7 @@ func TestBackfillArtifactTSV_Drains(t *testing.T) {
 func TestBackfillArtifactTSV_BadPayload(t *testing.T) {
 	pool := openTestDB(t)
 	h := NewBackfillArtifactTSVHandler(tsvTestDeps(pool)).Handler
-	for _, p := range []string{`{"batch":-1}`, `{"batch":5001}`, `{"batch":"x"}`} {
+	for _, p := range []string{`{"batch":0}`, `{"batch":-1}`, `{"batch":5001}`, `{"batch":"x"}`} {
 		if err := h(context.Background(), []byte(p)); !errors.Is(err, jobs.ErrFatal) {
 			t.Errorf("payload %s: err = %v, want ErrFatal", p, err)
 		}
@@ -277,6 +277,9 @@ func TestArtifactTSV_PopulatedUpgrade(t *testing.T) {
 	}
 	if err := goose.DownTo(db, migrationsDirFromHandlers, tsvBaseVersion); err != nil {
 		t.Fatalf("down to base: %v", err)
+	}
+	if v, err := goose.GetDBVersion(db); err != nil || v != tsvBaseVersion {
+		t.Fatalf("db version after DownTo = %d (%v), want %d", v, err, tsvBaseVersion)
 	}
 	if _, err := pool.Exec(ctx, `INSERT INTO graph.nodes (id, type, natural_key, metadata, machine_id)
 		SELECT 'up:' || i, 'jira', 'up:' || i, '{}', 'test' FROM generate_series(1, 50) i`); err != nil {

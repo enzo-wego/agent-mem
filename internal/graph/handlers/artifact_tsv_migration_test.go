@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"os"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/pressly/goose/v3"
 )
 
 func TestArtifactTSV_Trigger(t *testing.T) {
@@ -111,5 +113,81 @@ func TestArtifactTSV_DownLockBounded(t *testing.T) {
 	}
 	if cols != 1 || trgs != 1 {
 		t.Fatalf("after failed down: tsv column=%d trigger=%d, want 1/1", cols, trgs)
+	}
+}
+
+func tsvUpSQL(t *testing.T) string {
+	t.Helper()
+	files, _ := filepath.Glob(filepath.Join(migrationsDirFromHandlers, "*_artifact_index_tsv.sql"))
+	if len(files) != 1 {
+		t.Fatalf("want one artifact_index_tsv migration, got %v", files)
+	}
+	b, err := os.ReadFile(files[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	up, _, ok := strings.Cut(string(b), "-- +goose Down")
+	if !ok {
+		t.Fatal("no Down section")
+	}
+	return up
+}
+
+// TestArtifactTSV_UpLockBounded: with a reader holding ACCESS SHARE on
+// artifact_index, the Up section fails within its lock_timeout and applies
+// nothing.
+func TestArtifactTSV_UpLockBounded(t *testing.T) {
+	pool := openTestDB(t)
+	ctx := context.Background()
+	db, err := sql.Open("pgx", os.Getenv("DATABASE_URL"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if err := goose.SetDialect("postgres"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = goose.Up(db, migrationsDirFromHandlers, goose.WithAllowMissing()) })
+	if err := goose.Up(db, migrationsDirFromHandlers, goose.WithAllowMissing()); err != nil {
+		t.Fatalf("up: %v", err)
+	}
+	if err := goose.DownTo(db, migrationsDirFromHandlers, tsvBaseVersion); err != nil {
+		t.Fatalf("down to base: %v", err)
+	}
+	up := tsvUpSQL(t)
+
+	a, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Rollback(ctx)
+	if _, err := a.Exec(ctx, `LOCK TABLE graph.artifact_index IN ACCESS SHARE MODE`); err != nil {
+		t.Fatal(err)
+	}
+	b, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	_, err = b.Exec(ctx, up)
+	_ = b.Rollback(ctx)
+	var pe *pgconn.PgError
+	if !errors.As(err, &pe) || pe.Code != "55P03" {
+		t.Fatalf("up error = %v, want lock_not_available 55P03", err)
+	}
+	if d := time.Since(start); d > 10*time.Second {
+		t.Fatalf("up took %v, want < 10s", d)
+	}
+	_ = a.Rollback(ctx)
+
+	var cols, trgs, fns int
+	if err := pool.QueryRow(ctx, `SELECT
+		(SELECT count(*) FROM information_schema.columns WHERE table_schema='graph' AND table_name='artifact_index' AND column_name='tsv'),
+		(SELECT count(*) FROM pg_trigger WHERE tgrelid='graph.artifact_index'::regclass AND tgname='artifact_index_tsv_trg'),
+		(SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='graph' AND p.proname IN ('identifiers_text','artifact_index_tsv_doc','artifact_index_tsv_trg'))`).Scan(&cols, &trgs, &fns); err != nil {
+		t.Fatal(err)
+	}
+	if cols != 0 || trgs != 0 || fns != 0 {
+		t.Fatalf("after failed up: tsv column=%d trigger=%d functions=%d, want 0/0/0", cols, trgs, fns)
 	}
 }

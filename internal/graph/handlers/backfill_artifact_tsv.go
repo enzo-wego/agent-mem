@@ -43,7 +43,7 @@ func NewBackfillArtifactTSVHandler(deps Deps) jobs.Entry {
 		Handler: backfillArtifactTSVHandler(deps, func(ctx context.Context, payload []byte) error {
 			_, err := jobs.EnqueueRaw(ctx, deps.DB, "backfill_artifact_tsv", payload, jobs.EnqueueOptions{
 				AvailableAt:  time.Now().Add(backfillArtifactTSVPause),
-				TargetRunner: "any",
+				TargetRunner: deps.Runner,
 				MachineID:    deps.MachineID,
 			})
 			return err
@@ -56,14 +56,12 @@ func NewBackfillArtifactTSVHandler(deps Deps) jobs.Entry {
 // backfillArtifactTSVHandler takes the continuation enqueue as a seam.
 func backfillArtifactTSVHandler(deps Deps, enqueue func(ctx context.Context, payload []byte) error) jobs.Handler {
 	return func(ctx context.Context, raw []byte) error {
+		// Absent batch defaults; an explicit 0 is out of range (ErrFatal below).
 		p := backfillArtifactTSVPayload{Batch: backfillArtifactTSVDefaultBatch}
 		if len(raw) > 0 {
 			if err := json.Unmarshal(raw, &p); err != nil {
 				return fmt.Errorf("%w: backfill_artifact_tsv unmarshal: %v", jobs.ErrFatal, err)
 			}
-		}
-		if p.Batch == 0 {
-			p.Batch = backfillArtifactTSVDefaultBatch
 		}
 		if p.Batch < 1 || p.Batch > backfillArtifactTSVMaxBatch {
 			return fmt.Errorf("%w: backfill_artifact_tsv: batch must be 1-%d, got %d", jobs.ErrFatal, backfillArtifactTSVMaxBatch, p.Batch)

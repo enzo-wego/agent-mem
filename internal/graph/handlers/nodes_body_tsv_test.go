@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"strings"
 	"testing"
 )
 
@@ -24,6 +25,14 @@ func TestNodesBodyTSV_Cutoff(t *testing.T) {
 	}
 	if pos1 != 19901 || pos2 != 20101 {
 		t.Fatalf("fixture positions %d/%d, want 19901/20101 (1-based)", pos1, pos2)
+	}
+	var def string
+	if err := pool.QueryRow(ctx, `SELECT pg_get_indexdef('graph.idx_nodes_body_tsv'::regclass)`).Scan(&def); err != nil {
+		t.Fatal(err)
+	}
+	// pg_get_indexdef quotes the function name: "left"(...).
+	if !strings.Contains(def, `"left"(COALESCE(body, ''::text), 20000)`) {
+		t.Fatalf("index definition does not pin the 20000-char expression: %s", def)
 	}
 	find := func(term string) int {
 		var n int
