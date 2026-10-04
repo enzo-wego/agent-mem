@@ -207,4 +207,24 @@ func TestTemporalArm_UndatedStubEpic(t *testing.T) {
 			t.Fatalf("stub epic returned via expansion: %v", got)
 		}
 	})
+	t.Run("root_leak", func(t *testing.T) {
+		pool := winReset(t)
+		winNode(t, pool, businessRootID, "business", "", day)
+		winNode(t, pool, "jira:PAY-100", "jira", "", day)
+		winNode(t, pool, "jira:PAY-101", "jira", "2026-01-05T00:00:00Z", day)
+		winNode(t, pool, "jira:PAY-200", "jira", "", day)
+		winNode(t, pool, "jira:PAY-201", "jira", day, day)
+		winMap(t, pool, "PAY-100", "PAY-100")
+		winMap(t, pool, "PAY-101", "PAY-100")
+		winMap(t, pool, "PAY-200", "PAY-200")
+		winMap(t, pool, "PAY-201", "PAY-200")
+		winRebuild(t, pool, "PAY-100", "PAY-200")
+		got := run(t, pool)
+		if got["jira:PAY-100"] || got["jira:PAY-101"] {
+			t.Fatalf("business-root membership leaked undated/out-of-window nodes: %v", got)
+		}
+		if !got["jira:PAY-201"] {
+			t.Fatalf("in-window member missing: %v", got)
+		}
+	})
 }
