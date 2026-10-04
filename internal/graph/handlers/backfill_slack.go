@@ -372,14 +372,11 @@ func ingestSlackMessage(ctx context.Context, deps Deps, channelID string, msg sl
 		); edgeErr != nil {
 			deps.Logger.Warn().Err(edgeErr).Str("att_node_id", attNodeID).Msg("ingestSlackMessage: upsert attachment edge failed")
 		}
-		_, _ = jobs.Enqueue(ctx, deps.DB, "describe_attachment", map[string]string{
+		_, _ = enqueueDescribeIfNeeded(ctx, deps, attNodeID, map[string]string{
 			"node_id":      attNodeID,
 			"external_url": f.URLPrivate,
 			"mime":         f.MimeType,
 			"source":       "slack",
-		}, jobs.EnqueueOptions{
-			Priority:  5,
-			MachineID: deps.MachineID,
 		})
 	}
 

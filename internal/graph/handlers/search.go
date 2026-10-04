@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"sort"
@@ -11,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/agent-mem/agent-mem/internal/gemini"
@@ -145,16 +147,17 @@ func (s *Search) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// noFilter when no asker principal is asserted (eeid 0 = the trusted
-	// dashboard/integration calling behind the API key). A real asker
-	// (eeid != 0) is always filtered: even with zero memberships they see only
-	// "public" (plus their scopes), never the whole graph. (The API key is the
-	// privilege boundary; asker identity is advisory until authenticated.)
-	askerEEID := lookupAskerEEID(ctx, s.db, r.Header.Get("X-Asker-User"))
+	// An absent header is the trusted unfiltered view; a present header is
+	// always filtered, with unresolved askers limited to public/unscoped nodes.
+	// The API key remains the privilege boundary; identity is advisory.
+	askerEEID, scopeSet, noFilter := askerScopeSet(ctx, s.db, s.aclBld, r.Header.Get("X-Asker-User"))
 	var scopeArg any
-	if askerEEID != 0 {
-		scopes, _ := s.aclBld.For(ctx, askerEEID)
-		scopeArg = append(scopes, "public")
+	if !noFilter {
+		scopes := make([]string, 0, len(scopeSet))
+		for scope := range scopeSet {
+			scopes = append(scopes, scope)
+		}
+		scopeArg = scopes
 	}
 	var typesArg any
 	if t := splitCSV(qv.Get("types")); len(t) > 0 {
@@ -671,17 +674,23 @@ func sortByScore(rs []searchResult) {
 	})
 }
 
-// lookupAskerEEID resolves the X-Asker-User header (slack uid or email)
-// to an eeid by joining graph.people. Returns 0 if not found.
-func lookupAskerEEID(ctx context.Context, db *pgxpool.Pool, ref string) int {
+// lookupAsker resolves a trimmed X-Asker-User identity to an eeid.
+// Missing people and NULL eeids resolve to zero; database errors are preserved.
+func lookupAsker(ctx context.Context, db *pgxpool.Pool, ref string) (int, error) {
+	ref = strings.TrimSpace(ref)
 	if ref == "" {
-		return 0
+		return 0, nil
 	}
 	row := db.QueryRow(ctx, `
 SELECT COALESCE(eeid, 0) FROM graph.people
 WHERE slack_user_id = $1 OR email = $1 OR github_login = $1 OR jira_account_id = $1
 LIMIT 1`, ref)
 	var eeid int
-	row.Scan(&eeid)
-	return eeid
+	if err := row.Scan(&eeid); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	return eeid, nil
 }

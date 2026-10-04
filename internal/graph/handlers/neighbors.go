@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/agent-mem/agent-mem/internal/graph/acl"
@@ -141,11 +143,25 @@ func (h *neighborsHandler) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	epicArg := epicScopeArg(epicKeys)
 
-	// ACL: a real asker (eeid != 0) only sees neighbors in scope; eeid 0 is the
-	// trusted unfiltered view. Hidden nodes are neither surfaced nor traversed
-	// through, so the walk can't leak private structure or content.
-	eeid, scopeSet := askerScopeSet(ctx, h.db, h.aclBld, r.Header.Get("X-Asker-User"))
-	noFilter := eeid == 0
+	// Present headers are always filtered, including unresolved identities.
+	// Reject hidden roots before either expansion path can derive metadata.
+	_, scopeSet, noFilter := askerScopeSet(ctx, h.db, h.aclBld, r.Header.Get("X-Asker-User"))
+	if !noFilter {
+		var rootScope *string
+		err := h.db.QueryRow(ctx, `SELECT scope FROM graph.nodes WHERE id = $1 AND deleted_at IS NULL`, id).Scan(&rootScope)
+		if errors.Is(err, pgx.ErrNoRows) {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if !scopeVisible(rootScope, scopeSet, noFilter) {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+	}
 
 	// ponytail: flat per-request cap on lazy summarize enqueues; per-thread dedup
 	// lives in enqueueSummarizeThread.

@@ -127,16 +127,7 @@ func (h *Epic) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		key = strings.ToUpper(key)
 	}
 
-	header := strings.TrimSpace(r.Header.Get("X-Asker-User"))
-	noFilter := header == ""
-	var scopeSet map[string]bool
-	if !noFilter {
-		eeid, set := askerScopeSet(ctx, h.db, h.aclBld, header)
-		if eeid == 0 {
-			set = map[string]bool{"public": true} // unresolved asker: fail closed
-		}
-		scopeSet = set
-	}
+	_, scopeSet, noFilter := askerScopeSet(ctx, h.db, h.aclBld, r.Header.Get("X-Asker-User"))
 
 	// requested stays the key as asked (upper-cased): every 404 below names
 	// it, never an alias-resolved epic, so a denial cannot reveal the epic.
