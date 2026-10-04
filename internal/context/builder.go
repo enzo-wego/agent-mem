@@ -34,7 +34,7 @@ func (b *Builder) BuildContext(ctx context.Context, project, cwd string) (string
 		return "", err
 	}
 
-	brief := epicBriefForCwd(ctx, b.db.Pool, cwd)
+	brief := epicBriefForCwd(ctx, b.db.Pool, b.cfg, cwd)
 	if len(observations) == 0 && len(summaries) == 0 {
 		return brief, nil
 	}

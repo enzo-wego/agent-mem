@@ -47,6 +47,9 @@ type epicResponse struct {
 	Highlights     json.RawMessage `json:"highlights,omitempty"`
 	OpenItems      json.RawMessage `json:"open_items,omitempty"`
 	BriefUpdatedAt *time.Time      `json:"brief_updated_at,omitempty"`
+	// ResolvedFrom is the issue key the request named when it resolved to
+	// this epic through graph.jira_epic_map.
+	ResolvedFrom string `json:"resolved_from,omitempty"`
 }
 
 // Epic handles GET /api/graph/epic/{key}: the epic (or `business:payments`)
@@ -135,20 +138,39 @@ func (h *Epic) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		scopeSet = set
 	}
 
+	// requested stays the key as asked (upper-cased): every 404 below names
+	// it, never an alias-resolved epic, so a denial cannot reveal the epic.
+	requested := key
 	resp := epicResponse{
 		EpicKey: key, NodeID: nodeID, Business: business,
 		Members: map[string][]epicMember{}, ByVia: map[string]int{},
 	}
 	var epicScope *string
-	err := h.db.QueryRow(ctx, `
+	lookup := func(epicKey, epicNode string) error {
+		return h.db.QueryRow(ctx, `
 SELECT COALESCE(n.title,''), COALESCE(n.url,''), COALESCE(n.metadata->>'status',''),
        m.first_at, m.last_at, n.scope
 FROM graph.epic_membership m
 JOIN graph.nodes n ON n.id = m.node_id
-WHERE m.epic_key = $1 AND m.node_id = $2`, key, nodeID).Scan(
-		&resp.Title, &resp.URL, &resp.Status, &resp.FirstAt, &resp.LastAt, &epicScope)
+WHERE m.epic_key = $1 AND m.node_id = $2`, epicKey, epicNode).Scan(
+			&resp.Title, &resp.URL, &resp.Status, &resp.FirstAt, &resp.LastAt, &epicScope)
+	}
+	err := lookup(key, nodeID)
+	if err != nil && !business {
+		// Not a known epic: an issue key resolves to its epic through
+		// jira_epic_map (a laptop session only knows its branch's issue).
+		var epicKey string
+		if e := h.db.QueryRow(ctx, `SELECT epic_key FROM graph.jira_epic_map WHERE issue_key = $1 AND epic_key <> ''`,
+			requested).Scan(&epicKey); e == nil && !strings.EqualFold(epicKey, requested) {
+			epicKey = strings.ToUpper(epicKey)
+			if err = lookup(epicKey, "jira:"+epicKey); err == nil {
+				key, nodeID = epicKey, "jira:"+epicKey
+				resp.EpicKey, resp.NodeID, resp.ResolvedFrom = key, nodeID, requested
+			}
+		}
+	}
 	if err != nil || !scopeVisible(epicScope, scopeSet, noFilter) {
-		http.Error(w, "unknown epic "+key, http.StatusNotFound)
+		http.Error(w, "unknown epic "+requested, http.StatusNotFound)
 		return
 	}
 
