@@ -308,41 +308,54 @@ WHERE n.id = ANY($1)
 		return nil, err
 	}
 	defer rows.Close()
-	var results []searchResult
+	type hydrated struct {
+		id, typ, title, url, summary, authorName string
+		updatedAt, createdAt                     time.Time
+		depth                                    int16
+		authorEEID                               int
+	}
+	var loaded []hydrated
+	var authors []int
 	for rows.Next() {
-		var (
-			id, typ, title, url, summary, authorName string
-			updatedAt, createdAt                     time.Time
-			depth                                    int16
-			authorEEID                               int
-		)
-		if err := rows.Scan(&id, &typ, &title, &url, &summary, &authorName,
-			&updatedAt, &createdAt, &depth, &authorEEID); err != nil {
+		var h hydrated
+		if err := rows.Scan(&h.id, &h.typ, &h.title, &h.url, &h.summary, &h.authorName,
+			&h.updatedAt, &h.createdAt, &h.depth, &h.authorEEID); err != nil {
 			return nil, err
 		}
-		fz := fused[id]
+		loaded = append(loaded, h)
+		authors = append(authors, h.authorEEID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	rows.Close()
+	team := teamScoresForSearch(ctx, s.db, askerEEID, authors)
+
+	results := make([]searchResult, 0, len(loaded))
+	for _, h := range loaded {
+		fz := fused[h.id]
 		c := scoring.Components{
-			Sem:      scoring.Semantic(armLocal[armSemantic][id]),
-			Rec:      scoring.Recency(updatedAt, now, 30*24*time.Hour),
-			Edge:     armLocal[armGraph][id],
-			Team:     personScoreForSearch(ctx, s.db, askerEEID, authorEEID),
-			Auth:     scoring.Authority(depth, 6),
+			Sem:      scoring.Semantic(armLocal[armSemantic][h.id]),
+			Rec:      scoring.Recency(h.updatedAt, now, 30*24*time.Hour),
+			Edge:     armLocal[armGraph][h.id],
+			Team:     team[h.authorEEID],
+			Auth:     scoring.Authority(h.depth, 6),
 			Temporal: 0.5,
 			RRF:      fz.Score,
 			Ranks:    fz.Ranks,
 		}
 		if hasWindow {
-			c.Temporal = win.Proximity(createdAt)
+			c.Temporal = win.Proximity(h.createdAt)
 		}
 		results = append(results, searchResult{
-			NodeID: id, ID: id, Type: typ, Title: title, URL: url,
-			Summary:        summary,
+			NodeID: h.id, ID: h.id, Type: h.typ, Title: h.title, URL: h.url,
+			Summary:        h.summary,
 			Score:          scoring.Boost(fz.Score, alphas, c.Rec, c.Team, c.Temporal, c.Auth),
 			ScoreBreakdown: c,
-			Author:         authorName, CreatedAt: createdAt,
+			Author:         h.authorName, CreatedAt: h.createdAt,
 		})
 	}
-	return results, rows.Err()
+	return results, nil
 }
 
 // window resolves the temporal window: explicit ?since/?until (RFC3339 or
@@ -461,6 +474,69 @@ func personScoreForSearch(ctx context.Context, db *pgxpool.Pool, asker, author i
 	default:
 		return 0.1
 	}
+}
+
+// teamScoresForSearch returns personScoreForSearch(asker, author) for every
+// distinct author eeid in one query, instead of up to four per row. A zero
+// asker or author scores 0.1 and the asker themself 1.0, both decided in Go;
+// team/department overlap and org distance come from a single join.
+func teamScoresForSearch(ctx context.Context, db *pgxpool.Pool, asker int, authors []int) map[int]float64 {
+	out := make(map[int]float64, len(authors))
+	var others []int32
+	for _, a := range authors {
+		if _, done := out[a]; done {
+			continue
+		}
+		switch {
+		case asker == 0 || a == 0:
+			out[a] = 0.1
+		case asker == a:
+			out[a] = 1.0
+		default:
+			out[a] = 0.1 // default for an author the lookup cannot place
+			others = append(others, int32(a))
+		}
+	}
+	if len(others) == 0 {
+		return out
+	}
+	rows, err := db.Query(ctx, `
+SELECT au.eeid,
+       COALESCE(ac.team_group_ids && bc.team_group_ids, false),
+       COALESCE(ac.dept_group_ids && bc.dept_group_ids, false),
+       pd.hops
+FROM unnest($2::int[]) AS au(eeid)
+LEFT JOIN graph.user_affinity_config ac ON ac.eeid = $1
+LEFT JOIN graph.user_affinity_config bc ON bc.eeid = au.eeid
+LEFT JOIN graph.person_distance pd
+  ON pd.a_eeid = LEAST($1::int, au.eeid) AND pd.b_eeid = GREATEST($1::int, au.eeid)`, int32(asker), others)
+	if err != nil {
+		return out
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var eeid int32
+		var team, dept bool
+		var hops *int32
+		if err := rows.Scan(&eeid, &team, &dept, &hops); err != nil {
+			return out
+		}
+		switch {
+		case team:
+			out[int(eeid)] = 0.9
+		case dept:
+			out[int(eeid)] = 0.7
+		case hops == nil: // unknown pair: scoring.LookupDistance reports MaxInt32
+			out[int(eeid)] = 0.1
+		case *hops <= 2:
+			out[int(eeid)] = 0.4
+		case *hops <= 4:
+			out[int(eeid)] = 0.25
+		default:
+			out[int(eeid)] = 0.1
+		}
+	}
+	return out
 }
 
 // shareTeamGroup returns true if both eeids are in at least one common
