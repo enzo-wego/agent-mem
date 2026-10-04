@@ -8,13 +8,13 @@ import "github.com/go-chi/chi/v5"
 // (the worker mounts them behind the API-key middleware). The API key is the
 // privilege boundary — any key-bearing caller is trusted internal infra
 // (EnzoBot, the admin dashboard). The per-request asker identity used for ACL
-// (`X-Asker-User` header on search, `asker_eeid` in the resolve body) is an
-// ADVISORY hint asserted by that trusted caller on a user's behalf; it is NOT
-// independently authenticated. Read endpoints treat "no asker asserted"
-// (eeid 0) as the trusted/unfiltered view and always filter a real asker
-// (eeid != 0) — so a real user, even with zero memberships, can never read the
-// whole graph. Hardening this into a real per-user boundary requires
-// authenticating the asker (e.g. binding eeid to a verified principal).
+// (`X-Asker-User` on search/node/neighbors/epic, `asker_eeid` in resolve) is an
+// ADVISORY hint asserted by that trusted caller, not independently authenticated.
+// On header-based endpoints, an absent (trimmed empty) header is the trusted
+// unfiltered view; a present header is always filtered, and an unresolved one
+// sees only public/unscoped nodes. Resolve retains its numeric eeid 0 convention.
+// Other admin/dashboard routes do not implement this header contract. A real
+// per-user boundary requires binding asker identity to a verified principal.
 func Mount(r chi.Router, deps Deps) {
 	r.Post("/api/graph/ingest/content", NewIngestContentHandler(deps).ServeHTTP)
 	r.Post("/api/graph/ingest/url", NewIngestURLHandler(deps).ServeHTTP)
