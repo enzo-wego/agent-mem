@@ -308,6 +308,9 @@ func queueStaleJiraNodes(ctx context.Context, deps Deps, baseURL, email, token, 
 		return 0, fmt.Errorf("select candidates: %w", err)
 	}
 
+	// Dedup only against jobs that are due or running: a future-dated job (the
+	// metadata backfill spaces its depth-1 jobs ahead) must not swallow a
+	// depth-0 refresh that would otherwise run now.
 	queued := 0
 	for _, id := range candidates {
 		tag, err := deps.DB.Exec(ctx, `
@@ -315,7 +318,8 @@ func queueStaleJiraNodes(ctx context.Context, deps Deps, baseURL, email, token, 
 			SELECT 'fetch_body', jsonb_build_object('node_id', $1::text), 5, $2
 			WHERE NOT EXISTS (SELECT 1 FROM graph.jobs
 			                  WHERE type='fetch_body' AND status IN ('queued','running')
-			                    AND payload->>'node_id' = $1)`, id, deps.MachineID)
+			                    AND payload->>'node_id' = $1
+			                    AND available_at <= now())`, id, deps.MachineID)
 		if err != nil {
 			return 0, fmt.Errorf("enqueue fetch_body %s: %w", id, err)
 		}
