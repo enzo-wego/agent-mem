@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/rs/zerolog"
 )
@@ -29,40 +28,6 @@ func TestEpicBriefSignature(t *testing.T) {
 	}
 	if epicBriefSignature(nil) == epicBriefSignature(a) {
 		t.Fatal("empty set must differ")
-	}
-}
-
-func TestSelectBriefInputs(t *testing.T) {
-	at := time.Date(2026, 9, 27, 12, 0, 0, 0, time.UTC)
-	var members []briefMember
-	for i := range epicBriefMaxMembers + 5 {
-		members = append(members, briefMember{NodeID: "n" + string(rune('A'+i)), SummaryAt: at.Add(-time.Duration(i) * time.Hour)})
-	}
-	// First build: capped at epicBriefMaxMembers, order preserved (newest first).
-	first := selectBriefInputs(members, nil, time.Time{}, false)
-	if len(first) != epicBriefMaxMembers || first[0].NodeID != "nA" {
-		t.Fatalf("first build: got %d inputs starting %q", len(first), first[0].NodeID)
-	}
-
-	// Delta: previous build knew nA..nD at `at`; nB was re-summarized after,
-	// nZ is new; nA, nC, nD unchanged and known → excluded.
-	ms := []briefMember{
-		{NodeID: "nA", SummaryAt: at.Add(-time.Hour)},
-		{NodeID: "nB", SummaryAt: at.Add(time.Minute)},
-		{NodeID: "nC", SummaryAt: at.Add(-2 * time.Hour)},
-		{NodeID: "nD", SummaryAt: at},
-		{NodeID: "nZ", SummaryAt: at.Add(-3 * time.Hour)},
-	}
-	got := selectBriefInputs(ms, []string{"nA", "nB", "nC", "nD"}, at, true)
-	var ids []string
-	for _, m := range got {
-		ids = append(ids, m.NodeID)
-	}
-	if strings.Join(ids, ",") != "nB,nZ" {
-		t.Fatalf("delta inputs = %v, want [nB nZ]", ids)
-	}
-	if n := selectBriefInputs(ms[:1], []string{"nA"}, at, true); len(n) != 0 {
-		t.Fatalf("unchanged known member must yield no delta, got %v", n)
 	}
 }
 

@@ -29,7 +29,7 @@ const (
 
 // epicBriefSigVersion prefixes every member signature; bump it to force one
 // regeneration of every brief (prompt or input-selection change).
-const epicBriefSigVersion = "v1"
+var epicBriefSigVersion = "v1"
 
 // epicBriefMaxMembers caps how many member summaries one prompt carries
 // (newest first). A first build of a 200-thread epic reads 40 summaries, not
@@ -137,33 +137,70 @@ ORDER BY COALESCE(m.last_at, n.created_at, n.first_seen_at) DESC NULLS LAST, n.i
 	return out, rows.Err()
 }
 
-// selectBriefInputs picks the members one prompt carries. First build (no
-// prior brief): every member, newest first, capped. Delta build: members whose
-// summary changed after the brief was written, plus members not in the
-// previous build's sources (new joiners), same cap. Members are assumed newest
-// first. Returns nil when a delta has nothing new — the caller then refreshes
-// the signature without an LLM call.
-func selectBriefInputs(members []briefMember, prevSources []string, prevUpdatedAt time.Time, delta bool) []briefMember {
-	if !delta {
-		if len(members) > epicBriefMaxMembers {
-			return members[:epicBriefMaxMembers]
-		}
-		return members
-	}
-	known := make(map[string]bool, len(prevSources))
-	for _, s := range prevSources {
-		known[s] = true
-	}
+// epicBriefFedValue is what `fed` stores for a member: the signature version
+// plus exactly the per-member string epicBriefSignature hashes.
+func epicBriefFedValue(m briefMember) string {
+	return epicBriefSigVersion + "|" + m.NodeID + "|" + m.Version
+}
+
+// pendingMembers returns, in the given (newest-first) order, the members not
+// yet fed at their current version: absent from fed, or fed at another value.
+// A nil fed makes every member pending. The business root never appears here:
+// loadBriefMembers reads only rows keyed by this epic.
+func pendingMembers(members []briefMember, fed map[string]string) []briefMember {
 	var out []briefMember
 	for _, m := range members {
-		if !known[m.NodeID] || m.SummaryAt.After(prevUpdatedAt) {
+		if v, ok := fed[m.NodeID]; !ok || v != epicBriefFedValue(m) {
 			out = append(out, m)
-			if len(out) == epicBriefMaxMembers {
-				break
-			}
 		}
 	}
 	return out
+}
+
+// prunedFed returns a copy of fed restricted to current members.
+func prunedFed(fed map[string]string, members []briefMember) map[string]string {
+	cur := make(map[string]bool, len(members))
+	for _, m := range members {
+		cur[m.NodeID] = true
+	}
+	out := make(map[string]string, len(fed))
+	for id, v := range fed {
+		if cur[id] {
+			out[id] = v
+		}
+	}
+	return out
+}
+
+// epicBriefFullBuild reports whether the next build starts from scratch: no
+// non-empty stored brief, built under another signature version, or fed
+// missing / carrying another version.
+func epicBriefFullBuild(existing epicBriefRow, hasExisting bool) bool {
+	if !hasExisting || existing.Brief == "" || existing.BuiltVersion != epicBriefSigVersion || existing.Fed == nil {
+		return true
+	}
+	prefix := epicBriefSigVersion + "|"
+	for _, v := range existing.Fed {
+		if !strings.HasPrefix(v, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// selectBriefInputs picks the members one prompt carries, capped at
+// epicBriefMaxMembers, newest first: the newest members for a full build, the
+// newest pending members for a delta. nil means a delta with nothing to feed:
+// the caller then refreshes bookkeeping without an LLM call.
+func selectBriefInputs(members, pending []briefMember, full bool) []briefMember {
+	src := pending
+	if full {
+		src = members
+	}
+	if len(src) > epicBriefMaxMembers {
+		return src[:epicBriefMaxMembers]
+	}
+	return src
 }
 
 // epicBriefsEnabled reads graph.epic_briefs.enabled.
@@ -194,21 +231,33 @@ type epicBriefRow struct {
 	UpdatedAt  time.Time
 	Previous   string
 	PreviousAt *time.Time
+	// Fed is member node id -> epicBriefFedValue at the last feed; nil when
+	// the column is NULL (legacy row). BuiltVersion is "" when NULL.
+	Fed          map[string]string
+	BuiltVersion string
 }
 
 // loadEpicBrief returns the stored brief for epicKey, or ok=false when none.
 func loadEpicBrief(ctx context.Context, db *pgxpool.Pool, epicKey string) (epicBriefRow, bool) {
 	var r epicBriefRow
-	var prev *string
+	var prev, built *string
+	var fed []byte
 	err := db.QueryRow(ctx, `
-SELECT epic_key, brief, highlights, open_items, member_signature, sources, updated_at, previous, previous_at
+SELECT epic_key, brief, highlights, open_items, member_signature, sources, updated_at, previous, previous_at, fed, built_version
 FROM graph.epic_briefs WHERE epic_key = $1`, epicKey).Scan(
-		&r.EpicKey, &r.Brief, &r.Highlights, &r.OpenItems, &r.Signature, &r.Sources, &r.UpdatedAt, &prev, &r.PreviousAt)
+		&r.EpicKey, &r.Brief, &r.Highlights, &r.OpenItems, &r.Signature, &r.Sources, &r.UpdatedAt, &prev, &r.PreviousAt, &fed, &built)
 	if err != nil {
 		return epicBriefRow{}, false
 	}
 	if prev != nil {
 		r.Previous = *prev
+	}
+	if built != nil {
+		r.BuiltVersion = *built
+	}
+	if fed != nil {
+		r.Fed = map[string]string{}
+		_ = json.Unmarshal(fed, &r.Fed)
 	}
 	return r, true
 }
@@ -237,7 +286,7 @@ func buildEpicBriefPrompt(epicKey, title, description, previous string, inputs [
 	}
 	if delta && previous != "" {
 		b.WriteString("\nPrevious brief (update it with the new material below; keep what is still true):\n" + previous + "\n")
-		b.WriteString("\nMembers changed or added since the previous brief:\n")
+		b.WriteString("\nMembers not yet reflected at their current version:\n")
 	} else {
 		b.WriteString("\nMembers (newest first):\n")
 	}
@@ -350,14 +399,27 @@ func refreshEpicBriefHandler(deps Deps) jobs.Handler {
 		if err != nil {
 			return err
 		}
+		existing, hasExisting := loadEpicBrief(ctx, deps.DB, p.EpicKey)
 		if len(members) == 0 {
-			return nil // no membership rows: unknown epic or rebuild not run yet
+			if !hasExisting {
+				return nil // no membership rows: unknown epic or rebuild not run yet
+			}
+			// The epic lost every member: clear the bookkeeping so a later
+			// rejoin is fed again. brief and sources stay as the last build
+			// left them; no LLM call.
+			if p.DryRun {
+				log.Info().Msg("refresh_epic_brief: dry run, epic has no members; nothing to do")
+				return nil
+			}
+			_, err := deps.DB.Exec(ctx, `UPDATE graph.epic_briefs SET fed='{}'::jsonb, member_signature=$2 WHERE epic_key=$1`,
+				p.EpicKey, epicBriefSignature(nil))
+			return err
 		}
 		sig := epicBriefSignature(members)
-		existing, hasExisting := loadEpicBrief(ctx, deps.DB, p.EpicKey)
+		pending := pendingMembers(members, existing.Fed)
 		if hasExisting && !p.DryRun {
-			if existing.Signature == sig {
-				return nil // idempotent: same members, same summaries
+			if existing.Signature == sig && len(pending) == 0 {
+				return nil // idempotent: same members, same summaries, nothing left to feed
 			}
 			if wait := epicBriefsMinInterval(ctx, deps.DB); time.Since(existing.UpdatedAt) < wait {
 				log.Info().Dur("min_interval", wait).Time("updated_at", existing.UpdatedAt).
@@ -365,13 +427,18 @@ func refreshEpicBriefHandler(deps Deps) jobs.Handler {
 				return nil
 			}
 		}
-		delta := hasExisting && existing.Brief != ""
-		inputs := selectBriefInputs(members, existing.Sources, existing.UpdatedAt, delta)
+		full := epicBriefFullBuild(existing, hasExisting)
+		delta := !full
+		inputs := selectBriefInputs(members, pending, full)
 		if len(inputs) == 0 {
-			// Members left or were re-summarized to the same text: nothing to
-			// tell the LLM. Record the signature so the job stays idempotent.
+			// Nothing pending (members left, or were re-summarized to a state
+			// already fed). Record the signature and prune fed of departed
+			// members in one UPDATE; sources stay (the brief may still
+			// reflect them).
 			if !p.DryRun {
-				_, err := deps.DB.Exec(ctx, `UPDATE graph.epic_briefs SET member_signature=$2 WHERE epic_key=$1`, p.EpicKey, sig)
+				fedJSON, _ := json.Marshal(prunedFed(existing.Fed, members))
+				_, err := deps.DB.Exec(ctx, `UPDATE graph.epic_briefs SET member_signature=$2, fed=$3 WHERE epic_key=$1`,
+					p.EpicKey, sig, fedJSON)
 				return err
 			}
 			log.Info().Msg("refresh_epic_brief: dry run, delta empty; no LLM call")
@@ -385,13 +452,18 @@ func refreshEpicBriefHandler(deps Deps) jobs.Handler {
 			_ = deps.DB.QueryRow(ctx, `SELECT epic_summary FROM graph.jira_epic_map WHERE epic_key=$1 AND epic_summary<>'' LIMIT 1`,
 				p.EpicKey).Scan(&title)
 		}
-		userMsg := buildEpicBriefPrompt(p.EpicKey, title, description, existing.Brief, inputs, delta)
+		previous := ""
+		if delta {
+			previous = existing.Brief
+		}
+		userMsg := buildEpicBriefPrompt(p.EpicKey, title, description, previous, inputs, delta)
 		out, ok := genEpicBrief(ctx, deps.Gemini, userMsg, inputs)
 		if !ok {
 			return fmt.Errorf("refresh_epic_brief %s: LLM returned no usable brief", p.EpicKey)
 		}
 		// sources = every member the current brief rests on: the previous
-		// build's list plus this run's inputs (delta) or just the inputs.
+		// build's list plus this run's inputs (delta), or just the inputs
+		// (full build).
 		sources := map[string]bool{}
 		if delta {
 			for _, s := range existing.Sources {
@@ -416,9 +488,24 @@ func refreshEpicBriefHandler(deps Deps) jobs.Handler {
 				Msg("refresh_epic_brief: dry run (1 LLM call); not written")
 			return nil
 		}
+		// fed: delta merges this run's inputs into the surviving entries;
+		// a full build replaces it. Departed members are dropped either way.
+		newFed := map[string]string{}
+		if delta {
+			newFed = prunedFed(existing.Fed, members)
+		}
+		for _, m := range inputs {
+			newFed[m.NodeID] = epicBriefFedValue(m)
+		}
+		fedJSON, _ := json.Marshal(newFed)
+		var builtVersion *string // delta builds never change built_version
+		if !delta {
+			v := epicBriefSigVersion
+			builtVersion = &v
+		}
 		_, err = deps.DB.Exec(ctx, `
-INSERT INTO graph.epic_briefs (epic_key, brief, highlights, open_items, member_signature, sources, updated_at, previous, previous_at)
-VALUES ($1,$2,$3,$4,$5,$6,NOW(),NULL,NULL)
+INSERT INTO graph.epic_briefs (epic_key, brief, highlights, open_items, member_signature, sources, updated_at, previous, previous_at, fed, built_version)
+VALUES ($1,$2,$3,$4,$5,$6,NOW(),NULL,NULL,$7,$8)
 ON CONFLICT (epic_key) DO UPDATE SET
   previous         = NULLIF(graph.epic_briefs.brief,''),
   previous_at      = CASE WHEN graph.epic_briefs.brief = '' THEN NULL ELSE graph.epic_briefs.updated_at END,
@@ -427,8 +514,10 @@ ON CONFLICT (epic_key) DO UPDATE SET
   open_items       = EXCLUDED.open_items,
   member_signature = EXCLUDED.member_signature,
   sources          = EXCLUDED.sources,
+  fed              = EXCLUDED.fed,
+  built_version    = COALESCE(EXCLUDED.built_version, graph.epic_briefs.built_version),
   updated_at       = NOW()`,
-			p.EpicKey, out.Brief, hl, oi, sig, srcList)
+			p.EpicKey, out.Brief, hl, oi, sig, srcList, fedJSON, builtVersion)
 		if err != nil {
 			return fmt.Errorf("upsert epic brief: %w", err)
 		}
@@ -451,14 +540,20 @@ func enqueueEpicBriefs(ctx context.Context, deps Deps, project string) int {
 		deps.Logger.Warn().Msg("enqueue epic briefs: no LLM client configured; enqueueing nothing")
 		return 0
 	}
+	// Candidates: on-board epics plus every epic that already has a brief row,
+	// so an epic that left the board or lost all its issues still gets its
+	// cleanup run. LIKE $1 keeps the business root ('business:...') out.
 	rows, err := deps.DB.Query(ctx, `
-SELECT DISTINCT em.epic_key
-FROM graph.jira_epic_map em
-WHERE em.on_board AND em.epic_key <> '' AND em.epic_key LIKE $1
-  AND NOT EXISTS (
+SELECT c.k FROM (
+  SELECT em.epic_key AS k FROM graph.jira_epic_map em
+  WHERE em.on_board AND em.epic_key <> '' AND em.epic_key LIKE $1
+  UNION
+  SELECT eb.epic_key FROM graph.epic_briefs eb WHERE eb.epic_key LIKE $1
+) c
+WHERE NOT EXISTS (
     SELECT 1 FROM graph.jobs j
     WHERE j.type = 'refresh_epic_brief' AND j.status IN ('queued','running')
-      AND j.payload->>'epic_key' = em.epic_key)`, project+"-%")
+      AND j.payload->>'epic_key' = c.k)`, project+"-%")
 	if err != nil {
 		deps.Logger.Warn().Err(err).Msg("enqueue epic briefs: list epics failed")
 		return 0
@@ -475,10 +570,17 @@ WHERE em.on_board AND em.epic_key <> '' AND em.epic_key LIKE $1
 	n := 0
 	for _, k := range epics {
 		members, err := loadBriefMembers(ctx, deps.DB, k)
-		if err != nil || len(members) == 0 {
+		if err != nil {
 			continue
 		}
-		if existing, ok := loadEpicBrief(ctx, deps.DB, k); ok && existing.Signature == epicBriefSignature(members) {
+		existing, ok := loadEpicBrief(ctx, deps.DB, k)
+		if len(members) == 0 {
+			// No members: only an epic with a brief row needs work, and only
+			// to clear stale fed/signature bookkeeping.
+			if !ok || (len(existing.Fed) == 0 && existing.Signature == epicBriefSignature(nil)) {
+				continue
+			}
+		} else if ok && existing.Signature == epicBriefSignature(members) && len(pendingMembers(members, existing.Fed)) == 0 {
 			continue
 		}
 		if _, err := jobs.Enqueue(ctx, deps.DB, "refresh_epic_brief", refreshEpicBriefPayload{EpicKey: k},
