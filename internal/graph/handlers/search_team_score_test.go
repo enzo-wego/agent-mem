@@ -2,9 +2,13 @@ package handlers
 
 import (
 	"context"
+	"fmt"
+	"github.com/agent-mem/agent-mem/internal/graph/scoring"
+	"github.com/agent-mem/agent-mem/internal/graph/temporal"
 	"os"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -126,4 +130,66 @@ func TestTeamScoreBatch_QueryCount(t *testing.T) {
 		t.Errorf("batched queries = %d (10 ids), %d (50 ids); want equal and in 1..4", batch10, batch50)
 	}
 	t.Logf("per-row %d/%d queries, batched %d/%d", row10, row50, batch10, batch50)
+}
+
+func TestHydrateResults_QueryCountIndependentOfIDs(t *testing.T) {
+	setup := openTestDB(t)
+	ctx := context.Background()
+
+	counted := func(n int) int64 {
+		authors := seedTeamScoreFixture(t, setup, n)
+		cleanup := func() {
+			_, _ = setup.Exec(ctx, `DELETE FROM graph.nodes WHERE id LIKE 'hydrate-qc:%'`)
+			_, _ = setup.Exec(ctx, `DELETE FROM graph.people WHERE eeid = ANY($1)`, authors)
+		}
+		cleanup()
+		t.Cleanup(cleanup)
+		ids := make([]string, n)
+		fused := make(map[string]scoring.Fused, n)
+		for i, a := range authors {
+			var pid int64
+			if err := setup.QueryRow(ctx, `INSERT INTO graph.people (eeid, display_name, machine_id) VALUES ($1, $2, 'test') RETURNING id`,
+				a, fmt.Sprintf("author %d", a)).Scan(&pid); err != nil {
+				t.Fatal(err)
+			}
+			ids[i] = fmt.Sprintf("hydrate-qc:%d", i)
+			if _, err := setup.Exec(ctx, `INSERT INTO graph.nodes (id, type, natural_key, author_person_id, metadata, machine_id)
+				VALUES ($1, 'jira', $1, $2, '{}', 'test')`, ids[i], pid); err != nil {
+				t.Fatal(err)
+			}
+			fused[ids[i]] = scoring.Fused{Score: 1}
+		}
+
+		cfg, err := pgxpool.ParseConfig(os.Getenv("DATABASE_URL"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		counter := &queryCounter{}
+		cfg.ConnConfig.Tracer = counter
+		pool, err := pgxpool.NewWithConfig(ctx, cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer pool.Close()
+		if err := pool.Ping(ctx); err != nil {
+			t.Fatal(err)
+		}
+
+		s := &Search{db: pool}
+		counter.n.Store(0)
+		res, err := s.hydrateResults(ctx, ids, searchFilter{}, fused, nil, scoring.BoostAlphas{},
+			teamScoreAsker, temporal.Window{}, false, time.Now())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(res) != n {
+			t.Fatalf("hydrated %d results, want %d", len(res), n)
+		}
+		return counter.n.Load()
+	}
+
+	q10, q50 := counted(10), counted(50)
+	if q10 != q50 || q10 == 0 {
+		t.Errorf("hydrateResults queries = %d (10 ids), %d (50 ids); want equal and non-zero", q10, q50)
+	}
 }
