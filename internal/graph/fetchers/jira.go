@@ -47,13 +47,14 @@ type jiraIssueResponse struct {
 }
 
 type jiraFields struct {
-	Summary     string          `json:"summary"`
-	Description json.RawMessage `json:"description"`
-	Created     string          `json:"created"`
-	Updated     string          `json:"updated"`
-	Reporter    *jiraUser       `json:"reporter"`
-	Assignee    *jiraUser       `json:"assignee"`
+	Summary     string           `json:"summary"`
+	Description json.RawMessage  `json:"description"`
+	Created     string           `json:"created"`
+	Updated     string           `json:"updated"`
+	Reporter    *jiraUser        `json:"reporter"`
+	Assignee    *jiraUser        `json:"assignee"`
 	Attachment  []jiraAttachment `json:"attachment"`
+	IssueLinks  []jiraIssueLink  `json:"issuelinks"`
 }
 
 type jiraUser struct {
@@ -70,7 +71,92 @@ type jiraAttachment struct {
 	Content  string `json:"content"`
 }
 
-// Fetch retrieves the Jira issue.
+type jiraIssueLink struct {
+	OutwardIssue struct {
+		Key string `json:"key"`
+	} `json:"outwardIssue"`
+	InwardIssue struct {
+		Key string `json:"key"`
+	} `json:"inwardIssue"`
+}
+
+type jiraComment struct {
+	Author  *jiraUser       `json:"author"`
+	Created string          `json:"created"`
+	Body    json.RawMessage `json:"body"`
+}
+
+type jiraCommentPage struct {
+	Total    int           `json:"total"`
+	Comments []jiraComment `json:"comments"`
+}
+
+type jiraRemoteLink struct {
+	Object struct {
+		URL   string `json:"url"`
+		Title string `json:"title"`
+	} `json:"object"`
+}
+
+// getJSON keeps authentication and failure handling identical for every section.
+func (f *jiraFetcher) getJSON(ctx context.Context, apiURL string, dest any) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
+	if err != nil {
+		return fmt.Errorf("build request: %w", err)
+	}
+	req.SetBasicAuth(f.cfg.JiraEmail, f.cfg.JiraToken)
+	req.Header.Set("Accept", "application/json")
+	resp, err := f.cfg.HTTPClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("request: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		// A deleted or moved issue never comes back through retry. 403 stays
+		// retryable: a permission change can fix it.
+		if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusGone {
+			return &PermanentError{Code: fmt.Sprintf("jira_http_%d", resp.StatusCode)}
+		}
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
+		return fmt.Errorf("status %d: %s", resp.StatusCode, body)
+	}
+	if err := json.NewDecoder(resp.Body).Decode(dest); err != nil {
+		return fmt.Errorf("decode response: %w", err)
+	}
+	return ctx.Err()
+}
+
+// jiraADFContent accepts only a document object carrying a content array.
+func jiraADFContent(raw json.RawMessage) []json.RawMessage {
+	var doc struct {
+		Content []json.RawMessage `json:"content"`
+	}
+	if json.Unmarshal(raw, &doc) != nil {
+		return nil
+	}
+	return doc.Content
+}
+
+func jiraADFParagraph(text string) json.RawMessage {
+	raw, _ := json.Marshal(struct {
+		Type    string `json:"type"`
+		Content []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		} `json:"content"`
+	}{
+		Type: "paragraph",
+		Content: []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		}{{Type: "text", Text: text}},
+	})
+	return raw
+}
+
+// Fetch combines the description, oldest 500 comments, issue keys and remote
+// links into one ADF document. Every section must succeed before returning a
+// body, since downstream ingestion prunes references absent from that body.
 func (f *jiraFetcher) Fetch(ctx context.Context, node string) (FetchedBody, error) {
 	key, err := f.parseNode(node)
 	if err != nil {
@@ -78,44 +164,109 @@ func (f *jiraFetcher) Fetch(ctx context.Context, node string) (FetchedBody, erro
 	}
 
 	baseURL := strings.TrimRight(f.cfg.JiraBaseURL, "/")
-	apiURL := fmt.Sprintf("%s/rest/api/3/issue/%s?fields=summary,description,status,issuetype,assignee,reporter,creator,labels,created,updated,resolutiondate,parent,attachment", baseURL, key)
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
-	if err != nil {
-		return FetchedBody{}, fmt.Errorf("jira fetcher: build request: %w", err)
-	}
-	req.SetBasicAuth(f.cfg.JiraEmail, f.cfg.JiraToken)
-	req.Header.Set("Accept", "application/json")
-
-	resp, err := f.cfg.HTTPClient.Do(req)
-	if err != nil {
+	apiURL := fmt.Sprintf("%s/rest/api/3/issue/%s?fields=summary,description,status,issuetype,assignee,reporter,creator,labels,created,updated,resolutiondate,parent,attachment,issuelinks", baseURL, key)
+	var issueRaw json.RawMessage
+	if err := f.getJSON(ctx, apiURL, &issueRaw); err != nil {
 		return FetchedBody{}, fmt.Errorf("jira fetcher: %w", err)
 	}
-	defer resp.Body.Close()
 
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		// A deleted or moved issue never comes back through retry. 403 stays
-		// retryable: a permission change can fix it.
-		if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusGone {
-			return FetchedBody{}, &PermanentError{Code: fmt.Sprintf("jira_http_%d", resp.StatusCode)}
-		}
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
-		return FetchedBody{}, fmt.Errorf("jira fetcher status %d: %s", resp.StatusCode, string(body))
-	}
-
-	raw, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return FetchedBody{}, fmt.Errorf("jira fetcher: read response: %w", err)
-	}
 	var issue jiraIssueResponse
-	if err := json.Unmarshal(raw, &issue); err != nil {
+	if err := json.Unmarshal(issueRaw, &issue); err != nil {
 		return FetchedBody{}, fmt.Errorf("jira fetcher: decode response: %w", err)
 	}
+	content := jiraADFContent(issue.Fields.Description)
+	held := 0
+	for start := 0; ; {
+		var page jiraCommentPage
+		apiURL := fmt.Sprintf("%s/rest/api/3/issue/%s/comment?orderBy=created&startAt=%d&maxResults=100", baseURL, key, start)
+		if err := f.getJSON(ctx, apiURL, &page); err != nil {
+			return FetchedBody{}, fmt.Errorf("jira comments: %w", err)
+		}
+		if len(page.Comments) == 0 && start < page.Total {
+			return FetchedBody{}, fmt.Errorf("jira comments: empty page at startAt=%d of total=%d", start, page.Total)
+		}
+		comments := page.Comments
+		if len(comments) > 500-held {
+			comments = comments[:500-held]
+		}
+		for _, comment := range comments {
+			name := "unknown"
+			if comment.Author != nil && comment.Author.DisplayName != "" {
+				name = comment.Author.DisplayName
+			}
+			content = append(content, jiraADFParagraph(fmt.Sprintf("--- comment by %s @ %s ---", name, comment.Created)))
+			content = append(content, jiraADFContent(comment.Body)...)
+		}
+		held += len(comments)
+		start += len(page.Comments)
+		if held == 500 {
+			f.log.Warn().Str("key", key).Int("total", page.Total).Msg("jira comments capped at 500")
+			break
+		}
+		if start >= page.Total {
+			break
+		}
+	}
 
-	// Raw = the full issue JSON: the Jira normalizer walks fields.description as
-	// ADF and lifts status/issuetype/labels/… into node metadata.
-	bodyTS := parseJiraTime(issue.Fields.Updated)
-	createdAt := parseJiraTime(issue.Fields.Created)
+	var remoteLinks []jiraRemoteLink
+	apiURL = fmt.Sprintf("%s/rest/api/3/issue/%s/remotelink", baseURL, key)
+	if err := f.getJSON(ctx, apiURL, &remoteLinks); err != nil {
+		return FetchedBody{}, fmt.Errorf("jira remote links: %w", err)
+	}
+
+	var linkedKeys []string
+	seen := make(map[string]bool)
+	for _, link := range issue.Fields.IssueLinks {
+		linkedKey := link.OutwardIssue.Key
+		if linkedKey == "" {
+			linkedKey = link.InwardIssue.Key
+		}
+		if linkedKey != "" && !seen[linkedKey] {
+			seen[linkedKey] = true
+			linkedKeys = append(linkedKeys, linkedKey)
+		}
+	}
+	if len(linkedKeys) > 0 {
+		content = append(content, jiraADFParagraph("Linked issues: "+strings.Join(linkedKeys, ", ")))
+	}
+	for _, link := range remoteLinks {
+		content = append(content, jiraADFParagraph(fmt.Sprintf("Link: %s (%s)", link.Object.Title, link.Object.URL)))
+	}
+	if content == nil {
+		content = []json.RawMessage{}
+	}
+	doc, err := json.Marshal(struct {
+		Type    string            `json:"type"`
+		Version int               `json:"version"`
+		Content []json.RawMessage `json:"content"`
+	}{Type: "doc", Version: 1, Content: content})
+	if err != nil {
+		return FetchedBody{}, fmt.Errorf("jira fetcher: encode ADF: %w", err)
+	}
+
+	// Raw keeps the full issue shape ({"key", "fields": {...}}) so the normalizer
+	// lifts metadata from fields.*; only fields.description is replaced by the
+	// composite document (description + comments + links).
+	var envelope struct {
+		Fields map[string]json.RawMessage `json:"fields"`
+	}
+	if err := json.Unmarshal(issueRaw, &envelope); err != nil {
+		return FetchedBody{}, fmt.Errorf("jira fetcher: decode response: %w", err)
+	}
+	if envelope.Fields == nil {
+		envelope.Fields = map[string]json.RawMessage{}
+	}
+	envelope.Fields["description"] = doc
+	raw, err := json.Marshal(struct {
+		Key    string                     `json:"key"`
+		Fields map[string]json.RawMessage `json:"fields"`
+	}{Key: issue.Key, Fields: envelope.Fields})
+	if err != nil {
+		return FetchedBody{}, fmt.Errorf("jira fetcher: encode raw: %w", err)
+	}
+
+	bodyTS := ParseJiraTime(issue.Fields.Updated)
+	createdAt := ParseJiraTime(issue.Fields.Created)
 
 	var author AuthorRef
 	if r := issue.Fields.Reporter; r != nil {
@@ -153,9 +304,9 @@ func (f *jiraFetcher) Fetch(ctx context.Context, node string) (FetchedBody, erro
 	}, nil
 }
 
-// parseJiraTime parses Jira's timestamps. Jira returns "2006-01-02T15:04:05.000-0700"
+// ParseJiraTime parses Jira's timestamps. Jira returns "2006-01-02T15:04:05.000-0700"
 // (numeric tz offset, no colon), which isn't quite RFC3339; try both. Zero on failure.
-func parseJiraTime(s string) time.Time {
+func ParseJiraTime(s string) time.Time {
 	if s == "" {
 		return time.Time{}
 	}

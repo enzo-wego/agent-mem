@@ -243,13 +243,13 @@ func TestSearch_ArmSelectionAndExplicitWindow(t *testing.T) {
 	}
 }
 
-type failingEmbedder struct{}
+type failingArmEmbedder struct{}
 
-func (failingEmbedder) Embed(context.Context, string) ([]float32, error) {
+func (failingArmEmbedder) Embed(context.Context, string) ([]float32, error) {
 	return nil, errors.New("gateway down")
 }
 
-func (failingEmbedder) EmbedWithOptions(context.Context, string, gemini.EmbedOptions) ([]float32, error) {
+func (failingArmEmbedder) EmbedWithOptions(context.Context, string, gemini.EmbedOptions) ([]float32, error) {
 	return nil, errors.New("gateway down")
 }
 
@@ -258,7 +258,7 @@ func (failingEmbedder) EmbedWithOptions(context.Context, string, gemini.EmbedOpt
 func TestSearch_FailedArmIsReportedNotFatal(t *testing.T) {
 	pool := testDB(t)
 	seedArmsFixture(t, pool)
-	h, err := handlers.NewSearchWithEmbedder(pool, failingEmbedder{})
+	h, err := handlers.NewSearchWithEmbedder(pool, failingArmEmbedder{})
 	if err != nil {
 		t.Fatal(err)
 	}

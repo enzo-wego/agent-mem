@@ -108,7 +108,7 @@ type jiraBackfillResult struct {
 
 // enqueueFetchBodyForBackfill is a seam so a test can fail one enqueue.
 var enqueueFetchBodyForBackfill = func(ctx context.Context, db jobs.DB, nodeID, machineID string, availableAt time.Time) error {
-	_, err := jobs.Enqueue(ctx, db, "fetch_body", fetchBodyPayload{NodeID: nodeID, SkipAttachments: true}, jobs.EnqueueOptions{
+	_, err := jobs.Enqueue(ctx, db, "fetch_body", fetchBodyPayload{NodeID: nodeID, Depth: 1, SkipAttachments: true}, jobs.EnqueueOptions{
 		Priority:    7,
 		AvailableAt: availableAt,
 		MachineID:   machineID,

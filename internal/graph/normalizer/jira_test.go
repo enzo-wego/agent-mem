@@ -4,6 +4,9 @@ import (
 	"context"
 	"strings"
 	"testing"
+
+	"github.com/agent-mem/agent-mem/internal/graph/extractor"
+	"github.com/rs/zerolog"
 )
 
 func TestJiraNormalizer(t *testing.T) {
@@ -26,8 +29,8 @@ func TestJiraNormalizer(t *testing.T) {
 			wantContains: []string{},
 		},
 		{
-			name: "PAY-2128 real fixture",
-			input: `{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"Tabby authorizations failing due to missing installments_count in API response"}]}]}`,
+			name:         "PAY-2128 real fixture",
+			input:        `{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"Tabby authorizations failing due to missing installments_count in API response"}]}]}`,
 			wantContains: []string{"Tabby authorizations failing"},
 		},
 		{
@@ -41,8 +44,8 @@ func TestJiraNormalizer(t *testing.T) {
 			wantContains: []string{"Hello world", "docs (https://example.com)"},
 		},
 		{
-			name: "codeBlock",
-			input: `{"type":"doc","content":[{"type":"codeBlock","content":[{"type":"text","text":"fmt.Println(\"hi\")"}]}]}`,
+			name:         "codeBlock",
+			input:        `{"type":"doc","content":[{"type":"codeBlock","content":[{"type":"text","text":"fmt.Println(\"hi\")"}]}]}`,
 			wantContains: []string{"```", "fmt.Println"},
 		},
 		{
@@ -152,5 +155,38 @@ func TestJiraNormalizer_IssuePayloadLiftsMetadata(t *testing.T) {
 	res, _ = n.Normalize(context.Background(), []byte(`{"type":"doc","content":[]}`), nil)
 	if res.Metadata != nil {
 		t.Errorf("bare ADF metadata = %#v, want nil", res.Metadata)
+	}
+}
+
+func TestJiraNormalize_CodeBlockThenParagraph(t *testing.T) {
+	raw := `{"type":"doc","content":[{"type":"codeBlock","content":[{"type":"text","text":"code"}]},{"type":"paragraph","content":[{"type":"text","text":"--- comment by Jane @ now ---"}]}]}`
+	res, err := NewJiraNormalizer().Normalize(context.Background(), []byte(raw), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Text != "```code```\n\n--- comment by Jane @ now ---" {
+		t.Fatalf("unexpected text: %q", res.Text)
+	}
+}
+
+func TestJiraNormalize_BlockAndEmbedCard(t *testing.T) {
+	raw := `{"type":"doc","content":[{"type":"blockCard","attrs":{"url":"https://wego.slack.com/archives/C04U4KATYUV/p1787303769925489"}},{"type":"embedCard","attrs":{"url":"https://github.com/wego/payments/pull/123"}}]}`
+	ctx := context.Background()
+	res, err := NewJiraNormalizer().Normalize(ctx, []byte(raw), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found, err := extractor.New(nil, zerolog.Nop()).Extract(ctx, res.Text)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodes := make(map[string]bool)
+	for _, finding := range found.Findings {
+		nodes[finding.NodeID] = true
+	}
+	for _, id := range []string{"slack:C04U4KATYUV:1787303769.925489", "gh_pr:wego/payments#123"} {
+		if !nodes[id] {
+			t.Errorf("missing %s in findings %+v from %q", id, found.Findings, res.Text)
+		}
 	}
 }

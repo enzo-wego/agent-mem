@@ -332,7 +332,7 @@ func ingestSlackMessage(ctx context.Context, deps Deps, channelID string, msg sl
 			// cross-source artifacts a message links to (Jira/PR/Confluence) get
 			// enriched — not just left as title-less edge stubs.
 			for _, fnd := range extractResult.Findings {
-				enqueueFetchIfEmpty(ctx, deps, fnd.NodeID, fnd.Type, false)
+				enqueueFetchIfEmpty(ctx, deps, fnd.NodeID, fnd.Type, 1, nodeID, false)
 			}
 		}
 	}

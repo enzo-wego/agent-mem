@@ -10,6 +10,7 @@ import {
   graphSearch,
   graphResolve,
   parseSlackLink,
+  parseGraphSeed,
   listSubscriptions,
   createSubscription,
   deleteSubscription,
@@ -32,9 +33,11 @@ import {
   type PinnedThread,
   type BoardEpicGroup,
   type OpenRouterUsage,
+  type ThreadDecision,
 } from '../api'
 import { applyGroupNames, assignCountries, continentOf, nameOf } from '../continents'
 import ClusterGraph from './ClusterGraph'
+import ThreadDecisions from '../ThreadDecisions'
 
 // ── worldmonitor palette ──────────────────────────────────────────────────────
 const C = {
@@ -392,6 +395,8 @@ function edgeStrength(kind: string): number {
 // stays aligned.
 function collapseThreads(neighbors: GraphNeighbor[]): GraphNeighbor[] {
   const bestByThread = new Map<string, GraphNeighbor>()
+  const decisionsByThread = new Map<string, ThreadDecision[]>()
+  const questionsByThread = new Map<string, string[]>()
   const out: GraphNeighbor[] = []
   for (const n of neighbors) {
     const tt = slackThreadKey(n)
@@ -399,10 +404,26 @@ function collapseThreads(neighbors: GraphNeighbor[]): GraphNeighbor[] {
       out.push(n)
       continue
     }
+    if (!decisionsByThread.has(tt) && (n.node.decisions?.length ?? 0) > 0) {
+      decisionsByThread.set(tt, n.node.decisions!)
+    }
+    if (!questionsByThread.has(tt) && (n.node.open_questions?.length ?? 0) > 0) {
+      questionsByThread.set(tt, n.node.open_questions!)
+    }
     const prev = bestByThread.get(tt)
     if (!prev || edgeStrength(n.edge.kind) < edgeStrength(prev.edge.kind)) bestByThread.set(tt, n)
   }
-  return [...out, ...bestByThread.values()]
+  return [
+    ...out,
+    ...[...bestByThread.entries()].map(([tt, best]) => ({
+      ...best,
+      node: {
+        ...best.node,
+        decisions: best.node.decisions ?? decisionsByThread.get(tt),
+        open_questions: best.node.open_questions ?? questionsByThread.get(tt),
+      },
+    })),
+  ]
 }
 
 // Group neighbors by friendly type label. Slack messages sharing a thread collapse
@@ -971,22 +992,32 @@ export function LiveGlobePage() {
   const [searchQ, setSearchQ] = useState('')
   const [searchResults, setSearchResults] = useState<GraphNode[] | null>(null)
   const [searchLoading, setSearchLoading] = useState(false)
+  const [searchNotice, setSearchNotice] = useState('')
+  const searchGen = useRef(0)
 
   // Live search: fire after a typing pause, not only on Enter — an empty box
   // clears the panel.
   useEffect(() => {
     const t = setTimeout(() => {
-      if (searchQ.trim()) runSearch(searchQ)
-      else setSearchResults(null)
+      if (searchQ.trim()) {
+        runSearch(searchQ)
+      } else {
+        searchGen.current++
+        setSearchResults(null)
+        setSearchLoading(false)
+      }
     }, 450)
     return () => clearTimeout(t)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchQ])
 
   function runSearch(q: string) {
+    const gen = ++searchGen.current
+    setSearchNotice('')
     const term = q.trim()
     if (!term) {
       setSearchResults(null)
+      setSearchLoading(false)
       return
     }
     setSearchLoading(true)
@@ -1000,10 +1031,53 @@ export function LiveGlobePage() {
       openGraphForNodeID(slack.nodeId)
       return
     }
-    graphSearch(term, undefined, 20)
-      .then((r) => setSearchResults(r.results || []))
-      .catch(() => setSearchResults([]))
-      .finally(() => setSearchLoading(false))
+
+    const fallbackSearch = () => {
+      graphSearch(term, undefined, 20)
+        .then((r) => {
+          if (gen !== searchGen.current) return
+          setSearchResults(r.results || [])
+        })
+        .catch(() => {
+          if (gen !== searchGen.current) return
+          setSearchResults([])
+        })
+        .finally(() => {
+          if (gen !== searchGen.current) return
+          setSearchLoading(false)
+        })
+    }
+
+    const seed = parseGraphSeed(term)
+    if (!seed) {
+      fallbackSearch()
+      return
+    }
+    graphResolve([seed], undefined, 1)
+      .then((r) => {
+        if (gen !== searchGen.current) return
+        const root = (r.artifacts || []).find((a) => a.hop === 0)
+        if (!root) {
+          setSearchNotice(`not in the graph yet: ${term}`)
+          fallbackSearch()
+          return
+        }
+        searchGen.current++
+        setSearchQ('')
+        setSearchResults(null)
+        setSearchLoading(false)
+        openGraphForNode({
+          id: root.node_id,
+          type: root.type || 'slack',
+          title: root.title || '',
+          url: root.url || '',
+        } as GraphNode)
+      })
+      .catch(() => {
+        if (gen !== searchGen.current) return
+        setSearchNotice('link lookup failed, showing text search')
+        fallbackSearch()
+      })
   }
 
   // ── Topic subscriptions (enzobot hot-topic DM alerts) ─────────────────────────
@@ -2163,7 +2237,11 @@ export function LiveGlobePage() {
           >
             <input
               value={searchQ}
-              onChange={(e) => setSearchQ(e.target.value)}
+              onChange={(e) => {
+                searchGen.current++
+                setSearchNotice('')
+                setSearchQ(e.target.value)
+              }}
               placeholder="SEARCH GRAPH…"
               style={{
                 width: 200,
@@ -2178,17 +2256,29 @@ export function LiveGlobePage() {
                 outline: 'none',
               }}
             />
-            {searchResults !== null && (
+            {(searchQ !== '' || searchResults !== null) && (
               <button
                 type="button"
                 onClick={() => {
+                  searchGen.current++
+                  setSearchNotice('')
                   setSearchQ('')
                   setSearchResults(null)
+                  setSearchLoading(false)
                 }}
                 style={segBtn(false)}
               >
                 ✕
               </button>
+            )}
+            {searchQ.trim() !== '' && (
+              <a
+                href={`/search?q=${encodeURIComponent(searchQ.trim())}`}
+                title="open the full search page"
+                style={{ ...segBtn(false), textDecoration: 'none', display: 'inline-block' }}
+              >
+                ⤢ FULL
+              </a>
             )}
           </form>
           <button type="button" onClick={() => setPinsOpen(true)} style={segBtn(pinsOpen)}>
@@ -2271,6 +2361,7 @@ export function LiveGlobePage() {
             SEARCH · {searchLoading ? 'SEARCHING…' : `${searchResults.length} RESULTS`}
           </div>
           <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {searchNotice && <div style={{ color: C.dim, fontSize: 10 }}>{searchNotice}</div>}
             {!searchLoading && searchResults.length === 0 && (
               <div style={{ color: C.dim, fontSize: 11 }}>no matches</div>
             )}
@@ -2905,8 +2996,8 @@ export function LiveGlobePage() {
                           gap: 6,
                         }}
                       >
-                        {/* Deep thread summary (overview + highlights), Slack-only. */}
-                        {(t.overview || (t.highlights && t.highlights.length > 0)) && (
+                        {/* Deep thread summary and settled decisions, Slack-only. */}
+                        {(t.overview || (t.highlights && t.highlights.length > 0) || (t.decisions?.length ?? 0) > 0 || (t.open_questions?.length ?? 0) > 0) && (
                           <div
                             style={{
                               display: 'flex',
@@ -2950,6 +3041,7 @@ export function LiveGlobePage() {
                                 ))}
                               </ul>
                             )}
+                            <ThreadDecisions decisions={t.decisions} openQuestions={t.open_questions} text={C.text} dim={C.dim} accent={C.green} fontSize={10} />
                           </div>
                         )}
                         {loadingThread && <div style={{ color: C.dim, fontSize: 10 }}>Loading…</div>}
@@ -4027,6 +4119,8 @@ export function LiveGlobePage() {
                       ts_ms: graphTopic.first_ms,
                       first_ts_ms: graphTopic.first_ms,
                       last_ts_ms: graphTopic.last_ms,
+                      decisions: graphTopic.decisions,
+                      open_questions: graphTopic.open_questions,
                     },
                     edge: { kind: 'ROOT' },
                   }
@@ -4238,6 +4332,7 @@ export function LiveGlobePage() {
                           <div style={{ color: C.text, whiteSpace: 'pre-wrap' }}>
                             {n.node.overview || n.node.title || 'No summary yet — it may still be generating.'}
                           </div>
+                          {isSlack && <ThreadDecisions decisions={n.node.decisions} openQuestions={n.node.open_questions} text={C.text} dim={C.dim} accent={C.green} fontSize={10} />}
                           <div style={{ color: C.dim, fontSize: 10 }}>
                             {pinnedRow ? 'This is the thread you opened.' : edgeKindTooltip(n.edge)}
                           </div>

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -42,7 +43,14 @@ func TestFetchBody_JiraMetadataMergedAndCreatedAt(t *testing.T) {
 	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(issue)
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/comment"):
+			_, _ = w.Write([]byte(`{"total":0,"comments":[]}`))
+		case strings.HasSuffix(r.URL.Path, "/remotelink"):
+			_, _ = w.Write([]byte(`[]`))
+		default:
+			_ = json.NewEncoder(w).Encode(issue)
+		}
 	}))
 	defer srv.Close()
 

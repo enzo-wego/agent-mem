@@ -47,6 +47,8 @@ export function SearchPage({ project }: { project: string }) {
       const res = await search(query, project || undefined)
       setResults(res.results || [])
       setTotal(res.total)
+    } catch (e) {
+      setThreadErr(e instanceof Error ? e.message : 'resolve failed')
     } finally {
       setLoading(false)
     }

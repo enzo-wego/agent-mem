@@ -18,6 +18,7 @@ var reEpicBriefKey = regexp.MustCompile(`^[A-Z][A-Z0-9]+-[0-9]+$`)
 var enqueuableTypes = map[string]bool{
 	"backfill_created_at":      true,
 	"refresh_jira_board":       true,
+	"refresh_jira_updates":     true,
 	"refresh_slack_channels":   true,
 	"refresh_slack_users":      true,
 	"refresh_slack_bots":       true,

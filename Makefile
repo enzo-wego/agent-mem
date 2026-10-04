@@ -65,7 +65,7 @@ migrate: up ## Run all pending database migrations.
 	$(compose) exec worker agent-mem migrate
 
 migrate-create: ## Create a new migration file. Usage: make migrate-create name=add_column_to_table
-	$(GO) run cmd/agent-mem/main.go migrate-create $(name)
+	$(GO) run ./cmd/agent-mem migrate-create $(name)
 
 migrate-status: up ## Show migration status.
 	$(compose) exec worker agent-mem migrate-status

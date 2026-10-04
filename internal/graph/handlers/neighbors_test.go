@@ -226,3 +226,60 @@ func TestNeighbors_FileLeafCappedAt20(t *testing.T) {
 		t.Errorf("want exactly 20 file rows (cap), got %d", files)
 	}
 }
+
+func TestNeighbors_ExpandsThroughWellLinkedJira(t *testing.T) {
+	testNeighborsResourceExpansion(t, "jira:TEST-1", "jira", 1, 13, true)
+}
+
+func TestNeighbors_PopularityBoundary(t *testing.T) {
+	for _, incoming := range []int{12, 13} {
+		t.Run(fmt.Sprintf("incoming_%d", incoming), func(t *testing.T) {
+			testNeighborsResourceExpansion(t, "jira:TEST-1", "jira", incoming, 1, incoming == 12)
+		})
+	}
+}
+
+func TestNeighbors_IncomingOnlyForPR(t *testing.T) {
+	testNeighborsResourceExpansion(t, "gh_pr:wego/payments#123", "gh_pr", 1, 13, true)
+}
+
+func testNeighborsResourceExpansion(t *testing.T, resource, typ string, incoming, outgoing int, wantExpand bool) {
+	t.Helper()
+	pool := testDB(t)
+	const root = "slack:CROOT:1.000001"
+	const target = "slack:CTARGET:2.000002"
+	seedNode(t, pool, root, "slack", "Root thread")
+	seedNode(t, pool, target, "slack", "Target thread")
+	seedNode(t, pool, resource, typ, "Resource")
+	seedEdge(t, pool, root, resource, "REFERENCES")
+	seedEdge(t, pool, resource, target, "REFERENCES")
+	for i := 1; i < incoming; i++ {
+		id := fmt.Sprintf("slack:CREF%d:3.000003", i)
+		seedNode(t, pool, id, "slack", "Referrer")
+		seedEdge(t, pool, id, resource, "REFERENCES")
+	}
+	for i := 1; i < outgoing; i++ {
+		id := fmt.Sprintf("jira:OUT-%d", i)
+		seedNode(t, pool, id, "jira", "Outgoing resource")
+		seedEdge(t, pool, resource, id, "REFERENCES")
+	}
+	r := chi.NewRouter()
+	r.Mount("/api/graph", handlers.NewNeighbors(pool))
+	req := httptest.NewRequest("GET", "/api/graph/node/"+root+"/neighbors?depth=2", nil)
+	req.Header.Set("X-Asker-User", "U07UAC0J7T3")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	rows := decodeNeighbors(t, w)
+	found := false
+	for _, row := range rows {
+		if row.Node.NodeID == target {
+			found = true
+			if row.Hop != 2 {
+				t.Errorf("target hop = %d, want 2", row.Hop)
+			}
+		}
+	}
+	if found != wantExpand {
+		t.Fatalf("target present = %v, want %v; neighbors: %+v", found, wantExpand, rows)
+	}
+}

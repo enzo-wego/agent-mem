@@ -30,6 +30,17 @@ type jiraStubIssue struct {
 func jiraStubDeps(t *testing.T, pool *pgxpool.Pool, issues map[string]jiraStubIssue) Deps {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// The fetcher also reads the comment and remote-link sub-resources.
+		if strings.HasSuffix(r.URL.Path, "/comment") {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"total":0,"comments":[]}`))
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/remotelink") {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`[]`))
+			return
+		}
 		key := r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]
 		is, ok := issues[key]
 		if !ok {

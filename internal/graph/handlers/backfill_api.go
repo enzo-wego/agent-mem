@@ -2,7 +2,9 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"regexp"
 	"time"
@@ -188,5 +190,49 @@ func NewBackfillStaleSummariesHandler(deps Deps) http.Handler {
 			Remaining: remaining,
 			Limit:     limit,
 		})
+	})
+}
+
+// NewBackfillThreadDecisionsHandler previews a capped legacy-thread scope unless
+// dry_run is explicitly false. Deploy never invokes this backfill.
+func NewBackfillThreadDecisionsHandler(deps Deps) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Limit   int   `json:"limit"`
+			DryRun  *bool `json:"dry_run"`
+			Threads []struct {
+				ChannelID string `json:"channel_id"`
+				ThreadTs  string `json:"thread_ts"`
+			} `json:"threads"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+			writeError(w, http.StatusBadRequest, "invalid JSON body")
+			return
+		}
+		limit, ok := resolveStaleSummariesLimit(req.Limit)
+		if !ok {
+			writeError(w, http.StatusBadRequest, "limit must be between 1 and 500")
+			return
+		}
+		dryRun := req.DryRun == nil || *req.DryRun
+		var chans, tss []string
+		for _, thread := range req.Threads {
+			chans = append(chans, thread.ChannelID)
+			tss = append(tss, thread.ThreadTs)
+		}
+		picked, enqueued, remaining, err := BackfillThreadDecisions(r.Context(), deps.DB, limit, dryRun, chans, tss)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusAccepted, struct {
+			Status    string               `json:"status"`
+			DryRun    bool                 `json:"dry_run"`
+			Matched   int                  `json:"matched"`
+			Enqueued  int                  `json:"enqueued"`
+			Remaining int                  `json:"remaining"`
+			Limit     int                  `json:"limit"`
+			Threads   []decisionsCandidate `json:"threads"`
+		}{"ok", dryRun, len(picked), enqueued, remaining, limit, picked})
 	})
 }

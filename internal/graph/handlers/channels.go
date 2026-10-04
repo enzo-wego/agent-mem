@@ -268,17 +268,19 @@ WHERE e.kind = 'REFERENCES' AND e.from_node_id = ANY($1) AND n.deleted_at IS NUL
 }
 
 type topicView struct {
-	ThreadTS     string   `json:"thread_ts"`
-	NodeID       string   `json:"node_id"` // graph node id of the root/standalone msg (for /neighbors)
-	Summary      string   `json:"summary"` // one-line topic label
-	Overview     string   `json:"overview"`    // 2-3 sentence deep summary (threads only)
-	Highlights   []string `json:"highlights"`  // chronological key points (threads only)
-	IsThread     bool     `json:"is_thread"`
-	MsgCount     int      `json:"msg_count"`
-	Participants []string `json:"participants"`
-	FirstMs      int64    `json:"first_ms"`
-	LastMs       int64    `json:"last_ms"`
-	URL          string   `json:"url"`
+	ThreadTS      string           `json:"thread_ts"`
+	NodeID        string           `json:"node_id"`    // graph node id of the root/standalone msg (for /neighbors)
+	Summary       string           `json:"summary"`    // one-line topic label
+	Overview      string           `json:"overview"`   // 2-3 sentence deep summary (threads only)
+	Highlights    []string         `json:"highlights"` // chronological key points (threads only)
+	Decisions     []threadDecision `json:"decisions,omitempty"`
+	OpenQuestions []string         `json:"open_questions,omitempty"`
+	IsThread      bool             `json:"is_thread"`
+	MsgCount      int              `json:"msg_count"`
+	Participants  []string         `json:"participants"`
+	FirstMs       int64            `json:"first_ms"`
+	LastMs        int64            `json:"last_ms"`
+	URL           string           `json:"url"`
 	// Kind from the summarizer: "chatter" (leave notices, greetings, acks) is
 	// hidden by the panel; ""/"substantive" shows.
 	Kind string `json:"kind,omitempty"`
@@ -506,25 +508,28 @@ LIMIT 3000`, id, days)
 		cacheKeys = append(cacheKeys, v.ThreadTS)
 		rootText[i] = bodyOf(g.msgs[0])
 	}
-	cached := map[string]string{}            // thread_ts -> one-line topic
-	cachedSig := map[string]string{}         // thread_ts -> signature it was generated for
-	cachedOverview := map[string]string{}    // thread_ts -> deep overview
-	cachedHl := map[string][]string{}        // thread_ts -> highlights
-	cachedKind := map[string]string{}        // thread_ts -> substantive|chatter
+	cached := map[string]string{}         // thread_ts -> one-line topic
+	cachedSig := map[string]string{}      // thread_ts -> signature it was generated for
+	cachedOverview := map[string]string{} // thread_ts -> deep overview
+	cachedHl := map[string][]string{}     // thread_ts -> highlights
+	cachedKind := map[string]string{}     // thread_ts -> substantive|chatter
+	cachedDecisions := map[string][]threadDecision{}
+	cachedOpenQuestions := map[string][]string{}
 	if len(cacheKeys) > 0 {
 		crows, cerr := h.db.Query(ctx,
-			`SELECT thread_ts, summary, COALESCE(signature,''), COALESCE(overview,''), COALESCE(highlights,'[]'::jsonb), COALESCE(kind,'')
+			`SELECT thread_ts, summary, COALESCE(signature,''), COALESCE(overview,''), COALESCE(highlights,'[]'::jsonb), COALESCE(kind,''), decisions, open_questions
 			 FROM graph.thread_summaries WHERE channel_id=$1 AND thread_ts = ANY($2)`,
 			id, cacheKeys)
 		if cerr == nil {
 			for crows.Next() {
 				var tt, sum, sig, overview, kind string
-				var hlRaw []byte
-				if crows.Scan(&tt, &sum, &sig, &overview, &hlRaw, &kind) == nil {
+				var hlRaw, decRaw, oqRaw []byte
+				if crows.Scan(&tt, &sum, &sig, &overview, &hlRaw, &kind, &decRaw, &oqRaw) == nil {
 					cached[tt] = sum
 					cachedSig[tt] = sig
 					cachedOverview[tt] = overview
 					cachedKind[tt] = kind
+					cachedDecisions[tt], cachedOpenQuestions[tt] = decodeThreadDecisions(id, tt, decRaw, oqRaw)
 					var hl []string
 					if json.Unmarshal(hlRaw, &hl) == nil {
 						cachedHl[tt] = hl
@@ -571,6 +576,8 @@ GROUP BY 1`, id, cacheKeys)
 		// Deep fields (overview + highlights) are shown when a thread is expanded.
 		views[i].Overview = cachedOverview[v.ThreadTS]
 		views[i].Highlights = cachedHl[v.ThreadTS]
+		views[i].Decisions = cachedDecisions[v.ThreadTS]
+		views[i].OpenQuestions = cachedOpenQuestions[v.ThreadTS]
 		views[i].Kind = cachedKind[v.ThreadTS]
 		// Refresh on a miss OR when the cached summary is stale vs the live thread.
 		stale := !ok || s == "" || cachedSig[v.ThreadTS] != liveSig[v.ThreadTS]

@@ -27,6 +27,7 @@ func Mount(r chi.Router, deps Deps) {
 	r.Post("/api/graph/backfill/stale-summaries", NewBackfillStaleSummariesHandler(deps).ServeHTTP)
 	r.Post("/api/graph/backfill/jira-metadata", NewBackfillJiraMetadataHandler(deps).ServeHTTP)
 	r.Post("/api/graph/backfill/subtree-index", NewBackfillSubtreeIndexHandler(deps).ServeHTTP)
+	r.Post("/api/graph/backfill/thread-decisions", NewBackfillThreadDecisionsHandler(deps).ServeHTTP)
 	r.Get("/api/graph/topic-rules", NewTopicRulesHandler().ServeHTTP)
 
 	// Read endpoints (Phase 3).
@@ -69,6 +70,12 @@ func Mount(r chi.Router, deps Deps) {
 	r.Put("/api/graph/boost-alphas", channels.putBoostAlphas)
 	r.Get("/api/graph/epic-briefs", channels.getEpicBriefsConfig)
 	r.Put("/api/graph/epic-briefs", channels.putEpicBriefsConfig)
+	jiraUpdates := NewJiraUpdatesHandler(deps)
+	r.Method("GET", "/api/graph/jira-updates", jiraUpdates)
+	r.Method("PUT", "/api/graph/jira-updates", jiraUpdates)
+	searchWeights := NewSearchWeightsHandler(deps)
+	r.Method("GET", "/api/graph/search-weights", searchWeights)
+	r.Method("PUT", "/api/graph/search-weights", searchWeights)
 
 	// Topic subscriptions (hot-topic enzobot alerts).
 	subs := NewSubscriptions(deps)
@@ -85,5 +92,6 @@ func Mount(r chi.Router, deps Deps) {
 	r.Delete("/api/graph/pins", pins.delete)
 	r.Get("/api/graph/pins/board", pins.board)
 
+	r.Get("/api/graph/node/{id}/subject-queries", NewSubjectQueries(deps))
 	r.Mount("/api/graph", NewNeighbors(deps.DB))
 }

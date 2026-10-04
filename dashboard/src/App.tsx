@@ -10,6 +10,7 @@ import { JobsPage } from './pages/Jobs'
 import { BackfillPage } from './pages/Backfill'
 import { GlobePage } from './pages/Globe'
 import { LiveGlobePage } from './pages/LiveGlobe'
+import { GraphSearchPage } from './pages/GraphSearchPage'
 import { RulesPage } from './pages/RulesPage'
 import { ContinentsPage } from './pages/Continents'
 import { fetchProjects, getApiKey, setApiKey, clearApiKey, getOpenRouterUsage, type ProjectInfo, type OpenRouterUsage } from './api'
@@ -158,6 +159,8 @@ function App() {
   if (!authChecked) return null
   if (needsAuth) return <LoginForm onLogin={handleLogin} />
 
+  // Full-screen search page lives at /search?q=…, also bypassing the tabbed chrome.
+  if (window.location.pathname.startsWith('/search')) return <GraphSearchPage />
   // Full-screen live globe lives at /live, bypassing the tabbed chrome.
   // /live/rules renders the topic-linking rules (single source of truth).
   if (window.location.pathname.startsWith('/live/rules')) return <RulesPage />
@@ -175,6 +178,9 @@ function App() {
               className="text-sm text-green-600 dark:text-green-400 hover:underline"
             >
               ↗ Live
+            </a>
+            <a href="/search" className="text-sm text-green-600 dark:text-green-400 hover:underline">
+              ↗ Search
             </a>
           </div>
           <div className="flex items-center gap-2">

@@ -22,17 +22,16 @@ import (
 // files connect every thread sharing a phrase, an author, or an upload —
 // walking through them turns "related to this thread" into "everything that
 // ever said apple pay" (verified: feature:unified_apple_pay, REFERENCES
-// degree 94). Real resources are corridors only while quiet; a popular one
-// chains dozens of unrelated threads.
-// ponytail: total REFERENCES degree ≤ 12; count distinct referrer THREADS if
-// a single chatty thread ever inflates a legit ticket past the cap.
+// degree 94). Real resources are corridors only while quiet; the cap measures
+// popularity (how many things link to the node), not its own outgoing links.
+// A resource with more than 12 incoming REFERENCES chains unrelated threads.
 func expandableThrough(ctx context.Context, db *pgxpool.Pool, nodeID string) bool {
 	var typ string
 	var deg int
 	err := db.QueryRow(ctx, `
 SELECT n.type,
        (SELECT count(*) FROM graph.edges e
-        WHERE (e.from_node_id = n.id OR e.to_node_id = n.id) AND e.kind = 'REFERENCES')
+        WHERE e.to_node_id = n.id AND e.kind = 'REFERENCES')
 FROM graph.nodes n WHERE n.id = $1`, nodeID).Scan(&typ, &deg)
 	if err != nil {
 		return false
@@ -68,14 +67,16 @@ type neighborsHandler struct {
 
 type neighborItem struct {
 	Node struct {
-		NodeID   string `json:"node_id"`
-		Type     string `json:"type"`
-		URL      string `json:"url"`
-		Title    string `json:"title"`
-		Overview string `json:"overview,omitempty"` // slack threads: 2-3 sentence summary, for the expanded row
-		Channel  string `json:"channel"`            // slack only: human channel name (e.g. payments-dev), for display
-		ThreadTS string `json:"thread_ts"`          // slack only; lets the UI collapse a thread's messages into one row
-		TSMs     int64  `json:"ts_ms"`              // node time (slack message ts, else first_seen_at), epoch millis
+		NodeID        string           `json:"node_id"`
+		Type          string           `json:"type"`
+		URL           string           `json:"url"`
+		Title         string           `json:"title"`
+		Overview      string           `json:"overview,omitempty"` // slack threads: 2-3 sentence summary, for the expanded row
+		Decisions     []threadDecision `json:"decisions,omitempty"`
+		OpenQuestions []string         `json:"open_questions,omitempty"`
+		Channel       string           `json:"channel"`   // slack only: human channel name (e.g. payments-dev), for display
+		ThreadTS      string           `json:"thread_ts"` // slack only; lets the UI collapse a thread's messages into one row
+		TSMs          int64            `json:"ts_ms"`     // node time (slack message ts, else first_seen_at), epoch millis
 		// Slack threads only: first/last message time across the whole thread,
 		// computed server-side because SIMILAR rows are leaves (one node in the
 		// payload) so the client can't derive the span itself. 0 when unknown.
@@ -88,6 +89,15 @@ type neighborItem struct {
 		// through — a hop-2 SAME_TOPIC edge confirms against Via, not against
 		// the opened thread.
 		Via string `json:"via,omitempty"`
+		// Opt-in (?cards=1), Slack rows only: thread header data for /search.
+		ThreadRoot       string   `json:"thread_root,omitempty"`
+		RootAuthor       string   `json:"root_author,omitempty"`
+		MsgCount         int      `json:"msg_count,omitempty"`
+		Participants     []string `json:"participants,omitempty"`
+		ParticipantCount int      `json:"participant_count,omitempty"`
+		// Opt-in (?cards=1), Jira rows only: linked PRs (REFERENCES either way).
+		PRCount int     `json:"pr_count,omitempty"`
+		PRs     []prRef `json:"prs,omitempty"`
 	} `json:"node"`
 	Edge struct {
 		Kind       string  `json:"kind"`
@@ -143,6 +153,7 @@ func (h *neighborsHandler) serve(w http.ResponseWriter, r *http.Request) {
 	lazySummarized := 0
 
 	seen := map[string]bool{id: true}
+	decisionsSent := map[string]bool{}
 	frontier := []struct {
 		id  string
 		hop int
@@ -193,6 +204,7 @@ func (h *neighborsHandler) serve(w http.ResponseWriter, r *http.Request) {
 			// body — so a row shows readable text (and a whole thread one label),
 			// never a raw slack:CHANNEL:TS id.
 			var title, body, threadSummary string
+			var decRaw, oqRaw []byte
 			var scope *string
 			row := h.db.QueryRow(ctx, `
 SELECT n.id, n.type, COALESCE(n.url,''), COALESCE(n.title,''),
@@ -200,6 +212,7 @@ SELECT n.id, n.type, COALESCE(n.url,''), COALESCE(n.title,''),
        COALESCE(n.metadata->>'thread_ts',''),
        COALESCE(ts.summary,''),
        COALESCE(ts.overview,''),
+       ts.decisions, ts.open_questions,
        COALESCE(sc.name,''),
        (EXTRACT(EPOCH FROM COALESCE(n.created_at, to_timestamp(NULLIF(n.metadata->>'ts','')::float8), n.first_seen_at)) * 1000)::bigint,
        n.scope,
@@ -209,7 +222,8 @@ LEFT JOIN graph.thread_summaries ts
   ON ts.channel_id = REPLACE(n.scope,'slack:','')
   AND ts.thread_ts = COALESCE(NULLIF(n.metadata->>'thread_ts',''), split_part(n.id,':',3))
 LEFT JOIN graph.slack_channels sc
-  ON sc.slack_channel_id = REPLACE(n.scope,'slack:','')
+  ON sc.slack_channel_id = COALESCE(NULLIF(REPLACE(n.scope,'slack:',''),''),
+                                    CASE WHEN n.id LIKE 'slack:%' THEN split_part(n.id,':',2) END)
 LEFT JOIN LATERAL (
   SELECT (EXTRACT(EPOCH FROM MIN(COALESCE(to_timestamp(NULLIF(m.metadata->>'ts','')::float8), m.created_at, m.first_seen_at))) * 1000)::bigint AS first_ms,
          (EXTRACT(EPOCH FROM MAX(COALESCE(to_timestamp(NULLIF(m.metadata->>'ts','')::float8), m.created_at, m.first_seen_at))) * 1000)::bigint AS last_ms
@@ -222,13 +236,20 @@ LEFT JOIN LATERAL (
 WHERE n.id=$1
   AND `+epicScopeSQL2, n.NodeID, epicArg)
 			if err := row.Scan(&item.Node.NodeID, &item.Node.Type, &item.Node.URL,
-				&title, &body, &item.Node.ThreadTS, &threadSummary, &item.Node.Overview, &item.Node.Channel, &item.Node.TSMs, &scope,
+				&title, &body, &item.Node.ThreadTS, &threadSummary, &item.Node.Overview, &decRaw, &oqRaw, &item.Node.Channel, &item.Node.TSMs, &scope,
 				&item.Node.FirstTSMs, &item.Node.LastTSMs); err != nil {
 				continue
 			}
 			// Hidden from this asker: don't surface it and don't expand through it.
 			if !scopeVisible(scope, scopeSet, noFilter) {
 				continue
+			}
+			// A scope-less stub's channel name came from its node ID. Only show it to an
+			// asker who can see that channel; private channel names stay hidden.
+			if (scope == nil || *scope == "") && !noFilter {
+				if parts := strings.SplitN(item.Node.NodeID, ":", 3); len(parts) == 3 && !scopeSet["slack:"+parts[1]] {
+					item.Node.Channel = ""
+				}
 			}
 			if item.Node.Type == "slack" || item.Node.Type == "slack_thread" {
 				switch {
@@ -246,6 +267,12 @@ WHERE n.id=$1
 						if parts := strings.Split(item.Node.NodeID, ":"); len(parts) == 3 {
 							rootTs = parts[2]
 						}
+					}
+					channel := strings.TrimPrefix(*scope, "slack:")
+					key := channel + ":" + rootTs
+					if !decisionsSent[key] {
+						item.Node.Decisions, item.Node.OpenQuestions = decodeThreadDecisions(channel, rootTs, decRaw, oqRaw)
+						decisionsSent[key] = true
 					}
 					if u := slackPermalink("slack:" + strings.TrimPrefix(*scope, "slack:") + ":" + rootTs); u != "" {
 						item.Node.URL = u
@@ -459,8 +486,66 @@ ORDER BY f.id`, parentIDs)
 			}
 		}
 	}
+	if r.URL.Query().Get("cards") == "1" {
+		rootOf := make([]string, len(out))
+		var roots []string
+		for i := range out {
+			nd := &out[i].Node
+			if nd.Type != "slack" && nd.Type != "slack_thread" {
+				continue
+			}
+			parts := strings.Split(nd.NodeID, ":")
+			if len(parts) != 3 {
+				continue
+			}
+			ts := nd.ThreadTS
+			if ts == "" {
+				ts = parts[2]
+			}
+			rootOf[i] = "slack:" + parts[1] + ":" + ts
+			roots = append(roots, rootOf[i])
+		}
+		if cards, err := threadCards(ctx, h.db, roots); err == nil {
+			for i := range out {
+				if rootOf[i] == "" {
+					continue
+				}
+				out[i].Node.ThreadRoot = rootOf[i]
+				if c, ok := cards[rootOf[i]]; ok {
+					out[i].Node.RootAuthor = c.RootAuthor
+					out[i].Node.MsgCount = c.MsgCount
+					out[i].Node.Participants = c.Participants
+					out[i].Node.ParticipantCount = c.ParticipantCount
+				}
+			}
+		}
+	}
+	resp := map[string]any{"neighbors": out}
+	if r.URL.Query().Get("cards") == "1" {
+		visible := func(s *string) bool { return scopeVisible(s, scopeSet, noFilter) }
+		var jiraIDs []string
+		for i := range out {
+			if out[i].Node.Type == "jira" {
+				jiraIDs = append(jiraIDs, out[i].Node.NodeID)
+			}
+		}
+		if strings.HasPrefix(id, "jira:") {
+			jiraIDs = append(jiraIDs, id)
+		}
+		if lists, err := jiraPRs(ctx, h.db, jiraIDs, visible); err == nil {
+			for i := range out {
+				if l, ok := lists[out[i].Node.NodeID]; ok && out[i].Node.Type == "jira" {
+					out[i].Node.PRCount = l.Count
+					out[i].Node.PRs = l.PRs
+				}
+			}
+			if l, ok := lists[id]; ok && strings.HasPrefix(id, "jira:") {
+				resp["seed_prs"] = l
+			}
+		}
+	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{"neighbors": out})
+	json.NewEncoder(w).Encode(resp)
 }
 
 // epicScopeSQL2 is epicScopePredicate bound to $2 for the per-row lookups in

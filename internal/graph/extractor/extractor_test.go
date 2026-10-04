@@ -3,6 +3,7 @@ package extractor_test
 import (
 	"context"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -64,6 +65,83 @@ func newExtractor(t *testing.T, pool *pgxpool.Pool) *extractor.Extractor {
 		t.Fatalf("Refresh: %v", err)
 	}
 	return e
+}
+
+func seedFetchedJira(t *testing.T, pool *pgxpool.Pool, id, body string) {
+	t.Helper()
+	_, err := pool.Exec(context.Background(), `
+INSERT INTO graph.nodes (id, type, natural_key, body, machine_id)
+VALUES ($1, 'jira', $2, $3, 'test')
+ON CONFLICT (id) DO UPDATE SET body = EXCLUDED.body, deleted_at = NULL`,
+		id, strings.TrimPrefix(id, "jira:"), body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if _, err := pool.Exec(context.Background(), `DELETE FROM graph.nodes WHERE id = $1`, id); err != nil {
+			t.Error(err)
+		}
+	})
+}
+
+func TestExtract_BareJiraKey_KnownPrefixLinked(t *testing.T) {
+	pool := openTestDB(t)
+	if _, err := pool.Exec(context.Background(), `DELETE FROM graph.nodes WHERE id LIKE 'jira:SHA-%' OR id LIKE 'jira:ZZQ-%'`); err != nil {
+		t.Fatal(err)
+	}
+	seedFetchedJira(t, pool, "jira:PAY-1", "ticket")
+	e := newExtractor(t, pool)
+	result, err := e.Extract(context.Background(), "Fixes PAY-2 today")
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertContains(t, result.Findings, "jira:PAY-2")
+}
+
+func TestExtract_BareJiraKey_UnknownPrefixSkipped(t *testing.T) {
+	pool := openTestDB(t)
+	if _, err := pool.Exec(context.Background(), `DELETE FROM graph.nodes WHERE id LIKE 'jira:SHA-%' OR id LIKE 'jira:ZZQ-%'`); err != nil {
+		t.Fatal(err)
+	}
+	seedFetchedJira(t, pool, "jira:PAY-1", "ticket")
+	e := newExtractor(t, pool)
+	result, err := e.Extract(context.Background(), "Fixes PAY-2, hashed with SHA-256 per RFC-7231")
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertContains(t, result.Findings, "jira:PAY-2")
+	assertNotContains(t, result.Findings, "jira:SHA-256")
+	assertNotContains(t, result.Findings, "jira:RFC-7231")
+}
+
+func TestExtract_JiraURL_UnknownPrefixStillLinked(t *testing.T) {
+	pool := openTestDB(t)
+	if _, err := pool.Exec(context.Background(), `DELETE FROM graph.nodes WHERE id LIKE 'jira:SHA-%' OR id LIKE 'jira:ZZQ-%'`); err != nil {
+		t.Fatal(err)
+	}
+	seedFetchedJira(t, pool, "jira:PAY-1", "ticket")
+	e := newExtractor(t, pool)
+	result, err := e.Extract(context.Background(), "see https://wegomushi.atlassian.net/browse/ZZQ-7")
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertContains(t, result.Findings, "jira:ZZQ-7")
+}
+
+func TestExtract_BareJiraKey_EmptyKnownSetKeepsOldBehavior(t *testing.T) {
+	pool := openTestDB(t)
+	if _, err := pool.Exec(context.Background(), `DELETE FROM graph.nodes WHERE id LIKE 'jira:SHA-%' OR id LIKE 'jira:ZZQ-%'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(context.Background(), `DELETE FROM graph.nodes WHERE type = 'jira'`); err != nil {
+		t.Fatal(err)
+	}
+	e := newExtractor(t, pool)
+	result, err := e.Extract(context.Background(), "hashed with SHA-256")
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertContains(t, result.Findings, "jira:SHA-256")
 }
 
 // -----------------------------------------------------------------------
@@ -552,4 +630,99 @@ func TestExtract_EntityAlias_Refresh(t *testing.T) {
 		t.Fatalf("Extract (after refresh): %v", err)
 	}
 	assertContains(t, result2.Findings, "partner:tabby")
+}
+
+// -----------------------------------------------------------------------
+// Reply permalinks: ?thread_ts=<root> adds a finding for the thread root.
+// -----------------------------------------------------------------------
+
+const replyBase = "https://wego.slack.com/archives/C0BBJAHV4G1/p1790581016177759"
+
+var (
+	replyID = ids.SlackThread("C0BBJAHV4G1", "1790581016.177759")
+	rootID  = ids.SlackThread("C0BBJAHV4G1", "1789701873.754609")
+)
+
+func slackFindings(t *testing.T, body string) []extractor.Finding {
+	t.Helper()
+	result, err := newExtractorNoEntities(t).Extract(context.Background(), body)
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	var out []extractor.Finding
+	for _, f := range result.Findings {
+		if f.Type == ids.TypeSlackThread {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+func TestReplyPermalink_RootOnly(t *testing.T) {
+	got := slackFindings(t, "see "+replyBase+" ok")
+	if len(got) != 1 || got[0].NodeID != replyID {
+		t.Fatalf("findings = %+v", got)
+	}
+}
+
+func TestReplyPermalink_ReplyAddsRoot(t *testing.T) {
+	got := slackFindings(t, "see "+replyBase+"?thread_ts=1789701873.754609&cid=C0BBJAHV4G1 ok")
+	if len(got) != 2 {
+		t.Fatalf("findings = %+v", got)
+	}
+	if rootID != "slack:C0BBJAHV4G1:1789701873.754609" {
+		t.Fatalf("root id = %q", rootID)
+	}
+	assertContains(t, got, replyID)
+	assertContains(t, got, rootID)
+}
+
+func TestReplyPermalink_Reordered(t *testing.T) {
+	got := slackFindings(t, replyBase+"?cid=C0BBJAHV4G1&thread_ts=1789701873.754609")
+	if len(got) != 2 {
+		t.Fatalf("findings = %+v", got)
+	}
+	assertContains(t, got, rootID)
+}
+
+func TestReplyPermalink_SelfThread(t *testing.T) {
+	got := slackFindings(t, replyBase+"?thread_ts=1790581016.177759&cid=C0BBJAHV4G1")
+	if len(got) != 1 || got[0].NodeID != replyID {
+		t.Fatalf("findings = %+v", got)
+	}
+}
+
+func TestReplyPermalink_Invalid(t *testing.T) {
+	for _, tt := range []string{"", "abc", "123.4"} {
+		got := slackFindings(t, replyBase+"?thread_ts="+tt+"&cid=C0BBJAHV4G1")
+		if len(got) != 1 || got[0].NodeID != replyID {
+			t.Errorf("thread_ts=%q: findings = %+v", tt, got)
+		}
+	}
+}
+
+func TestReplyPermalink_DuplicateParam(t *testing.T) {
+	got := slackFindings(t, replyBase+"?thread_ts=1789701873.754609&thread_ts=1700000000.000001")
+	if len(got) != 2 {
+		t.Fatalf("findings = %+v", got)
+	}
+	assertContains(t, got, rootID)
+	assertNotContains(t, got, ids.SlackThread("C0BBJAHV4G1", "1700000000.000001"))
+}
+
+func TestReplyPermalink_Delimiters(t *testing.T) {
+	link := replyBase + "?thread_ts=1789701873.754609&cid=C0BBJAHV4G1"
+	for name, body := range map[string]string{
+		"paren":  "label (" + link + ") more",
+		"angle":  "<" + link + ">",
+		"pipe":   "<" + link + "|label>",
+		"period": "see " + link + ".",
+	} {
+		got := slackFindings(t, body)
+		if len(got) != 2 {
+			t.Errorf("%s: findings = %+v", name, got)
+			continue
+		}
+		assertContains(t, got, rootID)
+	}
 }

@@ -13,10 +13,10 @@ import (
 	"github.com/agent-mem/agent-mem/internal/graph/jobs"
 )
 
-// seedJiraNodes inserts PAY-<n> nodes with the given ids; first_seen_at is
+// seedJiraMetadataNodes inserts PAY-<n> nodes with the given ids; first_seen_at is
 // derived from the position in order (earlier in the slice = older), which the
 // caller makes differ from id order where it matters.
-func seedJiraNodes(t *testing.T, pool *pgxpool.Pool, nums []int) []string {
+func seedJiraMetadataNodes(t *testing.T, pool *pgxpool.Pool, nums []int) []string {
 	t.Helper()
 	var ids []string
 	for i, n := range nums {
@@ -51,7 +51,7 @@ func TestBackfillJiraMetadata_SkipsLatestFailed(t *testing.T) {
 	pool := openTestDB(t)
 	truncateGraphHandlerTables(t, pool)
 	ctx := context.Background()
-	seedJiraNodes(t, pool, []int{1})
+	seedJiraMetadataNodes(t, pool, []int{1})
 
 	jobID := insertFetchBodyJob(t, pool, "jira:PAY-001", "running")
 	if _, err := pool.Exec(ctx, `UPDATE graph.jobs SET enqueued_at = now() - interval '30 day' WHERE id = $1`, jobID); err != nil {
@@ -81,7 +81,7 @@ func TestBackfillJiraMetadata_ForceCursor(t *testing.T) {
 	truncateGraphHandlerTables(t, pool)
 	ctx := context.Background()
 	// first_seen order (slice order) differs from id order.
-	ids := seedJiraNodes(t, pool, []int{5, 2, 7, 1, 6, 3, 4})
+	ids := seedJiraMetadataNodes(t, pool, []int{5, 2, 7, 1, 6, 3, 4})
 
 	seen := map[string]int{}
 	after := ""
@@ -127,7 +127,7 @@ func TestBackfillJiraMetadata_ForceCursorEnqueueError(t *testing.T) {
 	pool := openTestDB(t)
 	truncateGraphHandlerTables(t, pool)
 	ctx := context.Background()
-	ids := seedJiraNodes(t, pool, []int{1, 2, 3, 4, 5})
+	ids := seedJiraMetadataNodes(t, pool, []int{1, 2, 3, 4, 5})
 
 	orig := enqueueFetchBodyForBackfill
 	t.Cleanup(func() { enqueueFetchBodyForBackfill = orig })
@@ -170,7 +170,7 @@ func TestBackfillJiraMetadata_AfterIDExcludes(t *testing.T) {
 	pool := openTestDB(t)
 	truncateGraphHandlerTables(t, pool)
 	ctx := context.Background()
-	ids := seedJiraNodes(t, pool, []int{1, 2, 3, 4, 5, 6, 7})
+	ids := seedJiraMetadataNodes(t, pool, []int{1, 2, 3, 4, 5, 6, 7})
 
 	r := BackfillJiraMetadata(ctx, pool, zerolog.Nop(), "test", jiraBackfillParams{Limit: 10, Force: true, AfterID: ids[3]})
 	if r.Enqueued != 3 || r.NextAfterID != "" {
@@ -186,7 +186,7 @@ func TestBackfillJiraMetadata_RetryFailed(t *testing.T) {
 	pool := openTestDB(t)
 	truncateGraphHandlerTables(t, pool)
 	ctx := context.Background()
-	seedJiraNodes(t, pool, []int{1})
+	seedJiraMetadataNodes(t, pool, []int{1})
 	failedID := insertFetchBodyJob(t, pool, "jira:PAY-001", "running")
 	if err := jobs.Fail(ctx, pool, failedID, errors.New("boom")); err != nil {
 		t.Fatal(err)
@@ -202,6 +202,10 @@ func TestBackfillJiraMetadata_RetryFailed(t *testing.T) {
 	var skip bool
 	if err := pool.QueryRow(ctx, `SELECT (payload->>'skip_attachments')::bool FROM graph.jobs WHERE type='fetch_body' AND status='queued'`).Scan(&skip); err != nil || !skip {
 		t.Fatalf("skip_attachments = %v (%v), want true", skip, err)
+	}
+	var depthJSON bool
+	if err := pool.QueryRow(ctx, `SELECT payload @> '{"depth":1}'::jsonb FROM graph.jobs WHERE type='fetch_body' AND status='queued'`).Scan(&depthJSON); err != nil || !depthJSON {
+		t.Fatalf(`payload has "depth":1 = %v (%v), want true`, depthJSON, err)
 	}
 	markFetchBodyJobsDone(t, pool)
 	if r := BackfillJiraMetadata(ctx, pool, zerolog.Nop(), "test", jiraBackfillParams{Limit: 10}); r.Matched != 1 {

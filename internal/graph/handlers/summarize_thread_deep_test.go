@@ -3,6 +3,9 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
@@ -270,5 +273,262 @@ VALUES ('slack:C:200.000001','gh_pr:wego/payments#2113','REFERENCES','slack:C:20
 		if !strings.Contains(gem.generateUser, want) {
 			t.Errorf("prompt missing %q\nprompt:\n%s", want, gem.generateUser)
 		}
+	}
+}
+
+func decisionsTestPool(t *testing.T) *pgxpool.Pool {
+	t.Helper()
+	pool := openTestDB(t)
+	for _, table := range []string{"graph.jobs", "graph.thread_summaries", "graph.nodes"} {
+		if _, err := pool.Exec(context.Background(), "DELETE FROM "+table); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return pool
+}
+
+func seedDecisionThread(t *testing.T, pool *pgxpool.Pool, channel, root string, count, size int) {
+	t.Helper()
+	for i := range count {
+		ts := fmt.Sprintf("%s.%06d", strings.Split(root, ".")[0], i+1)
+		meta, _ := json.Marshal(map[string]any{"ts": ts, "thread_ts": root, "author": map[string]string{"display_name": "Lan"}})
+		body := strings.Repeat("a", size) + fmt.Sprintf(" MSG-%02d", i+1)
+		if _, err := pool.Exec(context.Background(), `INSERT INTO graph.nodes(id,type,natural_key,body,scope,metadata,machine_id) VALUES($1,'slack',$1,$2,$3,$4::jsonb,'test')`, "slack:"+channel+":"+ts, body, "slack:"+channel, meta); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func runDecisionSummary(t *testing.T, pool *pgxpool.Pool, gem *mockGemini, root string, fill bool) {
+	t.Helper()
+	payload, _ := json.Marshal(summarizeThreadPayload{ChannelID: "C", ThreadTs: root, FillDecisions: fill})
+	if err := NewSummarizeThreadHandler(Deps{DB: pool, Gemini: gem, Logger: zerolog.Nop()}).Handler(context.Background(), payload); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSummarizeThread_StoresGroundedDecisions(t *testing.T) {
+	pool := decisionsTestPool(t)
+	seedDecisionThread(t, pool, "C", "500.000001", 3, 20)
+	gem := &mockGemini{generateResult: func() (string, error) {
+		return `{"topic":"T","overview":"O","decisions":[{"text":"Ship v2","by":"Lan","date":"2026-01-01","ts":"500.000003"},{"text":"Fake","by":"X","date":"2026-01-01","ts":"777.000001"}],"open_questions":["Who owns urgency?"]}`, nil
+	}}
+	runDecisionSummary(t, pool, gem, "500.000001", false)
+	var raw, oq []byte
+	if err := pool.QueryRow(context.Background(), `SELECT decisions,open_questions FROM graph.thread_summaries WHERE channel_id='C' AND thread_ts='500.000001'`).Scan(&raw, &oq); err != nil {
+		t.Fatal(err)
+	}
+	var got []threadDecision
+	var questions []string
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0] != (threadDecision{Text: "Ship v2", By: "Lan", Date: "1970-01-01", TS: "500.000003"}) {
+		t.Fatal(got)
+	}
+	if err := json.Unmarshal(oq, &questions); err != nil || len(questions) != 1 || questions[0] != "Who owns urgency?" {
+		t.Fatal(questions, err)
+	}
+	for _, line := range []string{"[1 1970-01-01 ts=500.000001] ", "[3 1970-01-01 ts=500.000003] "} {
+		if !strings.Contains(gem.generateUser, line) {
+			t.Fatalf("missing %q", line)
+		}
+	}
+}
+
+func TestSummarizeThread_NoDecisionsStoresEmptyArrays(t *testing.T) {
+	pool := decisionsTestPool(t)
+	seedDecisionThread(t, pool, "C", "500.000001", 2, 20)
+	gem := &mockGemini{generateResult: func() (string, error) { return `{"topic":"T","overview":"O","highlights":["h"]}`, nil }}
+	runDecisionSummary(t, pool, gem, "500.000001", false)
+	var empty bool
+	if err := pool.QueryRow(context.Background(), `SELECT decisions='[]'::jsonb AND open_questions='[]'::jsonb FROM graph.thread_summaries WHERE channel_id='C'`).Scan(&empty); err != nil || !empty {
+		t.Fatal(empty, err)
+	}
+}
+
+func TestSummarizeThread_LongThreadKeepsLatest(t *testing.T) {
+	pool := decisionsTestPool(t)
+	seedDecisionThread(t, pool, "C", "500.000001", 12, 1900)
+	gem := &mockGemini{generateResult: func() (string, error) { return `{"topic":"T","overview":"O"}`, nil }}
+	runDecisionSummary(t, pool, gem, "500.000001", false)
+	for i := 1; i <= 12; i++ {
+		if !strings.Contains(gem.generateUser, fmt.Sprintf("MSG-%02d", i)) {
+			t.Fatalf("missing message %d", i)
+		}
+	}
+	if strings.Contains(gem.generateUser, "messages omitted") {
+		t.Fatal("unexpected omission")
+	}
+}
+
+func TestSummarizeThread_OverBudgetKeepsHeadAndTail(t *testing.T) {
+	pool := decisionsTestPool(t)
+	seedDecisionThread(t, pool, "C", "500.000001", 30, 1900)
+	gem := &mockGemini{generateResult: func() (string, error) { return `{"topic":"T","overview":"O"}`, nil }}
+	runDecisionSummary(t, pool, gem, "500.000001", false)
+	for _, s := range []string{"MSG-01", "MSG-30", "messages omitted …]"} {
+		if !strings.Contains(gem.generateUser, s) {
+			t.Fatalf("missing %q", s)
+		}
+	}
+	if strings.Contains(gem.generateUser, "MSG-15") {
+		t.Fatal("middle message retained")
+	}
+}
+
+func TestSummarizeThread_FillDecisionsBypassesSkipOnce(t *testing.T) {
+	pool := decisionsTestPool(t)
+	seedDecisionThread(t, pool, "C", "500.000001", 2, 20)
+	var count int
+	var newest int64
+	if err := pool.QueryRow(context.Background(), `SELECT count(*),max((EXTRACT(EPOCH FROM updated_at)*1000)::bigint) FROM graph.nodes WHERE scope='slack:C' AND COALESCE(NULLIF(metadata->>'thread_ts',''),split_part(id,':',3))='500.000001'`).Scan(&count, &newest); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(context.Background(), `INSERT INTO graph.thread_summaries(channel_id,thread_ts,signature,link_signature,summary,overview) VALUES('C','500.000001',$1,'','T','O')`, threadSummarySignature(count, newest)); err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	gem := &mockGemini{generateResult: func() (string, error) {
+		calls++
+		return `{"topic":"T","overview":"O","decisions":[],"open_questions":[]}`, nil
+	}}
+	runDecisionSummary(t, pool, gem, "500.000001", false)
+	if calls != 0 {
+		t.Fatal(calls)
+	}
+	runDecisionSummary(t, pool, gem, "500.000001", true)
+	if calls != 1 {
+		t.Fatal(calls)
+	}
+	var missing bool
+	if err := pool.QueryRow(context.Background(), `SELECT decisions IS NULL FROM graph.thread_summaries WHERE channel_id='C'`).Scan(&missing); err != nil || missing {
+		t.Fatal(missing, err)
+	}
+	runDecisionSummary(t, pool, gem, "500.000001", true)
+	if calls != 1 {
+		t.Fatal(calls)
+	}
+}
+
+func TestBackfillThreadDecisions_Scope(t *testing.T) {
+	pool := decisionsTestPool(t)
+	ctx := context.Background()
+	for _, ch := range []string{"A", "B", "C", "D"} {
+		count, size := 4, 2000
+		if ch == "C" {
+			count, size = 2, 100
+		}
+		seedDecisionThread(t, pool, ch, "500.000001", count, size)
+		kind := "substantive"
+		if ch == "D" {
+			kind = "chatter"
+		}
+		if _, err := pool.Exec(ctx, `INSERT INTO graph.thread_summaries(channel_id,thread_ts,signature,summary,kind) VALUES($1,'500.000001','v9:test','T',$2)`, ch, kind); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := pool.Exec(ctx, `UPDATE graph.thread_summaries SET decisions='[]' WHERE channel_id='B'`); err != nil {
+		t.Fatal(err)
+	}
+	picked, enqueued, remaining, err := BackfillThreadDecisions(ctx, pool, 100, true, nil, nil)
+	if err != nil || len(picked) != 1 || picked[0].ChannelID != "A" || picked[0].Chars != 8000 || remaining != 1 || enqueued != 0 {
+		t.Fatal(picked, enqueued, remaining, err)
+	}
+	var jobsCount int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM graph.jobs WHERE type='summarize_thread'`).Scan(&jobsCount); err != nil || jobsCount != 0 {
+		t.Fatal(jobsCount, err)
+	}
+	_, enqueued, _, err = BackfillThreadDecisions(ctx, pool, 100, false, nil, nil)
+	if err != nil || enqueued != 1 {
+		t.Fatal(enqueued, err)
+	}
+	var raw []byte
+	if err := pool.QueryRow(ctx, `SELECT payload FROM graph.jobs WHERE type='summarize_thread'`).Scan(&raw); err != nil {
+		t.Fatal(err)
+	}
+	var p summarizeThreadPayload
+	if err := json.Unmarshal(raw, &p); err != nil || !p.FillDecisions || !p.SkipJudging {
+		t.Fatal(p, err)
+	}
+	picked, _, remaining, err = BackfillThreadDecisions(ctx, pool, 100, true, []string{"C"}, []string{"500.000001"})
+	if err != nil || len(picked) != 0 || remaining != 0 {
+		t.Fatal(picked, remaining, err)
+	}
+}
+
+func TestBackfillThreadDecisionsHandler_DefaultsToDryRun(t *testing.T) {
+	pool := decisionsTestPool(t)
+	h := NewBackfillThreadDecisionsHandler(Deps{DB: pool})
+	for _, tc := range []struct {
+		body   string
+		status int
+	}{{"", http.StatusAccepted}, {`{"limit":501}`, http.StatusBadRequest}, {`{"limit":`, http.StatusBadRequest}} {
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/", strings.NewReader(tc.body)))
+		if w.Code != tc.status {
+			t.Fatalf("%q: %d %s", tc.body, w.Code, w.Body.String())
+		}
+		if tc.body == "" {
+			var out struct {
+				DryRun bool `json:"dry_run"`
+			}
+			if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil || !out.DryRun {
+				t.Fatal(out, err)
+			}
+		}
+	}
+}
+
+func TestChannelTopics_ServesDecisions(t *testing.T) {
+	pool := decisionsTestPool(t)
+	ctx := context.Background()
+	for _, root := range []string{"600.000001", "700.000001"} {
+		seedDecisionThread(t, pool, "CDEC", root, 2, 20)
+		if _, err := pool.Exec(ctx, `INSERT INTO graph.thread_summaries(channel_id,thread_ts,signature,summary,overview) VALUES('CDEC',$1,'v9:test','T','old overview')`, root); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := pool.Exec(ctx, `UPDATE graph.thread_summaries SET decisions='[{"text":"Ship v2","by":"Lan","date":"1970-01-01","ts":"600.000002"}]',open_questions='["Who owns urgency?"]' WHERE thread_ts='600.000001'`); err != nil {
+		t.Fatal(err)
+	}
+	w := httptest.NewRecorder()
+	NewChannels(pool).topics(w, httptest.NewRequest(http.MethodGet, "/api/graph/channel/topics?id=CDEC", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("%d %s", w.Code, w.Body.String())
+	}
+	var views []map[string]json.RawMessage
+	if err := json.Unmarshal(w.Body.Bytes(), &views); err != nil {
+		t.Fatal(err)
+	}
+	found := 0
+	for _, view := range views {
+		var root string
+		_ = json.Unmarshal(view["thread_ts"], &root)
+		switch root {
+		case "600.000001":
+			found++
+			var ds []threadDecision
+			var qs []string
+			if err := json.Unmarshal(view["decisions"], &ds); err != nil || len(ds) != 1 || ds[0].URL != "https://wego.slack.com/archives/CDEC/p600000002?thread_ts=600.000001&cid=CDEC" {
+				t.Fatal(ds, err)
+			}
+			if err := json.Unmarshal(view["open_questions"], &qs); err != nil || len(qs) != 1 || qs[0] != "Who owns urgency?" {
+				t.Fatal(qs, err)
+			}
+		case "700.000001":
+			found++
+			var overview string
+			_ = json.Unmarshal(view["overview"], &overview)
+			if overview != "old overview" {
+				t.Fatal(overview)
+			}
+			if _, ok := view["decisions"]; ok {
+				t.Fatal("old row has decisions")
+			}
+		}
+	}
+	if found != 2 {
+		t.Fatalf("found %d thread views: %s", found, w.Body.String())
 	}
 }
