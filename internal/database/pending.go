@@ -88,6 +88,23 @@ func (db *DB) RequeuePendingMessage(ctx context.Context, id int, errMsg string, 
 	return nil
 }
 
+// RequeuePendingMessageUncharged delays a message and refunds its claim attempt.
+// Disabled processing is infrastructure state, not a message failure.
+func (db *DB) RequeuePendingMessageUncharged(ctx context.Context, id int, errMsg string, delay time.Duration) error {
+	_, err := db.Pool.Exec(ctx, `
+		UPDATE pending_messages
+		SET status = 'pending',
+		    error = $2,
+		    attempts = GREATEST(attempts - 1, 0),
+		    available_at = NOW() + ($3 || ' seconds')::interval
+		WHERE id = $1
+	`, id, errMsg, fmt.Sprintf("%d", int(delay/time.Second)))
+	if err != nil {
+		return fmt.Errorf("requeue pending message uncharged: %w", err)
+	}
+	return nil
+}
+
 // RequeueRetryablePendingMessage returns a claimed message to 'pending' and
 // refunds the claim attempt. Infrastructure failures are not caused by the
 // message and therefore must not consume its retry budget.
