@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"reflect"
 	"strings"
 	"sync"
@@ -40,13 +39,6 @@ func TestIndexArtifactHandler_MissingNodeID(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error when node_id is empty")
 	}
-}
-
-func TestIndexArtifactHandler_SkipsWithDB(t *testing.T) {
-	if os.Getenv("DATABASE_URL") == "" {
-		t.Skip("DATABASE_URL not set")
-	}
-	// Integration test placeholder — covered by DB-backed tests.
 }
 
 func TestIndexArtifactHandler_DuplicateHeuristicSkipsEmbedding(t *testing.T) {

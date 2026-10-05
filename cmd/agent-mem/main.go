@@ -374,6 +374,7 @@ func main() {
 		migrateFixCmd,
 		migrateSqliteCmd,
 		backfillCmd,
+		newReindexHeuristicCmd(func() *config.Config { return cfg }),
 		newEntitiesCmd(func() *config.Config { return cfg }),
 		newMCPCmd(func() *config.Config { return cfg }),
 	)

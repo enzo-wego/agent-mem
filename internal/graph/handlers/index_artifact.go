@@ -40,14 +40,28 @@ func indexArtifactHandler(deps Deps) jobs.Handler {
 		if p.NodeID == "" {
 			return fmt.Errorf("%w: index_artifact: node_id is required", jobs.ErrFatal)
 		}
+		return indexArtifactNode(ctx, deps, p.NodeID, p.Force, p.SkipJudging)
+	}
+}
 
-		// Step 1: skip if refreshed_at is < 24h old and, for Slack thread
-		// roots, not older than the cached thread summary it should embed.
-		if !p.Force {
-			var refreshedAt *time.Time
-			var summaryUpdatedAt *time.Time
-			err := deps.DB.QueryRow(ctx,
-				`SELECT ai.refreshed_at, ts.updated_at
+// artifactEmbedError distinguishes skippable provider failures from indexing
+// failures while retaining the queue's transient-error classification.
+type artifactEmbedError struct {
+	err error
+}
+
+func (e *artifactEmbedError) Error() string        { return "index_artifact embed: " + e.err.Error() }
+func (e *artifactEmbedError) Unwrap() error        { return e.err }
+func (e *artifactEmbedError) Is(target error) bool { return target == jobs.ErrTransient }
+
+func indexArtifactNode(ctx context.Context, deps Deps, nodeID string, force, skipJudging bool) error {
+	// Step 1: skip if refreshed_at is < 24h old and, for Slack thread
+	// roots, not older than the cached thread summary it should embed.
+	if !force {
+		var refreshedAt *time.Time
+		var summaryUpdatedAt *time.Time
+		err := deps.DB.QueryRow(ctx,
+			`SELECT ai.refreshed_at, ts.updated_at
 FROM graph.artifact_index ai
 JOIN graph.nodes n ON n.id = ai.node_id
 LEFT JOIN graph.thread_summaries ts
@@ -55,18 +69,18 @@ LEFT JOIN graph.thread_summaries ts
   AND ts.channel_id = REPLACE(n.scope,'slack:','')
   AND ts.thread_ts = COALESCE(NULLIF(n.metadata->>'thread_ts',''), split_part(n.id,':',3))
   AND COALESCE(NULLIF(n.metadata->>'thread_ts',''), split_part(n.id,':',3)) = split_part(n.id,':',3)
-WHERE ai.node_id = $1`, p.NodeID,
-			).Scan(&refreshedAt, &summaryUpdatedAt)
-			if err == nil && refreshedAt != nil && time.Since(*refreshedAt) < 24*time.Hour &&
-				(summaryUpdatedAt == nil || !summaryUpdatedAt.After(*refreshedAt)) {
-				return nil // fresh enough
-			}
+WHERE ai.node_id = $1`, nodeID,
+		).Scan(&refreshedAt, &summaryUpdatedAt)
+		if err == nil && refreshedAt != nil && time.Since(*refreshedAt) < 24*time.Hour &&
+			(summaryUpdatedAt == nil || !summaryUpdatedAt.After(*refreshedAt)) {
+			return nil // fresh enough
 		}
+	}
 
-		// Step 2: read node metadata and body_full, falling back to nodes.body.
-		var nodeType, scope, threadTs, ownTs, title, bodyFull string
-		err := deps.DB.QueryRow(ctx,
-			`SELECT n.type,
+	// Step 2: read node metadata and body_full, falling back to nodes.body.
+	var nodeType, scope, threadTs, ownTs, title, bodyFull string
+	err := deps.DB.QueryRow(ctx,
+		`SELECT n.type,
        COALESCE(n.scope,''),
        COALESCE(NULLIF(n.metadata->>'thread_ts',''), split_part(n.id,':',3)),
        split_part(n.id,':',3),
@@ -74,76 +88,76 @@ WHERE ai.node_id = $1`, p.NodeID,
        COALESCE(ab.body_full, n.body, '')
 FROM graph.nodes n
 LEFT JOIN graph.artifact_bodies ab ON ab.node_id = n.id
-WHERE n.id = $1`, p.NodeID,
-		).Scan(&nodeType, &scope, &threadTs, &ownTs, &title, &bodyFull)
-		if err != nil {
-			return fmt.Errorf("%w: index_artifact: node not found: %v", jobs.ErrFatal, err)
-		}
+WHERE n.id = $1`, nodeID,
+	).Scan(&nodeType, &scope, &threadTs, &ownTs, &title, &bodyFull)
+	if err != nil {
+		return fmt.Errorf("%w: index_artifact: node not found: %v", jobs.ErrFatal, err)
+	}
 
-		if bodyFull == "" && (nodeType == "slack" || nodeType == "slack_thread" || strings.TrimSpace(title) == "") {
-			// Nothing to index yet; not an error.
-			return nil
-		}
+	if bodyFull == "" && (nodeType == "slack" || nodeType == "slack_thread" || strings.TrimSpace(title) == "") {
+		// Nothing to index yet; not an error.
+		return nil
+	}
 
-		// Step 3: compute summary text. Slack thread roots prefer the cached
-		// resource-aware thread summary built by summarize_thread.
-		summary := heuristicSummary(p.NodeID, title, bodyFull)
-		if summary == "" {
-			return nil
-		}
-		summaryKind := "heuristic"
-		var decisionsText *string // NULL unless this node embeds a thread summary
-		if (nodeType == "slack" || nodeType == "slack_thread") && threadTs == ownTs && strings.HasPrefix(scope, "slack:") {
-			var topic, overview string
-			var decRaw []byte
-			_ = deps.DB.QueryRow(ctx,
-				`SELECT COALESCE(summary,''), COALESCE(overview,''), decisions
+	// Step 3: compute summary text. Slack thread roots prefer the cached
+	// resource-aware thread summary built by summarize_thread.
+	summary := heuristicSummary(nodeID, title, bodyFull)
+	if summary == "" && nodeType != "slack" && nodeType != "slack_thread" {
+		return nil
+	}
+	summaryKind := "heuristic"
+	var decisionsText *string // NULL unless this node embeds a thread summary
+	if (nodeType == "slack" || nodeType == "slack_thread") && threadTs == ownTs && strings.HasPrefix(scope, "slack:") {
+		var topic, overview string
+		var decRaw []byte
+		_ = deps.DB.QueryRow(ctx,
+			`SELECT COALESCE(summary,''), COALESCE(overview,''), decisions
 FROM graph.thread_summaries
 WHERE channel_id=$1 AND thread_ts=$2`,
-				strings.TrimPrefix(scope, "slack:"), threadTs,
-			).Scan(&topic, &overview, &decRaw)
-			if threadSummary, kind := indexSummaryForSlackRoot(topic, overview); threadSummary != "" {
-				summary = threadSummary
-				summaryKind = kind
-				var decisions []threadDecision
-				if len(decRaw) > 0 {
-					_ = json.Unmarshal(decRaw, &decisions) // NULL or bad JSON: no decisions
-				}
-				dt := decisionsBlock(decisions)
-				decisionsText = &dt
+			strings.TrimPrefix(scope, "slack:"), threadTs,
+		).Scan(&topic, &overview, &decRaw)
+		if threadSummary, kind := indexSummaryForSlackRoot(topic, overview); threadSummary != "" {
+			summary = threadSummary
+			summaryKind = kind
+			var decisions []threadDecision
+			if len(decRaw) > 0 {
+				_ = json.Unmarshal(decRaw, &decisions) // NULL or bad JSON: no decisions
 			}
+			dt := decisionsBlock(decisions)
+			decisionsText = &dt
 		}
+	}
 
-		// Step 4: extract identifiers from RAW text (thread roots read the
-		// whole thread) — summaries drop the IDs that shared-identifier
-		// candidates depend on.
-		identifiers, err := identifiersForNode(ctx, deps, p.NodeID, nodeType, scope, threadTs, ownTs, bodyFull)
+	// Step 4: extract identifiers from RAW text (thread roots read the
+	// whole thread) — summaries drop the IDs that shared-identifier
+	// candidates depend on.
+	identifiers, err := identifiersForNode(ctx, deps, nodeID, nodeType, scope, threadTs, ownTs, bodyFull)
+	if err != nil {
+		return fmt.Errorf("index_artifact: extract identifiers: %w", err)
+	}
+	if identifiers == nil {
+		identifiers = []string{}
+	}
+
+	// Step 5: identical heuristic summaries share one indexed
+	// representative. The transaction-scoped advisory lock serializes the
+	// check through the upsert across the handler's worker pool.
+	var indexTx pgx.Tx
+	skipEmbedding := false
+	if summaryKind == "heuristic" {
+		indexTx, err = deps.DB.Begin(ctx)
 		if err != nil {
-			return fmt.Errorf("index_artifact: extract identifiers: %w", err)
+			return fmt.Errorf("index_artifact: begin heuristic dedup transaction: %w", err)
 		}
-		if identifiers == nil {
-			identifiers = []string{}
+		defer func() {
+			_ = indexTx.Rollback(context.Background())
+		}()
+		if _, err = indexTx.Exec(ctx,
+			`SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))`,
+			summaryKind, summary); err != nil {
+			return fmt.Errorf("index_artifact: lock heuristic summary: %w", err)
 		}
-
-		// Step 5: identical heuristic summaries share one indexed
-		// representative. The transaction-scoped advisory lock serializes the
-		// check through the upsert across the handler's worker pool.
-		var indexTx pgx.Tx
-		skipEmbedding := false
-		if summaryKind == "heuristic" {
-			indexTx, err = deps.DB.Begin(ctx)
-			if err != nil {
-				return fmt.Errorf("index_artifact: begin heuristic dedup transaction: %w", err)
-			}
-			defer func() {
-				_ = indexTx.Rollback(context.Background())
-			}()
-			if _, err = indexTx.Exec(ctx,
-				`SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))`,
-				summaryKind, summary); err != nil {
-				return fmt.Errorf("index_artifact: lock heuristic summary: %w", err)
-			}
-			if err = indexTx.QueryRow(ctx, `
+		if err = indexTx.QueryRow(ctx, `
 SELECT EXISTS (
   SELECT 1
   FROM graph.artifact_index
@@ -151,26 +165,26 @@ SELECT EXISTS (
     AND summary_kind = $2
     AND embedding IS NOT NULL
     AND node_id <> $3
-)`, summary, summaryKind, p.NodeID).Scan(&skipEmbedding); err != nil {
-				return fmt.Errorf("index_artifact: check duplicate heuristic summary: %w", err)
-			}
+)`, summary, summaryKind, nodeID).Scan(&skipEmbedding); err != nil {
+			return fmt.Errorf("index_artifact: check duplicate heuristic summary: %w", err)
 		}
+	}
 
-		embedInput := summary
-		if decisionsText != nil && *decisionsText != "" {
-			embedInput += indexDecisionsMarker + *decisionsText
+	embedInput := summary
+	if decisionsText != nil && *decisionsText != "" {
+		embedInput += indexDecisionsMarker + *decisionsText
+	}
+	var embedding any
+	if !skipEmbedding {
+		vector, err := deps.Gemini.EmbedWithOptions(ctx, embedInput, graphEmbeddingOptions())
+		if err != nil {
+			return &artifactEmbedError{err: err}
 		}
-		var embedding any
-		if !skipEmbedding {
-			vector, err := deps.Gemini.EmbedWithOptions(ctx, embedInput, graphEmbeddingOptions())
-			if err != nil {
-				return fmt.Errorf("%w: index_artifact embed: %v", jobs.ErrTransient, err)
-			}
-			embedding = pgvector.NewVector(vector)
-		}
+		embedding = pgvector.NewVector(vector)
+	}
 
-		// Step 6: UPSERT graph.artifact_index.
-		const upsertSQL = `
+	// Step 6: UPSERT graph.artifact_index.
+	const upsertSQL = `
 			INSERT INTO graph.artifact_index (node_id, summary, summary_kind, embedding, identifiers, refreshed_at, machine_id, decisions_text)
 			VALUES ($1, $2, $3, $4, $5, NOW(), $6, $7)
 			ON CONFLICT (node_id) DO UPDATE SET
@@ -180,29 +194,28 @@ SELECT EXISTS (
 				identifiers  = EXCLUDED.identifiers,
 				decisions_text = EXCLUDED.decisions_text,
 				refreshed_at = NOW()`
-		if indexTx != nil {
-			_, err = indexTx.Exec(ctx, upsertSQL,
-				p.NodeID, summary, summaryKind, embedding, identifiers, deps.MachineID, decisionsText)
-		} else {
-			_, err = deps.DB.Exec(ctx, upsertSQL,
-				p.NodeID, summary, summaryKind, embedding, identifiers, deps.MachineID, decisionsText)
-		}
-		if err != nil {
-			return fmt.Errorf("index_artifact: upsert artifact_index: %w", err)
-		}
-		if indexTx != nil {
-			if err = indexTx.Commit(ctx); err != nil {
-				return fmt.Errorf("index_artifact: commit heuristic dedup transaction: %w", err)
-			}
-		}
-
-		// Only thread roots (embedding their resource-aware summary) and
-		// non-Slack resources link out — never raw-text Slack messages.
-		if (nodeType != "slack" && nodeType != "slack_thread") || summaryKind == "thread_summary" {
-			enqueueLinkTopics(ctx, deps, p.NodeID, linkTopicsForceFromIndexArtifact(p.Force), p.SkipJudging)
-		}
-		return nil
+	if indexTx != nil {
+		_, err = indexTx.Exec(ctx, upsertSQL,
+			nodeID, summary, summaryKind, embedding, identifiers, deps.MachineID, decisionsText)
+	} else {
+		_, err = deps.DB.Exec(ctx, upsertSQL,
+			nodeID, summary, summaryKind, embedding, identifiers, deps.MachineID, decisionsText)
 	}
+	if err != nil {
+		return fmt.Errorf("index_artifact: upsert artifact_index: %w", err)
+	}
+	if indexTx != nil {
+		if err = indexTx.Commit(ctx); err != nil {
+			return fmt.Errorf("index_artifact: commit heuristic dedup transaction: %w", err)
+		}
+	}
+
+	// Only thread roots (embedding their resource-aware summary) and
+	// non-Slack resources link out — never raw-text Slack messages.
+	if (nodeType != "slack" && nodeType != "slack_thread") || summaryKind == "thread_summary" {
+		enqueueLinkTopics(ctx, deps, nodeID, linkTopicsForceFromIndexArtifact(force), skipJudging)
+	}
+	return nil
 }
 
 // indexDecisionsMarker joins a thread root's summary and its decisions block in

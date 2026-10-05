@@ -378,6 +378,76 @@ out into `backfill_slack_thread`, `fetch_body`, `describe_attachment`, and
 dashboard tab. See [docs/ai/TESTING.md](docs/ai/TESTING.md) for the full
 insert → process → read walkthrough.
 
+### Re-index heuristic Jira, PR and Confluence resources
+
+`agent-mem reindex-heuristic` is an operator-run, serial backfill, not a queued
+job. It repairs existing heuristic Jira/PR/Confluence index rows and titled
+resources of those types with an empty effective body and no index row. Slack,
+thread summaries and other resource types are excluded.
+
+**Before choosing a cutoff:** deploy the new worker and stop/drain every
+old-version index writer. Take the cutoff only after the new worker is up.
+Confirm artifact-index sync imports are off (`AGENT_MEM_SYNC_ENABLED`), or
+explicitly record and eliminate incompatible writers/imports before proceeding.
+An old writer or imported old summary with a recent timestamp defeats timestamp
+resume; `refreshed_at` is not a content-version marker.
+
+The CLI bootstraps the database through `config.Load()` / `DATABASE_URL`, then
+loads `public.settings` and reapplies environment overrides, just like the
+worker. Gateway URL/key and machine ID can come from DB settings;
+`AGENT_MEM_LLM_GATEWAY_URL`, `AGENT_MEM_LLM_GATEWAY_API_KEY` and
+`AGENT_MEM_MACHINE_ID` take precedence. It builds only the DB, logger and
+3072-dimensional graph gateway client: no worker server or migration is started.
+A non-dry run rejects an empty gateway URL and probes one embedding of
+`preflight` before changing rows. Dry runs need no gateway.
+
+Use one fixed RFC3339 cutoff for the dry run, canary, full run and any resume.
+Future cutoffs relative to the DB clock are rejected; every run prints its cutoff.
+For example, in the deployed worker container:
+
+```bash
+# Set this once to the actual cutoff after all old writers have stopped.
+SINCE='2026-10-05T11:30:00Z'
+docker exec agent-mem-worker-1 agent-mem reindex-heuristic --since "$SINCE" --dry-run
+docker exec agent-mem-worker-1 agent-mem reindex-heuristic --since "$SINCE" --max-rows 20
+# Inspect the canary rows before starting the full run.
+docker exec agent-mem-worker-1 agent-mem reindex-heuristic --since "$SINCE" \
+  > reindex-heuristic.log 2>&1 &
+```
+
+Canary checks: summaries are substantive or valid title-only fallbacks, own keys
+are in identifiers, and embeddings exist except for legitimately deduplicated
+representatives. CLI-enqueued `link_topics` work must make zero judging calls.
+
+Flags: `--since` is required; `--interval-ms` defaults to 300 and accepts 50–5000;
+`--max-rows` defaults to 0 (all attempted rows, including skipped embeddings).
+`--dry-run` counts eligible rows and lists the first 20 IDs without changing
+rows; `--max-rows` also bounds a dry run's count when supplied. Progress prints
+every 50 attempts, followed by a final summary, last attempted ID and skipped
+embedding IDs, including when the run stops on an error or cancellation.
+
+Resume by re-running with **the same** `--since`. Eligibility is a missing
+index row or `refreshed_at < since`; rows refreshed at or after the cutoff by
+**any compatible new-code writer** are already repaired, not necessarily visited
+by this command. Skipped embedding failures stay eligible. More than 20
+consecutive embedding failures, or any other indexing/commit error, stops the
+run non-zero; post-commit link enqueue failures only log as in ordinary indexing.
+SIGINT and SIGTERM cancel the current work and the inter-node sleep.
+
+Only one CLI run owns the session advisory lock. It retains the same physical
+connection, checks that session before each node and never reacquires a lost
+lock. A lost lock session stops the run; at most the node already in flight can
+overlap a new run. This is not fencing and does not serialize ordinary indexing.
+Unlock uses a separate five-second cleanup context; a failed unlock closes the
+physical connection rather than returning a locked session to the pool.
+
+At 300 ms the serial loop starts at most about 200 node embeddings per minute
+(plus the single preflight probe); embedding latency reduces that rate.
+The expected repair population is about 4,200 `/embed` calls plus retries.
+`/embed` does not consume `llm_hourly_call_cap`, but provider quotas still apply.
+The zero-chat guarantee covers CLI-generated work only: ordinary linking jobs
+may independently re-judge changed summaries.
+
 ### Required env vars (fetchers)
 
 | Variable | Source |
@@ -737,6 +807,7 @@ agent-mem migrate-rollback --version <migration_version>
 agent-mem migrate-fix --version <migration_version>
 agent-mem migrate-sqlite --sqlite-path ~/.claude-mem/claude-mem.db
 agent-mem backfill-embeddings
+agent-mem reindex-heuristic --since <RFC3339-cutoff> --dry-run
 agent-mem install codex --scope project
 agent-mem install gemini --scope project
 agent-mem install-skill mem-search --scope project
