@@ -26,6 +26,24 @@ const (
 
 var allArms = []string{armSemantic, armKeyword, armGraph, armTemporal}
 
+// semanticMinCosine uses the human-selected F=0.65. Calibration E_min=0.6672
+// and N_max=0.6245 leave thin margins: 0.017 below good, 0.025 above noise.
+// See docs/ai/report-semantic-floor.md.
+const semanticMinCosine = 0.65
+
+// aboveSemanticFloor filters in place, preserving arm rank order.
+func aboveSemanticFloor(hits []armHit) []armHit {
+	kept := 0
+	for _, hit := range hits {
+		if hit.Score >= semanticMinCosine {
+			hits[kept] = hit
+			kept++
+		}
+	}
+	clear(hits[kept:])
+	return hits[:kept]
+}
+
 // armHit is one ranked candidate from an arm. Score is arm-local (cosine,
 // ts_rank, edge weight…) and only orders the arm's list; fusion is by rank.
 type armHit struct {
@@ -61,7 +79,11 @@ func semanticArm(ctx context.Context, db *pgxpool.Pool, vec []float32, f searchF
 	if err != nil {
 		return nil, err
 	}
-	return scanHits(rows)
+	hits, err := scanHits(rows)
+	if err != nil {
+		return nil, err
+	}
+	return aboveSemanticFloor(hits), nil
 }
 
 // semanticRows runs the semantic query; extra is an optional additional

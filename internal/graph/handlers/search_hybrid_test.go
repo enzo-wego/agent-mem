@@ -417,7 +417,8 @@ func TestSearch_HybridKeywordTitleBoostOutranksSemantic(t *testing.T) {
 	spNode(t, pool, "jira:PAY-B", "jira", "Unrelated ledger", "ledger export", "", "", "{}", 0, false)
 	spEmbed(t, pool, "jira:PAY-B", spUnitVec())
 	v := make([]float32, handlers.GraphEmbeddingDims)
-	v[0], v[1] = 0.5, float32(math.Sqrt(0.75))
+	c := handlers.SemanticMinCosine + 0.1
+	v[0], v[1] = float32(c), float32(math.Sqrt(1-c*c))
 	spEmbed(t, pool, "jira:PAY-A", v)
 	alphas := scoring.BoostAlphas{Rec: 0.2, Team: 0.2, Temporal: 0.2, Auth: 0.1}
 	shSetAlphas(t, pool, alphas)

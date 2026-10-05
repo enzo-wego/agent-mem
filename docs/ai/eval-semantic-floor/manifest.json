@@ -1,0 +1,193 @@
+{
+  "mode": "default",
+  "thread_fold_rule": "channel:(metadata.thread_ts or ts)",
+  "queries": [
+    {
+      "id": "Q1",
+      "params": {
+        "q": "What happened on the India GST epic in August 2026?",
+        "limit": 50
+      },
+      "expected_ids": [
+        "jira:PAY-2307",
+        "cf:4115693570",
+        "slack:CUV9EAYGY:1786442428.281449",
+        "slack:C0BBJAHV4G1:1786434184.778929",
+        "slack:C08SVNFA30R:1787125337.685409",
+        "slack:CUV9EAYGY:1787286012.340719",
+        "jira:PAY-2308",
+        "jira:PAY-2315"
+      ]
+    },
+    {
+      "id": "Q2",
+      "params": {
+        "q": "Which PRs closed PAY-2333 and what did the review discuss?",
+        "limit": 50
+      },
+      "expected_ids": [
+        "jira:PAY-2333",
+        "gh_pr:wego/payments#2280",
+        "gh_pr:wego/payments#2281",
+        "gh_pr:wego/payments#2282",
+        "gh_pr:wego/payments#2293",
+        "gh_pr:wego/payments#2310",
+        "gh_pr:wego/payments#2314"
+      ]
+    },
+    {
+      "id": "Q3",
+      "params": {
+        "q": "What is open on PAY-2307 right now?",
+        "limit": 50
+      },
+      "expected_ids": [
+        "jira:PAY-2307",
+        "jira:PAY-2331",
+        "jira:PAY-2360",
+        "jira:PAY-2393",
+        "jira:PAY-2400"
+      ]
+    },
+    {
+      "id": "Q4",
+      "params": {
+        "q": "Who owns the Razorpay checkout UI change and what did they decide?",
+        "limit": 50
+      },
+      "expected_ids": [
+        "jira:PAY-2318",
+        "gh_pr:wego/payments-react-component#480",
+        "slack:C0597404MS6:1787647035.383409",
+        "slack:CUV9EAYGY:1786948867.596489",
+        "cf:4107206660",
+        "slack:C012A121AQJ:1678158107.892769",
+        "jira:DES-1167"
+      ]
+    },
+    {
+      "id": "Q5",
+      "params": {
+        "q": "Which incidents (Datadog/PagerDuty) touched the tax path since July?",
+        "limit": 50
+      },
+      "expected_ids": [
+        "pagerduty:Q00IFF0Q0BGPIV",
+        "pagerduty:Q2EE3TH7G7IWMR",
+        "pagerduty:Q0NELS47JE95N0",
+        "datadog:monitor:252312593",
+        "slack:C08S954G2LX:1784236855.699269",
+        "slack:C08S954G2LX:1784206256.540219",
+        "slack:C08S954G2LX:1788421850.770589"
+      ]
+    },
+    {
+      "id": "Q6",
+      "params": {
+        "q": "Show the thread where the refund with scheme reference 74300216267920006001532 was confirmed from the gateway side.",
+        "limit": 50
+      },
+      "expected_ids": [
+        "slack:C0BRJGC92KA:1788682872.344359"
+      ]
+    },
+    {
+      "id": "Q7",
+      "params": {
+        "q": "What did payments discuss last week that has no ticket?",
+        "limit": 50,
+        "since": "2026-09-28",
+        "until": "2026-10-05"
+      },
+      "expected_ids": [
+        "slack:C05RNSE8TBR:1790939932.438779",
+        "slack:C05RNSE8TBR:1790574910.456809",
+        "slack:C05RNSE8TBR:1790765130.837879",
+        "slack:CUV9EAYGY:1790593195.088149",
+        "slack:C05RNSE8TBR:1790668280.158439",
+        "slack:C05RNSE8TBR:1790590105.368949",
+        "slack:CUV9EAYGY:1790675479.191359",
+        "slack:C02NA2MA5K5:1790594671.039869"
+      ]
+    },
+    {
+      "id": "Q8",
+      "params": {
+        "q": "Which epics were active in the first week of September?",
+        "limit": 50,
+        "since": "2026-09-01",
+        "until": "2026-09-08"
+      },
+      "expected_ids": [
+        "jira:PAY-2307",
+        "jira:PAY-1581",
+        "jira:PAY-1983",
+        "jira:PAY-2203",
+        "jira:PAY-2273",
+        "jira:PAY-2065"
+      ]
+    },
+    {
+      "id": "Q9",
+      "params": {
+        "q": "Was tax_country renamed from site_code, and where?",
+        "limit": 50
+      },
+      "expected_ids": [
+        "jira:PAY-2333",
+        "gh_pr:wego/payments#2280",
+        "gh_pr:wego/payments#2281",
+        "gh_pr:wego/payments#2282",
+        "gh_pr:wego/payments#2293",
+        "gh_pr:wego/payments#2310",
+        "gh_pr:wego/payments#2314",
+        "jira:DECLAW-215"
+      ]
+    },
+    {
+      "id": "Q10",
+      "params": {
+        "q": "What did the PK VAT CSV work depend on in another team's ticket?",
+        "limit": 50
+      },
+      "expected_ids": [
+        "jira:DECLAW-197",
+        "slack:C09H1QMK882:1786709371.372099",
+        "jira:PAY-2399",
+        "jira:DECLAW-230"
+      ]
+    },
+    {
+      "id": "tamara",
+      "params": {
+        "q": "tamara",
+        "limit": 50
+      },
+      "expected_ids": []
+    },
+    {
+      "id": "tabby",
+      "params": {
+        "q": "tabby",
+        "limit": 50
+      },
+      "expected_ids": []
+    },
+    {
+      "id": "juspay",
+      "params": {
+        "q": "juspay",
+        "limit": 50
+      },
+      "expected_ids": []
+    },
+    {
+      "id": "roxana",
+      "params": {
+        "q": "roxana",
+        "limit": 50
+      },
+      "expected_ids": []
+    }
+  ]
+}
