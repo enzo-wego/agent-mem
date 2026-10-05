@@ -80,22 +80,30 @@ func semanticArmFolded(ctx context.Context, db *pgxpool.Pool, vec []float32, f s
 		return nil, err
 	}
 	defer rows.Close()
-	seen := map[string]bool{}
 	var out []armHit
 	for rows.Next() {
 		var h armHit
 		if err := rows.Scan(&h.ID, &h.Score, &h.At, &h.Key); err != nil {
 			return nil, err
 		}
-		if seen[h.Key] {
-			continue
-		}
-		seen[h.Key] = true
 		out = append(out, h)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
+	out = aboveSemanticFloor(out)
+	seen := map[string]bool{}
+	kept := 0
+	for _, hit := range out {
+		if seen[hit.Key] {
+			continue
+		}
+		seen[hit.Key] = true
+		out[kept] = hit
+		kept++
+	}
+	clear(out[kept:])
+	out = out[:kept]
 	if len(out) > budget {
 		out = out[:budget]
 	}
