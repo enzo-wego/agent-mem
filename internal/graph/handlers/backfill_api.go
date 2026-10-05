@@ -59,7 +59,7 @@ func NewBackfillSlackHandler(deps Deps) http.Handler {
 
 		jobID, err := jobs.Enqueue(r.Context(), deps.DB, "backfill_slack_channel", payload, jobs.EnqueueOptions{
 			Priority:     5,
-			TargetRunner: "vps",
+			TargetRunner: deps.Runner,
 			MachineID:    deps.MachineID,
 		})
 		if err != nil {
