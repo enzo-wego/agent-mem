@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"reflect"
 	"strings"
 	"sync"
@@ -42,13 +41,6 @@ func TestIndexArtifactHandler_MissingNodeID(t *testing.T) {
 	}
 }
 
-func TestIndexArtifactHandler_SkipsWithDB(t *testing.T) {
-	if os.Getenv("DATABASE_URL") == "" {
-		t.Skip("DATABASE_URL not set")
-	}
-	// Integration test placeholder — covered by DB-backed tests.
-}
-
 func TestIndexArtifactHandler_DuplicateHeuristicSkipsEmbedding(t *testing.T) {
 	pool := openTestDB(t)
 	truncateGraphHandlerTables(t, pool)
@@ -73,7 +65,7 @@ VALUES ($1, 'jira', $1, $3, 'test'),
 INSERT INTO graph.artifact_index
   (node_id, summary, summary_kind, embedding, refreshed_at, machine_id)
 VALUES ($1, $2, 'heuristic', $3, NOW(), 'test')`,
-		representativeNodeID, heuristicSummary(targetNodeID, body), pgvector.NewVector(vector)); err != nil {
+		representativeNodeID, heuristicSummary(targetNodeID, "", body), pgvector.NewVector(vector)); err != nil {
 		t.Fatalf("seed representative artifact: %v", err)
 	}
 
@@ -137,7 +129,7 @@ VALUES ($1, 'jira', $1, $3, 'test'),
 		nodeIDs[0], nodeIDs[1], body); err != nil {
 		t.Fatalf("seed nodes: %v", err)
 	}
-	summary := heuristicSummary(nodeIDs[0], body)
+	summary := heuristicSummary(nodeIDs[0], "", body)
 
 	lockTx, err := pool.Begin(ctx)
 	if err != nil {
@@ -253,49 +245,39 @@ WHERE node_id = ANY($1)`, nodeIDs).Scan(&total, &nonNull); err != nil {
 
 func TestHeuristicSummary(t *testing.T) {
 	cases := []struct {
-		nodeID string
-		body   string
-		wantIn string // the result should contain or start with this
+		name, nodeID, title, body, want string
 	}{
-		{
-			nodeID: "jira:PAY-1234",
-			body:   "First paragraph.\n\nSecond paragraph.",
-			wantIn: "First paragraph.",
-		},
-		{
-			nodeID: "gh_pr:wego/payments#42",
-			body:   "PR title\nline2\nline3\nline4",
-			wantIn: "PR title",
-		},
-		{
-			nodeID: "slack:C123:1234.5678",
-			body:   "Short message",
-			wantIn: "Short message",
-		},
+		{"PAY-2307", "jira:PAY-2307", "India GST", "Overview\n\nEpic to implement India GST ...", "India GST\nEpic to implement India GST ..."},
+		{"three labels", "jira:PAY-1", "Refunds", "Background\n\nContext\n\nProblem\n\nFix duplicate refunds", "Refunds\nFix duplicate refunds"},
+		{"adjacent heading", "jira:PAY-1", "Details", "## What\nActual implementation details", "Details\nActual implementation details"},
+		{"punctuation", "jira:PAY-1", "Details", "Background:\n## What?\nReturn HTTP 409", "Details\nReturn HTTP 409"},
+		{"markdown title", "jira:PAY-1", " Exact  Stored TITLE ", "# Exact stored title\nExact stored title\nFix duplicate refunds", "Exact  Stored TITLE\nFix duplicate refunds"},
+		{"short substantive", "jira:PAY-1", "", "Fix duplicate refunds\nReturn HTTP 409\nhttps://example.com\n- retry", "Fix duplicate refunds Return HTTP 409 https://example.com - retry"},
+		{"heading only", "jira:PAY-1", "Refunds", "## What\nBackground:", "Refunds"},
+		{"heading fallback", "jira:PAY-1", "", "## What\nBackground:", "## What\nBackground:"},
+		{"empty", "jira:PAY-1", " ", " \n\t", ""},
+		{"title only", "jira:PAY-1", "Refunds", "", "Refunds"},
+		{"PR kept lines", "gh_pr:wego/payments#42", "Refunds", "## What\nFix refunds\n\nBackground:\nReturn HTTP 409\n- retry\nfourth", "Refunds\nFix refunds Return HTTP 409 - retry"},
+		{"Confluence", "cf:1", "Runbook", "Overview\nCheck payments\nNotes\nEscalate", "Runbook\nCheck payments Escalate"},
+		{"default", "datadog:1", "Alert", "Background\nFix payments", "Alert\nFix payments"},
+		{"Slack", "slack:C1:1.2", "Ignored", "Background\n\nKeep old behavior", "Background"},
+		{"Slack thread", "slack_thread:C1:1.2", "Ignored", "## What\nAdjacent\n\nLater", "## What\nAdjacent"},
 	}
-
 	for _, c := range cases {
-		got := heuristicSummary(c.nodeID, c.body)
-		if got == "" {
-			t.Errorf("heuristicSummary(%q, ...) returned empty string", c.nodeID)
-		}
-		if len(got) > 200 {
-			t.Errorf("heuristicSummary result exceeds 200 chars: %d", len(got))
-		}
+		t.Run(c.name, func(t *testing.T) {
+			if got := heuristicSummary(c.nodeID, c.title, c.body); got != c.want {
+				t.Fatalf("summary = %q, want %q", got, c.want)
+			}
+		})
 	}
-}
-
-// Regression: truncation must not split a multi-byte rune — a byte slice
-// produced invalid UTF-8 that Postgres rejected (SQLSTATE 22021).
-func TestHeuristicSummary_TruncatesOnRuneBoundary(t *testing.T) {
-	body := strings.Repeat("é", 300) // 2 bytes each, > 200 runes
-	for _, nodeID := range []string{"jira:PAY-1", "gh_pr:wego/x#1", "slack:C1:1.2"} {
-		got := heuristicSummary(nodeID, body)
-		if !utf8.ValidString(got) {
-			t.Errorf("%s: result is not valid UTF-8: %q", nodeID, got)
+	for _, nodeID := range []string{"jira:PAY-1", "gh_pr:wego/x#1", "cf:1", "slack:C1:1.2", "slack_thread:C1:1.2"} {
+		wantRunes := 400
+		if strings.HasPrefix(nodeID, "slack") {
+			wantRunes = 200
 		}
-		if n := utf8.RuneCountInString(got); n > 200 {
-			t.Errorf("%s: result exceeds 200 runes: %d", nodeID, n)
+		got := heuristicSummary(nodeID, "", strings.Repeat("é", 500))
+		if !utf8.ValidString(got) || utf8.RuneCountInString(got) != wantRunes {
+			t.Errorf("%s: invalid rune cap: %d", nodeID, utf8.RuneCountInString(got))
 		}
 	}
 }

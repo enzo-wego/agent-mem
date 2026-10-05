@@ -304,7 +304,7 @@ func TestBackfillSubtreeIndex_Converges(t *testing.T) {
 		t.Fatalf("seed summaries: %v", err)
 	}
 	// 600.0: heuristic row, NULL embedding, identical summary embedded on OPS-9.
-	dupSummary := heuristicSummary("slack:C1:600.0", "dup heuristic root")
+	dupSummary := heuristicSummary("slack:C1:600.0", "", "dup heuristic root")
 	if _, err := pool.Exec(ctx, `INSERT INTO graph.artifact_index (node_id, summary, summary_kind, embedding, refreshed_at, machine_id) VALUES
 		('jira:OPS-9', $1, 'heuristic', array_fill(0.1, ARRAY[3072])::halfvec, now(), 'test'),
 		('slack:C1:600.0', $1, 'heuristic', NULL, now(), 'test'),

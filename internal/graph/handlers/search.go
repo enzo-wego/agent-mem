@@ -314,6 +314,11 @@ func (s *Search) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sortByScore(results)
+	results, err = s.pinOwnKey(ctx, q, results, filter, fused, armLocal, alphas, askerEEID, win, hasWindow, now)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	if len(results) > limit {
 		results = results[:limit]
 	}

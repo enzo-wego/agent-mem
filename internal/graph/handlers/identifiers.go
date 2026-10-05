@@ -29,6 +29,8 @@ var (
 	rePaymentRef = regexp.MustCompile(`\b[psd][0-9b-oqrt-z]{9}\b`)
 	reActionRef  = regexp.MustCompile(`\ba[0-9b-oqrt-z]{14}\b`)
 	reJiraKey    = regexp.MustCompile(`\b[A-Z][A-Z0-9]{1,9}-[0-9]{1,6}\b`)
+	reOwnJiraKey = regexp.MustCompile(`^[A-Z][A-Z0-9]{1,9}-[0-9]{1,6}$`)
+	reOwnGHPR    = regexp.MustCompile(`^wego/[\w.-]+#[0-9]+$`)
 	reGHPRURL    = regexp.MustCompile(`\bgithub\.com/(wego/[\w.-]+)/pull/([0-9]+)\b`)
 	reGHPRShort  = regexp.MustCompile(`\b(wego/[\w.-]+)#([0-9]+)\b`)
 	reRequestID  = regexp.MustCompile(`\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b`)
@@ -39,7 +41,11 @@ var (
 // filtered here — the candidate generator applies the rarity cap where the
 // corpus-wide count is known.
 func extractIdentifiers(text string) []string {
-	if text == "" {
+	return extractIdentifiersWithOwnKey(text, "")
+}
+
+func extractIdentifiersWithOwnKey(text, ownKey string) []string {
+	if text == "" && ownKey == "" {
 		return nil
 	}
 	seen := make(map[string]struct{})
@@ -47,6 +53,9 @@ func extractIdentifiers(text string) []string {
 		if _, ok := seen[id]; !ok && len(seen) < maxIdentifiersPerNode {
 			seen[id] = struct{}{}
 		}
+	}
+	if ownKey != "" {
+		add(ownKey)
 	}
 	for _, re := range []*regexp.Regexp{rePaymentRef, reActionRef} {
 		for _, m := range re.FindAllString(text, -1) {
@@ -108,7 +117,7 @@ WHERE n.scope = 'slack:' || $1 AND n.deleted_at IS NULL
 // thread roots read the whole thread's raw text, non-Slack resources read
 // their full body, and non-root Slack messages get none (they never link out —
 // same gate as link_topics).
-func identifiersForNode(ctx context.Context, deps Deps, nodeType, scope, threadTs, ownTs, bodyFull string) ([]string, error) {
+func identifiersForNode(ctx context.Context, deps Deps, nodeID, nodeType, scope, threadTs, ownTs, bodyFull string) ([]string, error) {
 	if nodeType == "slack" || nodeType == "slack_thread" {
 		if threadTs != ownTs || !strings.HasPrefix(scope, "slack:") || strings.HasPrefix(scope, "slack:D") {
 			return nil, nil
@@ -119,7 +128,19 @@ func identifiersForNode(ctx context.Context, deps Deps, nodeType, scope, threadT
 		}
 		return extractIdentifiers(raw), nil
 	}
-	return extractIdentifiers(bodyFull), nil
+	var ownKey string
+	if strings.HasPrefix(nodeID, "jira:") {
+		key := strings.ToUpper(strings.TrimPrefix(nodeID, "jira:"))
+		if reOwnJiraKey.MatchString(key) {
+			ownKey = key
+		}
+	} else if strings.HasPrefix(nodeID, "gh_pr:") {
+		key := strings.TrimPrefix(nodeID, "gh_pr:")
+		if reOwnGHPR.MatchString(key) {
+			ownKey = key
+		}
+	}
+	return extractIdentifiersWithOwnKey(bodyFull, ownKey), nil
 }
 
 // NewBackfillIdentifiersHandler returns the job entry for
@@ -169,7 +190,7 @@ WHERE n.deleted_at IS NULL`)
 
 		var updated, withIDs int
 		for _, r := range todo {
-			ids, err := identifiersForNode(ctx, deps, r.typ, r.scope, r.threadTs, r.ownTs, r.body)
+			ids, err := identifiersForNode(ctx, deps, r.id, r.typ, r.scope, r.threadTs, r.ownTs, r.body)
 			if err != nil {
 				return fmt.Errorf("backfill_identifiers: %s: %w", r.id, err)
 			}
