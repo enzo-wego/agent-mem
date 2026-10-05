@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"regexp"
 	"strings"
@@ -63,8 +64,18 @@ func NewJobsEnqueueHandler(deps Deps) http.Handler {
 				return
 			}
 		}
-		id, err := jobs.EnqueueRaw(r.Context(), deps.DB, req.Type, payload,
-			jobs.EnqueueOptions{MachineID: deps.MachineID})
+		var id int64
+		var err error
+		if jobs.IsPeriodic(req.Type) {
+			id, err = jobs.EnqueuePeriodicNow(r.Context(), deps.DB, req.Type, deps.MachineID, deps.Runner)
+		} else {
+			id, err = jobs.EnqueueRaw(r.Context(), deps.DB, req.Type, payload,
+				jobs.EnqueueOptions{MachineID: deps.MachineID})
+		}
+		if errors.Is(err, jobs.ErrPeriodicPending) {
+			writeError(w, http.StatusConflict, err.Error())
+			return
+		}
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return

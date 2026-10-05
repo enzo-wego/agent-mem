@@ -66,8 +66,7 @@ func missingCredsErrFatal(t *testing.T, name, wantSubstr string, h func(ctx cont
 
 // TestNotifyWatchChannels_MissingTokenFails pins Fix B for the watch-channel
 // DM loop: empty deps.SlackBotToken + valid recipient (SlackDMUserID set) is a
-// misconfiguration and must return ErrFatal, not nil. Needs a DB because the
-// reschedule defer enqueues the next tick.
+// misconfiguration and must return ErrFatal, not nil.
 func TestNotifyWatchChannels_MissingTokenFails(t *testing.T) {
 	pool := openTestDB(t)
 	truncateGraphHandlerTables(t, pool)

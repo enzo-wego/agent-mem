@@ -21,11 +21,9 @@ import (
 	"github.com/agent-mem/agent-mem/internal/llmjson"
 )
 
-// Hot-topic detection cadence and lookback. The detect job re-enqueues itself
-// every detectInterval and considers threads active within detectLookback.
+// Hot-topic detection considers threads active within detectLookback.
 // Dedup (graph.topic_notifications) means a long-running hot thread fires once.
 const (
-	detectInterval = 5 * time.Minute
 	detectLookback = 24 // hours
 )
 
@@ -75,25 +73,11 @@ type hotThread struct {
 	HasAlwaysAlert  bool   // an author explicitly bypasses topic relevance for this subscriber
 }
 
-// NewDetectHotTopics returns the handler for the self-rescheduling
-// 'detect_hot_topics' job. Each run scans every active subscription for hot
-// threads, DMs new matches via enzobot, records them, then re-enqueues itself.
+// NewDetectHotTopics returns the handler for 'detect_hot_topics'. Each run
+// scans active subscriptions for hot threads, DMs new matches, and records them.
 func NewDetectHotTopics(deps Deps) jobs.Handler {
 	log := deps.Logger
 	return func(ctx context.Context, _ []byte) error {
-		// Always reschedule the next tick, even if this run hit per-sub errors, so
-		// the chain never dies on a transient failure.
-		defer func() {
-			if _, err := jobs.Enqueue(ctx, deps.DB, "detect_hot_topics", map[string]any{},
-				jobs.EnqueueOptions{
-					AvailableAt:  time.Now().Add(detectInterval),
-					TargetRunner: deps.Runner,
-					MachineID:    deps.MachineID,
-				}); err != nil {
-				log.Warn().Err(err).Msg("detect_hot_topics: reschedule failed")
-			}
-		}()
-
 		subs, err := listSubscriptions(ctx, deps.DB, true)
 		if err != nil {
 			return fmt.Errorf("list subscriptions: %w", err)

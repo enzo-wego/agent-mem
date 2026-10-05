@@ -13,7 +13,6 @@ import (
 )
 
 const (
-	derivePersonRolesInterval = 24 * time.Hour
 	roleRuleVersion           = "v1"
 	strongActivityMinMessages = 20
 	strongActivityMinShare    = 0.70
@@ -64,21 +63,6 @@ func NewDerivePersonRolesHandler(deps Deps) jobs.Entry {
 
 func derivePersonRolesHandler(deps Deps) jobs.Handler {
 	return func(ctx context.Context, _ []byte) error {
-		// Keep the daily chain alive even if this run fails or its claim context is
-		// cancelled. Startup also seeds a missing chain, so a restart self-heals it.
-		defer func() {
-			scheduleCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-			defer cancel()
-			if _, err := jobs.Enqueue(scheduleCtx, deps.DB, "derive_person_roles", map[string]any{},
-				jobs.EnqueueOptions{
-					AvailableAt:  time.Now().Add(derivePersonRolesInterval),
-					TargetRunner: "any",
-					MachineID:    deps.MachineID,
-				}); err != nil {
-				deps.Logger.Warn().Err(err).Msg("derive_person_roles: reschedule failed")
-			}
-		}()
-
 		count, err := recomputePersonRoles(ctx, deps)
 		if err != nil {
 			return fmt.Errorf("%w: derive_person_roles: %v", jobs.ErrTransient, err)
