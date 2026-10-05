@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 
@@ -82,6 +83,81 @@ func NewResolve(db *pgxpool.Pool) (*Resolve, error) {
 	}, nil
 }
 
+var resolveStructuralKinds = map[string]bool{
+	"REFERENCES": true,
+	"REFERS_TO":  true,
+	"THREAD":     true,
+}
+
+// nextStructural returns undecided corridor candidates in deterministic id order.
+// Thread siblings are structural even if Expand kept a stored topical edge.
+func nextStructural(level []string, nbrs map[string][]bfs.Neighbor, sibs map[string]map[string]bool, decided map[string]bool) []string {
+	next := make(map[string]bool)
+	for _, id := range level {
+		for _, n := range nbrs[id] {
+			if !decided[n.NodeID] && (resolveStructuralKinds[n.EdgeKind] || sibs[id][n.NodeID]) {
+				next[n.NodeID] = true
+			}
+		}
+	}
+	ids := make([]string, 0, len(next))
+	for id := range next {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+// displayHops follows every edge, but only expanded nodes have adjacency entries.
+// Thus leaves are recorded without ever becoming intermediate nodes.
+func displayHops(seeds []string, nbrs map[string][]bfs.Neighbor, depth int) map[string]bfs.Candidate {
+	visited := make(map[string]bfs.Candidate)
+	queue := make([]string, 0, len(seeds))
+	seedSet := make(map[string]bool, len(seeds))
+	for _, id := range seeds {
+		if !seedSet[id] {
+			seedSet[id] = true
+			visited[id] = bfs.Candidate{NodeID: id, Score: 1}
+			queue = append(queue, id)
+		}
+	}
+	for i := 0; i < len(queue); i++ {
+		c := visited[queue[i]]
+		if c.Hop >= depth {
+			break
+		}
+		for _, n := range nbrs[c.NodeID] {
+			if _, seen := visited[n.NodeID]; seen {
+				continue
+			}
+			visited[n.NodeID] = bfs.Candidate{
+				NodeID: n.NodeID, Hop: c.Hop + 1, Score: c.Score * 0.5, ViaEdge: n.EdgeKind,
+			}
+			queue = append(queue, n.NodeID)
+		}
+	}
+	nonSeeds := make([]string, 0, len(visited)-len(seedSet))
+	for id := range visited {
+		if !seedSet[id] {
+			nonSeeds = append(nonSeeds, id)
+		}
+	}
+	sort.Slice(nonSeeds, func(i, j int) bool {
+		a, b := visited[nonSeeds[i]], visited[nonSeeds[j]]
+		if a.Hop != b.Hop {
+			return a.Hop < b.Hop
+		}
+		return a.NodeID < b.NodeID
+	})
+	// ponytail: return at most 500 non-seed candidates; seeds are never capped.
+	if len(nonSeeds) > 500 {
+		for _, id := range nonSeeds[500:] {
+			delete(visited, id)
+		}
+	}
+	return visited
+}
+
 func (h *Resolve) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	t0 := time.Now()
 	ctx := r.Context()
@@ -112,35 +188,53 @@ func (h *Resolve) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		scopeSet[s] = true
 	}
 
-	// BFS expansion from seeds.
-	frontier := bfs.NewFrontier(200)
+	// As in neighbors.go, topical edges and hub nodes are leaves, not corridors.
+	// Corridor distance decides expansion; display distance is computed separately.
 	canonSeeds := h.canonicalizeSeeds(ctx, req.Seeds)
-	for _, s := range canonSeeds {
-		frontier.Push(bfs.Candidate{NodeID: s, Hop: 0, Score: 1.0})
-	}
-	visited := make(map[string]bfs.Candidate)
-	for frontier.Len() > 0 {
-		c := frontier.Pop()
-		if _, seen := visited[c.NodeID]; seen {
-			continue
-		}
-		visited[c.NodeID] = c
-		if c.Hop >= req.Depth {
-			continue
-		}
-		nbrs, err := h.exp.Expand(ctx, c.NodeID, nil)
-		if err != nil {
-			continue
-		}
-		for _, n := range nbrs {
-			frontier.Push(bfs.Candidate{
-				NodeID:  n.NodeID,
-				Hop:     c.Hop + 1,
-				Score:   c.Score * 0.5, // edge attenuation
-				ViaEdge: n.EdgeKind,
-			})
+	level := make([]string, 0, len(canonSeeds))
+	decided := make(map[string]bool, len(canonSeeds))
+	for _, id := range canonSeeds {
+		if !decided[id] {
+			level = append(level, id)
+			decided[id] = true
 		}
 	}
+	sort.Strings(level)
+	nbrs := make(map[string][]bfs.Neighbor)
+	for c := 0; c < req.Depth && len(level) > 0; c++ {
+		sibs := make(map[string]map[string]bool)
+		for _, id := range level {
+			ns, err := h.exp.Expand(ctx, id, nil)
+			if err != nil {
+				continue
+			}
+			nbrs[id] = ns
+			if strings.HasPrefix(id, "slack:") {
+				siblings, err := h.exp.ThreadSiblings(ctx, id)
+				if err != nil {
+					continue
+				}
+				sibs[id] = make(map[string]bool, len(siblings))
+				for _, sibling := range siblings {
+					sibs[id][sibling] = true
+				}
+			}
+		}
+		if c+1 == req.Depth {
+			break
+		}
+		next := nextStructural(level, nbrs, sibs, decided)
+		level = level[:0]
+		for _, id := range next {
+			decided[id] = true
+			eligible := expandableThrough(ctx, h.db, id)
+			// ponytail: expand at most 200 non-seed nodes per corridor level.
+			if eligible && len(level) < 200 {
+				level = append(level, id)
+			}
+		}
+	}
+	visited := displayHops(canonSeeds, nbrs, req.Depth)
 
 	// ACL filter. noFilter is keyed on whether a *principal was asserted at all*,
 	// NOT on whether the membership set is empty: a real asker (eeid != 0) with
