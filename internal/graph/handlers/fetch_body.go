@@ -400,6 +400,9 @@ func deriveScope(source string, meta map[string]any) string {
 func reconcileEdges(ctx context.Context, deps Deps, fromNodeID string, findings []extractor.Finding) ([]int64, error) {
 	var edgeIDs []int64
 	for _, f := range findings {
+		if f.NodeID == fromNodeID {
+			continue
+		}
 		// Upsert target node stub if it doesn't exist.
 		naturalKey, _ := ids.ParseNaturalKey(f.NodeID)
 		_, err := deps.DB.Exec(ctx, `
