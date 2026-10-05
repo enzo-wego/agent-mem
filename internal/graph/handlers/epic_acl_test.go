@@ -247,7 +247,7 @@ func TestEpicACL_BriefLookupError(t *testing.T) {
 
 	orig := epicSourceScopes
 	called := false
-	epicSourceScopes = func(ctx context.Context, db *pgxpool.Pool, ids []string) (map[string]*string, error) {
+	epicSourceScopes = func(ctx context.Context, db *pgxpool.Pool, ids []string) (map[string]epicSourceNode, error) {
 		called = true
 		return nil, errors.New("boom")
 	}

@@ -69,29 +69,34 @@ func NewEpic(db *pgxpool.Pool) *Epic {
 	return &Epic{db: db, aclBld: acl.NewBuilder(db, 5*time.Minute)}
 }
 
-// epicSourceScopes maps node id -> scope for the given ids, including
-// soft-deleted rows. Ids without a row are absent. Replaceable in tests.
-var epicSourceScopes = func(ctx context.Context, db *pgxpool.Pool, ids []string) (map[string]*string, error) {
-	rows, err := db.Query(ctx, `SELECT id, scope FROM graph.nodes WHERE id = ANY($1)`, ids)
+type epicSourceNode struct {
+	scope    *string
+	nodeType string
+}
+
+// epicSourceScopes includes the real node type; missing rows remain absent.
+// Replaceable in tests.
+var epicSourceScopes = func(ctx context.Context, db *pgxpool.Pool, ids []string) (map[string]epicSourceNode, error) {
+	rows, err := db.Query(ctx, `SELECT id, scope, type FROM graph.nodes WHERE id = ANY($1)`, ids)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	out := make(map[string]*string, len(ids))
+	out := make(map[string]epicSourceNode, len(ids))
 	for rows.Next() {
 		var id string
-		var scope *string
-		if err := rows.Scan(&id, &scope); err != nil {
+		var node epicSourceNode
+		if err := rows.Scan(&id, &node.scope, &node.nodeType); err != nil {
 			return nil, err
 		}
-		out[id] = scope
+		out[id] = node
 	}
 	return out, rows.Err()
 }
 
 // briefSourcesVisible reports whether every source of a stored brief is
 // readable by the asker. A query error or a source with no row withholds.
-func briefSourcesVisible(ctx context.Context, db *pgxpool.Pool, sources []string, scopeSet map[string]bool) bool {
+func briefSourcesVisible(ctx context.Context, db *pgxpool.Pool, sources []string, acl askerACL) bool {
 	if len(sources) == 0 {
 		return true
 	}
@@ -99,9 +104,26 @@ func briefSourcesVisible(ctx context.Context, db *pgxpool.Pool, sources []string
 	if err != nil {
 		return false
 	}
+	var attachments []string
+	for id, n := range scopes {
+		if attachmentType(n.nodeType) {
+			attachments = append(attachments, id)
+		}
+	}
+	allowed, err := visibleAttachments(ctx, db, acl, attachments)
+	if err != nil {
+		return false
+	}
 	for _, id := range sources {
-		sc, ok := scopes[id]
-		if !ok || !scopeVisible(sc, scopeSet, false) {
+		n, ok := scopes[id]
+		if !ok {
+			return false
+		}
+		if attachmentType(n.nodeType) {
+			if !allowed[id] {
+				return false
+			}
+		} else if visible, err := nodeVisible(ctx, db, acl, id, n.nodeType, n.scope); err != nil || !visible {
 			return false
 		}
 	}
@@ -127,7 +149,8 @@ func (h *Epic) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		key = strings.ToUpper(key)
 	}
 
-	_, scopeSet, noFilter := askerScopeSet(ctx, h.db, h.aclBld, r.Header.Get("X-Asker-User"))
+	eeid, scopeSet, noFilter := askerScopeSet(ctx, h.db, h.aclBld, r.Header.Get("X-Asker-User"))
+	acl := askerACL{noFilter: noFilter, resolved: eeid != 0, scopes: scopeSet}
 
 	// requested stays the key as asked (upper-cased): every 404 below names
 	// it, never an alias-resolved epic, so a denial cannot reveal the epic.
@@ -158,8 +181,9 @@ WHERE m.epic_key = $1 AND m.node_id = $2`, epicKey, epicNode).Scan(
 				// The alias reveals that the requested issue exists and
 				// its epic: the issue's own node must be visible too.
 				var issueScope *string
-				if se := h.db.QueryRow(ctx, `SELECT scope FROM graph.nodes WHERE id = $1`, "jira:"+requested).Scan(&issueScope); se != nil ||
-					!scopeVisible(issueScope, scopeSet, false) {
+				se := h.db.QueryRow(ctx, `SELECT scope FROM graph.nodes WHERE id = $1`, "jira:"+requested).Scan(&issueScope)
+				visible, visibilityErr := nodeVisible(ctx, h.db, acl, "jira:"+requested, "jira", issueScope)
+				if se != nil || visibilityErr != nil || !visible {
 					http.Error(w, "unknown epic "+requested, http.StatusNotFound)
 					return
 				}
@@ -170,7 +194,8 @@ WHERE m.epic_key = $1 AND m.node_id = $2`, epicKey, epicNode).Scan(
 			}
 		}
 	}
-	if err != nil || !scopeVisible(epicScope, scopeSet, noFilter) {
+	visible, visibilityErr := nodeVisible(ctx, h.db, acl, nodeID, "jira", epicScope)
+	if err != nil || visibilityErr != nil || !visible {
 		http.Error(w, "unknown epic "+requested, http.StatusNotFound)
 		return
 	}
@@ -187,8 +212,8 @@ SELECT n.id, n.type, COALESCE(n.title,''), COALESCE(n.url,''), m.via, m.confiden
         AND COALESCE(NULLIF(n.metadata->>'thread_ts',''), split_part(n.id,':',3)) <> split_part(n.id,':',3)) AS is_reply, n.scope
 FROM graph.epic_membership m
 JOIN graph.nodes n ON n.id = m.node_id AND n.deleted_at IS NULL
-WHERE m.epic_key = $1 AND m.node_id <> $2
-ORDER BY m.last_at DESC NULLS LAST, n.id`, key, nodeID)
+WHERE m.epic_key = $1 AND m.node_id <> $2 AND `+aclVisibleSQL("n", 3, 4)+`
+ORDER BY m.last_at DESC NULLS LAST, n.id`, key, nodeID, acl.scopeArg(), acl.resolved)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -206,8 +231,12 @@ ORDER BY m.last_at DESC NULLS LAST, n.id`, key, nodeID)
 			&m.Status, &created, &isReply, &scope); err != nil {
 			continue
 		}
-		if !scopeVisible(scope, scopeSet, noFilter) {
-			continue
+		// SQL already checks attachments in one batch; ordinary nodes use the
+		// same Go rule without issuing another query while rows are open.
+		if !attachmentType(typ) {
+			if visible, err := nodeVisible(ctx, h.db, acl, m.NodeID, typ, scope); err != nil || !visible {
+				continue
+			}
 		}
 		resp.Total++
 		resp.ByVia[m.Via]++
@@ -230,7 +259,7 @@ ORDER BY m.last_at DESC NULLS LAST, n.id`, key, nodeID)
 		return
 	}
 	if br, ok := loadEpicBrief(ctx, h.db, key); ok && br.Brief != "" &&
-		(noFilter || briefSourcesVisible(ctx, h.db, br.Sources, scopeSet)) {
+		(noFilter || briefSourcesVisible(ctx, h.db, br.Sources, acl)) {
 		resp.Brief, resp.Highlights, resp.OpenItems = br.Brief, br.Highlights, br.OpenItems
 		u := br.UpdatedAt
 		resp.BriefUpdatedAt = &u

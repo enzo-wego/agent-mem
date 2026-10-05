@@ -43,7 +43,7 @@ func NewDescribeAttachmentHandler(deps Deps) jobs.Entry {
 
 // describeEligibilityCheck reports whether an attachment must NOT be described:
 // it already has a non-empty body, or a describe_attachment job for it is
-// queued or running. One statement, so both conditions share a snapshot.
+// queued, running, or failed. One statement, so all conditions share a snapshot.
 // Replaceable in tests.
 var describeEligibilityCheck = func(ctx context.Context, tx pgx.Tx, attID string) (bool, error) {
 	var skip bool
@@ -51,12 +51,16 @@ var describeEligibilityCheck = func(ctx context.Context, tx pgx.Tx, attID string
 SELECT EXISTS (SELECT 1 FROM graph.artifact_bodies WHERE node_id = $1 AND COALESCE(body_full,'') <> '')
     OR EXISTS (SELECT 1 FROM graph.jobs
                WHERE type = 'describe_attachment' AND status IN ('queued','running')
+                 AND payload->>'node_id' = $1)
+    OR EXISTS (SELECT 1 FROM graph.jobs
+               WHERE type = 'describe_attachment' AND status = 'failed'
                  AND payload->>'node_id' = $1)`, attID).Scan(&skip)
 	return skip, err
 }
 
 // enqueueDescribeIfNeeded enqueues describe_attachment for attID unless it is
-// already described or already in flight. The check and the enqueue run in one
+// already described, already in flight, or previously failed (explicit repair only).
+// The check and the enqueue run in one
 // transaction under a per-attachment advisory lock, so concurrent producers cannot
 // both see "nothing queued". Only a committed enqueue returns a job ID and true;
 // every skip or error returns zero and false. A Commit error leaves the outcome
@@ -410,10 +414,10 @@ func sniffImageBytes(data []byte, declaredMime string) (sniffed string, err erro
 const backfillFailedAttachmentsDefaultLimit = 50
 
 // BackfillFailedAttachments re-enqueues describe_attachment for attachment nodes
-// whose stored body is a persisted vision failure (agent-mem-16e) — rows that
-// will never re-run on their own because the original job succeeded. It follows
-// the shape of BackfillMissingThreadSummaries: a capped query + dedup'd enqueue
-// loop. It is capped, deduped against already-queued/running jobs, and logs
+// whose stored body is a persisted vision failure (agent-mem-16e), or whose newest
+// describe job failed and body is absent or empty (agent-mem-a665). Newest means
+// highest job id, selected set-wise rather than scanning history per attachment.
+// It is capped, deduped against already-queued/running jobs, and logs
 // matched-vs-enqueued. Trigger it EXPLICITLY (admin endpoint) — never on startup,
 // and per project policy never against production. Returns (matched, enqueued).
 //
@@ -427,15 +431,41 @@ func BackfillFailedAttachments(ctx context.Context, db *pgxpool.Pool, logger zer
 		limit = backfillFailedAttachmentsDefaultLimit
 	}
 	rows, err := db.Query(ctx, `
-SELECT n.id, COALESCE(n.url, ''), COALESCE(n.mime_type, '')
-FROM graph.artifact_bodies ab
-JOIN graph.nodes n ON n.id = ab.node_id
-WHERE n.deleted_at IS NULL
-  AND n.type IN ('slack_file', 'jira_attachment')
-  AND (
-    ab.body_full ILIKE 'image processing failed%'
-    OR ab.body_full ILIKE 'unable to process the attachment%'
+WITH candidates AS (
+  SELECT n.id, n.url, n.mime_type, ab.body_full
+  FROM graph.nodes n
+  LEFT JOIN graph.artifact_bodies ab ON ab.node_id = n.id
+  WHERE n.deleted_at IS NULL
+    AND n.type IN ('slack_file', 'jira_attachment')
+    AND COALESCE(n.url, '') <> ''
+    AND (
+      COALESCE(ab.body_full, '') = ''
+      OR ab.body_full ILIKE 'image processing failed%'
+      OR ab.body_full ILIKE 'unable to process the attachment%'
+    )
+), newest_jobs AS (
+  SELECT DISTINCT ON (j.payload->>'node_id')
+    j.payload->>'node_id' AS node_id, j.status, j.id, j.payload->>'mime' AS mime
+  FROM graph.jobs j
+  JOIN candidates c ON c.id = j.payload->>'node_id'
+  WHERE j.type = 'describe_attachment'
+  ORDER BY j.payload->>'node_id', j.id DESC
+)
+SELECT c.id, c.url, COALESCE(NULLIF(j.mime, ''), c.mime_type, '')
+FROM candidates c
+LEFT JOIN newest_jobs j ON j.node_id = c.id
+WHERE (
+    c.body_full ILIKE 'image processing failed%'
+    OR c.body_full ILIKE 'unable to process the attachment%'
+    OR (COALESCE(c.body_full, '') = '' AND j.status = 'failed')
   )
+  AND NOT EXISTS (
+    SELECT 1 FROM graph.jobs active
+    WHERE active.type = 'describe_attachment'
+      AND active.status IN ('queued', 'running')
+      AND active.payload->>'node_id' = c.id
+  )
+ORDER BY j.id ASC NULLS LAST, c.id ASC
 LIMIT $1`, limit)
 	if err != nil {
 		logger.Warn().Err(err).Msg("backfill_failed_attachments: query failed")
@@ -457,10 +487,7 @@ LIMIT $1`, limit)
 	for _, r := range todo {
 		mime := r.mime
 		if mime == "" {
-			// Attachment nodes don't persist mime_type (ingest_content.go:319
-			// stores only id/type/url), and every poisoned row is an image
-			// failure, so derive an image mime from the URL to route the re-run
-			// back through the image branch.
+			// Legacy failures without a job MIME still use the URL image fallback.
 			mime = imageMimeFromURL(r.url)
 		}
 		if enqueueDescribeAttachment(ctx, db, r.id, r.url, mime, nodeSourceFromID(r.id)) {

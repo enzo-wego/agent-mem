@@ -107,7 +107,7 @@ func (h *Resolve) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	scopes, _ := h.aclBld.For(ctx, req.AskerEEID)
-	scopeSet := make(map[string]bool, len(scopes))
+	scopeSet := map[string]bool{"public": true}
 	for _, s := range scopes {
 		scopeSet[s] = true
 	}
@@ -169,15 +169,12 @@ func (h *Resolve) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	var filtered []bfs.Candidate
 	noFilter := req.AskerEEID == 0
+	allowedIDs, aclErr := h.checkScopes(ctx, visitedIDs, askerACL{noFilter: noFilter, resolved: !noFilter, scopes: scopeSet})
 	for _, c := range visited {
 		if !inEpic[c.NodeID] && !seedSet[c.NodeID] {
 			continue
 		}
-		if noFilter {
-			filtered = append(filtered, c)
-			continue
-		}
-		ok, _ := h.checkScope(ctx, c.NodeID, scopeSet)
+		ok := aclErr == nil && allowedIDs[c.NodeID]
 		if ok {
 			filtered = append(filtered, c)
 		}
@@ -272,6 +269,9 @@ WHERE n.id = ANY($1)`, ids); aErr == nil {
 	// reads hop 0 to learn the canonical node id to open, so emit a body-less
 	// row rather than returning a list the caller cannot anchor.
 	for _, s := range canonSeeds {
+		if aclErr != nil || !allowedIDs[s] {
+			continue
+		}
 		present := false
 		for _, a := range resp.Artifacts {
 			if a.NodeID == s {
@@ -454,15 +454,26 @@ WHERE n.id = $1
 	return out
 }
 
-func (h *Resolve) checkScope(ctx context.Context, nodeID string, scopeSet map[string]bool) (bool, error) {
-	row := h.db.QueryRow(ctx, `SELECT scope FROM graph.nodes WHERE id=$1`, nodeID)
-	var scope *string
-	if err := row.Scan(&scope); err != nil {
-		return false, err
+// checkScopes batches ACL decisions before hydration, including seed fallbacks.
+// A query error leaves every candidate denied.
+func (h *Resolve) checkScopes(ctx context.Context, ids []string, acl askerACL) (map[string]bool, error) {
+	out := make(map[string]bool, len(ids))
+	rows, err := h.db.Query(ctx, `SELECT n.id FROM graph.nodes n WHERE n.id=ANY($1) AND `+aclVisibleSQL("n", 2, 3), ids, acl.scopeArg(), acl.resolved)
+	if err != nil {
+		return nil, err
 	}
-	// noFilter is handled by the caller (eeid 0 skips checkScope entirely), so a
-	// real asker reaching here is always filtered through the shared rule.
-	return scopeVisible(scope, scopeSet, false), nil
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out[id] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (h *Resolve) enqueueFetchBody(ctx context.Context, nodeID string) {

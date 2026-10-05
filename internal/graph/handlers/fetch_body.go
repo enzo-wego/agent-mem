@@ -340,7 +340,7 @@ WHERE sn.type IN ('slack','slack_thread') AND sn.scope LIKE 'slack:%' AND sn.del
       SELECT e.from_node_id FROM graph.edges e
         JOIN graph.nodes r ON r.id=e.to_node_id
        WHERE e.from_node_id=$1 AND e.kind='REFERENCES'
-         AND r.type NOT IN ('slack','slack_thread','slack_file'))
+         AND r.type NOT IN ('slack','slack_thread','slack_file','jira_attachment'))
 LIMIT $2`, nodeID, refreshThreadsForResourceLinkCap+1) // +1 to detect truncation
 	if err != nil {
 		return

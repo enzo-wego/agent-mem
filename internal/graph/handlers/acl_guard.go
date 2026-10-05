@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -47,4 +48,92 @@ func scopeVisible(scope *string, scopeSet map[string]bool, noFilter bool) bool {
 		return true
 	}
 	return scopeSet[*scope]
+}
+
+type askerACL struct {
+	noFilter bool
+	resolved bool
+	scopes   map[string]bool
+}
+
+func attachmentType(nodeType string) bool {
+	return nodeType == "slack_file" || nodeType == "jira_attachment"
+}
+
+func (a askerACL) scopeArg() any {
+	if a.noFilter {
+		return nil
+	}
+	scopes := make([]string, 0, len(a.scopes)+1)
+	scopes = append(scopes, "public")
+	for s := range a.scopes {
+		if s != "public" && a.scopes[s] {
+			scopes = append(scopes, s)
+		}
+	}
+	return scopes
+}
+
+func parentVisibleSQL(alias string, scopeParam int) string {
+	return fmt.Sprintf(`EXISTS (
+ SELECT 1 FROM graph.edges e JOIN graph.nodes p ON p.id = e.from_node_id
+ WHERE e.to_node_id = %s.id AND e.kind = 'REFERENCES'
+   AND p.deleted_at IS NULL AND p.type NOT IN ('slack_file','jira_attachment')
+   AND (p.scope IS NULL OR p.scope = '' OR p.scope = 'public' OR p.scope = ANY($%d::text[]))
+)`, alias, scopeParam)
+}
+
+// ponytail: per-row EXISTS over REFERENCES parents; materialize if it shows up in p95.
+func aclVisibleSQL(alias string, scopeParam, resolvedParam int) string {
+	return fmt.Sprintf(`($%d::text[] IS NULL OR
+ (%s.type NOT IN ('slack_file','jira_attachment') AND
+  (%s.scope IS NULL OR %s.scope = '' OR %s.scope = 'public' OR %s.scope = ANY($%d::text[]))) OR
+ (%s.type IN ('slack_file','jira_attachment') AND $%d::boolean AND %s))`,
+		scopeParam, alias, alias, alias, alias, alias, scopeParam,
+		alias, resolvedParam, parentVisibleSQL(alias, scopeParam))
+}
+
+func nodeVisible(ctx context.Context, db *pgxpool.Pool, a askerACL, id, nodeType string, scope *string) (bool, error) {
+	if a.noFilter {
+		return true, nil
+	}
+	if !attachmentType(nodeType) {
+		return scopeVisible(scope, a.scopes, false), nil
+	}
+	if !a.resolved {
+		return false, nil
+	}
+	var visible bool
+	err := db.QueryRow(ctx, `SELECT `+parentVisibleSQL("n", 2)+` FROM graph.nodes n WHERE n.id=$1`, id, a.scopeArg()).Scan(&visible)
+	return err == nil && visible, err
+}
+
+// Query only attachment candidates, after callers have closed their result rows.
+func visibleAttachments(ctx context.Context, db *pgxpool.Pool, a askerACL, ids []string) (map[string]bool, error) {
+	out := make(map[string]bool, len(ids))
+	if a.noFilter {
+		for _, id := range ids {
+			out[id] = true
+		}
+		return out, nil
+	}
+	if !a.resolved || len(ids) == 0 {
+		return out, nil
+	}
+	rows, err := db.Query(ctx, `SELECT n.id FROM graph.nodes n WHERE n.id=ANY($1) AND n.type IN ('slack_file','jira_attachment') AND `+aclVisibleSQL("n", 2, 3), ids, a.scopeArg(), a.resolved)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out[id] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
 }

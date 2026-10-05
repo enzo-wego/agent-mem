@@ -129,7 +129,6 @@ func TestNeighbors_FileLeafFromNeighborThread(t *testing.T) {
 	r := chi.NewRouter()
 	r.Mount("/api/graph", handlers.NewNeighbors(pool))
 	req := httptest.NewRequest("GET", "/api/graph/node/slack:C1:1.1/neighbors?depth=1", nil)
-	req.Header.Set("X-Asker-User", "U07UAC0J7T3")
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
@@ -211,7 +210,6 @@ func TestNeighbors_FileLeafCappedAt20(t *testing.T) {
 	r := chi.NewRouter()
 	r.Mount("/api/graph", handlers.NewNeighbors(pool))
 	req := httptest.NewRequest("GET", "/api/graph/node/slack:C1:1.1/neighbors?depth=1", nil)
-	req.Header.Set("X-Asker-User", "U07UAC0J7T3")
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 

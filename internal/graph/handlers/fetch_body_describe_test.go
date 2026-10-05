@@ -309,6 +309,12 @@ func TestEnqueueDescribe_Eligibility(t *testing.T) {
 		run(t, pool, deps, false)
 		want(t, pool, 1)
 	})
+	t.Run("failed_job_skips", func(t *testing.T) {
+		pool, deps := setup(t)
+		insertJob(t, pool, "failed")
+		run(t, pool, deps, false)
+		want(t, pool, 1)
+	})
 	t.Run("described", func(t *testing.T) {
 		pool, deps := setup(t)
 		seedAttBody(t, pool, att, "a description")
