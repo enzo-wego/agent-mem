@@ -309,17 +309,19 @@ func downloadWithAuth(ctx context.Context, rawURL, source, declaredMime string, 
 	client := &http.Client{Timeout: 60 * time.Second}
 	allowedSlack := source == "slack" && isSlackFileURL(req.URL.Scheme, req.URL.Host)
 	var userToken, userCookie string
+	redirectRefused := false
 	switch source {
 	case "slack":
 		if deps.SlackUserCreds != nil {
 			userToken, userCookie = deps.SlackUserCreds()
 		}
 		client.CheckRedirect = func(next *http.Request, via []*http.Request) error {
-			if !isSlackFileURL(next.URL.Scheme, next.URL.Host) {
-				return fmt.Errorf("slack file redirect outside allowed host")
-			}
 			if len(via) >= 10 {
 				return fmt.Errorf("stopped after 10 redirects")
+			}
+			if !isSlackFileURL(next.URL.Scheme, next.URL.Host) {
+				redirectRefused = true
+				return http.ErrUseLastResponse
 			}
 			return nil
 		}
@@ -345,14 +347,28 @@ func downloadWithAuth(ctx context.Context, rawURL, source, declaredMime string, 
 			req.Header.Set("Authorization", "Bearer "+token)
 		}
 	}
+	redirectRefused = false
 	data, status, login, err := downloadGET(client, req, source == "slack", allowedSlack, declaredMime)
 	if err != nil {
 		return nil, err
 	}
-	if !allowedSlack || (status != 401 && status != 403 && !login) {
+	botRedirect := redirectRefused
+	if source == "slack" && status >= 300 && status < 400 && !botRedirect {
+		return nil, fmt.Errorf("%w: download HTTP %d: %s", jobs.ErrFatal, status, rawURL)
+	}
+	if !allowedSlack {
+		if botRedirect {
+			return nil, fmt.Errorf("%w: download: slack redirect (no auth): %s", jobs.ErrFatal, rawURL)
+		}
+		return downloadResult(data, status, rawURL)
+	}
+	if status != 401 && status != 403 && !login && !botRedirect {
 		return downloadResult(data, status, rawURL)
 	}
 	if userToken == "" {
+		if botRedirect {
+			return nil, fmt.Errorf("%w: download: slack redirect (bot): %s", jobs.ErrFatal, rawURL)
+		}
 		if login {
 			return nil, fmt.Errorf("%w: download: slack login page (bot): %s", jobs.ErrFatal, rawURL)
 		}
@@ -362,6 +378,7 @@ func downloadWithAuth(ctx context.Context, rawURL, source, declaredMime string, 
 	if userCookie != "" {
 		req.Header.Set("Cookie", "d="+userCookie)
 	}
+	redirectRefused = false
 	data, userStatus, userLogin, err := downloadGET(client, req, true, true, declaredMime)
 	if err != nil {
 		return nil, err
@@ -370,14 +387,21 @@ func downloadWithAuth(ctx context.Context, rawURL, source, declaredMime string, 
 	if login {
 		botResult = "login"
 	}
+	if botRedirect {
+		botResult = "redirect"
+	}
 	if userLogin {
 		return nil, fmt.Errorf("%w: download: slack login page (bot %s, user login): %s", jobs.ErrFatal, botResult, rawURL)
 	}
-	if userStatus >= 500 || userStatus == 429 {
-		return downloadResult(data, userStatus, rawURL)
-	}
 	if userStatus < 200 || userStatus >= 300 {
-		return nil, fmt.Errorf("%w: download HTTP %s (bot), %d (user): %s", jobs.ErrFatal, botResult, userStatus, rawURL)
+		userResult := fmt.Sprintf("%d", userStatus)
+		if redirectRefused {
+			userResult = "redirect"
+		}
+		if userStatus >= 500 || userStatus == 429 {
+			return nil, fmt.Errorf("download HTTP %s (bot), %s (user): %s", botResult, userResult, rawURL)
+		}
+		return nil, fmt.Errorf("%w: download HTTP %s (bot), %s (user): %s", jobs.ErrFatal, botResult, userResult, rawURL)
 	}
 	deps.Logger.Info().Str("file", path.Base(req.URL.Path)).Msg("Slack file fetched with user session")
 	return data, nil
@@ -404,7 +428,7 @@ func downloadGET(client *http.Client, req *http.Request, slack, detectLogin bool
 		expectedType, _, _ := mime.ParseMediaType(declaredMime)
 		login = contentType == "text/html" && expectedType != "text/html"
 	}
-	if resp.StatusCode >= 400 || login {
+	if resp.StatusCode >= 400 || login || (slack && resp.StatusCode >= 300 && resp.StatusCode < 400) {
 		return nil, resp.StatusCode, login, nil
 	}
 	data, err := io.ReadAll(resp.Body)

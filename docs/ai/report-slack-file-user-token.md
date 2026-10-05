@@ -225,3 +225,110 @@ The browser tab and scratch worker were closed; the throwaway container, smoke e
 ## Remaining operational boundary
 
 No real Slack credential or production file was used. Whether Enzo's current session can fetch particular production files, or those files redirect outside the allowlist, is intentionally unverified. The conductor's approved PR/review/merge/deploy, credential entry, ten-job canary, and separately approved rate-limited requeue remain human-gated operations outside this implementation. A refused redirect must remain a failure; do not widen the host allowlist to make a production canary pass.
+
+## Round 2: off-host redirect
+
+Implemented the redirect-refusal plan with Revisions 2 and 3 taking precedence.
+The exact HTTPS `files.slack.com` allowlist is unchanged. Only a redirect stopped
+by the Slack policy sets the per-attempt refusal flag; the flag resets before
+each HTTP attempt and the bot result is retained separately. A bot refusal can
+trigger one user-session attempt, but only for an originally allowed URL.
+Initially disallowed URLs remain anonymous, never fall back, and policy-stopped
+redirects are fatal (`slack redirect (no auth)`).
+
+All final Slack 3xx response bodies are closed without being read. A final 302
+without Location or a 304 is a fatal numeric HTTP result, not a refusal.
+The ten-redirect cap is checked before the target policy, remains transient,
+and never triggers fallback. Network errors stay redacted and transient.
+Mixed diagnostics preserve bot/user reasons; user 429/5xx remain transient.
+Non-Slack redirect and body handling are unchanged.
+
+### Red / green evidence
+
+The production downloader was still the pinned baseline
+`09786c96ff8790b653f4e4216d4eb5c93616ac88` when the new regression ran:
+
+```text
+$ env -u DATABASE_URL -u AGENT_MEM_TEST_DATABASE_URL AGENT_MEM_EVAL= \
+    go test ./internal/graph/handlers/ \
+    -run '^TestDownloadSlackOffHostRedirectFallsBack$' -count=1 -v
+=== RUN   TestDownloadSlackOffHostRedirectFallsBack
+    describe_attachment_download_security_test.go:428: error = http get: download request failed, bytes = "", requests = 1, foreign = 0
+--- FAIL: TestDownloadSlackOffHostRedirectFallsBack (0.00s)
+FAIL
+FAIL github.com/agent-mem/agent-mem/internal/graph/handlers 0.664s
+exit 1
+```
+
+Created throwaway container `agent-mem-rp86-redirect-scratch` from
+`pgvector/pgvector:pg16`, published only at `127.0.0.1:53402`, database
+`agentmem_test`. Checked its binding, database readiness and `53402 != 5433`
+before migration. Migration, focused tests, smoke and the full suite use an
+environment allowlist with both `DATABASE_URL` and
+`AGENT_MEM_TEST_DATABASE_URL` explicitly set to that scratch DSN and
+`AGENT_MEM_EVAL=`. No inherited secret values were printed or inspected.
+
+```text
+$ go run ./cmd/agent-mem migrate
+INF Running migrations dir=./migrations
+INF Migrations applied
+exit 0
+$ go build ./...
+exit 0 (no output)
+$ go vet ./...
+exit 0 (no output)
+$ go test ./internal/graph/handlers/ -run 'Download|DescribeAttachment' -count=1 -v
+--- PASS: TestDownloadSlackFallbackStatuses (0.12s)
+--- PASS: TestDownloadSlackRedirects (0.01s)
+--- PASS: TestDownloadSlackOffHostRedirectFallsBack (0.00s)
+--- PASS: TestDownloadSlackFinalRedirectBodies (0.00s)
+--- PASS: TestDownloadSlackRedirectCapBeforeRefusal (0.00s)
+--- SKIP: TestDescribeAttachmentHandler_UnsupportedMime (0.00s)
+PASS
+ok github.com/agent-mem/agent-mem/internal/graph/handlers 1.626s
+exit 0
+```
+
+The serial local HTTP cases inspect bot/user credentials on actual attempts and
+prove zero foreign requests, same-host redirect support, fatal refusal without
+a user token, both-attempt refusal, and downgrade/suffix/explicit-port containment.
+The instrumented RoundTripper cases prove zero reads and exactly one close of
+each final Slack 3xx body, closure before fallback, anonymous redirect refusal,
+numeric 302/304 classification, bot-redirect/user-302 flag reset, and transient
+user network failure after a bot refusal. Fake credential leak canaries remain
+absent from errors and captured logs.
+
+A separate throwaway local HTTP smoke exercised the downloader and was removed:
+
+```text
+=== RUN   TestRedirectRoundTwoSmoke
+SMOKE: bot redirect -> user bytes; files requests=2; foreign requests=0
+--- PASS: TestRedirectRoundTwoSmoke (0.00s)
+PASS
+ok github.com/agent-mem/agent-mem/internal/graph/handlers 0.523s
+exit 0
+```
+
+### Full scratch suite and boundaries
+
+`make test-db TEST_DATABASE_URL=<validated scratch DSN>` exited 0:
+14 packages passed, no failure events. Actual skips:
+
+```text
+TestDescribeAttachmentHandler_UnsupportedMime:
+  requires network; covered by integration tests
+TestParseDocument_RichPDF:
+  lit binary not in PATH; skipping real PDF test
+TestTopicJudgeGolden:
+  set AGENT_MEM_EVAL=1 to run the topic-judge eval (needs real DB + API key)
+```
+
+No live secrets, settings rows or env files were read; no hub or dev DB on 5433
+was touched. No dashboard/settings changes, PR, merge, deploy or requeue.
+Production curl/canary observations remain conductor context, not worker
+acceptance evidence; real-session production validation remains outside scope.
+The throwaway smoke file and scratch container were removed.
+
+Beads tracking could not be created: `bd create` returned
+`database not initialized: issue_prefix config is missing`.
+No Beads database initialization or shared tracker repair was attempted.
