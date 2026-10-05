@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -79,6 +80,7 @@ type searchResult struct {
 type searchWindow struct {
 	Start time.Time `json:"start"`
 	End   time.Time `json:"end"`
+	Hard  bool      `json:"hard,omitempty"`
 }
 
 type searchResponse struct {
@@ -314,6 +316,25 @@ func (s *Search) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sortByScore(results)
+	hardWindow := hasWindow && explicitWindow(qv)
+	if hardWindow {
+		ids = ids[:0]
+		for _, result := range results {
+			ids = append(ids, result.NodeID)
+		}
+		eligible, err := nodesEligibleInWindow(ctx, s.db, ids, win)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		kept := results[:0]
+		for _, result := range results {
+			if eligible[result.NodeID] {
+				kept = append(kept, result)
+			}
+		}
+		results = kept
+	}
 	results, err = s.pinOwnKey(ctx, q, results, filter, fused, armLocal, alphas, askerEEID, win, hasWindow, now)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -337,7 +358,7 @@ func (s *Search) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if hasWindow {
-			resp.Window = &searchWindow{Start: win.Start, End: win.End}
+			resp.Window = &searchWindow{Start: win.Start, End: win.End, Hard: hardWindow}
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(resp)
@@ -354,13 +375,17 @@ func (s *Search) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		resp.ArmErrors = armErrs
 	}
 	if hasWindow {
-		resp.Window = &searchWindow{Start: win.Start, End: win.End}
+		resp.Window = &searchWindow{Start: win.Start, End: win.End, Hard: hardWindow}
 	}
 	if resp.Results == nil {
 		resp.Results = []searchResult{}
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
+}
+
+func explicitWindow(qv url.Values) bool {
+	return strings.TrimSpace(qv.Get("since")) != "" || strings.TrimSpace(qv.Get("until")) != ""
 }
 
 func nilIfEmpty(m map[string]string) map[string]string {

@@ -157,6 +157,44 @@ var directWindowSQL = `(
              AND es.first_at < $3 AND es.last_at >= $2)
 )`
 
+// windowEligibleSQL includes both direct time eligibility and inheritance
+// from an active epic self row. Keep the active epic set uncorrelated.
+var windowEligibleSQL = `(
+  ` + directWindowSQL + `
+  OR EXISTS (
+    SELECT 1 FROM graph.epic_membership em
+    WHERE em.node_id = n.id
+      AND em.epic_key = ANY(ARRAY(
+        SELECT ep.epic_key FROM graph.epic_membership ep
+        WHERE ep.node_id = ` + epicSelfIDSQL("ep") + `
+          AND ep.epic_key <> '` + businessRootID + `'
+          AND ep.first_at < $3 AND ep.last_at >= $2)))
+)`
+
+// nodesEligibleInWindow checks the same eligibility as temporal retrieval,
+// against the canonical ids that hydration used.
+func nodesEligibleInWindow(ctx context.Context, db *pgxpool.Pool, ids []string, w temporal.Window) (map[string]bool, error) {
+	out := make(map[string]bool, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+	rows, err := db.Query(ctx, `
+SELECT n.id FROM graph.nodes n
+WHERE n.id = ANY($1) AND `+windowEligibleSQL, ids, w.Start, w.End)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out[id] = true
+	}
+	return out, rows.Err()
+}
+
 const (
 	temporalCandidates = 60
 	temporalBuckets    = 8
@@ -181,17 +219,7 @@ SELECT n.id,
 FROM graph.nodes n
 LEFT JOIN graph.artifact_index ai ON ai.node_id = n.id
 WHERE `+f.sql(5, 6, 7)+`
-  AND (
-    `+directWindowSQL+`
-    OR EXISTS (
-      SELECT 1 FROM graph.epic_membership em
-      WHERE em.node_id = n.id
-        AND em.epic_key = ANY(ARRAY(
-          SELECT ep.epic_key FROM graph.epic_membership ep
-          WHERE ep.node_id = `+epicSelfIDSQL("ep")+`
-            AND ep.epic_key <> '`+businessRootID+`'
-            AND ep.first_at < $3 AND ep.last_at >= $2)))
-  )
+  AND `+windowEligibleSQL+`
 ORDER BY cosine DESC, at DESC
 LIMIT $4`, append([]any{vecArg, w.Start, w.End, temporalCandidates}, f.args()...)...)
 	if err != nil {
