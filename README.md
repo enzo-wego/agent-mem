@@ -22,6 +22,7 @@
 - Exposes the read API as a stdio MCP server ([`agent-mem mcp`](#graph-mcp-server)) and a [`/live` board + globe view](#dashboard)
 - Resource heuristic summaries include the title and substantive body lines (400 runes, PRs limited to three kept lines). Markdown headings and known section labels are skipped; title-only resources are indexed. Slack retains its first-paragraph behavior. Identical heuristic summaries share one embedded representative.
 - Jira issues and Wego PRs always reserve an identifier slot for their own key before body extraction; identifiers remain deduplicated, sorted, and bounded to 64.
+- An exact Jira key or Wego PR reference query pins its eligible owner first in default and hybrid search, before the result limit. Case and surrounding whitespace are normalized; ACL, type, epic and soft-delete filters still apply. Other queries retain their fused/boosted ranking.
 
 ### The two subsystems at a glance
 
