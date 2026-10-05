@@ -101,26 +101,20 @@ LIMIT 1
 	}
 	// An absent header is trusted/unfiltered; every present header is filtered.
 	// Hidden nodes return 404 so their existence/body is not disclosed.
-	_, scopeSet, noFilter := askerScopeSet(ctx, h.db, h.aclBld, r.Header.Get("X-Asker-User"))
-	if !scopeVisible(scope, scopeSet, noFilter) {
+	eeid, scopeSet, noFilter := askerScopeSet(ctx, h.db, h.aclBld, r.Header.Get("X-Asker-User"))
+	acl := askerACL{noFilter: noFilter, resolved: eeid != 0, scopes: scopeSet}
+	if visible, err := nodeVisible(ctx, h.db, acl, resp.NodeID, resp.Type, scope); err != nil || !visible {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
 	resp.UpdatedAt = updatedAt.Format(time.RFC3339)
-	var scopeArg []string
-	if !noFilter {
-		scopeArg = make([]string, 0, len(scopeSet))
-		for scope := range scopeSet {
-			scopeArg = append(scopeArg, scope)
-		}
-	}
-	resp.EdgesIn, _ = h.edges(ctx, resp.NodeID, "in", scopeArg)
-	resp.EdgesOut, _ = h.edges(ctx, resp.NodeID, "out", scopeArg)
+	resp.EdgesIn, _ = h.edges(ctx, resp.NodeID, "in", acl)
+	resp.EdgesOut, _ = h.edges(ctx, resp.NodeID, "out", acl)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
 }
 
-func (h *Node) edges(ctx context.Context, id string, dir string, scopes []string) ([]edgeRef, error) {
+func (h *Node) edges(ctx context.Context, id string, dir string, acl askerACL) ([]edgeRef, error) {
 	var q string
 	if dir == "in" {
 		q = `SELECT from_node_id, kind FROM graph.edges WHERE to_node_id=$1`
@@ -128,9 +122,8 @@ func (h *Node) edges(ctx context.Context, id string, dir string, scopes []string
 		q = `SELECT to_node_id, kind FROM graph.edges WHERE from_node_id=$1`
 	}
 	args := []any{id}
-	if scopes != nil {
-		// LEFT JOIN keeps dangling endpoints visible as unscoped, without
-		// fetching one node per edge. Only the other endpoint controls access.
+	if !acl.noFilter {
+		// Filter the opposite endpoint through the shared node visibility rule.
 		if dir == "in" {
 			q = `SELECT e.from_node_id, e.kind FROM graph.edges e
 LEFT JOIN graph.nodes n ON n.id = e.from_node_id WHERE e.to_node_id = $1`
@@ -138,8 +131,8 @@ LEFT JOIN graph.nodes n ON n.id = e.from_node_id WHERE e.to_node_id = $1`
 			q = `SELECT e.to_node_id, e.kind FROM graph.edges e
 LEFT JOIN graph.nodes n ON n.id = e.to_node_id WHERE e.from_node_id = $1`
 		}
-		q += ` AND (n.scope IS NULL OR n.scope = '' OR n.scope = ANY($2::text[]))`
-		args = append(args, scopes)
+		q += ` AND ` + aclVisibleSQL("n", 2, 3)
+		args = append(args, acl.scopeArg(), acl.resolved)
 	}
 	rows, err := h.db.Query(ctx, q, args...)
 	if err != nil {

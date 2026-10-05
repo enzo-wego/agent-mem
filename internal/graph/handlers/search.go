@@ -151,19 +151,13 @@ func (s *Search) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// always filtered, with unresolved askers limited to public/unscoped nodes.
 	// The API key remains the privilege boundary; identity is advisory.
 	askerEEID, scopeSet, noFilter := askerScopeSet(ctx, s.db, s.aclBld, r.Header.Get("X-Asker-User"))
-	var scopeArg any
-	if !noFilter {
-		scopes := make([]string, 0, len(scopeSet))
-		for scope := range scopeSet {
-			scopes = append(scopes, scope)
-		}
-		scopeArg = scopes
-	}
+	acl := askerACL{noFilter: noFilter, resolved: askerEEID != 0, scopes: scopeSet}
+	scopeArg := acl.scopeArg()
 	var typesArg any
 	if t := splitCSV(qv.Get("types")); len(t) > 0 {
 		typesArg = t
 	}
-	filter := searchFilter{types: typesArg, scope: scopeArg, epic: epicScopeArg(epicKeys)}
+	filter := searchFilter{types: typesArg, scope: scopeArg, epic: epicScopeArg(epicKeys), resolved: acl.resolved}
 
 	// One embedding of the topic (time phrase removed) serves the semantic
 	// and temporal arms. A query that was only a time phrase has no topic.
@@ -325,7 +319,7 @@ func (s *Search) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if hybrid {
-		rows, err := hybridDisplay(ctx, s.db, results, scopeArg)
+		rows, err := hybridDisplay(ctx, s.db, results, acl)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return

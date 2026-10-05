@@ -51,8 +51,8 @@ type hybridResponse struct {
 
 // hybridDisplay turns the fused, boosted, truncated results into hybrid rows:
 // match from per-arm ranks, and Slack thread / Jira PR enrichment for the kept
-// rows only. scope is the request's ACL scope (nil = unfiltered).
-func hybridDisplay(ctx context.Context, db *pgxpool.Pool, results []searchResult, scope any) ([]hybridResult, error) {
+// rows only. acl preserves the request's resolved and unfiltered state.
+func hybridDisplay(ctx context.Context, db *pgxpool.Pool, results []searchResult, acl askerACL) ([]hybridResult, error) {
 	out := make([]hybridResult, 0, len(results))
 	if len(results) == 0 {
 		return out, nil
@@ -180,17 +180,9 @@ WHERE (channel_id, thread_ts) IN (SELECT unnest($1::text[]), unnest($2::text[]))
 	}
 
 	if len(jiraIDs) > 0 {
-		ss, _ := scope.([]string)
 		visible := func(sc *string) bool {
-			if scope == nil || sc == nil || *sc == "" {
-				return true
-			}
-			for _, s := range ss {
-				if s == *sc {
-					return true
-				}
-			}
-			return false
+			ok, _ := nodeVisible(ctx, db, acl, "", "gh_pr", sc)
+			return ok
 		}
 		lists, err := jiraPRs(ctx, db, jiraIDs, visible)
 		if err != nil {

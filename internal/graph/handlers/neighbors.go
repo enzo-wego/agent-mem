@@ -145,10 +145,12 @@ func (h *neighborsHandler) serve(w http.ResponseWriter, r *http.Request) {
 
 	// Present headers are always filtered, including unresolved identities.
 	// Reject hidden roots before either expansion path can derive metadata.
-	_, scopeSet, noFilter := askerScopeSet(ctx, h.db, h.aclBld, r.Header.Get("X-Asker-User"))
+	eeid, scopeSet, noFilter := askerScopeSet(ctx, h.db, h.aclBld, r.Header.Get("X-Asker-User"))
+	acl := askerACL{noFilter: noFilter, resolved: eeid != 0, scopes: scopeSet}
 	if !noFilter {
 		var rootScope *string
-		err := h.db.QueryRow(ctx, `SELECT scope FROM graph.nodes WHERE id = $1 AND deleted_at IS NULL`, id).Scan(&rootScope)
+		var rootType string
+		err := h.db.QueryRow(ctx, `SELECT scope, type FROM graph.nodes WHERE id = $1 AND deleted_at IS NULL`, id).Scan(&rootScope, &rootType)
 		if errors.Is(err, pgx.ErrNoRows) {
 			http.Error(w, "not found", http.StatusNotFound)
 			return
@@ -157,7 +159,7 @@ func (h *neighborsHandler) serve(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		if !scopeVisible(rootScope, scopeSet, noFilter) {
+		if visible, err := nodeVisible(ctx, h.db, acl, id, rootType, rootScope); err != nil || !visible {
 			http.Error(w, "not found", http.StatusNotFound)
 			return
 		}
@@ -199,6 +201,11 @@ func (h *neighborsHandler) serve(w http.ResponseWriter, r *http.Request) {
 				nbrs = append(nbrs, sim...) // failure is non-fatal: just no related threads
 			}
 		}
+		candidateIDs := make([]string, 0, len(nbrs))
+		for _, n := range nbrs {
+			candidateIDs = append(candidateIDs, n.NodeID)
+		}
+		attachmentVisible, attachmentErr := visibleAttachments(ctx, h.db, acl, candidateIDs)
 		for _, n := range nbrs {
 			if seen[n.NodeID] {
 				continue
@@ -257,7 +264,13 @@ WHERE n.id=$1
 				continue
 			}
 			// Hidden from this asker: don't surface it and don't expand through it.
-			if !scopeVisible(scope, scopeSet, noFilter) {
+			visible := false
+			if attachmentType(item.Node.Type) {
+				visible = attachmentErr == nil && attachmentVisible[item.Node.NodeID]
+			} else {
+				visible, _ = nodeVisible(ctx, h.db, acl, item.Node.NodeID, item.Node.Type, scope)
+			}
+			if !visible {
 				continue
 			}
 			// A scope-less stub's channel name came from its node ID. Only show it to an
@@ -459,6 +472,11 @@ ORDER BY f.id`, parentIDs)
 				files = append(files, fr)
 			}
 			rows.Close()
+			fileIDs := make([]string, 0, len(files))
+			for _, fr := range files {
+				fileIDs = append(fileIDs, fr.id)
+			}
+			fileVisible, visibilityErr := visibleAttachments(ctx, h.db, acl, fileIDs)
 			// ponytail: cap 20 file rows per request so a thread with a photo dump
 			// can't flood the payload; count emitted (post-dedup, post-ACL) rows.
 			const maxFileLeaves = 20
@@ -470,13 +488,13 @@ ORDER BY f.id`, parentIDs)
 				if seen[fr.id] {
 					continue
 				}
-				// Never attach a leaf whose parent was filtered out, and run the
-				// same scope check on the file itself.
+				// Never attach a leaf whose surfaced parent was filtered out.
+				// The full live REFERENCES-parent rule still governs the file.
 				pm, ok := parents[fr.parent]
 				if !ok {
 					continue
 				}
-				if !scopeVisible(fr.scope, scopeSet, noFilter) {
+				if visibilityErr != nil || !fileVisible[fr.id] {
 					continue
 				}
 				title := fr.title
@@ -538,7 +556,10 @@ ORDER BY f.id`, parentIDs)
 	}
 	resp := map[string]any{"neighbors": out}
 	if r.URL.Query().Get("cards") == "1" {
-		visible := func(s *string) bool { return scopeVisible(s, scopeSet, noFilter) }
+		visible := func(s *string) bool {
+			ok, _ := nodeVisible(ctx, h.db, acl, "", "gh_pr", s)
+			return ok
+		}
 		var jiraIDs []string
 		for i := range out {
 			if out[i].Node.Type == "jira" {

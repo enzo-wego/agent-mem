@@ -39,21 +39,21 @@ type armHit struct {
 // searchFilter is the WHERE every arm shares: soft-deleted rows out, optional
 // type list, ACL scopes, epic/business membership.
 type searchFilter struct {
-	types any // []string or nil
-	scope any // []string or nil (nil = trusted unfiltered view)
-	epic  any // []string or nil
+	types    any // []string or nil
+	scope    any // []string or nil (nil = trusted unfiltered view)
+	epic     any // []string or nil
+	resolved bool
 }
 
-// sql renders the predicate with the filter's three arrays bound at
-// positional parameters t, s and e.
+// sql binds the arrays at t, s and e, and resolved immediately after e.
 func (f searchFilter) sql(t, s, e int) string {
 	return fmt.Sprintf(`n.deleted_at IS NULL
   AND ($%[1]d::text[] IS NULL OR n.type = ANY($%[1]d))
-  AND ($%[2]d::text[] IS NULL OR n.scope IS NULL OR n.scope = '' OR n.scope = ANY($%[2]d))
-  AND `, t, s) + fmt.Sprintf(epicScopePredicate, fmt.Sprintf("$%d", e))
+  AND `, t) + aclVisibleSQL("n", s, e+1) + `
+  AND ` + fmt.Sprintf(epicScopePredicate, fmt.Sprintf("$%d", e))
 }
 
-func (f searchFilter) args() []any { return []any{f.types, f.scope, f.epic} }
+func (f searchFilter) args() []any { return []any{f.types, f.scope, f.epic, f.resolved} }
 
 // semanticArm orders indexed nodes by cosine to the query vector.
 func semanticArm(ctx context.Context, db *pgxpool.Pool, vec []float32, f searchFilter, limit int) ([]armHit, error) {
@@ -91,8 +91,7 @@ var ilikeEscaper = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
 // a CTE scan is not a parameter, so the planner could not use the GIN index
 // through it. The body expression must match idx_nodes_body_tsv exactly. The
 // artifact_index join is a LEFT JOIN so nodes without an index row qualify.
-// Parameters: $1 websearch query, $2 limit, $3-$5 the filter arrays, $6 the
-// ILIKE-escaped query.
+// Parameters: $1 query, $2 limit, $3-$5 filter arrays, $6 resolved, $7 escaped query.
 func keywordArmSQL(f searchFilter) string {
 	return keywordCTE + `
 SELECT n.id,
@@ -113,7 +112,7 @@ WITH tq AS (SELECT websearch_to_tsquery('simple', $1) AS q),
 candidates AS (
   SELECT node_id AS id FROM graph.artifact_index WHERE tsv @@ websearch_to_tsquery('simple', $1)
   UNION
-  SELECT id FROM graph.nodes WHERE title ILIKE '%' || $6 || '%' ESCAPE '\'
+  SELECT id FROM graph.nodes WHERE title ILIKE '%' || $7 || '%' ESCAPE '\'
   UNION
   -- ponytail: body hits are not ranked by body relevance; add ts_rank_cd over the body expression if eval shows body-only hits ordered badly.
   SELECT id FROM graph.nodes WHERE to_tsvector('simple'::regconfig, left(coalesce(body, ''), 20000)) @@ websearch_to_tsquery('simple', $1)
@@ -121,7 +120,7 @@ candidates AS (
 
 // keywordRankSQL is the keyword score: ts_rank_cd plus a flat title bonus.
 const keywordRankSQL = `COALESCE(ts_rank_cd(ai.tsv, tq.q), 0)
-         + CASE WHEN n.title ILIKE '%' || $6 || '%' ESCAPE '\' THEN 0.5 ELSE 0 END AS rank`
+         + CASE WHEN n.title ILIKE '%' || $7 || '%' ESCAPE '\' THEN 0.5 ELSE 0 END AS rank`
 
 // keywordArmArgs binds keywordArmSQL's parameters.
 func keywordArmArgs(q string, f searchFilter, limit int) []any {
