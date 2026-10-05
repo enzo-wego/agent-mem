@@ -167,6 +167,10 @@ func NewServer(cfg *config.Config, logBuf *LogBuffer) (*Server, error) {
 		LiteParse:   liteparseConfigFromEnv(),
 
 		SlackBotToken: cfg.Graph.SlackBotToken,
+		SlackUserCreds: func() (string, string) {
+			snapshot := cfg.Snapshot()
+			return snapshot.SlackUserToken, snapshot.SlackUserCookie
+		},
 		JiraEmail:     cfg.Graph.JiraEmail,
 		JiraToken:     cfg.Graph.JiraToken,
 		SlackDMUserID: cfg.Graph.SlackDMUserID,

@@ -93,6 +93,11 @@ type Config struct {
 	LLMGatewayURL    string `json:"llm_gateway_url"`
 	LLMGatewayAPIKey string `json:"llm_gateway_api_key"`
 
+	// Slack user credentials are used only for refused Slack file downloads.
+	// Blank saves preserve them; clear_settings explicitly removes either value.
+	SlackUserToken  string `json:"slack_user_token"`
+	SlackUserCookie string `json:"slack_user_cookie"`
+
 	// LLMHourlyCallCap is the maximum number of generate calls (Generate,
 	// GenerateCheap) allowed per rolling clock-hour, per process. 0 = unlimited.
 	// Embeddings are excluded — they run on OpenRouter credits, not the Claude
@@ -152,6 +157,8 @@ func (c *Config) RuntimeSettings() map[string]string {
 		"gemini_embedding_dims": strconv.Itoa(c.GeminiEmbeddingDims),
 		"llm_gateway_url":       c.LLMGatewayURL,
 		"llm_gateway_api_key":   c.LLMGatewayAPIKey,
+		"slack_user_token":      c.SlackUserToken,
+		"slack_user_cookie":     c.SlackUserCookie,
 		"llm_hourly_call_cap":   strconv.Itoa(c.LLMHourlyCallCap),
 		"context_observations":  strconv.Itoa(c.ContextObservations),
 		"context_full_count":    strconv.Itoa(c.ContextFullCount),
@@ -186,6 +193,10 @@ func (c *Config) ApplyDBSettings(dbSettings map[string]string) {
 			c.LLMGatewayURL = v
 		case "llm_gateway_api_key":
 			c.LLMGatewayAPIKey = v
+		case "slack_user_token":
+			c.SlackUserToken = v
+		case "slack_user_cookie":
+			c.SlackUserCookie = v
 		case "llm_hourly_call_cap":
 			if n, err := strconv.Atoi(v); err == nil {
 				c.LLMHourlyCallCap = n
@@ -238,6 +249,8 @@ func (c *Config) snapshot() ConfigSnapshot {
 		GeminiEmbeddingDims: c.GeminiEmbeddingDims,
 		LLMGatewayURL:       c.LLMGatewayURL,
 		LLMGatewayAPIKey:    c.LLMGatewayAPIKey,
+		SlackUserToken:      c.SlackUserToken,
+		SlackUserCookie:     c.SlackUserCookie,
 		LLMHourlyCallCap:    c.LLMHourlyCallCap,
 		ContextObservations: c.ContextObservations,
 		ContextFullCount:    c.ContextFullCount,
@@ -266,6 +279,8 @@ type ConfigSnapshot struct {
 
 	LLMGatewayURL       string      `json:"llm_gateway_url"`
 	LLMGatewayAPIKey    string      `json:"llm_gateway_api_key"`
+	SlackUserToken      string      `json:"slack_user_token"`
+	SlackUserCookie     string      `json:"slack_user_cookie"`
 	LLMHourlyCallCap    int         `json:"llm_hourly_call_cap"`
 	ContextObservations int         `json:"context_observations"`
 	ContextFullCount    int         `json:"context_full_count"`
@@ -309,6 +324,14 @@ func (c *Config) Update(partial map[string]any) (llmChanged bool) {
 		case "llm_gateway_api_key":
 			if s, ok := v.(string); ok {
 				c.LLMGatewayAPIKey = strings.TrimSpace(s)
+			}
+		case "slack_user_token":
+			if s, ok := v.(string); ok && strings.TrimSpace(s) != "" {
+				c.SlackUserToken = strings.TrimSpace(s)
+			}
+		case "slack_user_cookie":
+			if s, ok := v.(string); ok && strings.TrimSpace(s) != "" {
+				c.SlackUserCookie = strings.TrimSpace(s)
 			}
 		case "llm_hourly_call_cap":
 			if n, ok := toInt(v); ok {
@@ -369,6 +392,18 @@ func (c *Config) Update(partial map[string]any) (llmChanged bool) {
 		case "machine_id":
 			if s, ok := v.(string); ok {
 				c.MachineID = s
+			}
+		}
+	}
+
+	// Apply explicit clears last, so clear wins independently of map iteration.
+	if clear, ok := partial["clear_settings"].([]any); ok {
+		for _, key := range clear {
+			switch key {
+			case "slack_user_token":
+				c.SlackUserToken = ""
+			case "slack_user_cookie":
+				c.SlackUserCookie = ""
 			}
 		}
 	}

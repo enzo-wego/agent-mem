@@ -15,7 +15,7 @@ import (
 )
 
 // settingsResponse is the JSON shape returned by GET /api/settings.
-// DatabaseURL and LLMGatewayAPIKey are masked for security.
+// DatabaseURL, LLMGatewayAPIKey, and Slack user credentials are masked.
 type settingsResponse struct {
 	WorkerPort  int    `json:"worker_port"`
 	DataDir     string `json:"data_dir"`
@@ -29,6 +29,8 @@ type settingsResponse struct {
 	GeminiEmbeddingDims int    `json:"gemini_embedding_dims"`
 	LLMGatewayURL       string `json:"llm_gateway_url"`
 	LLMGatewayAPIKey    string `json:"llm_gateway_api_key"`
+	SlackUserToken      string `json:"slack_user_token"`
+	SlackUserCookie     string `json:"slack_user_cookie"`
 	LLMHourlyCallCap    int    `json:"llm_hourly_call_cap"`
 	ProcessingPaused    bool   `json:"processing_paused"`
 
@@ -66,6 +68,8 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, _ *http.Request) {
 		GeminiEmbeddingDims: snap.GeminiEmbeddingDims,
 		LLMGatewayURL:       snap.LLMGatewayURL,
 		LLMGatewayAPIKey:    maskKey(snap.LLMGatewayAPIKey),
+		SlackUserToken:      maskKey(snap.SlackUserToken),
+		SlackUserCookie:     maskKey(snap.SlackUserCookie),
 		LLMHourlyCallCap:    snap.LLMHourlyCallCap,
 		ProcessingPaused:    snap.ProcessingPaused,
 		ContextObservations: snap.ContextObservations,
@@ -102,6 +106,23 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 			resp, _ := json.Marshal(map[string]string{"error": blocked + " requires a restart to change"})
 			http.Error(w, string(resp), http.StatusBadRequest)
 			return
+		}
+	}
+
+	// Validate all clear actions before changing any setting. Only the two
+	// write-only Slack credentials support explicit clearing.
+	if value, present := partial["clear_settings"]; present {
+		clear, ok := value.([]any)
+		if !ok {
+			http.Error(w, `{"error":"clear_settings must be an array of Slack credential keys"}`, http.StatusBadRequest)
+			return
+		}
+		for _, value := range clear {
+			key, ok := value.(string)
+			if !ok || (key != "slack_user_token" && key != "slack_user_cookie") {
+				http.Error(w, `{"error":"clear_settings accepts only slack_user_token and slack_user_cookie"}`, http.StatusBadRequest)
+				return
+			}
 		}
 	}
 
