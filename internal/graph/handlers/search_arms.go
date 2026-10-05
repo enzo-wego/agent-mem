@@ -76,6 +76,13 @@ func (f searchFilter) args() []any { return []any{f.types, f.scope, f.epic, f.re
 
 // semanticArm orders indexed nodes by cosine to the query vector.
 func semanticArm(ctx context.Context, db *pgxpool.Pool, vec []float32, f searchFilter, limit int) ([]armHit, error) {
+	if f.win != nil {
+		hits, err := windowedSemanticHits(ctx, db, vec, f, limit, "", scanSemanticHits)
+		if err != nil {
+			return nil, err
+		}
+		return aboveSemanticFloor(hits), nil
+	}
 	rows, err := semanticRows(ctx, db, vec, f, limit, "")
 	if err != nil {
 		return nil, err
@@ -90,7 +97,9 @@ func semanticArm(ctx context.Context, db *pgxpool.Pool, vec []float32, f searchF
 // semanticRows runs the semantic query; extra is an optional additional
 // select-list expression (", <expr>") appended after the three base columns.
 // An arm-only window is bound at $7 and $8, after the shared filter values.
-func semanticRows(ctx context.Context, db *pgxpool.Pool, vec []float32, f searchFilter, limit int, extra string) (pgx.Rows, error) {
+func semanticRows(ctx context.Context, db interface {
+	Query(context.Context, string, ...any) (pgx.Rows, error)
+}, vec []float32, f searchFilter, limit int, extra string) (pgx.Rows, error) {
 	predicate := f.sql(3, 4, 5)
 	args := append([]any{pgvector.NewVector(vec), limit}, f.args()...)
 	if f.win != nil {
@@ -106,6 +115,47 @@ WHERE ai.embedding IS NOT NULL
   AND `+predicate+`
 ORDER BY ai.embedding <=> $1
 LIMIT $2`, args...)
+}
+
+// afterSetLocalHook lets tests cancel inside the transaction, before querying.
+// Tests using this hook must not run in parallel.
+var afterSetLocalHook func()
+
+const windowedSemanticScanLimitSQL = "SET LOCAL hnsw.max_scan_tuples = 20000"
+
+// windowedSemanticHits owns the transaction until rows have been consumed and
+// closed. Local HNSW settings never escape onto a pooled connection.
+func windowedSemanticHits(ctx context.Context, db *pgxpool.Pool, vec []float32, f searchFilter, limit int, extra string, scan func(pgx.Rows) ([]armHit, error)) ([]armHit, error) {
+	tx, err := db.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(context.Background())
+	if _, err := tx.Exec(ctx, "SET LOCAL hnsw.iterative_scan = strict_order"); err != nil {
+		return nil, err
+	}
+	if _, err := tx.Exec(ctx, windowedSemanticScanLimitSQL); err != nil {
+		return nil, err
+	}
+	if afterSetLocalHook != nil {
+		afterSetLocalHook()
+	}
+	rows, err := semanticRows(ctx, tx, vec, f, limit, extra)
+	if err != nil {
+		return nil, err
+	}
+	hits, err := scan(rows)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return hits, nil
+}
+
+func scanSemanticHits(rows pgx.Rows) ([]armHit, error) {
+	return scanHits(rows)
 }
 
 // ilikeEscaper escapes the LIKE metacharacters so a query such as "50%" is
