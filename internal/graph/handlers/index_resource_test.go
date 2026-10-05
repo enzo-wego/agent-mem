@@ -62,4 +62,13 @@ func TestIndexArtifact_TitleOnlyAndDistinct(t *testing.T) {
 			t.Fatalf("duplicate reindex %s representatives=%d", id, count)
 		}
 	}
+	for _, id := range []string{"jira:PAY-2307", "jira:PAY-2310", "jira:PAY-2311"} {
+		var ids []string
+		if err := pool.QueryRow(ctx, `SELECT identifiers FROM graph.artifact_index WHERE node_id=$1`, id).Scan(&ids); err != nil {
+			t.Fatal(err)
+		}
+		if len(ids) != 1 || ids[0] != id[len("jira:"):] {
+			t.Fatalf("%s own identifiers=%v", id, ids)
+		}
+	}
 }

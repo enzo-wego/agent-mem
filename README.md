@@ -21,6 +21,7 @@
 - Derives higher-level signal from the raw graph: thread & cluster summaries, hot-topic detection with Slack alerts, a live Jira board mirror, people/role inference (see [Derived pipelines](#derived-pipelines))
 - Exposes the read API as a stdio MCP server ([`agent-mem mcp`](#graph-mcp-server)) and a [`/live` board + globe view](#dashboard)
 - Resource heuristic summaries include the title and substantive body lines (400 runes, PRs limited to three kept lines). Markdown headings and known section labels are skipped; title-only resources are indexed. Slack retains its first-paragraph behavior. Identical heuristic summaries share one embedded representative.
+- Jira issues and Wego PRs always reserve an identifier slot for their own key before body extraction; identifiers remain deduplicated, sorted, and bounded to 64.
 
 ### The two subsystems at a glance
 

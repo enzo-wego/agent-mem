@@ -117,7 +117,7 @@ WHERE channel_id=$1 AND thread_ts=$2`,
 		// Step 4: extract identifiers from RAW text (thread roots read the
 		// whole thread) — summaries drop the IDs that shared-identifier
 		// candidates depend on.
-		identifiers, err := identifiersForNode(ctx, deps, nodeType, scope, threadTs, ownTs, bodyFull)
+		identifiers, err := identifiersForNode(ctx, deps, p.NodeID, nodeType, scope, threadTs, ownTs, bodyFull)
 		if err != nil {
 			return fmt.Errorf("index_artifact: extract identifiers: %w", err)
 		}
