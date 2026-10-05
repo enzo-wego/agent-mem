@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -63,29 +64,33 @@ WHERE ai.node_id = $1`, p.NodeID,
 		}
 
 		// Step 2: read node metadata and body_full, falling back to nodes.body.
-		var nodeType, scope, threadTs, ownTs, bodyFull string
+		var nodeType, scope, threadTs, ownTs, title, bodyFull string
 		err := deps.DB.QueryRow(ctx,
 			`SELECT n.type,
        COALESCE(n.scope,''),
        COALESCE(NULLIF(n.metadata->>'thread_ts',''), split_part(n.id,':',3)),
        split_part(n.id,':',3),
+       COALESCE(n.title,''),
        COALESCE(ab.body_full, n.body, '')
 FROM graph.nodes n
 LEFT JOIN graph.artifact_bodies ab ON ab.node_id = n.id
 WHERE n.id = $1`, p.NodeID,
-		).Scan(&nodeType, &scope, &threadTs, &ownTs, &bodyFull)
+		).Scan(&nodeType, &scope, &threadTs, &ownTs, &title, &bodyFull)
 		if err != nil {
 			return fmt.Errorf("%w: index_artifact: node not found: %v", jobs.ErrFatal, err)
 		}
 
-		if bodyFull == "" {
+		if bodyFull == "" && (nodeType == "slack" || nodeType == "slack_thread" || strings.TrimSpace(title) == "") {
 			// Nothing to index yet; not an error.
 			return nil
 		}
 
 		// Step 3: compute summary text. Slack thread roots prefer the cached
 		// resource-aware thread summary built by summarize_thread.
-		summary := heuristicSummary(p.NodeID, bodyFull)
+		summary := heuristicSummary(p.NodeID, title, bodyFull)
+		if summary == "" {
+			return nil
+		}
 		summaryKind := "heuristic"
 		var decisionsText *string // NULL unless this node embeds a thread summary
 		if (nodeType == "slack" || nodeType == "slack_thread") && threadTs == ownTs && strings.HasPrefix(scope, "slack:") {
@@ -245,31 +250,50 @@ func indexSummaryForSlackRoot(topic, overview string) (summary, kind string) {
 	}
 }
 
-// heuristicSummary produces a short summary based on the node type and body.
-func heuristicSummary(nodeID, body string) string {
-	const maxChars = 200
+var reSummaryHeading = regexp.MustCompile(`^#{1,6}\s`)
 
-	// Determine type prefix.
-	colonIdx := strings.Index(nodeID, ":")
-	var typePrefix string
-	if colonIdx > 0 {
-		typePrefix = nodeID[:colonIdx]
+// heuristicSummary keeps Slack's first paragraph; resources include their title.
+func heuristicSummary(nodeID, title, body string) string {
+	if strings.HasPrefix(nodeID, "slack:") || strings.HasPrefix(nodeID, "slack_thread:") {
+		return firstParagraph(body, 200)
 	}
-
-	switch typePrefix {
-	case "jira":
-		// Take description's first paragraph.
-		return firstParagraph(body, maxChars)
-
-	case "gh_pr":
-		// title + first 3 lines.
-		lines := strings.SplitN(body, "\n", 4)
-		count := min(len(lines), 3)
-		return truncateRunes(strings.Join(lines[:count], "\n"), maxChars)
-
-	default:
-		return firstParagraph(body, maxChars)
+	title = strings.TrimSpace(title)
+	normalizeTitle := func(s string) string {
+		return strings.ToLower(strings.Join(strings.Fields(strings.TrimLeft(strings.TrimSpace(s), "#")), " "))
 	}
+	// ponytail: label list + markdown heading strip; Jira bodies keep section headings since R1
+	var kept []string
+	for _, line := range strings.Split(body, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || reSummaryHeading.MatchString(line) {
+			continue
+		}
+		switch strings.ToLower(strings.TrimSpace(strings.TrimRight(line, ":?"))) {
+		case "background", "context", "problem", "problem statement", "description", "summary",
+			"goal", "goals", "overview", "what", "why", "how", "scope", "out of scope",
+			"acceptance criteria", "notes", "details", "requirements", "solution", "proposal",
+			"testing", "test plan", "changes", "tasks", "references", "links":
+			continue
+		}
+		kept = append(kept, line)
+	}
+	if len(kept) > 0 && normalizeTitle(kept[0]) == normalizeTitle(title) {
+		kept = kept[1:]
+	}
+	if strings.HasPrefix(nodeID, "gh_pr:") && len(kept) > 3 {
+		kept = kept[:3]
+	}
+	summary := title
+	if len(kept) > 0 {
+		if summary != "" {
+			summary += "\n"
+		}
+		summary += strings.Join(kept, " ")
+	}
+	if summary == "" {
+		summary = strings.TrimSpace(body)
+	}
+	return truncateRunes(summary, 400)
 }
 
 // truncateRunes caps s to at most n runes, never splitting a multi-byte

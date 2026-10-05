@@ -20,6 +20,7 @@
 - Ingests cross-source artifacts (push, URL, or Slack backfill), processes them through a Postgres-backed job queue (fetch → normalize → extract edges → describe media → embed), and serves search / BFS-resolve / node read endpoints
 - Derives higher-level signal from the raw graph: thread & cluster summaries, hot-topic detection with Slack alerts, a live Jira board mirror, people/role inference (see [Derived pipelines](#derived-pipelines))
 - Exposes the read API as a stdio MCP server ([`agent-mem mcp`](#graph-mcp-server)) and a [`/live` board + globe view](#dashboard)
+- Resource heuristic summaries include the title and substantive body lines (400 runes, PRs limited to three kept lines). Markdown headings and known section labels are skipped; title-only resources are indexed. Slack retains its first-paragraph behavior. Identical heuristic summaries share one embedded representative.
 
 ### The two subsystems at a glance
 
