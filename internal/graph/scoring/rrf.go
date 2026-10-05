@@ -3,6 +3,7 @@ package scoring
 import (
 	"context"
 	"fmt"
+	"math"
 	"strconv"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -24,11 +25,22 @@ type Fused struct {
 // Σ_arms 1/(k + rank). A duplicate id inside one arm's list keeps its first
 // (best) rank. k <= 0 falls back to RRFK.
 func Fuse(lists map[string][]string, k int) map[string]Fused {
+	return FuseWeighted(lists, k, nil)
+}
+
+// FuseWeighted combines ranked lists using w/(k + rank). Missing, negative
+// or non-finite weights default to 1; zero retains ids and ranks without a vote.
+// Duplicate ids keep their first rank, and k <= 0 falls back to RRFK.
+func FuseWeighted(lists map[string][]string, k int, weights map[string]float64) map[string]Fused {
 	if k <= 0 {
 		k = RRFK
 	}
 	out := make(map[string]Fused)
 	for arm, ids := range lists {
+		weight, ok := weights[arm]
+		if !ok || weight < 0 || math.IsNaN(weight) || math.IsInf(weight, 0) {
+			weight = 1
+		}
 		for i, id := range ids {
 			f, ok := out[id]
 			if !ok {
@@ -39,7 +51,7 @@ func Fuse(lists map[string][]string, k int) map[string]Fused {
 			}
 			rank := i + 1
 			f.Ranks[arm] = rank
-			f.Score += 1 / float64(k+rank)
+			f.Score += weight / float64(k+rank)
 			out[id] = f
 		}
 	}
@@ -107,4 +119,22 @@ func LoadBoostAlphas(ctx context.Context, db *pgxpool.Pool) (BoostAlphas, error)
 		}
 	}
 	return a, rows.Err()
+}
+
+// GraphArmWeightKey is the public.settings key for the graph arm's RRF vote.
+const GraphArmWeightKey = "graph.rrf.weight.graph"
+
+// LoadGraphArmWeight reads the graph arm's RRF weight for each search.
+// ponytail: default to an equal vote; tuning is opt-in through Settings.
+// Unset, unparsable, non-finite or out-of-range values keep the default of 1.
+func LoadGraphArmWeight(ctx context.Context, db *pgxpool.Pool) (float64, error) {
+	var value string
+	if err := db.QueryRow(ctx, `SELECT COALESCE((SELECT value FROM public.settings WHERE key = $1), '1')`, GraphArmWeightKey).Scan(&value); err != nil {
+		return 1, fmt.Errorf("load graph arm weight: %w", err)
+	}
+	weight, err := strconv.ParseFloat(value, 64)
+	if err != nil || math.IsNaN(weight) || math.IsInf(weight, 0) || weight < 0 || weight > 1 {
+		return 1, nil
+	}
+	return weight, nil
 }

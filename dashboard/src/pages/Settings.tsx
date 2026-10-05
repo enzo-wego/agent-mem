@@ -754,28 +754,33 @@ const BOOST_ALPHA_FIELDS: { key: keyof BoostAlphas; label: string; hint: string 
 
 function BoostAlphasSection() {
   const [alphas, setAlphas] = useState<BoostAlphas | null>(null)
+  const [armGraph, setArmGraph] = useState(1)
   const [legacy, setLegacy] = useState<Record<string, number>>({})
   const [saving, setSaving] = useState(false)
   const [toast, setToast] = useState<{ type: 'ok' | 'err'; msg: string } | null>(null)
 
   useEffect(() => {
     fetchBoostAlphas()
-      .then((cfg) => { setAlphas(cfg.alphas); setLegacy(cfg.legacy_weights) })
+      .then((cfg) => { setAlphas(cfg.alphas); setArmGraph(cfg.arm_graph); setLegacy(cfg.legacy_weights) })
       .catch(() => setToast({ type: 'err', msg: 'Failed to load boost alphas' }))
   }, [])
 
-  const save = async (key: keyof BoostAlphas, raw: string) => {
+  const save = async (key: keyof BoostAlphas | 'arm_graph', raw: string) => {
     if (!alphas) return
     const v = Number(raw)
     if (!Number.isFinite(v) || v < 0 || v > 1) {
-      setToast({ type: 'err', msg: 'Alpha must be a number between 0 and 1' })
+      setToast({ type: 'err', msg: `${key === 'arm_graph' ? 'Graph arm weight' : 'Alpha'} must be a number between 0 and 1` })
       return
     }
     setSaving(true)
     setToast(null)
     try {
-      const updated = await saveBoostAlphas({ ...alphas, [key]: v })
+      const updated = await saveBoostAlphas(
+        key === 'arm_graph' ? alphas : { ...alphas, [key]: v },
+        key === 'arm_graph' ? v : armGraph,
+      )
       setAlphas(updated.alphas)
+      setArmGraph(updated.arm_graph)
       setToast({ type: 'ok', msg: 'Saved — applies to the next search' })
     } catch (e: unknown) {
       setToast({ type: 'err', msg: e instanceof Error ? e.message : 'Save failed' })
@@ -804,6 +809,9 @@ function BoostAlphasSection() {
               <EditableField value={String(alphas[f.key])} saving={saving} onSave={(v) => save(f.key, v)} placeholder="0.2" />
             </Field>
           ))}
+          <Field label="Graph arm weight (graph.rrf.weight.graph)" hint="RRF weight of the graph arm; 1 = equal to the other arms">
+            <EditableField value={String(armGraph)} saving={saving} onSave={(v) => save('arm_graph', v)} placeholder="1" />
+          </Field>
           <Field label="Legacy weights (graph.weights.*)" hint="Read-only. Still used by /api/graph/resolve's additive score; search no longer reads them.">
             <p className="text-sm font-mono text-gray-500 dark:text-gray-400">
               {Object.entries(legacy).map(([k, v]) => `${k}=${v}`).join('  ')}
