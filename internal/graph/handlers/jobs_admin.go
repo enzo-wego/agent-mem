@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 	"time"
@@ -122,14 +123,31 @@ func NewJobsRetryHandler(deps Deps) http.Handler {
 		}
 
 		ctx := r.Context()
-		_, err := deps.DB.Exec(ctx,
-			`UPDATE graph.jobs
-			 SET status = 'queued', available_at = NOW(), attempts = 0, last_error = NULL
-			 WHERE id = $1 AND status = 'failed'`,
-			id,
-		)
+		var jobType string
+		err := deps.DB.QueryRow(ctx,
+			`SELECT COALESCE((SELECT type FROM graph.jobs WHERE id=$1), '')`, id).Scan(&jobType)
+		if err == nil {
+			if jobs.IsPeriodic(jobType) {
+				err = jobs.RetryPeriodicNow(ctx, deps.DB, id)
+			} else {
+				// Keep non-periodic retries on the original request context,
+				// without the periodic transaction's five-second deadline.
+				_, err = deps.DB.Exec(ctx,
+					`UPDATE graph.jobs
+					 SET status = 'queued', available_at = NOW(), attempts = 0, last_error = NULL
+					 WHERE id = $1 AND status = 'failed'`, id)
+			}
+		}
+		if errors.Is(err, jobs.ErrPeriodicPending) {
+			writeError(w, http.StatusConflict, err.Error())
+			return
+		}
 		if err != nil {
 			deps.Logger.Error().Err(err).Int64("job_id", id).Msg("jobs_retry: update failed")
+			if jobs.IsPeriodic(jobType) {
+				writeError(w, http.StatusInternalServerError, "periodic retry outcome is unknown; check the jobs list before retrying")
+				return
+			}
 			writeError(w, http.StatusInternalServerError, "retry job failed")
 			return
 		}

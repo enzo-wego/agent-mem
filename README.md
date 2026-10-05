@@ -524,6 +524,63 @@ DELETE /api/graph/jobs/{id}
 POST /api/graph/jobs/{id}/retry
 ```
 
+Periodic enqueue and retry conflicts return HTTP 409 with
+`{"error":"already queued or running"}`. A conflict leaves the queue unchanged;
+the Jobs dashboard displays that message. Manual enqueue via
+`POST /api/graph/jobs/enqueue` accepts `refresh_jira_board` and
+`derive_person_roles` among the maintenance allowlist. `detect_hot_topics` and
+`notify_watch_channels` remain disallowed through that endpoint (HTTP 400).
+
+Periodic transaction errors return HTTP 500 with an unknown-outcome warning:
+check the jobs list before retrying. The five-second deadline includes COMMIT,
+so a client error does not prove that the transaction rolled back.
+
+### Fixed-interval periodic jobs
+
+One process-owned ticker polls every 30 seconds while the graph job manager is
+enabled (`runner=none` does not schedule). It owns these four schedules:
+
+| Job | Interval | Target runner |
+|---|---|---|
+| `notify_watch_channels` | 5 minutes | Worker runner |
+| `detect_hot_topics` | 5 minutes | Worker runner |
+| `derive_person_roles` | 24 hours | `any` |
+| `refresh_jira_board` | 6 hours | Worker runner |
+
+Manual periodic enqueue from a worker with an empty or `none` runner targets
+`any`, allowing an active local or VPS runner to claim it.
+
+For each type, a database-local advisory lock serializes scheduled enqueue,
+manual enqueue, and admin retry. Queued **or** running work suppresses a new
+enqueue. The persisted `graph.periodic.<type>.last_enqueued_at` records scheduled
+enqueues; manual runs do not change it. Each tick transaction has a five-second
+deadline, including pool acquisition, and failures are logged without preventing
+the other types from being checked.
+
+The first healthy poll seeds missing schedules. Cadence is measured from the
+last enqueue, not completion plus the interval; a long retry chain can therefore
+be followed immediately by a due tick after it terminates. Exhausted retries do
+not end the schedule. This removes handler self-reschedule multiplication but
+does not fence stale lease owners: stale `Retry`/`Complete` interleavings can
+still resurrect an old row (`agent-mem-ud0t`). The ticker adds nothing while
+either row is pending and resumes on the next due poll after both terminate.
+
+Production uses one hub worker against one database. Independent databases have
+independent schedules. On a shared database with mixed runners, an unclaimed
+runner-pinned row can block its type if its worker exits; delete that stranded
+row before a surviving runner can schedule it. Runner failover is not provided
+by this change.
+
+For one-time duplicate cleanup, stop **every** queue writer against the target
+database, preview queued/running counts for exactly these four types, then run
+`psql -X -v expected=<previewed queued total> -f scripts/cleanup-periodic-jobs.sql`.
+The script deletes only their queued rows and four schedule keys; a count
+mismatch aborts the entire transaction. Running rows remain for janitor reclaim.
+Restart only after cleanup succeeds; cleared schedule keys allow immediate
+reseeding at the next healthy poll. The temporary, expiring
+`monitor_hourly_report` and finite TSV/Slack pagination continuation chains are
+unchanged.
+
 ### Import org chart from BambooHR
 
 ```bash

@@ -401,7 +401,11 @@ export async function listJobs(status?: string, type?: string, limit = 50): Prom
 }
 
 export async function retryJob(id: number): Promise<void> {
-  await authFetch(`${BASE}/api/graph/jobs/${id}/retry`, { method: 'POST', headers: authHeaders() });
+  const res = await authFetch(`${BASE}/api/graph/jobs/${id}/retry`, { method: 'POST', headers: authHeaders() });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Unknown error' }));
+    throw new Error(err.error || `HTTP ${res.status}`);
+  }
 }
 
 export async function deleteJob(id: number): Promise<void> {

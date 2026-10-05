@@ -18,7 +18,7 @@ import (
 // refresh_jira_board fills graph.jira_epic_map: for every PAY issue key already
 // referenced in the graph (graph.nodes type='jira'), fetch its parent epic from
 // Jira and upsert the mapping. Powers the 📌 PINS panel's board section (threads
-// grouped by epic). Self-reschedules every 6h, like detect_hot_topics.
+// grouped by epic). The periodic ticker schedules it every 6h.
 //
 // ponytail: board = project PAY (board 193 is the PAY board). Make it a setting
 // when a second board matters.
@@ -32,8 +32,6 @@ var businessRootBoards = map[string]int{"PAY": 193}
 // boardEpicNoRank sorts epics that are not on the board (and the no-epic group)
 // after every ranked epic. Matches the migration's DEFAULT.
 const boardEpicNoRank = 2147483647
-
-const refreshJiraBoardInterval = 6 * time.Hour
 
 // NewRefreshJiraBoardHandler returns the job entry for "refresh_jira_board".
 func NewRefreshJiraBoardHandler(deps Deps) jobs.Entry {
@@ -279,19 +277,6 @@ func fetchActiveSprintEpics(ctx context.Context, client *http.Client, baseURL, e
 
 func refreshJiraBoardHandler(deps Deps) jobs.Handler {
 	return func(ctx context.Context, _ []byte) error {
-		// Always reschedule the next tick, even on failure — same contract as
-		// detect_hot_topics: one bad Jira day must not kill the loop.
-		defer func() {
-			if _, err := jobs.Enqueue(ctx, deps.DB, "refresh_jira_board", map[string]any{},
-				jobs.EnqueueOptions{
-					AvailableAt:  time.Now().Add(refreshJiraBoardInterval),
-					TargetRunner: deps.Runner,
-					MachineID:    deps.MachineID,
-				}); err != nil {
-				deps.Logger.Warn().Err(err).Msg("refresh_jira_board: reschedule failed")
-			}
-		}()
-
 		baseURL := strings.TrimRight(os.Getenv("AGENT_MEM_JIRA_BASE_URL"), "/")
 		email := os.Getenv("AGENT_MEM_JIRA_EMAIL")
 		token := os.Getenv("AGENT_MEM_JIRA_TOKEN")

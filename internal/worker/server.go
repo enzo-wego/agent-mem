@@ -216,57 +216,6 @@ func NewServer(cfg *config.Config, logBuf *LogBuffer) (*Server, error) {
 			}
 		}
 
-		// Kick off the self-rescheduling hot-topic detector (deduped: skip if one is
-		// already queued/running). Each run re-enqueues the next tick.
-		var detectPending bool
-		_ = pool.QueryRow(ctx,
-			`SELECT EXISTS(SELECT 1 FROM graph.jobs WHERE type='detect_hot_topics' AND status IN ('queued','running'))`).
-			Scan(&detectPending)
-		if !detectPending {
-			if _, err := jobs.Enqueue(ctx, pool, "detect_hot_topics", map[string]any{},
-				jobs.EnqueueOptions{TargetRunner: cfg.Graph.Runner, MachineID: cfg.MachineID}); err != nil {
-				graphLog.Warn().Err(err).Msg("startup: enqueue detect_hot_topics failed")
-			}
-		}
-
-		// Recompute evidence-backed person roles daily. The handler schedules its next run;
-		// startup only repairs a missing chain and triggers the first computation after deploy.
-		var rolesPending bool
-		_ = pool.QueryRow(ctx,
-			`SELECT EXISTS(SELECT 1 FROM graph.jobs WHERE type='derive_person_roles' AND status IN ('queued','running'))`).
-			Scan(&rolesPending)
-		if !rolesPending {
-			if _, err := jobs.Enqueue(ctx, pool, "derive_person_roles", map[string]any{},
-				jobs.EnqueueOptions{TargetRunner: "any", MachineID: cfg.MachineID}); err != nil {
-				graphLog.Warn().Err(err).Msg("startup: enqueue derive_person_roles failed")
-			}
-		}
-
-		// Kick off the self-rescheduling Jira board→epic map refresh (deduped).
-		var jiraBoardPending bool
-		_ = pool.QueryRow(ctx,
-			`SELECT EXISTS(SELECT 1 FROM graph.jobs WHERE type='refresh_jira_board' AND status IN ('queued','running'))`).
-			Scan(&jiraBoardPending)
-		if !jiraBoardPending {
-			if _, err := jobs.Enqueue(ctx, pool, "refresh_jira_board", map[string]any{},
-				jobs.EnqueueOptions{TargetRunner: cfg.Graph.Runner, MachineID: cfg.MachineID}); err != nil {
-				graphLog.Warn().Err(err).Msg("startup: enqueue refresh_jira_board failed")
-			}
-		}
-
-		// Kick off the self-rescheduling watch-channels notifier (DMs every message in
-		// the Payment Partners group). Deduped: skip if one is already queued/running.
-		var watchPending bool
-		_ = pool.QueryRow(ctx,
-			`SELECT EXISTS(SELECT 1 FROM graph.jobs WHERE type='notify_watch_channels' AND status IN ('queued','running'))`).
-			Scan(&watchPending)
-		if !watchPending {
-			if _, err := jobs.Enqueue(ctx, pool, "notify_watch_channels", map[string]any{},
-				jobs.EnqueueOptions{TargetRunner: cfg.Graph.Runner, MachineID: cfg.MachineID}); err != nil {
-				graphLog.Warn().Err(err).Msg("startup: enqueue notify_watch_channels failed")
-			}
-		}
-
 		// Arm the 7-day hourly monitor (threaded DM report). Deduped; the handler
 		// self-expires 7 days after its first run, so a restart after that just no-ops.
 		var monitorPending bool
@@ -408,6 +357,7 @@ func (s *Server) Run() error {
 	// Start graph job manager (dispatchers + janitor)
 	if s.manager != nil {
 		go s.manager.Run(ctx)
+		go jobs.RunPeriodicJobsTicker(ctx, s.db.Pool, s.config.MachineID, s.config.Graph.Runner, log.Logger)
 		// Jira freshness poll: the ticker owns the refresh_jira_updates cadence.
 		go graphhandlers.RunJiraUpdatesTicker(ctx, s.db.Pool, s.config.MachineID, s.config.Graph.Runner, log.Logger)
 		if s.config.Graph.SlackBotToken != "" {

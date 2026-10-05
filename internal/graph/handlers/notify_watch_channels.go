@@ -18,7 +18,6 @@ import (
 const watchContinentID = "partners"
 
 const (
-	watchInterval = 5 * time.Minute
 	watchLookback = 6 * time.Hour // bounds the scan; dedup prevents re-notify
 	// settings key holding the activation timestamp — messages before it are not
 	// back-notified, so turning this on doesn't dump recent history as a burst.
@@ -87,7 +86,7 @@ func loadContinentsConfig(ctx context.Context, db *pgxpool.Pool) continentsConfi
 	return cfg
 }
 
-// NewNotifyWatchChannels returns the self-rescheduling handler that DMs the
+// NewNotifyWatchChannels returns the handler that DMs the
 // subscriber for every new message in a watched channel group (Payment Partners).
 // No topic/volume gate — these channels are important enough that every message
 // matters. Dedup via graph.channel_notifications; activation watermark avoids a
@@ -95,17 +94,6 @@ func loadContinentsConfig(ctx context.Context, db *pgxpool.Pool) continentsConfi
 func NewNotifyWatchChannels(deps Deps) jobs.Handler {
 	log := deps.Logger
 	return func(ctx context.Context, _ []byte) error {
-		defer func() {
-			if _, err := jobs.Enqueue(ctx, deps.DB, "notify_watch_channels", map[string]any{},
-				jobs.EnqueueOptions{
-					AvailableAt:  time.Now().Add(watchInterval),
-					TargetRunner: deps.Runner,
-					MachineID:    deps.MachineID,
-				}); err != nil {
-				log.Warn().Err(err).Msg("notify_watch_channels: reschedule failed")
-			}
-		}()
-
 		to := deps.SlackDMUserID
 		if deps.SlackBotToken == "" {
 			// Misconfiguration, not a data condition: no amount of retrying
