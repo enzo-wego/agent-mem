@@ -1163,6 +1163,7 @@ export interface BoostAlphas {
 
 export interface BoostAlphasConfig {
   alphas: BoostAlphas;
+  arm_graph: number;
   legacy_weights: Record<string, number>; // graph.weights.*, still used by resolve
 }
 
@@ -1175,11 +1176,11 @@ export async function fetchBoostAlphas(): Promise<BoostAlphasConfig> {
   return res.json();
 }
 
-export async function saveBoostAlphas(alphas: BoostAlphas): Promise<BoostAlphasConfig> {
+export async function saveBoostAlphas(alphas: BoostAlphas, arm_graph: number): Promise<BoostAlphasConfig> {
   const res = await authFetch(`${BASE}/api/graph/boost-alphas`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json', ...authHeaders() },
-    body: JSON.stringify({ alphas }),
+    body: JSON.stringify({ alphas, arm_graph }),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: 'Unknown error' }));

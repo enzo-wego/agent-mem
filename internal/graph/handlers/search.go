@@ -300,15 +300,20 @@ func (s *Search) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		ranked[arm] = ids
 		armLocal[arm] = local
 	}
-	fused := scoring.Fuse(ranked, scoring.RRFK)
-	ids := make([]string, 0, len(fused))
-	for id := range fused {
-		ids = append(ids, id)
-	}
 	alphas, err := scoring.LoadBoostAlphas(ctx, s.db)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+	graphWeight, err := scoring.LoadGraphArmWeight(ctx, s.db)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	fused := scoring.FuseWeighted(ranked, scoring.RRFK, map[string]float64{armGraph: graphWeight})
+	ids := make([]string, 0, len(fused))
+	for id := range fused {
+		ids = append(ids, id)
 	}
 	results, err := s.hydrateResults(ctx, ids, filter, fused, armLocal, alphas, askerEEID, win, hasWindow, now)
 	if err != nil {
