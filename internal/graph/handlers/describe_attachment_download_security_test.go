@@ -32,8 +32,8 @@ func TestDownloadSlackFallbackStatuses(t *testing.T) {
 		{name: "both403", bot: 403, user: 403, requests: 2, fatal: true, fail: true, message: "fatal: download HTTP 403 (bot), 403 (user): "},
 		{name: "bot401 user403 preserves status", bot: 401, user: 403, requests: 2, fatal: true, fail: true, message: "fatal: download HTTP 401 (bot), 403 (user): "},
 		{name: "user404", bot: 403, user: 404, requests: 2, fatal: true, fail: true, message: "fatal: download HTTP 403 (bot), 404 (user): "},
-		{name: "user503 transient", bot: 403, user: 503, requests: 2, fail: true, message: "download HTTP 503: "},
-		{name: "user429 transient", bot: 403, user: 429, requests: 2, fail: true, message: "download HTTP 429: "},
+		{name: "user503 transient", bot: 403, user: 503, requests: 2, fail: true, message: "download HTTP 403 (bot), 503 (user): "},
+		{name: "user429 transient", bot: 403, user: 429, requests: 2, fail: true, message: "download HTTP 403 (bot), 429 (user): "},
 		{name: "bot503 no fallback", bot: 503, requests: 1, fail: true, message: "download HTTP 503: "},
 		{name: "bot429 no fallback", bot: 429, requests: 1, fail: true, message: "download HTTP 429: "},
 		{name: "bot404 no fallback", bot: 404, requests: 1, fatal: true, fail: true, message: "fatal: download HTTP 404: "},
@@ -41,6 +41,15 @@ func TestDownloadSlackFallbackStatuses(t *testing.T) {
 		{name: "bot403 user login", bot: 403, user: 200, userType: "text/html; charset=utf-8", requests: 2, fatal: true, fail: true, message: "fatal: download: slack login page (bot 403, user login): "},
 		{name: "bot401 user login", bot: 401, user: 200, userType: "text/html", requests: 2, fatal: true, fail: true, message: "fatal: download: slack login page (bot 401, user login): "},
 		{name: "both login", bot: 200, botType: "text/html; charset=utf-8", user: 200, userType: "text/html", requests: 2, fatal: true, fail: true, message: "fatal: download: slack login page (bot login, user login): "},
+		{name: "no token redirect", bot: 302, noToken: true, requests: 1, fatal: true, fail: true, message: "fatal: download: slack redirect (bot): "},
+		{name: "redirect user403", bot: 302, user: 403, requests: 2, fatal: true, fail: true, message: "fatal: download HTTP redirect (bot), 403 (user): "},
+		{name: "both redirect", bot: 302, user: 302, requests: 2, fatal: true, fail: true, message: "fatal: download HTTP redirect (bot), redirect (user): "},
+		{name: "401 user redirect", bot: 401, user: 302, requests: 2, fatal: true, fail: true, message: "fatal: download HTTP 401 (bot), redirect (user): "},
+		{name: "403 user redirect", bot: 403, user: 302, requests: 2, fatal: true, fail: true, message: "fatal: download HTTP 403 (bot), redirect (user): "},
+		{name: "login user redirect", bot: 200, botType: "text/html", user: 302, requests: 2, fatal: true, fail: true, message: "fatal: download HTTP login (bot), redirect (user): "},
+		{name: "redirect user login", bot: 302, user: 200, userType: "text/html", requests: 2, fatal: true, fail: true, message: "fatal: download: slack login page (bot redirect, user login): "},
+		{name: "redirect user429", bot: 302, user: 429, requests: 2, fail: true, message: "download HTTP redirect (bot), 429 (user): "},
+		{name: "redirect user503", bot: 302, user: 503, requests: 2, fail: true, message: "download HTTP redirect (bot), 503 (user): "},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -66,6 +75,9 @@ func TestDownloadSlackFallbackStatuses(t *testing.T) {
 					contentType = "image/png"
 				}
 				w.Header().Set("Content-Type", contentType)
+				if status == http.StatusFound {
+					w.Header().Set("Location", "https://evil.example/"+downloadUserToken)
+				}
 				w.WriteHeader(status)
 				io.WriteString(w, "file bytes")
 			})
@@ -180,7 +192,7 @@ func TestDownloadSlackRedirects(t *testing.T) {
 	}{
 		{"same host bot", "https://files.slack.com/final", false, 2, false},
 		{"same host user", "https://files.slack.com/final", true, 3, false},
-		{"foreign bot", "https://evil.example/final", false, 1, true},
+		{"foreign bot", "https://evil.example/final", false, 2, true},
 		{"foreign user", "https://evil.example/final", true, 2, true},
 		{"http downgrade user", "http://files.slack.com/final", true, 2, true},
 		{"suffix user", "https://files.slack.com.evil.example/final", true, 2, true},
@@ -198,7 +210,7 @@ func TestDownloadSlackRedirects(t *testing.T) {
 					return
 				}
 				wantAuth, wantCookie := "Bearer bot", ""
-				if tc.fallback {
+				if (tc.fallback && requests > 1) || (!tc.fallback && tc.fail && requests > 1) {
 					wantAuth, wantCookie = "Bearer "+downloadUserToken, "d="+downloadUserCookie
 				}
 				if r.Header.Get("Authorization") != wantAuth || r.Header.Get("Cookie") != wantCookie {
@@ -216,6 +228,9 @@ func TestDownloadSlackRedirects(t *testing.T) {
 			assertDownloadNoLeaks(t, err, logs.String())
 			if (err != nil) != tc.fail {
 				t.Errorf("error = %v, want fail %v", err, tc.fail)
+			}
+			if errors.Is(err, jobs.ErrFatal) != tc.fail {
+				t.Errorf("fatal classification = %v", err)
 			}
 			if !tc.fail && string(data) != "redirect bytes" {
 				t.Errorf("bytes = %q", data)
@@ -238,7 +253,7 @@ func TestDownloadSlackRedirectLimit(t *testing.T) {
 			var logs bytes.Buffer
 			_, err := downloadWithAuth(context.Background(), "https://files.slack.com/start", source, "image/png", downloadTestDeps(&logs))
 			assertDownloadNoLeaks(t, err, logs.String())
-			if err == nil || requests != 10 {
+			if err == nil || errors.Is(err, jobs.ErrFatal) || requests != 10 {
 				t.Errorf("error = %v, requests = %d; want redirect cap 10", err, requests)
 			}
 		})
@@ -395,7 +410,161 @@ func TestDownloadSlackUserRedirectLimit(t *testing.T) {
 	var logs bytes.Buffer
 	_, err := downloadWithAuth(context.Background(), "https://files.slack.com/start", "slack", "image/png", downloadTestDeps(&logs))
 	assertDownloadNoLeaks(t, err, logs.String())
-	if err == nil || requests != 11 {
+	if err == nil || errors.Is(err, jobs.ErrFatal) || requests != 11 {
 		t.Errorf("error = %v, requests = %d; want bot plus capped user chain", err, requests)
+	}
+}
+
+func TestDownloadSlackOffHostRedirectFallsBack(t *testing.T) {
+	requests, foreign := 0, 0
+	installDownloadServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Host != "files.slack.com" {
+			foreign++
+			t.Error("foreign host requested")
+			return
+		}
+		requests++
+		if requests == 1 {
+			if r.Header.Get("Authorization") != "Bearer bot" || r.Header.Get("Cookie") != "" {
+				t.Error("unexpected bot credentials")
+			}
+			http.Redirect(w, r, "https://evil.example/"+downloadUserToken, http.StatusFound)
+			return
+		}
+		if r.Header.Get("Authorization") != "Bearer "+downloadUserToken || r.Header.Get("Cookie") != "d="+downloadUserCookie {
+			t.Error("unexpected user credentials")
+		}
+		io.WriteString(w, "user bytes")
+	})
+	var logs bytes.Buffer
+	data, err := downloadWithAuth(context.Background(), "https://files.slack.com/file", "slack", "image/png", downloadTestDeps(&logs))
+	assertDownloadNoLeaks(t, err, logs.String())
+	if err != nil || string(data) != "user bytes" || requests != 2 || foreign != 0 {
+		t.Fatalf("error = %v, bytes = %q, requests = %d, foreign = %d", err, data, requests, foreign)
+	}
+}
+
+type downloadUnreadBody struct {
+	reads, closes int
+}
+
+func (b *downloadUnreadBody) Read([]byte) (int, error) {
+	b.reads++
+	return 0, fmt.Errorf("refusal body %s %s", downloadUserToken, downloadUserCookie)
+}
+
+func (b *downloadUnreadBody) Close() error {
+	b.closes++
+	return nil
+}
+
+func TestDownloadSlackFinalRedirectBodies(t *testing.T) {
+	for _, tc := range []struct {
+		name, initial, location, message string
+		bot, user, requests              int
+		fatal                            bool
+	}{
+		{name: "bot redirect user bytes", bot: 302, user: 200, location: "https://evil.example/file", requests: 2},
+		{name: "both redirect", bot: 302, user: 302, location: "https://evil.example/file", requests: 2, fatal: true, message: "download HTTP redirect (bot), redirect (user): "},
+		{name: "anonymous redirect", initial: "https://other.example/file", bot: 302, location: "https://evil.example/file", requests: 1, fatal: true, message: "download: slack redirect (no auth): "},
+		{name: "302 without location", bot: 302, requests: 1, fatal: true, message: "download HTTP 302: "},
+		{name: "304", bot: 304, requests: 1, fatal: true, message: "download HTTP 304: "},
+		{name: "reset flag user302", bot: 302, user: 302, location: "https://evil.example/file", requests: 2, fatal: true, message: "download HTTP redirect (bot), 302 (user): "},
+		{name: "redirect user network", bot: 302, user: -1, location: "https://evil.example/file", requests: 2, message: "http get: download request failed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			initial := tc.initial
+			if initial == "" {
+				initial = "https://files.slack.com/file"
+			}
+			calls, foreign := 0, 0
+			var bodies []*downloadUnreadBody
+			old := http.DefaultTransport
+			http.DefaultTransport = downloadRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+				if req.URL.String() != initial {
+					foreign++
+					return nil, errors.New("foreign request")
+				}
+				for _, body := range bodies {
+					if body.closes != 1 {
+						t.Error("previous response not closed before fallback")
+					}
+				}
+				calls++
+				auth, cookie := "Bearer bot", ""
+				if tc.initial != "" {
+					auth = ""
+				} else if calls > 1 {
+					auth, cookie = "Bearer "+downloadUserToken, "d="+downloadUserCookie
+				}
+				if req.Header.Get("Authorization") != auth || req.Header.Get("Cookie") != cookie {
+					t.Error("unexpected credentials")
+				}
+				status := tc.bot
+				if calls > 1 {
+					status = tc.user
+				}
+				if status == -1 {
+					return nil, fmt.Errorf("network %s", downloadUserToken)
+				}
+				header := http.Header{}
+				if tc.location != "" && !(tc.name == "reset flag user302" && calls > 1) {
+					header.Set("Location", tc.location+"/"+downloadUserCookie)
+				}
+				var body io.ReadCloser = io.NopCloser(strings.NewReader("user bytes"))
+				if status >= 300 && status < 400 {
+					unread := &downloadUnreadBody{}
+					bodies = append(bodies, unread)
+					body = unread
+				}
+				return &http.Response{StatusCode: status, Header: header, Body: body, Request: req}, nil
+			})
+			t.Cleanup(func() { http.DefaultTransport = old })
+			var logs bytes.Buffer
+			data, err := downloadWithAuth(context.Background(), initial, "slack", "image/png", downloadTestDeps(&logs))
+			assertDownloadNoLeaks(t, err, logs.String())
+			if errors.Is(err, jobs.ErrFatal) != tc.fatal || calls != tc.requests || foreign != 0 {
+				t.Errorf("error = %v, calls = %d, foreign = %d", err, calls, foreign)
+			}
+			if tc.message == "" {
+				if err != nil || string(data) != "user bytes" {
+					t.Errorf("error = %v, data = %q", err, data)
+				}
+			} else {
+				want := tc.message
+				if tc.fatal {
+					want = jobs.ErrFatal.Error() + ": " + want + initial
+				}
+				if err == nil || err.Error() != want {
+					t.Errorf("error = %v, want %q", err, want)
+				}
+			}
+			for _, body := range bodies {
+				if body.reads != 0 || body.closes != 1 {
+					t.Errorf("body reads = %d, closes = %d", body.reads, body.closes)
+				}
+			}
+		})
+	}
+}
+
+func TestDownloadSlackRedirectCapBeforeRefusal(t *testing.T) {
+	requests := 0
+	installDownloadServer(t, func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if r.Header.Get("Authorization") != "Bearer bot" || r.Header.Get("Cookie") != "" {
+			t.Error("cap triggered fallback")
+		}
+		target := "https://files.slack.com/" + strconv.Itoa(requests)
+		if requests == 10 {
+			target = "https://evil.example/" + downloadUserToken
+		}
+		http.Redirect(w, r, target, http.StatusFound)
+	})
+	var logs bytes.Buffer
+	_, err := downloadWithAuth(context.Background(), "https://files.slack.com/start", "slack", "image/png", downloadTestDeps(&logs))
+	assertDownloadNoLeaks(t, err, logs.String())
+	if err == nil || errors.Is(err, jobs.ErrFatal) || requests != 10 {
+		t.Errorf("error = %v, requests = %d", err, requests)
 	}
 }
