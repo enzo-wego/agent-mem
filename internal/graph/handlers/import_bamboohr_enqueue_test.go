@@ -25,10 +25,12 @@ func TestImportBambooHR_CSVBytes_ParsesAndUpserts(t *testing.T) {
 		MachineID: "test-machine",
 	}
 
+	// Real BambooHR exports use manager EEIDs, not names (751f896); reports_to
+	// is an integer column, so this DB-backed fixture must use the same format.
 	csvContent := `EEID,Full Name,Reports To
 1,Jane Doe,
-2,John Smith,Jane Doe
-3,Alice Lee,John Smith
+2,John Smith,1
+3,Alice Lee,2
 `
 	encoded := base64.StdEncoding.EncodeToString([]byte(csvContent))
 	payload, err := json.Marshal(importBambooHRPayload{CSVBytes: encoded})

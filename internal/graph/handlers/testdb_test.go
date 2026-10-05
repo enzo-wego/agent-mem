@@ -20,6 +20,7 @@ func databaseName(dsn string) string {
 
 // openTestDB connects to the Postgres instance identified by DATABASE_URL.
 // If DATABASE_URL is not set the test is skipped.
+// DB tests share tables across packages and must run with -p=1.
 func openTestDB(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	dsn := os.Getenv("DATABASE_URL")

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -133,6 +134,32 @@ func tsvUpSQL(t *testing.T) string {
 	return up
 }
 
+// downToTSVBase selects by version, not application order. ApplyVersion fixtures
+// reapply older migrations, which makes DownTo stop at an older row too early.
+func downToTSVBase(t *testing.T, ctx context.Context, provider *goose.Provider) {
+	t.Helper()
+	statuses, err := provider.Status(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var versions []int64
+	for _, status := range statuses {
+		if status.State == goose.StateApplied && status.Source.Version > tsvBaseVersion {
+			versions = append(versions, status.Source.Version)
+		}
+	}
+	slices.Sort(versions)
+	slices.Reverse(versions)
+	for _, version := range versions {
+		if _, err := provider.ApplyVersion(ctx, version, false); err != nil {
+			t.Fatalf("down migration %d: %v", version, err)
+		}
+	}
+	if version, err := provider.GetDBVersion(ctx); err != nil || version != tsvBaseVersion {
+		t.Fatalf("down to base: version=%d error=%v, want %d", version, err, tsvBaseVersion)
+	}
+}
+
 // TestArtifactTSV_UpLockBounded: with a reader holding ACCESS SHARE on
 // artifact_index, the Up section fails within its lock_timeout and applies
 // nothing.
@@ -144,16 +171,21 @@ func TestArtifactTSV_UpLockBounded(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	if err := goose.SetDialect("postgres"); err != nil {
+	// ApplyVersion tests can reapply older migrations after newer ones.
+	// Use the provider's version-aware history, not legacy insertion-order state.
+	provider, err := goose.NewProvider(goose.DialectPostgres, db, os.DirFS(migrationsDirFromHandlers), goose.WithAllowOutofOrder(true))
+	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = goose.Up(db, migrationsDirFromHandlers, goose.WithAllowMissing()) })
-	if err := goose.Up(db, migrationsDirFromHandlers, goose.WithAllowMissing()); err != nil {
+	t.Cleanup(func() {
+		if _, err := provider.Up(ctx); err != nil {
+			t.Errorf("restore migrations: %v", err)
+		}
+	})
+	if _, err := provider.Up(ctx); err != nil {
 		t.Fatalf("up: %v", err)
 	}
-	if err := goose.DownTo(db, migrationsDirFromHandlers, tsvBaseVersion); err != nil {
-		t.Fatalf("down to base: %v", err)
-	}
+	downToTSVBase(t, ctx, provider)
 	up := tsvUpSQL(t)
 
 	a, err := pool.Begin(ctx)

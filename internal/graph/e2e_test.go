@@ -104,7 +104,7 @@ func postIngestContent(t *testing.T, router http.Handler, body map[string]any) (
 // It exercises the full synchronous ingest path: node upsert, artifact_bodies upsert,
 // edge reconciliation from the extractor, and the outcome tiebreaker.
 //
-// Uses the Lei TRY thread message from extractor/testdata/try_currency_lei.txt.
+// Based on the Lei TRY thread message from extractor/testdata/try_currency_lei.txt.
 func TestE2E_IngestContent_TRYThread(t *testing.T) {
 	pool := openE2EPool(t)
 	truncateE2ETables(t, pool)
@@ -113,7 +113,8 @@ func TestE2E_IngestContent_TRYThread(t *testing.T) {
 	ctx := context.Background()
 
 	const (
-		channelID = "C08S954G2LX"
+		// 92dfc60 made payments-alerts incident-only; use an ordinary test channel.
+		channelID = "CTESTTRY"
 		ts        = "1779710863.216389"
 		bodyTS1   = "2026-05-25T09:01:03Z"
 		bodyTS2   = "2026-05-25T09:02:00Z" // newer — triggers update
@@ -121,10 +122,10 @@ func TestE2E_IngestContent_TRYThread(t *testing.T) {
 
 	nodeID := "slack:" + channelID + ":" + ts
 
-	// The body from the test fixture.
+	// Reference a different Slack thread: self-links are intentionally ignored.
 	body := `Hey team, quick heads up — the TRY (Turkish Lira) payments through checkout are failing intermittently since this morning. I saw about 12 errors in the last hour. Looks like the issue might be related to PAY-2128.
 
-Check the thread here: https://wego.slack.com/archives/C08S954G2LX/p1779710863216389
+Check the related thread here: https://wego.slack.com/archives/CUV9EAYGY/p1779251276315399
 
 I'll dig into it more. Anyone from the tabby team have context?`
 

@@ -106,17 +106,21 @@ func TestIngestURL_AlreadyFresh(t *testing.T) {
 	// Pre-insert a node + fresh artifact_body.
 	nodeID := "slack:CUV9EAYGY:1779251276.315399"
 	ctx := context.Background()
-	pool.Exec(ctx, `
+	if _, err := pool.Exec(ctx, `
 		INSERT INTO graph.nodes (id, type, natural_key, url, body_revision, updated_at, machine_id)
 		VALUES ($1, 'slack', $2, $3, 1, NOW(), 'test')`,
 		nodeID, "CUV9EAYGY:1779251276.315399",
 		"https://wego.slack.com/archives/CUV9EAYGY/p1779251276315399",
-	)
-	pool.Exec(ctx, `
-		INSERT INTO graph.artifact_bodies (node_id, body_full, fetched_at)
-		VALUES ($1, 'cached body', $2)`,
+	); err != nil {
+		t.Fatalf("seed graph.nodes: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO graph.artifact_bodies (node_id, body_full, fetched_at, machine_id)
+		VALUES ($1, 'cached body', $2, 'test')`,
 		nodeID, time.Now().Add(-5*time.Minute),
-	)
+	); err != nil {
+		t.Fatalf("seed graph.artifact_bodies: %v", err)
+	}
 
 	deps := Deps{
 		DB:        pool,

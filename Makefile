@@ -39,6 +39,10 @@ build-cli: ## Build the agent-mem CLI into ./bin/agent-mem. Override GO=/path/to
 	mkdir -p bin
 	$(GO) build -o ./bin/agent-mem ./cmd/agent-mem
 
+test-db: ## Run graph DB tests serially. Usage: make test-db TEST_DATABASE_URL=<scratch agentmem_test DSN>
+	@test -n "$(TEST_DATABASE_URL)" || { echo "TEST_DATABASE_URL is required"; exit 1; }
+	DATABASE_URL="$(TEST_DATABASE_URL)" AGENT_MEM_TEST_DATABASE_URL="$(TEST_DATABASE_URL)" AGENT_MEM_EVAL= $(GO) test -p=1 -count=1 -json ./internal/graph/...
+
 install-cli: ## Install the agent-mem CLI. Override with GO=/path/to/go and GOBIN=/path, e.g. /usr/local/bin.
 ifdef GOBIN
 	GOBIN="$(GOBIN)" $(GO) install ./cmd/agent-mem
@@ -118,4 +122,4 @@ db-reset: ## Clear the database and re-run migrations.
 	@sleep 5
 	$(compose) exec worker agent-mem migrate
 
-.PHONY: all help build build-cli install-cli install-cli-vps up down status logs migrate migrate-create migrate-status migrate-rollback migrate-up-by-one migrate-fix restart deploy deploy-payments db-backup db-restore db-reset
+.PHONY: all help build build-cli test-db install-cli install-cli-vps up down status logs migrate migrate-create migrate-status migrate-rollback migrate-up-by-one migrate-fix restart deploy deploy-payments db-backup db-restore db-reset
