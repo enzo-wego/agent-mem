@@ -69,7 +69,7 @@ func backfillSlackChannelHandler(deps Deps) jobs.Handler {
 				}
 				if _, jErr := jobs.Enqueue(ctx, deps.DB, "backfill_slack_thread", threadPayload, jobs.EnqueueOptions{
 					Priority:     5,
-					TargetRunner: "vps",
+					TargetRunner: deps.Runner,
 					MachineID:    deps.MachineID,
 				}); jErr != nil {
 					deps.Logger.Warn().Err(jErr).
@@ -97,7 +97,7 @@ func backfillSlackChannelHandler(deps Deps) jobs.Handler {
 				}
 				if _, jErr := jobs.Enqueue(ctx, deps.DB, "backfill_slack_thread", threadPayload, jobs.EnqueueOptions{
 					Priority:     5,
-					TargetRunner: "vps",
+					TargetRunner: deps.Runner,
 					MachineID:    deps.MachineID,
 				}); jErr != nil {
 					deps.Logger.Warn().Err(jErr).
@@ -116,7 +116,7 @@ func backfillSlackChannelHandler(deps Deps) jobs.Handler {
 			}
 			if _, jErr := jobs.Enqueue(ctx, deps.DB, "backfill_slack_channel", nextPayload, jobs.EnqueueOptions{
 				Priority:     5,
-				TargetRunner: "vps",
+				TargetRunner: deps.Runner,
 				MachineID:    deps.MachineID,
 			}); jErr != nil {
 				return fmt.Errorf("backfill_slack_channel: re-enqueue next page: %w", jErr)
@@ -344,7 +344,7 @@ func ingestSlackMessage(ctx context.Context, deps Deps, channelID string, msg sl
 			"source":  "slack",
 		}, jobs.EnqueueOptions{
 			Priority:     0,
-			TargetRunner: "vps",
+			TargetRunner: deps.Runner,
 			MachineID:    deps.MachineID,
 		})
 	}

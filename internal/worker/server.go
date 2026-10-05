@@ -45,9 +45,11 @@ type Server struct {
 	mu sync.RWMutex // protects flatLLM and searcher
 	// flatLLM serves every flat-memory LLM call: observation extraction, session
 	// summaries and their embeddings. Nil when no gateway is configured, in which
-	// case that work is skipped rather than sent anywhere else.
-	flatLLM  flatLLM
-	searcher *search.Searcher
+	// case queued work waits until a client is configured.
+	flatLLM       flatLLM
+	searcher      *search.Searcher
+	noLLMWarned   bool           // owned by the single pending-message processor loop
+	flatLLMGetter func() flatLLM // optional resolver, fixed before processing starts
 
 	// graphAdapter is the graph handlers' LLM adapter; swapped in place on
 	// settings reload. Nil when no LLM key was set at boot (restart required
@@ -72,6 +74,9 @@ type flatLLM interface {
 
 // getFlatLLM returns the client flat memory should call (may be nil).
 func (s *Server) getFlatLLM() flatLLM {
+	if s.flatLLMGetter != nil {
+		return s.flatLLMGetter()
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.flatLLM

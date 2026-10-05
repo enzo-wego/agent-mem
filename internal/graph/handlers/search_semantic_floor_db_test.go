@@ -3,7 +3,6 @@ package handlers_test
 import (
 	"math"
 	"net/http"
-	"os"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -11,21 +10,9 @@ import (
 	"github.com/agent-mem/agent-mem/internal/graph/handlers"
 )
 
-// Validate the scratch target before testDB can connect or truncate any tables.
+// testDB validates the scratch target before connecting or truncating any tables.
 func semanticFloorDB(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	dsn := os.Getenv("DATABASE_URL")
-	if dsn == "" {
-		t.Skip("DATABASE_URL not set")
-	}
-	cfg, err := pgxpool.ParseConfig(dsn)
-	if err != nil {
-		t.Fatal("invalid DATABASE_URL for SemanticFloor integration tests")
-	}
-	conn := cfg.ConnConfig
-	if conn.Database != "agentmem_test" {
-		t.Fatal("SemanticFloor integration tests require scratch database agentmem_test")
-	}
 	return testDB(t)
 }
 

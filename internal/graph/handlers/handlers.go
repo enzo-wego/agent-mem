@@ -72,11 +72,12 @@ func RegisterAll(reg *jobs.Registry, deps Deps) {
 	reg.Register("merge_identities_by_name", NewMergeIdentitiesByNameHandler(deps))
 	reg.Register("import_bamboohr", NewImportBambooHRHandler(deps))
 	reg.Register("recompute_person_distance", jobs.Entry{
-		Handler:   RecomputePersonDistance(deps.DB, deps.Logger),
-		Systems:   []string{},
-		PoolSize:  1,
-		Lease:     600 * time.Second,
-		Heartbeat: true,
+		Handler:    RecomputePersonDistance(deps.DB, deps.Logger),
+		Systems:    []string{},
+		PoolSize:   1,
+		Lease:      600 * time.Second,
+		Heartbeat:  true,
+		MaxRuntime: 30 * time.Minute,
 	})
 	reg.Register("backfill_slack_channel", NewBackfillSlackChannelHandler(deps))
 	reg.Register("summarize_thread", NewSummarizeThreadHandler(deps))
@@ -102,10 +103,11 @@ func RegisterAll(reg *jobs.Registry, deps Deps) {
 		Lease:    120 * time.Second,
 	})
 	reg.Register("refresh_topic_scope", jobs.Entry{
-		Handler:   NewRefreshTopicScope(deps),
-		PoolSize:  1,
-		Lease:     600 * time.Second,
-		Heartbeat: true,
-		UsesLLM:   true,
+		Handler:    NewRefreshTopicScope(deps),
+		PoolSize:   1,
+		Lease:      600 * time.Second,
+		Heartbeat:  true,
+		MaxRuntime: 30 * time.Minute,
+		UsesLLM:    true,
 	})
 }

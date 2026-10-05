@@ -26,7 +26,7 @@ const (
 // A single pinned session owns the pass lock and every write. Readers accept
 // channel grants for 24 hours plus their existing five-minute cache grace.
 func NewRefreshSlackMembersHandler(deps Deps) jobs.Entry {
-	return jobs.Entry{Handler: refreshSlackMembersHandler(deps), Systems: []string{"slack"}, PoolSize: 1, Lease: 600 * time.Second, Heartbeat: true}
+	return jobs.Entry{Handler: refreshSlackMembersHandler(deps), Systems: []string{"slack"}, PoolSize: 1, Lease: 600 * time.Second, Heartbeat: true, MaxRuntime: 30 * time.Minute}
 }
 func refreshSlackMembersHandler(deps Deps) jobs.Handler {
 	return refreshSlackMembersWithClient(deps, slackMembersClient{baseURL: "https://slack.com/api", http: &http.Client{Timeout: 60 * time.Second}, wait: waitSlackMembers})

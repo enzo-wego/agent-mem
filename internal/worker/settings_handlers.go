@@ -151,9 +151,8 @@ func newGatewayClient(snap config.ConfigSnapshot, dims int) *llmgateway.Client {
 }
 
 // flatLLMFor returns the client flat memory should call, or nil when no gateway
-// is configured — in which case observation extraction and session summaries are
-// simply skipped, the same as having no LLM at all. There is no direct-provider
-// path to fall back to by design.
+// is configured — in which case pending observations and session summaries wait
+// until a client is configured. There is no direct-provider fallback by design.
 //
 // dims comes from gemini_embedding_dims (768) because observations.embedding is
 // vector(768) — NOT the graph's 3072.

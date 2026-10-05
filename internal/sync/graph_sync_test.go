@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"strings"
 	"testing"
 	"time"
 
@@ -14,14 +13,21 @@ import (
 	"github.com/agent-mem/agent-mem/internal/database"
 )
 
-// databaseName extracts the database name from a postgres DSN. A DSN that does
-// not parse returns "", which fails the test-database guard closed.
-func databaseName(dsn string) string {
-	config, err := pgxpool.ParseConfig(dsn)
+// parseScratchDSN validates the database pgx will actually connect to.
+func parseScratchDSN(dsn string) (*pgxpool.Config, error) {
+	cfg, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
-		return ""
+		return nil, fmt.Errorf("refusing to run: invalid DATABASE_URL: %w", err)
 	}
-	return config.ConnConfig.Database
+	if cfg.ConnConfig.Database != "agentmem_test" {
+		return nil, fmt.Errorf("refusing to run: DATABASE_URL database name %q is not \"agentmem_test\"; tests may delete graph rows", cfg.ConnConfig.Database)
+	}
+	return cfg, nil
+}
+
+func checkScratchDSN(dsn string) error {
+	_, err := parseScratchDSN(dsn)
+	return err
 }
 
 // openTestPool connects to the DATABASE_URL Postgres instance.
@@ -34,16 +40,15 @@ func openTestPool(t *testing.T) *pgxpool.Pool {
 	}
 	// This helper DELETEs every row in the graph tables. On 2026-07-14 an
 	// integration test run against the live dev database hard-deleted the graph
-	// and synced the damage to prod. Refuse anything whose database name does
-	// not say "test" — use agentmem_test, not agentmem. See agent-mem-z14.
-	if !strings.Contains(databaseName(dsn), "test") {
-		t.Fatalf("refusing to run: DATABASE_URL database name %q does not contain \"test\"; "+
-			"these tests delete all rows in the graph tables", databaseName(dsn))
+	// and synced the damage to prod. Require the dedicated scratch database exactly.
+	cfg, err := parseScratchDSN(dsn)
+	if err != nil {
+		t.Fatal(err)
 	}
 	ctx := context.Background()
-	pool, err := pgxpool.New(ctx, dsn)
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
-		t.Fatalf("pgxpool.New: %v", err)
+		t.Fatalf("pgxpool.NewWithConfig: %v", err)
 	}
 	if err := pool.Ping(ctx); err != nil {
 		pool.Close()

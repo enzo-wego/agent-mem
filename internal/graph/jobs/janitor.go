@@ -8,6 +8,9 @@ import (
 	"github.com/rs/zerolog"
 )
 
+// nullLeaseGrace bounds abandoned claims from versions that did not set a lease.
+const nullLeaseGrace = 30 * time.Minute
+
 // JanitorConfig configures the lease-expiry reclaimer.
 type JanitorConfig struct {
 	DB           *pgxpool.Pool
@@ -62,9 +65,9 @@ func (j *Janitor) scan(ctx context.Context) (int, error) {
 		WITH expired AS (
 			SELECT id FROM graph.jobs
 			WHERE status = 'running'
-			  AND lease_until IS NOT NULL
-			  AND lease_until < NOW()
-			ORDER BY lease_until ASC
+			  AND (lease_until < NOW()
+			       OR (lease_until IS NULL AND locked_at < NOW() - ($2::bigint * INTERVAL '1 second')))
+			ORDER BY COALESCE(lease_until, locked_at) ASC
 			FOR UPDATE SKIP LOCKED
 			LIMIT $1
 		)
@@ -78,7 +81,7 @@ func (j *Janitor) scan(ctx context.Context) (int, error) {
 		                  'janitor: lease expired'
 		FROM expired e
 		WHERE jb.id = e.id
-	`, j.cfg.BatchSize)
+	`, j.cfg.BatchSize, int(nullLeaseGrace/time.Second))
 	if err != nil {
 		return 0, err
 	}

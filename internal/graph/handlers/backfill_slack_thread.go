@@ -83,7 +83,7 @@ func backfillSlackThreadHandler(deps Deps) jobs.Handler {
 			}
 			if _, jErr := jobs.Enqueue(ctx, deps.DB, "backfill_slack_thread", nextPayload, jobs.EnqueueOptions{
 				Priority:     5,
-				TargetRunner: "vps",
+				TargetRunner: deps.Runner,
 				MachineID:    deps.MachineID,
 			}); jErr != nil {
 				return fmt.Errorf("backfill_slack_thread: re-enqueue next page: %w", jErr)

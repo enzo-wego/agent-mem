@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -21,6 +22,8 @@ import (
 const llmBackoff = 30 * time.Second
 
 const maxMessageAttempts = 3
+
+var errNoLLM = errors.New("no flat-memory LLM configured")
 
 // processLoop runs a background loop that picks up pending messages for processing.
 func (s *Server) processLoop(ctx context.Context) {
@@ -57,6 +60,16 @@ func (s *Server) backoffLLM(ctx context.Context) {
 }
 
 func (s *Server) processPendingMessages(ctx context.Context) {
+	// Leave the queue untouched while disabled. The loop's normal poll tick
+	// retries configuration without charging messages or hammering the DB.
+	if s.getFlatLLM() == nil {
+		if !s.noLLMWarned {
+			log.Warn().Msg("No flat-memory LLM configured; leaving messages pending")
+			s.noLLMWarned = true
+		}
+		return
+	}
+	s.noLLMWarned = false
 	msg, err := s.db.ClaimPendingMessage(ctx)
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to claim pending message")
@@ -74,6 +87,12 @@ func (s *Server) processPendingMessages(ctx context.Context) {
 
 	err = s.processMessage(ctx, msg)
 	if err != nil {
+		if errors.Is(err, errNoLLM) {
+			if reqErr := s.db.RequeuePendingMessageUncharged(ctx, msg.ID, err.Error(), time.Second); reqErr != nil {
+				log.Error().Err(reqErr).Int("id", msg.ID).Msg("Failed to requeue message without charging attempt")
+			}
+			return
+		}
 		// A transient fault must NOT be marked failed: that status is terminal
 		// and nothing re-claims it, so an LLM outage would silently discard every
 		// observation that arrived during it. Requeue instead and back the loop
@@ -117,16 +136,16 @@ func (s *Server) processPendingMessages(ctx context.Context) {
 
 // processMessage handles a single pending message by sending it to the LLM.
 func (s *Server) processMessage(ctx context.Context, msg *database.PendingMessage) error {
-	if s.getFlatLLM() == nil {
-		log.Debug().Int("id", msg.ID).Msg("No LLM configured, skipping")
-		return nil
+	gc := s.getFlatLLM()
+	if gc == nil {
+		return errNoLLM
 	}
 
 	switch msg.MessageType {
 	case "observation":
-		return s.processObservation(ctx, msg)
+		return s.processObservation(ctx, msg, gc)
 	case "summary":
-		return s.processSummary(ctx, msg)
+		return s.processSummary(ctx, msg, gc)
 	default:
 		log.Warn().Str("type", msg.MessageType).Msg("Unknown message type")
 		return nil
@@ -134,12 +153,7 @@ func (s *Server) processMessage(ctx context.Context, msg *database.PendingMessag
 }
 
 // processObservation extracts a structured observation via Gemini and stores it with an embedding.
-func (s *Server) processObservation(ctx context.Context, msg *database.PendingMessage) error {
-	gc := s.getFlatLLM()
-	if gc == nil {
-		return nil
-	}
-
+func (s *Server) processObservation(ctx context.Context, msg *database.PendingMessage, gc flatLLM) error {
 	// Parse payload
 	var payload struct {
 		ToolName     string          `json:"tool_name"`
@@ -213,12 +227,7 @@ func (s *Server) processObservation(ctx context.Context, msg *database.PendingMe
 }
 
 // processSummary extracts a session summary via Gemini and stores it with an embedding.
-func (s *Server) processSummary(ctx context.Context, msg *database.PendingMessage) error {
-	gc := s.getFlatLLM()
-	if gc == nil {
-		return nil
-	}
-
+func (s *Server) processSummary(ctx context.Context, msg *database.PendingMessage, gc flatLLM) error {
 	// Parse payload
 	var payload struct {
 		LastAssistantMessage string `json:"last_assistant_message"`

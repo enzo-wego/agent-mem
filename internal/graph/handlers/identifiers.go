@@ -148,11 +148,12 @@ func identifiersForNode(ctx context.Context, deps Deps, nodeID, nodeType, scope,
 // every indexed node. Regex-only, no LLM; idempotent, safe to re-run.
 func NewBackfillIdentifiersHandler(deps Deps) jobs.Entry {
 	return jobs.Entry{
-		Handler:   backfillIdentifiersHandler(deps),
-		Systems:   []string{},
-		PoolSize:  1,
-		Lease:     600 * time.Second,
-		Heartbeat: true,
+		Handler:    backfillIdentifiersHandler(deps),
+		Systems:    []string{},
+		PoolSize:   1,
+		Lease:      600 * time.Second,
+		Heartbeat:  true,
+		MaxRuntime: 30 * time.Minute,
 	}
 }
 
