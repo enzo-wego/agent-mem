@@ -266,19 +266,23 @@ func TestArtifactTSV_PopulatedUpgrade(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	if err := goose.SetDialect("postgres"); err != nil {
+	// Match the ApplyVersion fixtures: older migrations may have been reapplied
+	// after newer ones, so legacy insertion-order version lookup is not valid.
+	provider, err := goose.NewProvider(goose.DialectPostgres, db, os.DirFS(migrationsDirFromHandlers), goose.WithAllowOutofOrder(true))
+	if err != nil {
 		t.Fatal(err)
 	}
 	// Leave the scratch DB fully migrated even if an assertion fails midway.
-	t.Cleanup(func() { _ = goose.Up(db, migrationsDirFromHandlers, goose.WithAllowMissing()) })
-
-	if err := goose.Up(db, migrationsDirFromHandlers, goose.WithAllowMissing()); err != nil {
+	t.Cleanup(func() {
+		if _, err := provider.Up(ctx); err != nil {
+			t.Errorf("restore migrations: %v", err)
+		}
+	})
+	if _, err := provider.Up(ctx); err != nil {
 		t.Fatalf("up: %v", err)
 	}
-	if err := goose.DownTo(db, migrationsDirFromHandlers, tsvBaseVersion); err != nil {
-		t.Fatalf("down to base: %v", err)
-	}
-	if v, err := goose.GetDBVersion(db); err != nil || v != tsvBaseVersion {
+	downToTSVBase(t, ctx, provider)
+	if v, err := provider.GetDBVersion(ctx); err != nil || v != tsvBaseVersion {
 		t.Fatalf("db version after DownTo = %d (%v), want %d", v, err, tsvBaseVersion)
 	}
 	if _, err := pool.Exec(ctx, `INSERT INTO graph.nodes (id, type, natural_key, metadata, machine_id)
@@ -291,7 +295,7 @@ func TestArtifactTSV_PopulatedUpgrade(t *testing.T) {
 		FROM generate_series(1, 50) i`); err != nil {
 		t.Fatalf("seed index: %v", err)
 	}
-	if err := goose.Up(db, migrationsDirFromHandlers, goose.WithAllowMissing()); err != nil {
+	if _, err := provider.Up(ctx); err != nil {
 		t.Fatalf("up to head: %v", err)
 	}
 	if n := nullTSV(t, pool); n != 50 {

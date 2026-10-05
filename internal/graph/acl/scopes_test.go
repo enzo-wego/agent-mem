@@ -41,10 +41,11 @@ func cleanupACLTables(t *testing.T, pool *pgxpool.Pool) {
 		"graph.member_scopes",
 		"graph.nodes",
 		"graph.slack_groups",
+		"graph.identity_map",
 		"graph.people",
 	} {
 		if _, err := pool.Exec(ctx, "DELETE FROM "+tbl); err != nil {
-			t.Logf("cleanup %s: %v", tbl, err)
+			t.Fatalf("cleanup %s: %v", tbl, err)
 		}
 	}
 }

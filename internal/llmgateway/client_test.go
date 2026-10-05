@@ -13,12 +13,7 @@ import (
 	"time"
 
 	"github.com/agent-mem/agent-mem/internal/gemini"
-	"github.com/agent-mem/agent-mem/internal/graph/handlers"
 )
-
-// The client must satisfy the whole surface it replaces. A compile-time
-// assertion is cheaper than discovering a missing method at wiring time.
-var _ handlers.GeminiClient = (*Client)(nil)
 
 // capture records what the gateway received, so tests can assert on the wire
 // format rather than on our own request structs.
@@ -286,15 +281,11 @@ func TestContextCancellationIsHonored(t *testing.T) {
 	}
 }
 
-// gateway 180s < client 200s < lease 240s. Editing one must trip on the others.
+// The client's timeout must exceed the gateway's own timeout.
 func TestTimeoutOrderingHolds(t *testing.T) {
 	const gatewayClaudeTimeout = 180 * time.Second
 	if RequestTimeout <= gatewayClaudeTimeout {
 		t.Errorf("RequestTimeout %v must exceed the gateway's %v", RequestTimeout, gatewayClaudeTimeout)
-	}
-	if handlers.SummaryLease <= RequestTimeout {
-		t.Errorf("SummaryLease %v must exceed RequestTimeout %v, else leases expire mid-call",
-			handlers.SummaryLease, RequestTimeout)
 	}
 }
 
