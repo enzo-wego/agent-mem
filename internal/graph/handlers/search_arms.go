@@ -185,10 +185,12 @@ WHERE `+f.sql(5, 6, 7)+`
     `+directWindowSQL+`
     OR EXISTS (
       SELECT 1 FROM graph.epic_membership em
-      JOIN graph.epic_membership ep
-        ON ep.epic_key = em.epic_key AND ep.node_id = `+epicSelfIDSQL("ep")+`
-      WHERE em.node_id = n.id AND em.epic_key <> '`+businessRootID+`'
-        AND ep.first_at < $3 AND ep.last_at >= $2)
+      WHERE em.node_id = n.id
+        AND em.epic_key = ANY(ARRAY(
+          SELECT ep.epic_key FROM graph.epic_membership ep
+          WHERE ep.node_id = `+epicSelfIDSQL("ep")+`
+            AND ep.epic_key <> '`+businessRootID+`'
+            AND ep.first_at < $3 AND ep.last_at >= $2)))
   )
 ORDER BY cosine DESC, at DESC
 LIMIT $4`, append([]any{vecArg, w.Start, w.End, temporalCandidates}, f.args()...)...)
