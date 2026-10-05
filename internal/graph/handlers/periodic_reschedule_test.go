@@ -24,10 +24,11 @@ func periodicHandlerDB(t *testing.T) *pgxpool.Pool {
 	if dsn == "" {
 		t.Skip("DATABASE_URL not set")
 	}
-	if databaseName(dsn) != "agentmem_test" {
-		t.Fatal("periodic tests require agentmem_test database")
+	cfg, err := parseScratchDSN(dsn)
+	if err != nil {
+		t.Fatal(err)
 	}
-	pool, err := pgxpool.New(t.Context(), dsn)
+	pool, err := pgxpool.NewWithConfig(t.Context(), cfg)
 	if err != nil {
 		t.Fatal(err)
 	}

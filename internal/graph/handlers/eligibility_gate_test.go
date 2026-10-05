@@ -174,12 +174,9 @@ func seedEligibilityDecision(
 func eligibilityLookupErrorPool(t *testing.T, allowedAcquisitions int) *pgxpool.Pool {
 	t.Helper()
 	dsn := os.Getenv("DATABASE_URL")
-	if databaseName(dsn) != "agentmem_test" {
-		t.Fatalf("lookup error pool requires agentmem_test")
-	}
-	config, err := pgxpool.ParseConfig(dsn)
+	config, err := parseScratchDSN(dsn)
 	if err != nil {
-		t.Fatalf("parse lookup error pool config: %v", err)
+		t.Fatal(err)
 	}
 	config.MaxConns = 1
 	var mu sync.Mutex
