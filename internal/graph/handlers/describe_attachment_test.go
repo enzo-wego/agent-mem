@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
 	"encoding/json"
@@ -348,7 +349,9 @@ func serveStatus(t *testing.T, status int) string {
 // download fails before any DB access, so DB may be nil.
 func runDownloadAndClassify(t *testing.T, url string) error {
 	t.Helper()
-	deps := Deps{Logger: zerolog.Nop(), MachineID: "test"}
+	var logs bytes.Buffer
+	deps := downloadTestDeps(&logs)
+	deps.MachineID = "test"
 	h := NewDescribeAttachmentHandler(deps)
 	payload, _ := json.Marshal(describeAttachmentPayload{
 		NodeID:      "slack_file:FDL",
@@ -356,7 +359,9 @@ func runDownloadAndClassify(t *testing.T, url string) error {
 		Mime:        "image/png",
 		Source:      "slack",
 	})
-	return h.Handler(context.Background(), payload)
+	err := h.Handler(context.Background(), payload)
+	assertDownloadNoLeaks(t, err, logs.String())
+	return err
 }
 
 func TestDescribeAttachment_Download403NotRetryable(t *testing.T) {

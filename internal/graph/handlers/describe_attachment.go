@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"os"
 	"path"
@@ -132,9 +133,8 @@ func describeAttachmentHandler(deps Deps) jobs.Handler {
 			ctx,
 			p.ExternalURL,
 			p.Source,
-			deps.SlackBotToken,
-			deps.JiraToken,
-			deps.JiraEmail,
+			p.Mime,
+			deps,
 		)
 		if err != nil {
 			return fmt.Errorf("%w: describe_attachment download: %w", jobs.ErrTransient, err)
@@ -192,9 +192,8 @@ func describeAttachmentHandler(deps Deps) jobs.Handler {
 			}
 
 		case strings.HasPrefix(mime, "image/"):
-			// downloadWithAuth only rejects HTTP status >= 400, but Slack/Jira serve
-			// sign-in HTML with a 200. Sniff the bytes before the vision call so an
-			// auth/error page never reaches Gemini as if it were an image.
+			// Even after Slack's login-page check, other sources and incorrectly
+			// labelled responses can return non-image bytes. Sniff before vision.
 			sniffed, sniffErr := sniffImageBytes(data, p.Mime)
 			if sniffErr != nil {
 				deps.Logger.Warn().
@@ -300,58 +299,130 @@ func describeAttachmentHandler(deps Deps) jobs.Handler {
 	}
 }
 
-// downloadWithAuth downloads bytes from url, injecting the appropriate auth header.
-func downloadWithAuth(ctx context.Context, url, source, slackToken, jiraToken, jiraEmail string) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+// downloadWithAuth downloads bytes with source-appropriate auth. Slack credentials
+// are confined to HTTPS files.slack.com, including every redirect.
+func downloadWithAuth(ctx context.Context, rawURL, source, declaredMime string, deps Deps) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
-
+	client := &http.Client{Timeout: 60 * time.Second}
+	allowedSlack := source == "slack" && isSlackFileURL(req.URL.Scheme, req.URL.Host)
+	var userToken, userCookie string
 	switch source {
 	case "slack":
-		if slackToken != "" {
-			req.Header.Set("Authorization", "Bearer "+slackToken)
+		if deps.SlackUserCreds != nil {
+			userToken, userCookie = deps.SlackUserCreds()
+		}
+		client.CheckRedirect = func(next *http.Request, via []*http.Request) error {
+			if !isSlackFileURL(next.URL.Scheme, next.URL.Host) {
+				return fmt.Errorf("slack file redirect outside allowed host")
+			}
+			if len(via) >= 10 {
+				return fmt.Errorf("stopped after 10 redirects")
+			}
+			return nil
+		}
+		if allowedSlack && deps.SlackBotToken != "" {
+			req.Header.Set("Authorization", "Bearer "+deps.SlackBotToken)
 		}
 	case "jira", "confluence":
-		if jiraToken != "" && jiraEmail != "" {
-			req.SetBasicAuth(jiraEmail, jiraToken)
-		} else if jiraToken != "" {
-			req.Header.Set("Authorization", "Bearer "+jiraToken)
+		if deps.JiraToken != "" && deps.JiraEmail != "" {
+			req.SetBasicAuth(deps.JiraEmail, deps.JiraToken)
+		} else if deps.JiraToken != "" {
+			req.Header.Set("Authorization", "Bearer "+deps.JiraToken)
 		}
 	case "github":
-		token := os.Getenv("GH_TOKEN")
-		if token != "" {
+		if token := os.Getenv("GH_TOKEN"); token != "" {
 			req.Header.Set("Authorization", "Bearer "+token)
 		}
 	case "pagerduty":
-		token := os.Getenv("PAGERDUTY_TOKEN")
-		if token != "" {
+		if token := os.Getenv("PAGERDUTY_TOKEN"); token != "" {
 			req.Header.Set("Authorization", "Token token="+token)
 		}
 	case "wegohub":
-		token := os.Getenv("AGENT_MEM_WEGOHUB_TOKEN")
-		if token != "" {
+		if token := os.Getenv("AGENT_MEM_WEGOHUB_TOKEN"); token != "" {
 			req.Header.Set("Authorization", "Bearer "+token)
 		}
 	}
+	data, status, login, err := downloadGET(client, req, source == "slack", allowedSlack, declaredMime)
+	if err != nil {
+		return nil, err
+	}
+	if !allowedSlack || (status != 401 && status != 403 && !login) {
+		return downloadResult(data, status, rawURL)
+	}
+	if userToken == "" {
+		if login {
+			return nil, fmt.Errorf("%w: download: slack login page (bot): %s", jobs.ErrFatal, rawURL)
+		}
+		return downloadResult(data, status, rawURL)
+	}
+	req.Header.Set("Authorization", "Bearer "+userToken)
+	if userCookie != "" {
+		req.Header.Set("Cookie", "d="+userCookie)
+	}
+	data, userStatus, userLogin, err := downloadGET(client, req, true, true, declaredMime)
+	if err != nil {
+		return nil, err
+	}
+	botResult := fmt.Sprintf("%d", status)
+	if login {
+		botResult = "login"
+	}
+	if userLogin {
+		return nil, fmt.Errorf("%w: download: slack login page (bot %s, user login): %s", jobs.ErrFatal, botResult, rawURL)
+	}
+	if userStatus >= 500 || userStatus == 429 {
+		return downloadResult(data, userStatus, rawURL)
+	}
+	if userStatus < 200 || userStatus >= 300 {
+		return nil, fmt.Errorf("%w: download HTTP %s (bot), %d (user): %s", jobs.ErrFatal, botResult, userStatus, rawURL)
+	}
+	deps.Logger.Info().Str("file", path.Base(req.URL.Path)).Msg("Slack file fetched with user session")
+	return data, nil
+}
 
-	client := &http.Client{Timeout: 60 * time.Second}
+func isSlackFileURL(scheme, host string) bool {
+	return scheme == "https" && host == "files.slack.com"
+}
+
+// downloadGET closes each response before a possible fallback. Slack errors
+// are not interpolated: transports may echo credentials or redirect targets.
+func downloadGET(client *http.Client, req *http.Request, slack, detectLogin bool, declaredMime string) ([]byte, int, bool, error) {
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("http get: %w", err)
+		if !slack {
+			return nil, 0, false, fmt.Errorf("http get: %w", err)
+		}
+		return nil, 0, false, fmt.Errorf("http get: download request failed")
 	}
 	defer resp.Body.Close()
-
-	if resp.StatusCode >= 500 || resp.StatusCode == 429 {
-		return nil, fmt.Errorf("download HTTP %d: %s", resp.StatusCode, url)
+	login := false
+	if detectLogin && resp.StatusCode == http.StatusOK {
+		contentType, _, _ := mime.ParseMediaType(resp.Header.Get("Content-Type"))
+		expectedType, _, _ := mime.ParseMediaType(declaredMime)
+		login = contentType == "text/html" && expectedType != "text/html"
 	}
-	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("%w: download HTTP %d: %s", jobs.ErrFatal, resp.StatusCode, url)
+	if resp.StatusCode >= 400 || login {
+		return nil, resp.StatusCode, login, nil
 	}
-
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("read body: %w", err)
+		if !slack {
+			return nil, 0, false, fmt.Errorf("read body: %w", err)
+		}
+		return nil, 0, false, fmt.Errorf("read body: download response failed")
+	}
+	return data, resp.StatusCode, false, nil
+}
+
+func downloadResult(data []byte, status int, rawURL string) ([]byte, error) {
+	if status >= 500 || status == 429 {
+		return nil, fmt.Errorf("download HTTP %d: %s", status, rawURL)
+	}
+	if status >= 400 {
+		return nil, fmt.Errorf("%w: download HTTP %d: %s", jobs.ErrFatal, status, rawURL)
 	}
 	return data, nil
 }
@@ -394,9 +465,8 @@ func isNonResult(description, ocr string) bool {
 // sniffImageBytes validates that downloaded bytes plausibly match a declared
 // image/* mime before they reach the vision model. It returns the sniffed type
 // and a non-nil error for an empty download or bytes that sniff as HTML/plain
-// text — the "auth/error page served with HTTP 200" class that downloadWithAuth
-// cannot catch (it only rejects HTTP status >= 400, and Slack/Jira serve sign-in
-// HTML with a 200). http.DetectContentType examines only the first 512 bytes.
+// text. This also catches incorrectly labelled responses and non-Slack login
+// pages. http.DetectContentType examines only the first 512 bytes.
 func sniffImageBytes(data []byte, declaredMime string) (sniffed string, err error) {
 	if len(data) == 0 {
 		return "", fmt.Errorf("empty download for declared mime %q", declaredMime)

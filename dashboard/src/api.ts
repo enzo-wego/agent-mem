@@ -228,6 +228,8 @@ export interface Settings {
   gemini_embedding_dims: number;
   llm_gateway_url: string;
   llm_gateway_api_key: string;
+  slack_user_token: string;
+  slack_user_cookie: string;
   context_observations: number;
   context_full_count: number;
   context_session_count: number;
@@ -246,7 +248,11 @@ export async function fetchSettings(): Promise<Settings> {
   return res.json();
 }
 
-export async function updateSettings(partial: Partial<Settings>): Promise<Settings> {
+export type SettingsUpdate = Partial<Settings> & {
+  clear_settings?: Array<'slack_user_token' | 'slack_user_cookie'>;
+};
+
+export async function updateSettings(partial: SettingsUpdate): Promise<Settings> {
   const res = await authFetch(`${BASE}/api/settings`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json', ...authHeaders() },

@@ -27,6 +27,7 @@ import {
   updateGatewayConfig,
   getOpenRouterUsage,
   type Settings,
+  type SettingsUpdate,
   type ChannelCount,
   type ChannelFilters,
   type EligibilityGateConfig,
@@ -43,6 +44,8 @@ export function SettingsPage() {
   const [saving, setSaving] = useState(false)
   const [toast, setToast] = useState<{ type: 'ok' | 'err'; msg: string } | null>(null)
   const [newGatewayKey, setNewGatewayKey] = useState('')
+  const [newSlackToken, setNewSlackToken] = useState('')
+  const [newSlackCookie, setNewSlackCookie] = useState('')
 
   useEffect(() => {
     fetchSettings()
@@ -50,15 +53,17 @@ export function SettingsPage() {
       .catch(() => setError('Failed to load settings'))
   }, [])
 
-  const save = async (partial: Partial<Settings>) => {
+  const save = async (partial: SettingsUpdate) => {
     setSaving(true)
     setToast(null)
     try {
       const updated = await updateSettings(partial)
       setSettings(updated)
       setToast({ type: 'ok', msg: 'Saved' })
+      return true
     } catch (e: any) {
       setToast({ type: 'err', msg: e.message || 'Save failed' })
+      return false
     } finally {
       setSaving(false)
     }
@@ -136,6 +141,43 @@ export function SettingsPage() {
           </p>
         </Field>
         <GatewayPanel />
+      </Section>
+
+      <Section title="Slack attachment fallback">
+        <p className="text-sm text-gray-500 dark:text-gray-400">
+          Used only when a Slack file download is refused by the bot. Applies immediately on save.
+          Credentials are sent only to HTTPS files.slack.com; clearing the token disables fallback.
+        </p>
+        {([
+          ['slack_user_token', 'User token', 'Paste the xoxc- session token or xoxp- user token.', newSlackToken, setNewSlackToken],
+          ['slack_user_cookie', 'Session cookie (optional)', 'Paste only the d cookie value (xoxd-...), not “d=”. Leave unset for bearer-only xoxp tokens.', newSlackCookie, setNewSlackCookie],
+        ] as const).map(([key, label, hint, value, setValue]) => (
+          <Field key={key} label={label} hint={hint}>
+            <p className="text-xs text-gray-500 mb-2">{settings[key] ? 'Set' : 'Not set'}</p>
+            <div className="flex gap-2">
+              <input
+                type="password"
+                aria-label={label}
+                autoComplete="new-password"
+                placeholder="New value (write-only)"
+                value={value}
+                onChange={(e) => setValue(e.target.value)}
+                disabled={saving}
+                className={inputCls}
+              />
+              <button
+                disabled={saving || !value.trim()}
+                onClick={async () => { if (await save({ [key]: value })) setValue('') }}
+                className={btnPrimary}
+              >Save</button>
+              <button
+                disabled={saving || !settings[key]}
+                onClick={async () => { if (await save({ clear_settings: [key] })) setValue('') }}
+                className={btnSecondary}
+              >Clear</button>
+            </div>
+          </Field>
+        ))}
       </Section>
 
       {/* Projects */}
