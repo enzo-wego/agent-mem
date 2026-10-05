@@ -60,7 +60,7 @@ func TestSlackMembersSetting(t *testing.T) {
 	if code, cfg := do(router, http.MethodGet, ""); code != http.StatusOK || cfg.IntervalMinutes != 60 {
 		t.Fatalf("defaults: status=%d config=%+v", code, cfg)
 	}
-	for _, interval := range []string{"15", "720", "120"} {
+	for _, interval := range []string{"15", "480", "120"} {
 		if code, _ := do(router, http.MethodPut, `{"interval_minutes":`+interval+`}`); code != http.StatusOK {
 			t.Fatalf("save %s: status=%d", interval, code)
 		}
@@ -73,7 +73,7 @@ func TestSlackMembersSetting(t *testing.T) {
 		t.Fatalf("persisted interval=%q err=%v", stored, err)
 	}
 	for _, body := range []string{
-		`{"interval_minutes":14}`, `{"interval_minutes":721}`,
+		`{"interval_minutes":14}`, `{"interval_minutes":481}`,
 		`{"interval_minutes":15.5}`, `{"interval_minutes":"60"}`,
 		`{"interval_minutes":null}`, `{}`, `null`, `{"interval_minutes":`,
 		`{"interval_minutes":60} {"interval_minutes":120}`,

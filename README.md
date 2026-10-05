@@ -485,11 +485,15 @@ by default, measured from `graph.slack_members.last_attempt_at`, not successful
 job completion. **Settings → Slack Membership Freshness** or
 `GET`/`PUT /api/graph/slack-members` configures `{"interval_minutes":60}`.
 The persisted key is `graph.slack_members.interval_minutes`; server-side
-validation accepts only integers from **15–720**. A scheduled transient abort
+validation accepts only integers from **15–480**, leaving room for two missed passes within the 24-hour grant lifetime. A scheduled transient abort
 logs its partial-pass counts and ends `done`; recovery waits for the next due
 tick. Fatal credentials remain `failed` without per-minute retry churn. Both
 scheduled and forced runs retry an individual transient API request once,
 respecting `Retry-After` up to 60 seconds before aborting the pass.
+
+Rollback removes all Slack channel (`slack:C%` / `slack:G%`) grants before dropping
+freshness metadata; otherwise the old binary would treat refreshed grants as permanent.
+DM and non-Slack grants remain intact.
 
 ### Read endpoints
 

@@ -31,7 +31,10 @@ func slackMembersTick(ctx context.Context, db *pgxpool.Pool, machineID, runner s
 
 // RunSlackMembersTicker polls persisted last-attempt state once a minute.
 // Failures do not create retry chains; manual force jobs retain queue backoff.
-func RunSlackMembersTicker(ctx context.Context, db *pgxpool.Pool, machineID, runner string, log zerolog.Logger) {
+func RunSlackMembersTicker(ctx context.Context, db *pgxpool.Pool, machineID, runner, token string, log zerolog.Logger) {
+	if token == "" {
+		return
+	}
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
 	for {

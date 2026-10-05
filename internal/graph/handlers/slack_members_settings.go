@@ -38,8 +38,8 @@ func (h *Channels) putSlackMembersConfig(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadRequest, "invalid json")
 		return
 	}
-	if cfg.IntervalMinutes < 15 || cfg.IntervalMinutes > 720 {
-		writeError(w, http.StatusBadRequest, "interval_minutes must be an integer from 15 to 720")
+	if cfg.IntervalMinutes < 15 || cfg.IntervalMinutes > 480 {
+		writeError(w, http.StatusBadRequest, "interval_minutes must be an integer from 15 to 480")
 		return
 	}
 	if _, err := h.db.Exec(r.Context(), `

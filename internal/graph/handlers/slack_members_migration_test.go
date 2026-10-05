@@ -90,4 +90,12 @@ func TestSlackMembersMigration(t *testing.T) {
 	if err != nil || len(scopes) != 3 {
 		t.Fatalf("refreshed scopes=%v err=%v", scopes, err)
 	}
+	membersExec(t, db, `INSERT INTO graph.member_scopes(eeid,scope) VALUES(1001,'slack:G1')`)
+	if _, err := provider.ApplyVersion(ctx, version, false); err != nil {
+		t.Fatal(err)
+	}
+	membersWant(t, db, "slack:C1")
+	membersWant(t, db, "slack:G1")
+	membersWant(t, db, "slack:D1", 1001)
+	membersWant(t, db, "jira:PAY", 1001)
 }

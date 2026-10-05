@@ -58,7 +58,7 @@ func readSlackMembersInterval(ctx context.Context, db jobs.DB) (int, error) {
 	if err != nil {
 		return 60, nil
 	}
-	return min(max(n, 15), 720), nil
+	return min(max(n, 15), 480), nil
 }
 func slackMembersDue(ctx context.Context, db jobs.DB, now time.Time) (bool, error) {
 	interval, err := readSlackMembersInterval(ctx, db)
@@ -115,6 +115,9 @@ func refreshSlackMembersWithClient(deps Deps, client slackMembersClient) jobs.Ha
 		}
 		if !locked {
 			conn.Release()
+			if p.Force {
+				return fmt.Errorf("%w: refresh_slack_members: pass already running", jobs.ErrTransient)
+			}
 			return nil
 		}
 		defer releaseSlackMembersConn(conn)
@@ -124,6 +127,9 @@ func refreshSlackMembersWithClient(deps Deps, client slackMembersClient) jobs.Ha
 		}
 		if !p.Force && !due {
 			return nil
+		}
+		if deps.SlackBotToken == "" {
+			return fmt.Errorf("%w: refresh_slack_members: Slack bot token not set", jobs.ErrFatal)
 		}
 		if err := putSetting(ctx, conn, slackMembersLastAttemptKey, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
 			return fmt.Errorf("%w: last attempt: %v", jobs.ErrTransient, err)
@@ -164,10 +170,11 @@ func refreshSlackMembersWithClient(deps Deps, client slackMembersClient) jobs.Ha
 				result = nil
 			}
 		}()
-		if deps.SlackBotToken == "" {
-			return fmt.Errorf("%w: refresh_slack_members: Slack bot token not set", jobs.ErrFatal)
-		}
-		rows, err := conn.Query(ctx, `SELECT DISTINCT scope FROM graph.nodes WHERE deleted_at IS NULL AND (scope LIKE 'slack:C%' OR scope LIKE 'slack:G%') ORDER BY scope`)
+		rows, err := conn.Query(ctx, `SELECT n.scope FROM
+    (SELECT DISTINCT scope FROM graph.nodes WHERE deleted_at IS NULL
+     AND (scope LIKE 'slack:C%' OR scope LIKE 'slack:G%')) n
+    LEFT JOIN graph.member_scopes m ON m.scope=n.scope
+    GROUP BY n.scope ORDER BY min(m.refreshed_at) NULLS FIRST, n.scope`)
 		if err != nil {
 			return fmt.Errorf("%w: channels: %v", jobs.ErrTransient, err)
 		}
@@ -214,7 +221,13 @@ func refreshSlackMembersWithClient(deps Deps, client slackMembersClient) jobs.Ha
 				}
 				complete++
 				mapped += count
-				unmapped += len(ids) - count
+				var missing int
+				if err := conn.QueryRow(ctx, `SELECT count(*) FROM unnest($1::text[]) AS ids(id)
+    WHERE NOT EXISTS (SELECT 1 FROM graph.people p WHERE p.slack_user_id=ids.id
+    AND p.eeid IS NOT NULL AND p.merged_into IS NULL)`, ids).Scan(&missing); err != nil {
+					return fmt.Errorf("%w: unmapped members: %v", jobs.ErrTransient, err)
+				}
+				unmapped += missing
 			}
 		}
 		allKnown = unknown == 0

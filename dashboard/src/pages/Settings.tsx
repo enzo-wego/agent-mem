@@ -925,7 +925,7 @@ function SlackMembersSection() {
   }
 
   const intervalInvalid =
-    config !== null && (!Number.isInteger(config.interval_minutes) || config.interval_minutes < 15 || config.interval_minutes > 720)
+    config !== null && (!Number.isInteger(config.interval_minutes) || config.interval_minutes < 15 || config.interval_minutes > 480)
 
   return (
     <Section title="Slack Membership Freshness">
@@ -938,11 +938,11 @@ function SlackMembersSection() {
         <p className="text-sm text-gray-500">Loading…</p>
       ) : (
         <>
-          <Field label="Interval (minutes)" hint="Refresh Slack channel access every 15–720 minutes (default 60), measured from the last refresh attempt, not the last success. The worker checks once a minute; scheduled failures wait until the next due attempt. Saving does not immediately run a refresh.">
+          <Field label="Interval (minutes)" hint="Refresh Slack channel access every 15–480 minutes (default 60), measured from the last refresh attempt, not the last success. The worker checks once a minute; scheduled failures wait until the next due attempt. Saving does not immediately run a refresh.">
             <input
               type="number"
               min="15"
-              max="720"
+              max="480"
               step="1"
               value={config.interval_minutes}
               disabled={saving}
@@ -954,7 +954,7 @@ function SlackMembersSection() {
             Channel grants expire after 24 hours without a successful membership refresh, even when the worker is paused. Readers cache access for up to 5 minutes, so grants, revocations, and expiry can take that long to reach every reader. Channels update individually, not as one atomic snapshot. Coverage is limited to channels the Slack bot can access.
           </p>
           {intervalInvalid && (
-            <p className="text-sm text-red-600 dark:text-red-400">Interval must be a whole number from 15 to 720.</p>
+            <p className="text-sm text-red-600 dark:text-red-400">Interval must be a whole number from 15 to 480.</p>
           )}
           <button disabled={saving || intervalInvalid} onClick={save} className={btnPrimary}>
             {saving ? 'Saving…' : 'Save Slack membership freshness'}

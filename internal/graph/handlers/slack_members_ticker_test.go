@@ -121,7 +121,7 @@ func TestSlackMembersTicker_LockSkipThenFatal(t *testing.T) {
 	now := time.Now()
 	// A no-op duplicate can finish done, but must not postpone the holder's
 	// next due tick if its actual refresh fails.
-	if err := h(context.Background(), []byte(`{"force":true}`)); err != nil {
+	if err := h(context.Background(), nil); err != nil {
 		close(release)
 		t.Fatal(err)
 	}

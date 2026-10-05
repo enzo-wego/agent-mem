@@ -410,7 +410,9 @@ func (s *Server) Run() error {
 		go s.manager.Run(ctx)
 		// Jira freshness poll: the ticker owns the refresh_jira_updates cadence.
 		go graphhandlers.RunJiraUpdatesTicker(ctx, s.db.Pool, s.config.MachineID, s.config.Graph.Runner, log.Logger)
-		go graphhandlers.RunSlackMembersTicker(ctx, s.db.Pool, s.config.MachineID, s.config.Graph.Runner, log.Logger)
+		if s.config.Graph.SlackBotToken != "" {
+			go graphhandlers.RunSlackMembersTicker(ctx, s.db.Pool, s.config.MachineID, s.config.Graph.Runner, s.config.Graph.SlackBotToken, log.Logger)
+		}
 	}
 
 	s.http = &http.Server{

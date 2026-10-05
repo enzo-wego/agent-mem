@@ -74,6 +74,73 @@ func membersClient(t *testing.T, serve http.HandlerFunc) slackMembersClient {
 func membersReply(w http.ResponseWriter, ids []string, cursor string) {
 	_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "members": ids, "response_metadata": map[string]string{"next_cursor": cursor}})
 }
+
+func TestRefreshSlackMembersFollowup(t *testing.T) {
+	t.Run("no_token_ticker", func(t *testing.T) {
+		done := make(chan struct{})
+		go func() {
+			RunSlackMembersTicker(context.Background(), nil, "test", "local", "", zerolog.Nop())
+			close(done)
+		}()
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Fatal("no-token ticker started instead of returning")
+		}
+	})
+	db := openTestDB(t)
+	membersReset(t, db)
+	ctx := context.Background()
+	h := refreshSlackMembersWithClient(Deps{DB: db, Logger: zerolog.Nop()}, slackMembersClient{})
+	if err := h(ctx, []byte(`{"force":true}`)); !errors.Is(err, jobs.ErrFatal) {
+		t.Fatalf("missing token: %v", err)
+	}
+	var attempts int
+	if err := db.QueryRow(ctx, `SELECT count(*) FROM settings WHERE key=$1`, slackMembersLastAttemptKey).Scan(&attempts); err != nil || attempts != 0 {
+		t.Fatalf("missing token stamped attempt: %d %v", attempts, err)
+	}
+	conn, err := db.Acquire(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var locked bool
+	if err := conn.QueryRow(ctx, slackMembersLockSQL).Scan(&locked); err != nil || !locked {
+		t.Fatalf("lock: %v", err)
+	}
+	err = h(ctx, []byte(`{"force":true}`))
+	releaseSlackMembersConn(conn)
+	if !errors.Is(err, jobs.ErrTransient) {
+		t.Fatalf("forced contention: %v", err)
+	}
+	for _, c := range []string{"C1", "C2", "C3"} {
+		membersNode(t, db, c)
+	}
+	var calls []string
+	fail := true
+	client := membersClient(t, func(w http.ResponseWriter, r *http.Request) {
+		c := r.URL.Query().Get("channel")
+		calls = append(calls, c)
+		if fail && c == "C2" {
+			w.WriteHeader(503)
+			return
+		}
+		membersReply(w, []string{"U1"}, "")
+	})
+	h = refreshSlackMembersWithClient(Deps{DB: db, SlackBotToken: "fake", Logger: zerolog.Nop()}, client)
+	if err := h(ctx, nil); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(calls, []string{"C1", "C2", "C2"}) {
+		t.Fatalf("first pass: %v", calls)
+	}
+	fail, calls = false, nil
+	if err := h(ctx, []byte(`{"force":true}`)); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(calls, []string{"C2", "C3", "C1"}) {
+		t.Fatalf("recovery order: %v", calls)
+	}
+}
 func TestRefreshSlackMembers(t *testing.T) {
 	t.Run("mapping_pagination_revocation_archived", func(t *testing.T) {
 		db := openTestDB(t)
@@ -350,7 +417,7 @@ func TestRefreshSlackMembers_LockLifecycle(t *testing.T) {
 		if err := db.QueryRow(context.Background(), `SELECT value FROM settings WHERE key=$1`, slackMembersLastAttemptKey).Scan(&stamp); err != nil {
 			t.Fatal(err)
 		}
-		if err := h(context.Background(), []byte(`{"force":true}`)); err != nil {
+		if err := h(context.Background(), []byte(`{"force":true}`)); !errors.Is(err, jobs.ErrTransient) {
 			t.Fatal(err)
 		}
 		if calls.Load() != 1 {
