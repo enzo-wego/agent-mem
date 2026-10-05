@@ -139,3 +139,27 @@ workspace (agent-mem-e3) so the two deploys don't overlap.
 pi review 1 (openai-codex gpt-6-astra), CHANGES REQUIRED, 1 finding: the CHECK
 constraint hides a missing guard → the guard test drops the constraint in setup
 and restores it in cleanup. The constraint gets its own test.
+
+## Revision 2: step 1 STOP resolved (conductor, auto: recommended, 2026-10-05)
+
+Round 1 (commit 9dfb6fb) stopped correctly on the literal step 1 condition. The
+conductor resolves it as follows. **Proceed with steps 2-5 and the vm42 item
+unchanged.**
+
+- The hub's graph-edge push import (`sync_handlers.go:63-76`,
+  `graph_sync.go:492-506`) can't restore a deleted self-loop once migration 2 is
+  in place. The CHECK rejects the row, and the handler counts it as rejected and
+  continues (`sync_handlers.go:70-76`). The constraint is the protection, and
+  migration order (delete, then constraint) is what makes it hold.
+- Replicas' cached copies: `internal/worker/server.go:92` runs
+  `database.RunMigrations` at worker startup, so every machine applies the same
+  delete + constraint when it upgrades. No tombstone protocol is needed.
+- Current clients don't push graph edges (`engine.go:155-173`).
+- Out of scope, and the report should list it as a follow-up: the hub's push
+  response reports `rejected` counts that the client ignores
+  (`engine.go:181-205`).
+
+Add to the report's sync section: "Resolved by the conductor: the CHECK
+constraint plus migrations at startup cover restoration and replica cleanup."
+Update `report-edge-self-loops.md` with the step 2-5 and vm42 results in the
+same commit series.
