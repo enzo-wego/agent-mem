@@ -22,7 +22,7 @@ func periodicHandlerDB(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {
-		t.Fatal("DATABASE_URL is required for periodic integration tests")
+		t.Skip("DATABASE_URL not set")
 	}
 	if databaseName(dsn) != "agentmem_test" {
 		t.Fatal("periodic tests require agentmem_test database")
@@ -171,6 +171,39 @@ func TestEnqueuePeriodicNow_Endpoints(t *testing.T) {
 				t.Fatalf("%s payload preservation=%v err=%v", c.typ, same, err)
 			}
 		}
+	}
+}
+
+func TestEnqueuePeriodicNow_NoneRunnerClaimable(t *testing.T) {
+	pool := periodicHandlerDB(t)
+	h := NewJobsEnqueueHandler(Deps{DB: pool, Logger: zerolog.Nop(), MachineID: "admin", Runner: "none"})
+	for _, runner := range []string{"local", "vps"} {
+		t.Run(runner, func(t *testing.T) {
+			w := periodicPost(h, "refresh_jira_board", `{}`)
+			if w.Code != http.StatusOK {
+				t.Fatalf("enqueue status=%d body=%s", w.Code, w.Body)
+			}
+			var response struct {
+				ID int64 `json:"id"`
+			}
+			if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+				t.Fatal(err)
+			}
+			// Use the database clock so host/container skew cannot mask routing.
+			if _, err := pool.Exec(t.Context(), `UPDATE graph.jobs SET available_at=NOW()-interval '1 second' WHERE id=$1`, response.ID); err != nil {
+				t.Fatal(err)
+			}
+			job, err := jobs.Claim(t.Context(), pool, "refresh_jira_board", time.Minute, "consumer", runner)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if job == nil || job.ID != response.ID || job.TargetRunner != "any" {
+				t.Fatalf("runner=%s claimed=%+v, want job %d targeting any", runner, job, response.ID)
+			}
+			if err := jobs.Complete(t.Context(), pool, job.ID); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }
 

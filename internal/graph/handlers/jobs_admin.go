@@ -144,6 +144,10 @@ func NewJobsRetryHandler(deps Deps) http.Handler {
 		}
 		if err != nil {
 			deps.Logger.Error().Err(err).Int64("job_id", id).Msg("jobs_retry: update failed")
+			if jobs.IsPeriodic(jobType) {
+				writeError(w, http.StatusInternalServerError, "periodic retry outcome is unknown; check the jobs list before retrying")
+				return
+			}
 			writeError(w, http.StatusInternalServerError, "retry job failed")
 			return
 		}

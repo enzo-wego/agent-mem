@@ -168,7 +168,7 @@ func RetryPeriodicNow(ctx context.Context, db *pgxpool.Pool, id int64) error {
 }
 
 func periodicOptions(jobType, machineID, runner string, now time.Time) EnqueueOptions {
-	if jobType == "derive_person_roles" || runner == "" {
+	if jobType == "derive_person_roles" || runner == "" || runner == "none" {
 		runner = "any"
 	}
 	return EnqueueOptions{Priority: 5, AvailableAt: now, TargetRunner: runner, MachineID: machineID}

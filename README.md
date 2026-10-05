@@ -531,6 +531,10 @@ the Jobs dashboard displays that message. Manual enqueue via
 `derive_person_roles` among the maintenance allowlist. `detect_hot_topics` and
 `notify_watch_channels` remain disallowed through that endpoint (HTTP 400).
 
+Periodic transaction errors return HTTP 500 with an unknown-outcome warning:
+check the jobs list before retrying. The five-second deadline includes COMMIT,
+so a client error does not prove that the transaction rolled back.
+
 ### Fixed-interval periodic jobs
 
 One process-owned ticker polls every 30 seconds while the graph job manager is
@@ -542,6 +546,9 @@ enabled (`runner=none` does not schedule). It owns these four schedules:
 | `detect_hot_topics` | 5 minutes | Worker runner |
 | `derive_person_roles` | 24 hours | `any` |
 | `refresh_jira_board` | 6 hours | Worker runner |
+
+Manual periodic enqueue from a worker with an empty or `none` runner targets
+`any`, allowing an active local or VPS runner to claim it.
 
 For each type, a database-local advisory lock serializes scheduled enqueue,
 manual enqueue, and admin retry. Queued **or** running work suppresses a new

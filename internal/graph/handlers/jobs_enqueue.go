@@ -77,6 +77,10 @@ func NewJobsEnqueueHandler(deps Deps) http.Handler {
 			return
 		}
 		if err != nil {
+			if jobs.IsPeriodic(req.Type) {
+				writeError(w, http.StatusInternalServerError, "periodic enqueue outcome is unknown; check the jobs list before retrying")
+				return
+			}
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
