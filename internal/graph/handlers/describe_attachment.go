@@ -437,6 +437,7 @@ WITH candidates AS (
   LEFT JOIN graph.artifact_bodies ab ON ab.node_id = n.id
   WHERE n.deleted_at IS NULL
     AND n.type IN ('slack_file', 'jira_attachment')
+    AND COALESCE(n.url, '') <> ''
     AND (
       COALESCE(ab.body_full, '') = ''
       OR ab.body_full ILIKE 'image processing failed%'
@@ -444,13 +445,13 @@ WITH candidates AS (
     )
 ), newest_jobs AS (
   SELECT DISTINCT ON (j.payload->>'node_id')
-    j.payload->>'node_id' AS node_id, j.status
+    j.payload->>'node_id' AS node_id, j.status, j.id, j.payload->>'mime' AS mime
   FROM graph.jobs j
   JOIN candidates c ON c.id = j.payload->>'node_id'
   WHERE j.type = 'describe_attachment'
   ORDER BY j.payload->>'node_id', j.id DESC
 )
-SELECT c.id, COALESCE(c.url, ''), COALESCE(c.mime_type, '')
+SELECT c.id, c.url, COALESCE(NULLIF(j.mime, ''), c.mime_type, '')
 FROM candidates c
 LEFT JOIN newest_jobs j ON j.node_id = c.id
 WHERE (
@@ -464,6 +465,7 @@ WHERE (
       AND active.status IN ('queued', 'running')
       AND active.payload->>'node_id' = c.id
   )
+ORDER BY j.id ASC NULLS LAST, c.id ASC
 LIMIT $1`, limit)
 	if err != nil {
 		logger.Warn().Err(err).Msg("backfill_failed_attachments: query failed")
@@ -485,10 +487,7 @@ LIMIT $1`, limit)
 	for _, r := range todo {
 		mime := r.mime
 		if mime == "" {
-			// Attachment nodes don't persist mime_type (ingest_content.go:319
-			// stores only id/type/url), and every poisoned row is an image
-			// failure, so derive an image mime from the URL to route the re-run
-			// back through the image branch.
+			// Legacy failures without a job MIME still use the URL image fallback.
 			mime = imageMimeFromURL(r.url)
 		}
 		if enqueueDescribeAttachment(ctx, db, r.id, r.url, mime, nodeSourceFromID(r.id)) {

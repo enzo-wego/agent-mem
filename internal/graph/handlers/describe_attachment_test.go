@@ -713,3 +713,30 @@ func TestBackfillFailedAttachments_NewestJobAndActiveExclusion(t *testing.T) {
 		}
 	}
 }
+
+func TestBackfillFailedAttachments_JobMimeAndURLCap(t *testing.T) {
+	pool := openTestDB(t)
+	truncateGraphHandlerTables(t, pool)
+	ctx := context.Background()
+	for _, tc := range []struct{ id, url string }{
+		{"jira_attachment:NOURL", ""},
+		{"jira_attachment:PDF", "https://example.test/failed.pdf"},
+		{"jira_attachment:LATER", "https://example.test/later.pdf"},
+	} {
+		seedAttachmentBody(t, pool, tc.id, tc.url, "")
+		aclExec(t, pool, `INSERT INTO graph.jobs(type,payload,status,machine_id)
+			VALUES('describe_attachment',jsonb_build_object('node_id',$1::text,'mime','application/pdf'),'failed','test')`, tc.id)
+	}
+	matched, enqueued := BackfillFailedAttachments(ctx, pool, zerolog.Nop(), 1)
+	if matched != 1 || enqueued != 1 {
+		t.Fatalf("matched/enqueued=%d/%d, want 1/1", matched, enqueued)
+	}
+	var id, mime string
+	if err := pool.QueryRow(ctx, `SELECT payload->>'node_id',payload->>'mime' FROM graph.jobs
+		WHERE type='describe_attachment' AND status='queued'`).Scan(&id, &mime); err != nil {
+		t.Fatal(err)
+	}
+	if id != "jira_attachment:PDF" || mime != "application/pdf" {
+		t.Fatalf("queued %s with MIME %s, want first valid PDF/application/pdf", id, mime)
+	}
+}

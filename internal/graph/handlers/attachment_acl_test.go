@@ -263,3 +263,52 @@ func TestAttachmentACL_ErrorsFailClosed(t *testing.T) {
 		t.Fatalf("closed batch visible=%v err=%v", got, err)
 	}
 }
+
+func TestAttachmentACL_FileLeaves(t *testing.T) {
+	pool := openTestDB(t)
+	h := attachmentACLFixture(t, pool)
+	// Reverse REFERENCES are included by the leaf pass, but do not grant
+	// visibility: F1's sharing parents remain CPRIV and COTHER.
+	aclExec(t, pool, `INSERT INTO graph.edges(from_node_id,to_node_id,kind,metadata,machine_id)
+		VALUES('jira:ACL-CONTROL','slack:PUBLIC:3','RELATED','{}','test'),
+		      ('slack_file:F1','slack:PUBLIC:3','REFERENCES','{}','test')`)
+	for _, tc := range []struct {
+		name, header string
+		want         bool
+	}{
+		{"unknown", "nobody@example.com", false},
+		{"non_member", "plain@example.com", false},
+		{"member", "private@example.com", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := askerRequest(t, h, "/api/graph/node/jira:ACL-CONTROL/neighbors?depth=1", tc.header)
+			if w.Code != 200 {
+				t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+			}
+			var resp struct {
+				Items []neighborItem `json:"neighbors"`
+			}
+			if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+				t.Fatal(err)
+			}
+			thread, file := false, false
+			for _, item := range resp.Items {
+				if item.Node.NodeID == "slack:PUBLIC:3" {
+					thread = true
+				}
+				if item.Node.NodeID == "slack_file:F1" {
+					file = true
+					if item.Hop != 2 {
+						t.Errorf("file hop=%d, want 2", item.Hop)
+					}
+				}
+			}
+			if !thread {
+				t.Fatal("visible thread missing")
+			}
+			if file != tc.want {
+				t.Errorf("file visible=%v want=%v", file, tc.want)
+			}
+		})
+	}
+}
