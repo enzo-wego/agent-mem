@@ -51,9 +51,13 @@ func (d *TypeDispatcher) runOne(ctx context.Context, job *Job) {
 
 	// Run the handler.
 	runCtx := ctx
-	if d.entry.Lease > 0 && !d.entry.Heartbeat {
+	timeout := d.entry.Lease
+	if d.entry.Heartbeat {
+		timeout = d.entry.MaxRuntime
+	}
+	if timeout > 0 {
 		var cancel context.CancelFunc
-		runCtx, cancel = context.WithTimeout(ctx, d.entry.Lease)
+		runCtx, cancel = context.WithTimeout(ctx, timeout)
 		defer cancel()
 	}
 	if d.entry.Handler == nil {
