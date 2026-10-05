@@ -157,18 +157,19 @@ var directWindowSQL = `(
              AND es.first_at < $3 AND es.last_at >= $2)
 )`
 
-// windowEligibleSQL includes both direct time eligibility and inheritance
-// from an active epic self row. Keep the active epic set uncorrelated.
+// windowEligibleSQL includes direct time eligibility and, for non-Slack nodes,
+// inheritance from an active epic self row. Slack uses only its own time.
+// Keep the active epic set uncorrelated.
 var windowEligibleSQL = `(
   ` + directWindowSQL + `
-  OR EXISTS (
+  OR (n.type <> 'slack' AND EXISTS (
     SELECT 1 FROM graph.epic_membership em
     WHERE em.node_id = n.id
       AND em.epic_key = ANY(ARRAY(
         SELECT ep.epic_key FROM graph.epic_membership ep
         WHERE ep.node_id = ` + epicSelfIDSQL("ep") + `
           AND ep.epic_key <> '` + businessRootID + `'
-          AND ep.first_at < $3 AND ep.last_at >= $2)))
+          AND ep.first_at < $3 AND ep.last_at >= $2))))
 )`
 
 // nodesEligibleInWindow checks the same eligibility as temporal retrieval,
@@ -202,7 +203,8 @@ const (
 )
 
 // temporalArm returns nodes whose event time falls in the window, or whose
-// epic's activity window overlaps it, ordered by cosine to the topic vector
+// epic's activity window overlaps it (non-Slack nodes only). Slack threads use
+// only their own time. Results are ordered by cosine to the topic vector
 // (event time when there is no vector). The top 60 are spread across 8 time
 // buckets so one busy week cannot crowd out the rest, then each is expanded
 // one hop over REFERENCES/PART_OF at score × 0.7 with the window re-applied.
