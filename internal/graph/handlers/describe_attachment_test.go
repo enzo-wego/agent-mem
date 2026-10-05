@@ -598,10 +598,10 @@ func TestBackfillFailedAttachments(t *testing.T) {
 		t.Errorf("legit long body must not be re-enqueued; got %d jobs", legitJobs)
 	}
 
-	// Second run: the node already has a queued job → dedup, matched again but enqueued 0.
+	// Second run: active jobs are excluded from the repair selector.
 	matched2, enqueued2 := BackfillFailedAttachments(ctx, pool, zerolog.Nop(), 50)
-	if matched2 != 1 || enqueued2 != 0 {
-		t.Fatalf("second run: matched=%d enqueued=%d, want 1/0 (dedup)", matched2, enqueued2)
+	if matched2 != 0 || enqueued2 != 0 {
+		t.Fatalf("second run: matched=%d enqueued=%d, want 0/0 (dedup)", matched2, enqueued2)
 	}
 }
 
@@ -619,5 +619,97 @@ func TestBackfillFailedAttachments_RespectsCap(t *testing.T) {
 	matched, enqueued := BackfillFailedAttachments(ctx, pool, zerolog.Nop(), 2)
 	if matched != 2 || enqueued != 2 {
 		t.Fatalf("cap: matched=%d enqueued=%d, want 2/2 (hard cap of 2)", matched, enqueued)
+	}
+}
+
+func TestBackfillAttachments_RepairsFailedEmptyBody(t *testing.T) {
+	for _, bodyState := range []string{"absent", "empty"} {
+		t.Run(bodyState, func(t *testing.T) {
+			pool := openTestDB(t)
+			truncateGraphHandlerTables(t, pool)
+			ctx := context.Background()
+			const id = "slack_file:FFAILED"
+			seedAttachmentBody(t, pool, id, "https://example.test/failed.png", "")
+			if bodyState == "absent" {
+				if _, err := pool.Exec(ctx, `DELETE FROM graph.artifact_bodies WHERE node_id=$1`, id); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := pool.Exec(ctx, `INSERT INTO graph.jobs (type,payload,status,machine_id)
+				VALUES ('describe_attachment',jsonb_build_object('node_id',$1::text),'failed','test')`, id); err != nil {
+				t.Fatal(err)
+			}
+			handler := NewBackfillAttachmentsHandler(Deps{DB: pool, Logger: zerolog.Nop()})
+			for call := range 2 {
+				rec := httptest.NewRecorder()
+				handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/graph/backfill/attachments", strings.NewReader(`{"limit":50}`)))
+				if rec.Code != http.StatusAccepted {
+					t.Fatalf("call %d: status=%d body=%s", call, rec.Code, rec.Body.String())
+				}
+				var resp backfillAttachmentsResponse
+				if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+					t.Fatal(err)
+				}
+				want := 1 - call
+				if resp.Matched != want || resp.Enqueued != want {
+					t.Fatalf("call %d: matched/enqueued=%d/%d, want %d/%d", call, resp.Matched, resp.Enqueued, want, want)
+				}
+				var total, queued int
+				if err := pool.QueryRow(ctx, `SELECT count(*),count(*) FILTER (WHERE status='queued')
+					FROM graph.jobs WHERE type='describe_attachment' AND payload->>'node_id'=$1`, id).Scan(&total, &queued); err != nil {
+					t.Fatal(err)
+				}
+				if total != 2 || queued != 1 {
+					t.Fatalf("call %d: total/queued=%d/%d, want 2/1", call, total, queued)
+				}
+			}
+		})
+	}
+}
+
+func TestBackfillFailedAttachments_NewestJobAndActiveExclusion(t *testing.T) {
+	pool := openTestDB(t)
+	truncateGraphHandlerTables(t, pool)
+	ctx := context.Background()
+	for _, tc := range []struct {
+		id       string
+		statuses []string
+		body     string
+	}{
+		{"slack_file:FNEWFAILED", []string{"failed", "done", "failed"}, ""},
+		{"slack_file:FNEWDONE", []string{"failed", "done"}, ""},
+		{"slack_file:FOLDQUEUED", []string{"queued", "failed"}, ""},
+		{"slack_file:FOLDRUNNING", []string{"running", "failed"}, ""},
+		{"slack_file:FGOOD", []string{"failed"}, "A valid description"},
+		{"slack_file:FNOJOB", nil, ""},
+		{"slack_file:FOTHERJOB", []string{"failed"}, ""},
+	} {
+		seedAttachmentBody(t, pool, tc.id, "https://example.test/x.png", tc.body)
+		for _, status := range tc.statuses {
+			if _, err := pool.Exec(ctx, `INSERT INTO graph.jobs (type,payload,status,machine_id)
+				VALUES ('describe_attachment',jsonb_build_object('node_id',$1::text),$2,'test')`, tc.id, status); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if tc.id == "slack_file:FOTHERJOB" {
+			if _, err := pool.Exec(ctx, `INSERT INTO graph.jobs (type,payload,status,machine_id)
+				VALUES ('index_artifact',jsonb_build_object('node_id',$1::text),'done','test')`, tc.id); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	matched, enqueued := BackfillFailedAttachments(ctx, pool, zerolog.Nop(), 50)
+	if matched != 2 || enqueued != 2 {
+		t.Fatalf("matched/enqueued=%d/%d, want 2/2", matched, enqueued)
+	}
+	for _, id := range []string{"slack_file:FNEWFAILED", "slack_file:FOTHERJOB"} {
+		var queued int
+		if err := pool.QueryRow(ctx, `SELECT count(*) FROM graph.jobs WHERE type='describe_attachment'
+			AND status='queued' AND payload->>'node_id'=$1`, id).Scan(&queued); err != nil {
+			t.Fatal(err)
+		}
+		if queued != 1 {
+			t.Errorf("%s: queued=%d, want 1", id, queued)
+		}
 	}
 }
