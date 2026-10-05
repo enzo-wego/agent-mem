@@ -64,6 +64,7 @@ func RegisterAll(reg *jobs.Registry, deps Deps) {
 	reg.Register("derive_person_roles", NewDerivePersonRolesHandler(deps))
 	reg.Register("refresh_slack_bots", NewRefreshSlackBotsHandler(deps))
 	reg.Register("refresh_slack_channels", NewRefreshSlackChannelsHandler(deps))
+	reg.Register("refresh_slack_members", NewRefreshSlackMembersHandler(deps))
 	reg.Register("refresh_jira_board", NewRefreshJiraBoardHandler(deps))
 	reg.Register("refresh_jira_updates", NewRefreshJiraUpdatesHandler(deps))
 	reg.Register("backfill_created_at", NewBackfillCreatedAtHandler(deps))
