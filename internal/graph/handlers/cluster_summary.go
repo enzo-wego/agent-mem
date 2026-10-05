@@ -120,6 +120,11 @@ LEFT JOIN graph.thread_summaries ts ON ts.channel_id = q.ch AND ts.thread_ts = q
 }
 
 func (h *clusterSummaryHandler) serve(w http.ResponseWriter, r *http.Request) {
+	// ponytail: filtered askers get 403; per-asker cluster filtering if a client needs it
+	if strings.TrimSpace(r.Header.Get("X-Asker-User")) != "" {
+		http.Error(w, "cluster summary is available to the unfiltered view only", http.StatusForbidden)
+		return
+	}
 	ctx := r.Context()
 	id := r.URL.Query().Get("node")
 	if dec, err := url.QueryUnescape(id); err == nil {

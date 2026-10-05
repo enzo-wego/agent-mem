@@ -298,7 +298,7 @@ JOIN graph.edges e ON e.from_node_id = n.id AND e.kind = 'REFERENCES'
 JOIN graph.nodes r ON r.id = e.to_node_id AND r.deleted_at IS NULL
 WHERE n.scope = 'slack:' || $1 AND n.deleted_at IS NULL
   AND (n.id = 'slack:' || $1 || ':' || $2 OR COALESCE(n.metadata->>'thread_ts','') = $2)
-  AND r.type NOT IN ('slack','slack_thread','slack_file')
+  AND r.type NOT IN ('slack','slack_thread','slack_file','jira_attachment')
 ORDER BY 1`, channelID, threadTs)
 	if err != nil {
 		return ""
