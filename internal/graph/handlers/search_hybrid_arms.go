@@ -27,6 +27,10 @@ const slackThreadRootSQL = `CASE WHEN n.type IN ('slack','slack_thread') AND n.s
 // query); the outer query orders threads by that member's score.
 // Parameters are keywordArmSQL's.
 func keywordArmFoldedSQL(f searchFilter) string {
+	predicate := f.sql(3, 4, 5)
+	if f.win != nil {
+		predicate += "\n  AND " + windowEligibleSQLAt(8, 9)
+	}
 	return keywordCTE + `,
 scored AS (
   SELECT n.id,
@@ -38,7 +42,7 @@ scored AS (
   JOIN graph.nodes n ON n.id = c.id
   CROSS JOIN tq
   LEFT JOIN graph.artifact_index ai ON ai.node_id = n.id
-  WHERE ` + f.sql(3, 4, 5) + `
+  WHERE ` + predicate + `
 ),
 best AS (
   SELECT DISTINCT ON (thread_key) id, rank, at, upd, thread_key

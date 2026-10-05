@@ -61,6 +61,7 @@ type searchFilter struct {
 	scope    any // []string or nil (nil = trusted unfiltered view)
 	epic     any // []string or nil
 	resolved bool
+	win      *temporal.Window // optional arm-only window; sql and args ignore it
 }
 
 // sql binds the arrays at t, s and e, and resolved immediately after e.
@@ -88,16 +89,23 @@ func semanticArm(ctx context.Context, db *pgxpool.Pool, vec []float32, f searchF
 
 // semanticRows runs the semantic query; extra is an optional additional
 // select-list expression (", <expr>") appended after the three base columns.
+// An arm-only window is bound at $7 and $8, after the shared filter values.
 func semanticRows(ctx context.Context, db *pgxpool.Pool, vec []float32, f searchFilter, limit int, extra string) (pgx.Rows, error) {
+	predicate := f.sql(3, 4, 5)
+	args := append([]any{pgvector.NewVector(vec), limit}, f.args()...)
+	if f.win != nil {
+		predicate += "\n  AND " + windowEligibleSQLAt(7, 8)
+		args = append(args, f.win.Start, f.win.End)
+	}
 	return db.Query(ctx, `
 SELECT n.id, 1.0 - (ai.embedding <=> $1) AS cosine,
        COALESCE(n.created_at, n.first_seen_at)`+extra+`
 FROM graph.artifact_index ai
 JOIN graph.nodes n ON n.id = ai.node_id
 WHERE ai.embedding IS NOT NULL
-  AND `+f.sql(3, 4, 5)+`
+  AND `+predicate+`
 ORDER BY ai.embedding <=> $1
-LIMIT $2`, append([]any{pgvector.NewVector(vec), limit}, f.args()...)...)
+LIMIT $2`, args...)
 }
 
 // ilikeEscaper escapes the LIKE metacharacters so a query such as "50%" is
@@ -114,7 +122,12 @@ var ilikeEscaper = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
 // through it. The body expression must match idx_nodes_body_tsv exactly. The
 // artifact_index join is a LEFT JOIN so nodes without an index row qualify.
 // Parameters: $1 query, $2 limit, $3-$5 filter arrays, $6 resolved, $7 escaped query.
+// An arm-only window appends $8 start and $9 end.
 func keywordArmSQL(f searchFilter) string {
+	predicate := f.sql(3, 4, 5)
+	if f.win != nil {
+		predicate += "\n  AND " + windowEligibleSQLAt(8, 9)
+	}
 	return keywordCTE + `
 SELECT n.id,
        ` + keywordRankSQL + `,
@@ -123,7 +136,7 @@ FROM candidates c
 JOIN graph.nodes n ON n.id = c.id
 CROSS JOIN tq
 LEFT JOIN graph.artifact_index ai ON ai.node_id = n.id
-WHERE ` + f.sql(3, 4, 5) + `
+WHERE ` + predicate + `
 ORDER BY rank DESC, n.updated_at DESC
 LIMIT $2`
 }
@@ -146,7 +159,11 @@ const keywordRankSQL = `COALESCE(ts_rank_cd(ai.tsv, tq.q), 0)
 
 // keywordArmArgs binds keywordArmSQL's parameters.
 func keywordArmArgs(q string, f searchFilter, limit int) []any {
-	return append([]any{q, limit}, append(f.args(), ilikeEscaper.Replace(q))...)
+	args := append([]any{q, limit}, append(f.args(), ilikeEscaper.Replace(q))...)
+	if f.win != nil {
+		args = append(args, f.win.Start, f.win.End)
+	}
+	return args
 }
 
 // keywordArm matches websearch syntax against artifact_index.tsv (summary +
@@ -172,27 +189,35 @@ func epicSelfIDSQL(alias string) string {
 // event time. Epic self nodes and the business root never match on time
 // (stub epics carry a placeholder first_seen_at); they match only when their
 // epic window overlaps.
-var directWindowSQL = `(
-  (NOT EXISTS (SELECT 1 FROM graph.epic_membership es WHERE es.node_id = n.id AND es.node_id = ` + epicSelfIDSQL("es") + `)
-   AND COALESCE(n.created_at, n.first_seen_at) >= $2 AND COALESCE(n.created_at, n.first_seen_at) < $3)
-  OR EXISTS (SELECT 1 FROM graph.epic_membership es WHERE es.node_id = n.id AND es.node_id = ` + epicSelfIDSQL("es") + `
-             AND es.first_at < $3 AND es.last_at >= $2)
-)`
+var directWindowSQL = directWindowSQLAt(2, 3)
+
+func directWindowSQLAt(start, end int) string {
+	return fmt.Sprintf(`(
+  (NOT EXISTS (SELECT 1 FROM graph.epic_membership es WHERE es.node_id = n.id AND es.node_id = `+epicSelfIDSQL("es")+`)
+   AND COALESCE(n.created_at, n.first_seen_at) >= $%[1]d AND COALESCE(n.created_at, n.first_seen_at) < $%[2]d)
+  OR EXISTS (SELECT 1 FROM graph.epic_membership es WHERE es.node_id = n.id AND es.node_id = `+epicSelfIDSQL("es")+`
+             AND es.first_at < $%[2]d AND es.last_at >= $%[1]d)
+)`, start, end)
+}
 
 // windowEligibleSQL includes direct time eligibility and, for non-Slack nodes,
 // inheritance from an active epic self row. Slack uses only its own time.
 // Keep the active epic set uncorrelated.
-var windowEligibleSQL = `(
-  ` + directWindowSQL + `
+var windowEligibleSQL = windowEligibleSQLAt(2, 3)
+
+func windowEligibleSQLAt(start, end int) string {
+	return `(
+  ` + directWindowSQLAt(start, end) + fmt.Sprintf(`
   OR (n.type <> 'slack' AND EXISTS (
     SELECT 1 FROM graph.epic_membership em
     WHERE em.node_id = n.id
       AND em.epic_key = ANY(ARRAY(
         SELECT ep.epic_key FROM graph.epic_membership ep
-        WHERE ep.node_id = ` + epicSelfIDSQL("ep") + `
-          AND ep.epic_key <> '` + businessRootID + `'
-          AND ep.first_at < $3 AND ep.last_at >= $2))))
-)`
+        WHERE ep.node_id = `+epicSelfIDSQL("ep")+`
+          AND ep.epic_key <> '`+businessRootID+`'
+          AND ep.first_at < $%[2]d AND ep.last_at >= $%[1]d))))
+)`, start, end)
+}
 
 // nodesEligibleInWindow checks the same eligibility as temporal retrieval,
 // against the canonical ids that hydration used.
