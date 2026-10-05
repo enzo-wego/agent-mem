@@ -45,7 +45,7 @@ func loadFixtureTabbyIncident(t *testing.T, pool *pgxpool.Pool) {
 		},
 		{
 			"cf:3861872666",
-			"cf_page",
+			"cf",
 			"Postmortem: Tabby TRY currency incident May 2026",
 			"Timeline and root cause analysis for the Tabby TRY installments_count incident. PAY-2128 was the tracking ticket.",
 		},

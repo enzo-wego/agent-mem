@@ -53,8 +53,8 @@ func reindexCLITestDB(t *testing.T) *pgxpool.Pool {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.ConnConfig.Database != "agentmem_test" || cfg.ConnConfig.Host != "127.0.0.1" || cfg.ConnConfig.Port != 5446 {
-		t.Fatal("reindex CLI tests require isolated 127.0.0.1:5446/agentmem_test")
+	if cfg.ConnConfig.Database != "agentmem_test" {
+		t.Fatal("refusing to run: reindex CLI tests require database agentmem_test; tests may delete graph rows")
 	}
 	pool, err := pgxpool.NewWithConfig(context.Background(), cfg)
 	if err != nil {

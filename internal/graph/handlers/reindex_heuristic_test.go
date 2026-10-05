@@ -83,7 +83,7 @@ func reindexSeed(t *testing.T, pool *pgxpool.Pool, id, typ, kind, title, body st
 func TestReindexHeuristicCLI_PopulationResumeAndNoChat(t *testing.T) {
 	deps, opts, c := reindexFixture(t, 1)
 	reindexSeed(t, deps.DB, "gh_pr:wego/payments#2", "gh_pr", "heuristic", "Fix duplicate refunds", "Background\nReturn HTTP 409 for duplicate refunds to protect the payment ledger")
-	reindexSeed(t, deps.DB, "cf_page:3", "cf_page", "heuristic", "Payment runbook", "Overview\nEscalate refunds")
+	reindexSeed(t, deps.DB, "cf:3", "cf", "heuristic", "Payment runbook", "Overview\nEscalate refunds")
 	reindexSeed(t, deps.DB, "jira:PAY-004", "jira", "", "Title only", "")
 	reindexSeed(t, deps.DB, "jira:PAY-005", "jira", "", "Effective body empty", "ignored node body")
 	if _, err := deps.DB.Exec(context.Background(), `INSERT INTO graph.artifact_bodies (node_id,body_full,machine_id) VALUES ('jira:PAY-005','','test')`); err != nil {
@@ -156,6 +156,58 @@ func TestReindexHeuristicCLI_PopulationResumeAndNoChat(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "last_id=") || !strings.Contains(out.String(), opts.Since.UTC().Format(time.RFC3339Nano)) {
 		t.Fatalf("output: %s", &out)
+	}
+}
+
+func TestReindexHeuristicCLI_EmptyDoesNotConsumeMaxRows(t *testing.T) {
+	deps, opts, _ := reindexFixture(t, 1)
+	reindexSeed(t, deps.DB, "cf:0", "cf", "heuristic", "", "")
+	opts.MaxRows = 1
+	var out bytes.Buffer
+	opts.Output = &out
+	result, err := RunReindexHeuristic(context.Background(), deps, opts)
+	if err != nil || result.Done != 1 || result.LastID != "jira:PAY-001" || !strings.Contains(out.String(), "skipped (empty)") {
+		t.Fatalf("empty/max rows = %+v, %v, output=%s", result, err, &out)
+	}
+}
+
+func TestReindexHeuristicCLI_EmbedDeadlinesContinue(t *testing.T) {
+	deps, opts, c := reindexFixture(t, 2)
+	c.embed = func(ctx context.Context, text string) error {
+		deadline, ok := ctx.Deadline()
+		if !ok || time.Until(deadline) > 60*time.Second {
+			t.Errorf("embedding has no bounded 60s deadline")
+		}
+		if text != "preflight" {
+			return context.DeadlineExceeded
+		}
+		return nil
+	}
+	result, err := RunReindexHeuristic(context.Background(), deps, opts)
+	if err != nil || result.Skipped != 2 || result.Done != 0 {
+		t.Fatalf("embed timeouts = %+v, %v", result, err)
+	}
+}
+
+func TestIndexArtifact_BodyAfterTitle(t *testing.T) {
+	deps, _, c := reindexFixture(t, 0)
+	ctx := context.Background()
+	reindexSeed(t, deps.DB, "jira:PAY-999", "jira", "", "Refund repair", "")
+	if err := indexArtifactNode(ctx, deps, "jira:PAY-999", false, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := deps.DB.Exec(ctx, `INSERT INTO graph.artifact_bodies (node_id,body_full,fetched_at,machine_id) VALUES ('jira:PAY-999','Return HTTP 409',clock_timestamp(),'test')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := indexArtifactNode(ctx, deps, "jira:PAY-999", false, true); err != nil {
+		t.Fatal(err)
+	}
+	var summary string
+	if err := deps.DB.QueryRow(ctx, `SELECT summary FROM graph.artifact_index WHERE node_id='jira:PAY-999'`).Scan(&summary); err != nil {
+		t.Fatal(err)
+	}
+	if summary != "Refund repair\nReturn HTTP 409" || len(c.inputs) != 2 {
+		t.Fatalf("body arrival: summary=%q inputs=%v", summary, c.inputs)
 	}
 }
 

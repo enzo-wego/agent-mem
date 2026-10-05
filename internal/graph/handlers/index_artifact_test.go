@@ -258,7 +258,7 @@ func TestHeuristicSummary(t *testing.T) {
 		{"empty", "jira:PAY-1", " ", " \n\t", ""},
 		{"title only", "jira:PAY-1", "Refunds", "", "Refunds"},
 		{"PR kept lines", "gh_pr:wego/payments#42", "Refunds", "## What\nFix refunds\n\nBackground:\nReturn HTTP 409\n- retry\nfourth", "Refunds\nFix refunds Return HTTP 409 - retry"},
-		{"Confluence", "confluence:1", "Runbook", "Overview\nCheck payments\nNotes\nEscalate", "Runbook\nCheck payments Escalate"},
+		{"Confluence", "cf:1", "Runbook", "Overview\nCheck payments\nNotes\nEscalate", "Runbook\nCheck payments Escalate"},
 		{"default", "datadog:1", "Alert", "Background\nFix payments", "Alert\nFix payments"},
 		{"Slack", "slack:C1:1.2", "Ignored", "Background\n\nKeep old behavior", "Background"},
 		{"Slack thread", "slack_thread:C1:1.2", "Ignored", "## What\nAdjacent\n\nLater", "## What\nAdjacent"},
@@ -270,7 +270,7 @@ func TestHeuristicSummary(t *testing.T) {
 			}
 		})
 	}
-	for _, nodeID := range []string{"jira:PAY-1", "gh_pr:wego/x#1", "confluence:1", "slack:C1:1.2", "slack_thread:C1:1.2"} {
+	for _, nodeID := range []string{"jira:PAY-1", "gh_pr:wego/x#1", "cf:1", "slack:C1:1.2", "slack_thread:C1:1.2"} {
 		wantRunes := 400
 		if strings.HasPrefix(nodeID, "slack") {
 			wantRunes = 200

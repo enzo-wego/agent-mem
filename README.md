@@ -419,8 +419,14 @@ Canary checks: summaries are substantive or valid title-only fallbacks, own keys
 are in identifiers, and embeddings exist except for legitimately deduplicated
 representatives. CLI-enqueued `link_topics` work must make zero judging calls.
 
+Re-indexing changes epic-brief member signatures. With
+`graph.epic_briefs.enabled`, each on-board epic may generate one delta brief per
+`min_interval` during the run; the CLI itself still makes no judging calls.
+
 Flags: `--since` is required; `--interval-ms` defaults to 300 and accepts 50–5000;
 `--max-rows` defaults to 0 (all attempted rows, including skipped embeddings).
+Empty title/body rows are reported as `skipped (empty)` and do not consume the
+non-dry-run limit or count as done.
 `--dry-run` counts eligible rows and lists the first 20 IDs without changing
 rows; `--max-rows` also bounds a dry run's count when supplied. Progress prints
 every 50 attempts, followed by a final summary, last attempted ID and skipped
@@ -432,6 +438,8 @@ index row or `refreshed_at < since`; rows refreshed at or after the cutoff by
 by this command. Skipped embedding failures stay eligible. More than 20
 consecutive embedding failures, or any other indexing/commit error, stops the
 run non-zero; post-commit link enqueue failures only log as in ordinary indexing.
+Each embedding request, including preflight, has its own 60-second timeout;
+node embedding timeouts count as skipped failures, not cancellation of the run.
 SIGINT and SIGTERM cancel the current work and the inter-node sleep.
 
 Only one CLI run owns the session advisory lock. It retains the same physical

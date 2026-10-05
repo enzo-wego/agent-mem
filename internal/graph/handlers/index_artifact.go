@@ -55,24 +55,27 @@ func (e *artifactEmbedError) Unwrap() error        { return e.err }
 func (e *artifactEmbedError) Is(target error) bool { return target == jobs.ErrTransient }
 
 func indexArtifactNode(ctx context.Context, deps Deps, nodeID string, force, skipJudging bool) error {
-	// Step 1: skip if refreshed_at is < 24h old and, for Slack thread
-	// roots, not older than the cached thread summary it should embed.
+	// Step 1: recent indexes remain fresh only while their cached body and
+	// Slack thread summary are no newer than the index.
 	if !force {
 		var refreshedAt *time.Time
 		var summaryUpdatedAt *time.Time
+		var bodyFetchedAt *time.Time
 		err := deps.DB.QueryRow(ctx,
-			`SELECT ai.refreshed_at, ts.updated_at
+			`SELECT ai.refreshed_at, ts.updated_at, ab.fetched_at
 FROM graph.artifact_index ai
 JOIN graph.nodes n ON n.id = ai.node_id
+LEFT JOIN graph.artifact_bodies ab ON ab.node_id = ai.node_id
 LEFT JOIN graph.thread_summaries ts
   ON n.type IN ('slack','slack_thread')
   AND ts.channel_id = REPLACE(n.scope,'slack:','')
   AND ts.thread_ts = COALESCE(NULLIF(n.metadata->>'thread_ts',''), split_part(n.id,':',3))
   AND COALESCE(NULLIF(n.metadata->>'thread_ts',''), split_part(n.id,':',3)) = split_part(n.id,':',3)
 WHERE ai.node_id = $1`, nodeID,
-		).Scan(&refreshedAt, &summaryUpdatedAt)
+		).Scan(&refreshedAt, &summaryUpdatedAt, &bodyFetchedAt)
 		if err == nil && refreshedAt != nil && time.Since(*refreshedAt) < 24*time.Hour &&
-			(summaryUpdatedAt == nil || !summaryUpdatedAt.After(*refreshedAt)) {
+			(summaryUpdatedAt == nil || !summaryUpdatedAt.After(*refreshedAt)) &&
+			(bodyFetchedAt == nil || !bodyFetchedAt.After(*refreshedAt)) {
 			return nil // fresh enough
 		}
 	}

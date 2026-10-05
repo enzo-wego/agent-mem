@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"time"
+
+	"github.com/agent-mem/agent-mem/internal/gemini"
 )
 
 // ReindexHeuristicOptions keeps one fixed cutoff across dry runs, canaries and resumes.
@@ -18,10 +20,11 @@ type ReindexHeuristicOptions struct {
 }
 
 // ReindexHeuristicResult includes attempted progress even when the run stops.
-// Done counts successful indexing calls; Skipped counts embedding failures.
+// Done counts indexed rows; Skipped counts embedding failures, Empty counts no-ops.
 type ReindexHeuristicResult struct {
 	Done       int
 	Skipped    int
+	Empty      int
 	Eligible   int
 	LastID     string
 	SkippedIDs []string
@@ -48,12 +51,23 @@ FROM graph.nodes n
 LEFT JOIN graph.artifact_index ai ON ai.node_id=n.id
 LEFT JOIN graph.artifact_bodies ab ON ab.node_id=n.id
 WHERE n.deleted_at IS NULL
-  AND n.type IN ('jira','gh_pr','cf_page')
+  AND n.type IN ('jira','gh_pr','cf')
   AND (ai.node_id IS NULL OR ai.refreshed_at < $1)
   AND (ai.summary_kind='heuristic'
        OR (ai.node_id IS NULL AND COALESCE(n.title,'') ~ '[^[:space:]]'
            AND COALESCE(ab.body_full,n.body,'')=''))
   AND n.id > $2`
+
+// reindexEmbedder bounds each gateway request, not the indexing transaction.
+type reindexEmbedder struct {
+	GeminiClient
+}
+
+func (c reindexEmbedder) EmbedWithOptions(ctx context.Context, text string, opts gemini.EmbedOptions) ([]float32, error) {
+	embedCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+	return c.GeminiClient.EmbedWithOptions(embedCtx, text, opts)
+}
 
 // RunReindexHeuristic repairs resources directly, without queue continuations or
 // the dispatcher's semaphore. Each shared index call owns its own transaction.
@@ -70,7 +84,7 @@ func RunReindexHeuristic(ctx context.Context, deps Deps, opts ReindexHeuristicOp
 		for _, id := range result.SkippedIDs {
 			fmt.Fprintf(out, "skipped_id=%s\n", id)
 		}
-		fmt.Fprintf(out, "final done=%d skipped=%d eligible=%d elapsed=%s last_id=%s\n", result.Done, result.Skipped, result.Eligible, result.Elapsed.Round(time.Millisecond), result.LastID)
+		fmt.Fprintf(out, "final done=%d skipped=%d empty=%d eligible=%d elapsed=%s last_id=%s\n", result.Done, result.Skipped, result.Empty, result.Eligible, result.Elapsed.Round(time.Millisecond), result.LastID)
 	}()
 	if err := opts.Validate(); err != nil {
 		return result, err
@@ -136,6 +150,7 @@ func RunReindexHeuristic(ctx context.Context, deps Deps, opts ReindexHeuristicOp
 		return result, errors.New("--since is later than the database clock")
 	}
 	if !opts.DryRun {
+		deps.Gemini = reindexEmbedder{GeminiClient: deps.Gemini}
 		vector, err := deps.Gemini.EmbedWithOptions(ctx, "preflight", graphEmbeddingOptions())
 		if ctx.Err() != nil {
 			return result, ctx.Err()
@@ -160,7 +175,7 @@ func RunReindexHeuristic(ctx context.Context, deps Deps, opts ReindexHeuristicOp
 			}
 			return result, fmt.Errorf("lock session lost: %w", err)
 		}
-		rows, err := conn.Query(ctx, `SELECT n.id `+reindexHeuristicPopulation+` ORDER BY n.id LIMIT 1`, opts.Since, cursor)
+		rows, err := conn.Query(ctx, `SELECT n.id, COALESCE(n.title,'') !~ '[^[:space:]]' AND COALESCE(ab.body_full,n.body,'') !~ '[^[:space:]]' `+reindexHeuristicPopulation+` ORDER BY n.id LIMIT 1`, opts.Since, cursor)
 		if err != nil {
 			return result, fmt.Errorf("select reindex population: %w", err)
 		}
@@ -173,7 +188,8 @@ func RunReindexHeuristic(ctx context.Context, deps Deps, opts ReindexHeuristicOp
 			return result, nil
 		}
 		var id string
-		err = rows.Scan(&id)
+		var empty bool
+		err = rows.Scan(&id, &empty)
 		rows.Close()
 		if err == nil {
 			err = rows.Err()
@@ -191,6 +207,11 @@ func RunReindexHeuristic(ctx context.Context, deps Deps, opts ReindexHeuristicOp
 			if opts.MaxRows > 0 && result.Eligible >= opts.MaxRows {
 				return result, nil
 			}
+			continue
+		}
+		if empty {
+			result.Empty++
+			fmt.Fprintf(out, "skipped (empty) node_id=%s\n", id)
 			continue
 		}
 		if result.Done+result.Skipped > 0 {
@@ -217,9 +238,6 @@ func RunReindexHeuristic(ctx context.Context, deps Deps, opts ReindexHeuristicOp
 		err = indexArtifactNode(ctx, deps, id, true, true)
 		if ctx.Err() != nil {
 			return result, ctx.Err()
-		}
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			return result, err
 		}
 		if err != nil {
 			var embedErr *artifactEmbedError
