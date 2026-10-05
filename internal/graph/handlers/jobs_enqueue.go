@@ -21,6 +21,7 @@ var enqueuableTypes = map[string]bool{
 	"refresh_jira_board":       true,
 	"refresh_jira_updates":     true,
 	"refresh_slack_channels":   true,
+	"refresh_slack_members":    true, // payload: {"force":true} for immediate/manual queue retries
 	"refresh_slack_users":      true,
 	"refresh_slack_bots":       true,
 	"refresh_slack_groups":     true,

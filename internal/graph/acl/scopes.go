@@ -57,18 +57,19 @@ func (b *Builder) For(ctx context.Context, askerEEID int) ([]string, error) {
 // per-source membership table populated by the refresh jobs (one row per
 // (eeid, scope), e.g. 'slack:C123', 'jira:PROJ', 'github:org/repo').
 //
-// NOTE: there is no separate Slack path. graph.slack_groups stores Slack
-// *usergroups* (@team-x handles), not channel membership, so it cannot answer
-// "is this asker in channel C?"; the previous Slack query joined slack_groups to
-// itself and effectively granted every slack:* scope to anyone in any usergroup
-// — a cross-channel leak. Until a channel-membership source exists (a
-// conversations.members refresh job writing slack:CHANNEL rows into
-// member_scopes — see issue agent-mem-7h1), Slack ACL fails closed: a real asker
-// gets no slack:* scope and so sees only public/unscoped Slack content. The
-// trusted unfiltered view (eeid 0) is unaffected.
+// Slack channel scopes (C/G) require membership evidence refreshed within
+// 24 hours, independently of whether the refresh job's housekeeping runs.
+// DM and non-Slack scopes are not age-limited. Each reader caches this snapshot
+// for its TTL (five minutes in production), so grants and revocations can take
+// that long to become visible, including expiry of an aged channel grant.
+// graph.slack_groups stores usergroups, not channel membership, and is never
+// used to grant channel access.
 func (b *Builder) build(ctx context.Context, eeid int) ([]string, error) {
 	rows, err := b.db.Query(ctx, `
-SELECT DISTINCT scope FROM graph.member_scopes WHERE eeid = $1
+SELECT DISTINCT scope FROM graph.member_scopes
+WHERE eeid = $1
+  AND NOT ((scope LIKE 'slack:C%' OR scope LIKE 'slack:G%')
+           AND refreshed_at < now() - interval '24 hours')
 `, eeid)
 	if err != nil {
 		return nil, fmt.Errorf("acl member_scopes: %w", err)

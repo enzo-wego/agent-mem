@@ -456,6 +456,45 @@ The command enqueues an `import_bamboohr` job. The worker processes the CSV to u
 
 Graph tables (`graph.people`, `graph.nodes`, `graph.edges`, `graph.artifact_bodies`, etc.) are included in the standard push/pull sync rotation. Batch sizes: `artifact_bodies` and `artifact_index` use 50 rows per batch; all others use 100. Embeddings are excluded from sync transport — the receiving machine re-generates them via the `index_artifact` job.
 
+### Slack channel access
+
+`refresh_slack_members` fetches complete `conversations.members` snapshots for
+live `slack:C…`/`slack:G…` scopes, including archived channels. Exact active
+`graph.people.slack_user_id` matches with an EEID become `graph.member_scopes`
+grants. Unmapped, external and merged identities are skipped; no identity is
+inferred from a name or email.
+
+Channel grants expire at read time after **24 hours**, even if the worker is
+stopped or refresh fails. Readers cache scopes for up to **5 minutes**, so the
+expiry bound is 24 hours plus that cache grace. Migration expires unverified
+existing channel grants until refreshed. DM and non-Slack grants are unchanged.
+Snapshots publish atomically per channel, not per pass. Incomplete pagination
+keeps existing grants; `not_in_channel`/`channel_not_found` revoke that channel
+fail-closed and log an `inaccessible` coverage gap, not evidence that people left.
+Token failures remain visible as failed jobs.
+
+An authorized admin can enqueue an immediate refresh via
+`POST /api/graph/jobs/enqueue` with
+`{"type":"refresh_slack_members","payload":{"force":true}}`.
+Force runs retry transient failures through normal queue backoff. An advisory
+lock serializes passes across processes; duplicate non-force runs recheck the
+persisted last-attempt time under that lock.
+
+The worker checks once a minute and schedules a refresh every **60 minutes**
+by default, measured from `graph.slack_members.last_attempt_at`, not successful
+job completion. **Settings → Slack Membership Freshness** or
+`GET`/`PUT /api/graph/slack-members` configures `{"interval_minutes":60}`.
+The persisted key is `graph.slack_members.interval_minutes`; server-side
+validation accepts only integers from **15–480**, leaving room for two missed passes within the 24-hour grant lifetime. A scheduled transient abort
+logs its partial-pass counts and ends `done`; recovery waits for the next due
+tick. Fatal credentials remain `failed` without per-minute retry churn. Both
+scheduled and forced runs retry an individual transient API request once,
+respecting `Retry-After` up to 60 seconds before aborting the pass.
+
+Rollback removes all Slack channel (`slack:C%` / `slack:G%`) grants before dropping
+freshness metadata; otherwise the old binary would treat refreshed grants as permanent.
+DM and non-Slack grants remain intact.
+
 ### Read endpoints
 
 Query the graph that ingest + processing built. All require the Bearer API key;
