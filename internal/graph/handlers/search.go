@@ -217,13 +217,17 @@ func (s *Search) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			record(arm, hits, err)
 		}()
 	}
+	armFilter := filter
+	if hasWindow && explicitWindow(qv) {
+		armFilter.win = &win
+	}
 	if runSemantic {
 		run(armSemantic, func() ([]armHit, error) {
 			arm := semanticArm
 			if hybrid {
 				arm = semanticArmFolded
 			}
-			hits, err := arm(ctx, s.db, vec, filter, budget)
+			hits, err := arm(ctx, s.db, vec, armFilter, budget)
 			if err != nil {
 				if runGraph {
 					record(armGraph, nil, fmt.Errorf("semantic seeds unavailable: %w", err))
@@ -240,9 +244,9 @@ func (s *Search) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if runKeyword {
 		run(armKeyword, func() ([]armHit, error) {
 			if hybrid {
-				return keywordArmFolded(ctx, s.db, rest, filter, budget)
+				return keywordArmFolded(ctx, s.db, rest, armFilter, budget)
 			}
-			return keywordArm(ctx, s.db, rest, filter, budget)
+			return keywordArm(ctx, s.db, rest, armFilter, budget)
 		})
 	}
 	if runTemporal {
