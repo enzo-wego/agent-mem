@@ -158,6 +158,11 @@ LIMIT $3`
 	return out, rows.Err()
 }
 
+// ThreadSiblings returns the other messages in nodeID's Slack thread.
+func (e *Expander) ThreadSiblings(ctx context.Context, nodeID string) ([]string, error) {
+	return e.threadSiblings(ctx, nodeID)
+}
+
 // threadSiblings returns the other Slack messages in the same thread as nodeID
 // (same channel and thread_ts; the root's thread key is its own ts).
 func (e *Expander) threadSiblings(ctx context.Context, nodeID string) ([]string, error) {
