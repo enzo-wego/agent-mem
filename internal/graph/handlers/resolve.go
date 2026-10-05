@@ -209,7 +209,7 @@ func (h *Resolve) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			nbrs[id] = ns
-			if strings.HasPrefix(id, "slack:") {
+			if c+1 < req.Depth && strings.HasPrefix(id, "slack:") {
 				siblings, err := h.exp.ThreadSiblings(ctx, id)
 				if err != nil {
 					continue
@@ -227,9 +227,11 @@ func (h *Resolve) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		level = level[:0]
 		for _, id := range next {
 			decided[id] = true
-			eligible := expandableThrough(ctx, h.db, id)
 			// ponytail: expand at most 200 non-seed nodes per corridor level.
-			if eligible && len(level) < 200 {
+			if len(level) >= 200 {
+				continue
+			}
+			if expandableThrough(ctx, h.db, id) {
 				level = append(level, id)
 			}
 		}
