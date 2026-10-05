@@ -355,6 +355,19 @@ func TestSearch_JiraOwnKey(t *testing.T) {
 						params.Set("arms", "keyword,semantic")
 					}
 					rows := ownKeyRequest(t, s, q, mode, ownKeyAsker, params)
+					if strings.HasPrefix(q, "PAY-2333") {
+						if len(rows) == 0 || rows[0].NodeID != "jira:PAY-2333" {
+							t.Fatalf("sentence %q did not pin owner: %v", q, ownKeyIDs(rows))
+						}
+						rows = rows[1:]
+						unpinned := baseline[:0]
+						for _, row := range baseline {
+							if row.NodeID != "jira:PAY-2333" {
+								unpinned = append(unpinned, row)
+							}
+						}
+						baseline = unpinned
+					}
 					if len(rows) != len(baseline) {
 						t.Fatalf("nonexact query %q changed result count: got %+v, before %+v", q, rows, baseline)
 					}
@@ -365,6 +378,112 @@ func TestSearch_JiraOwnKey(t *testing.T) {
 					}
 				}
 			})
+		})
+	}
+}
+
+func TestSearch_KeyInSentence(t *testing.T) {
+	pool := openTestDB(t)
+	ownKeyBoostSettings(t, pool)
+	for _, mode := range []string{"default", "hybrid"} {
+		t.Run(mode, func(t *testing.T) {
+			for _, tc := range []struct {
+				name, query string
+				pins        []string
+				hidden      string
+				params      url.Values
+			}{
+				{"question", "Which PRs closed PAY-2333 and what did the review discuss?", []string{"jira:PAY-2333"}, "", nil},
+				{"mixed_order", "see https://github.com/wego/payments/pull/2280 then PAY-2333 and wego/payments#2281", []string{"gh_pr:wego/payments#2280", "jira:PAY-2333", "gh_pr:wego/payments#2281"}, "", nil},
+				{"dedupe_cap", "PAY-1 PAY-1 wego/payments#2280 github.com/wego/payments/pull/2280 PAY-2 PAY-3", []string{"jira:PAY-1", "gh_pr:wego/payments#2280", "jira:PAY-2"}, "", nil},
+				{"missing_cap", "PAY-999 PAY-1 PAY-2 PAY-3", []string{"jira:PAY-1", "jira:PAY-2"}, "", nil},
+				{"acl_continue", "PAY-2333 then PAY-1 and PAY-2", []string{"jira:PAY-1", "jira:PAY-2"}, "jira:PAY-2333", nil},
+				{"types_continue", "PAY-2333 then wego/payments#2280 and wego/payments#2281", []string{"gh_pr:wego/payments#2280", "gh_pr:wego/payments#2281"}, "", url.Values{"types": {"gh_pr"}}},
+				{"lowercase", "discuss pay-2333 refund", nil, "", nil},
+				{"utf8", "discuss utf-8 refund", nil, "", nil},
+				{"uppercase_pr_prefix", "discuss WEGO/payments#2280 refund", nil, "", nil},
+				{"limit", "PAY-2333 then PAY-1", []string{"jira:PAY-2333"}, "", url.Values{"limit": {"1"}}},
+				{"limit_skip", "PAY-999 then PAY-1", []string{"jira:PAY-1"}, "", url.Values{"limit": {"1"}}},
+				{"present", "discuss SEARCH-91 and PAY-2333 refund", []string{"jira:SEARCH-91", "jira:PAY-2333"}, "", nil},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					s := ownKeyFixture(t, pool, "jira:PAY-2333", "PAY-2333", false)
+					for _, id := range []string{"jira:PAY-1", "jira:PAY-2", "jira:PAY-3", "gh_pr:wego/payments#2280", "gh_pr:wego/payments#2281"} {
+						typ := "jira"
+						if strings.HasPrefix(id, "gh_pr:") {
+							typ = "gh_pr"
+						}
+						aclExec(t, pool, `INSERT INTO graph.nodes
+							(id, type, natural_key, title, body, scope, metadata, created_at, updated_at, machine_id)
+							VALUES ($1, $2, $1, 'Refund reference', 'refund', 'public', '{}', $3, $3, 'test')`, id, typ, s.now())
+					}
+					// The fourth reference is retrieved normally, below the competitor,
+					// so the cap must preserve its place in the unpinned sequence.
+					aclExec(t, pool, `INSERT INTO graph.artifact_index (node_id, summary, summary_kind, machine_id)
+						VALUES ('jira:PAY-3', 'PAY-3 refund', 'heuristic', 'test')`)
+					vec := make([]float32, GraphEmbeddingDims)
+					vec[0], vec[1] = 1, 0.2
+					aclExec(t, pool, `UPDATE graph.artifact_index SET embedding = $1 WHERE node_id IN ('jira:PAY-3', 'jira:SEARCH-91')`, pgvector.NewVector(vec))
+					if err := backfillIdentifiersHandler(Deps{DB: pool, Logger: zerolog.Nop()})(context.Background(), []byte(`{}`)); err != nil {
+						t.Fatal(err)
+					}
+					if tc.hidden != "" {
+						aclExec(t, pool, `UPDATE graph.nodes SET scope = 'slack:OWNKEYPRIVATE' WHERE id = $1`, tc.hidden)
+					}
+					baseline := ownKeyUnpinned(t, s, tc.query, mode)
+					if tc.name == "dedupe_cap" || tc.name == "missing_cap" || tc.name == "present" {
+						target := "jira:PAY-3"
+						if tc.name == "present" {
+							target = "jira:SEARCH-91"
+						}
+						at := -1
+						for i, row := range baseline {
+							if row.NodeID == target {
+								at = i
+							}
+						}
+						if at < 1 {
+							t.Fatalf("fixture must retrieve %s below a competitor: %+v", target, baseline)
+						}
+					}
+					params := url.Values{}
+					if mode == "default" {
+						params.Set("arms", "keyword,semantic")
+					}
+					for k, v := range tc.params {
+						params[k] = v
+					}
+					rows := ownKeyRequest(t, s, tc.query, mode, ownKeyAsker, params)
+					want := append([]string{}, tc.pins...)
+					for _, old := range baseline {
+						if tc.params.Get("types") != "" && old.Type != tc.params.Get("types") {
+							continue
+						}
+						pinned := false
+						for _, id := range tc.pins {
+							pinned = pinned || old.NodeID == id
+						}
+						if !pinned && tc.params.Get("limit") == "" {
+							want = append(want, old.NodeID)
+						}
+					}
+					if got := ownKeyIDs(rows); !reflect.DeepEqual(got, want) {
+						t.Fatalf("sentence %q ids %v, want %v", tc.query, got, want)
+					}
+					for _, row := range rows {
+						for _, old := range baseline {
+							if row.NodeID == old.NodeID && !ownKeySameResult(row.searchResult, old) {
+								t.Fatalf("pin changed score, breakdown or metadata: got %+v, before %+v", row.searchResult, old)
+							}
+						}
+						if row.NodeID == "jira:PAY-2333" {
+							if row.Title != "Owner refund behavior" || row.URL != "https://example.com/owner" || row.Type != "jira" || row.ID != row.NodeID || row.CreatedAt.IsZero() || row.Score != 0 || row.ScoreBreakdown.RRF != 0 || len(row.ScoreBreakdown.Ranks) != 0 || len(row.Match) != 0 {
+								t.Fatalf("missing-index metadata or provenance incorrect: %+v", row)
+							}
+						}
+					}
+				})
+			}
 		})
 	}
 }
