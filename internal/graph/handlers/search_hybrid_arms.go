@@ -3,6 +3,8 @@ package handlers
 import (
 	"context"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -79,20 +81,18 @@ func keywordArmFolded(ctx context.Context, db *pgxpool.Pool, q string, f searchF
 // first (best) row per thread key in Go, then truncates to the budget.
 // ponytail: 3x over-fetch; a thread with more matching replies than that can still crowd others out, page further if eval shows it
 func semanticArmFolded(ctx context.Context, db *pgxpool.Pool, vec []float32, f searchFilter, budget int) ([]armHit, error) {
-	rows, err := semanticRows(ctx, db, vec, f, budget*3, ", "+threadKeySQL)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
 	var out []armHit
-	for rows.Next() {
-		var h armHit
-		if err := rows.Scan(&h.ID, &h.Score, &h.At, &h.Key); err != nil {
-			return nil, err
+	var err error
+	if f.win != nil {
+		out, err = windowedSemanticHits(ctx, db, vec, f, budget*3, ", "+threadKeySQL, scanFoldedSemanticHits)
+	} else {
+		var rows pgx.Rows
+		rows, err = semanticRows(ctx, db, vec, f, budget*3, ", "+threadKeySQL)
+		if err == nil {
+			out, err = scanFoldedSemanticHits(rows)
 		}
-		out = append(out, h)
 	}
-	if err := rows.Err(); err != nil {
+	if err != nil {
 		return nil, err
 	}
 	out = aboveSemanticFloor(out)
@@ -112,6 +112,19 @@ func semanticArmFolded(ctx context.Context, db *pgxpool.Pool, vec []float32, f s
 		out = out[:budget]
 	}
 	return out, nil
+}
+
+func scanFoldedSemanticHits(rows pgx.Rows) ([]armHit, error) {
+	defer rows.Close()
+	var out []armHit
+	for rows.Next() {
+		var h armHit
+		if err := rows.Scan(&h.ID, &h.Score, &h.At, &h.Key); err != nil {
+			return nil, err
+		}
+		out = append(out, h)
+	}
+	return out, rows.Err()
 }
 
 // canonicalizeThreads rewrites each folded hit's ID to its canonical result
