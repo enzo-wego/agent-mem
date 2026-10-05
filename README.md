@@ -480,6 +480,17 @@ Force runs retry transient failures through normal queue backoff. An advisory
 lock serializes passes across processes; duplicate non-force runs recheck the
 persisted last-attempt time under that lock.
 
+The worker checks once a minute and schedules a refresh every **60 minutes**
+by default, measured from `graph.slack_members.last_attempt_at`, not successful
+job completion. **Settings → Slack Membership Freshness** or
+`GET`/`PUT /api/graph/slack-members` configures `{"interval_minutes":60}`.
+The persisted key is `graph.slack_members.interval_minutes`; server-side
+validation accepts only integers from **15–720**. A scheduled transient abort
+logs its partial-pass counts and ends `done`; recovery waits for the next due
+tick. Fatal credentials remain `failed` without per-minute retry churn. Both
+scheduled and forced runs retry an individual transient API request once,
+respecting `Retry-After` up to 60 seconds before aborting the pass.
+
 ### Read endpoints
 
 Query the graph that ingest + processing built. All require the Bearer API key;

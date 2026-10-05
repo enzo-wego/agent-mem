@@ -19,6 +19,9 @@ import {
   type EpicBriefsConfig,
   fetchJiraUpdates,
   saveJiraUpdates,
+  fetchSlackMembersConfig,
+  saveSlackMembersConfig,
+  type SlackMembersConfig,
   fetchGatewayHealth,
   fetchGatewayConfig,
   updateGatewayConfig,
@@ -161,6 +164,7 @@ export function SettingsPage() {
       <TimeZoneSection />
       <EpicBriefsSection />
       <JiraUpdatesSection />
+      <SlackMembersSection />
 
       {/* Context */}
       <Section title="Context Window">
@@ -886,6 +890,74 @@ function JiraUpdatesSection() {
 
           <button disabled={saving || intervalInvalid} onClick={save} className={btnPrimary}>
             {saving ? 'Saving…' : 'Save Jira freshness'}
+          </button>
+        </>
+      )}
+    </Section>
+  )
+}
+
+// --- Slack channel membership freshness ---
+
+function SlackMembersSection() {
+  const [config, setConfig] = useState<SlackMembersConfig | null>(null)
+  const [saving, setSaving] = useState(false)
+  const [toast, setToast] = useState<{ type: 'ok' | 'err'; msg: string } | null>(null)
+
+  useEffect(() => {
+    fetchSlackMembersConfig()
+      .then(setConfig)
+      .catch(() => setToast({ type: 'err', msg: 'Failed to load Slack membership settings' }))
+  }, [])
+
+  const save = async () => {
+    if (!config) return
+    setSaving(true)
+    setToast(null)
+    try {
+      setConfig(await saveSlackMembersConfig(config))
+      setToast({ type: 'ok', msg: 'Saved — cadence applies on the next minute tick' })
+    } catch (e: unknown) {
+      setToast({ type: 'err', msg: e instanceof Error ? e.message : 'Save failed' })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const intervalInvalid =
+    config !== null && (!Number.isInteger(config.interval_minutes) || config.interval_minutes < 15 || config.interval_minutes > 720)
+
+  return (
+    <Section title="Slack Membership Freshness">
+      {toast && (
+        <div className={`text-sm px-3 py-1.5 rounded-md ${toast.type === 'ok' ? 'bg-green-50 text-green-700 dark:bg-green-900/30 dark:text-green-300' : 'bg-red-50 text-red-700 dark:bg-red-900/30 dark:text-red-300'}`}>
+          {toast.msg}
+        </div>
+      )}
+      {!config ? (
+        <p className="text-sm text-gray-500">Loading…</p>
+      ) : (
+        <>
+          <Field label="Interval (minutes)" hint="Refresh Slack channel access every 15–720 minutes (default 60), measured from the last refresh attempt, not the last success. The worker checks once a minute; scheduled failures wait until the next due attempt. Saving does not immediately run a refresh.">
+            <input
+              type="number"
+              min="15"
+              max="720"
+              step="1"
+              value={config.interval_minutes}
+              disabled={saving}
+              onChange={(e) => setConfig({ interval_minutes: Number(e.target.value) })}
+              className={inputCls}
+            />
+          </Field>
+          <p className="text-sm text-gray-500 dark:text-gray-400">
+            Channel grants expire after 24 hours without a successful membership refresh, even when the worker is paused. Readers cache access for up to 5 minutes, so grants, revocations, and expiry can take that long to reach every reader. Channels update individually, not as one atomic snapshot. Coverage is limited to channels the Slack bot can access.
+          </p>
+          {intervalInvalid && (
+            <p className="text-sm text-red-600 dark:text-red-400">Interval must be a whole number from 15 to 720.</p>
+          )}
+          <button disabled={saving || intervalInvalid} onClick={save} className={btnPrimary}>
+            {saving ? 'Saving…' : 'Save Slack membership freshness'}
           </button>
         </>
       )}

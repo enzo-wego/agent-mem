@@ -1093,6 +1093,32 @@ export async function saveJiraUpdates(cfg: JiraUpdatesConfig): Promise<JiraUpdat
   return res.json();
 }
 
+export interface SlackMembersConfig {
+  interval_minutes: number;
+}
+
+export async function fetchSlackMembersConfig(): Promise<SlackMembersConfig> {
+  const res = await authFetch(`${BASE}/api/graph/slack-members`);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Unknown error' }));
+    throw new Error(err.error || `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function saveSlackMembersConfig(cfg: SlackMembersConfig): Promise<SlackMembersConfig> {
+  const res = await authFetch(`${BASE}/api/graph/slack-members`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify(cfg),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Unknown error' }));
+    throw new Error(err.error || `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
 // ── Time zone for search time windows ────────────────────────────────────────
 
 export interface TemporalTimezone {
