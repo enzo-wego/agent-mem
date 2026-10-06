@@ -1,3 +1,5 @@
+import type { ResolveLink } from './pages/linkChips';
+
 const BASE = '';
 
 function authHeaders(): HeadersInit {
@@ -476,6 +478,7 @@ export interface ResolveArtifact {
   thread_ts?: string;
   score?: number;
   hop: number;
+  links?: ResolveLink[];
 }
 
 export interface ResolveTrace {
