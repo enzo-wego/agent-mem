@@ -22,6 +22,9 @@ import {
   type PurposeConfig,
   fetchJiraUpdates,
   saveJiraUpdates,
+  fetchGHKeySearch,
+  saveGHKeySearch,
+  type GHKeySearchConfig,
   fetchSlackMembersConfig,
   saveSlackMembersConfig,
   type SlackMembersConfig,
@@ -210,6 +213,7 @@ export function SettingsPage() {
       <EpicBriefsSection />
       <PurposeSection />
       <JiraUpdatesSection />
+      <GHKeySearchSection />
       <SlackMembersSection />
 
       {/* Context */}
@@ -1016,6 +1020,100 @@ function JiraUpdatesSection() {
 
           <button disabled={saving || intervalInvalid} onClick={save} className={btnPrimary}>
             {saving ? 'Saving…' : 'Save Jira freshness'}
+          </button>
+        </>
+      )}
+    </Section>
+  )
+}
+
+// --- GitHub PR key search ---
+
+function GHKeySearchSection() {
+  const [config, setConfig] = useState<GHKeySearchConfig | null>(null)
+  const [saving, setSaving] = useState(false)
+  const [toast, setToast] = useState<{ type: 'ok' | 'err'; msg: string } | null>(null)
+
+  useEffect(() => {
+    fetchGHKeySearch()
+      .then(({ enabled, interval_minutes, start_date }) => setConfig({ enabled, interval_minutes, start_date }))
+      .catch(() => setToast({ type: 'err', msg: 'Failed to load GitHub PR key search settings' }))
+  }, [])
+
+  const save = async () => {
+    if (!config) return
+    setSaving(true)
+    setToast(null)
+    try {
+      const { enabled, interval_minutes, start_date } = await saveGHKeySearch(config)
+      setConfig({ enabled, interval_minutes, start_date })
+      setToast({ type: 'ok', msg: 'Saved' })
+    } catch (e: unknown) {
+      setToast({ type: 'err', msg: e instanceof Error ? e.message : 'Save failed' })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const intervalInvalid =
+    config !== null && (!Number.isInteger(config.interval_minutes) || config.interval_minutes < 15 || config.interval_minutes > 1440)
+  const dateInvalid = config !== null && !/^\d{4}-\d{2}-\d{2}$/.test(config.start_date)
+
+  return (
+    <Section title="GitHub PR Key Search">
+      {toast && (
+        <div className={`text-sm px-3 py-1.5 rounded-md ${toast.type === 'ok' ? 'bg-green-50 text-green-700 dark:bg-green-900/30 dark:text-green-300' : 'bg-red-50 text-red-700 dark:bg-red-900/30 dark:text-red-300'}`}>
+          {toast.msg}
+        </div>
+      )}
+
+      {!config ? (
+        <p className="text-sm text-gray-500">Loading…</p>
+      ) : (
+        <>
+          <Field label="Enabled" hint="Search wego/* GitHub PRs for PAY ticket keys in the title or body and link them to the ticket.">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={config.enabled}
+                disabled={saving}
+                onChange={(e) => setConfig({ ...config, enabled: e.target.checked })}
+                className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+              />
+              <span className="text-sm">{config.enabled ? 'Enabled' : 'Disabled'}</span>
+            </label>
+          </Field>
+
+          <Field label="Interval (minutes)" hint="How often the search runs, 15–1440.">
+            <input
+              type="number"
+              min="15"
+              max="1440"
+              step="1"
+              value={config.interval_minutes}
+              disabled={saving}
+              onChange={(e) => setConfig({ ...config, interval_minutes: Number(e.target.value) })}
+              className={inputCls}
+            />
+          </Field>
+
+          <Field label="Start date" hint="PRs updated before this date are not searched. Used only until the first PR is processed.">
+            <input
+              type="date"
+              value={config.start_date}
+              disabled={saving}
+              onChange={(e) => setConfig({ ...config, start_date: e.target.value })}
+              className={inputCls}
+            />
+          </Field>
+
+          {intervalInvalid && (
+            <p className="text-sm text-red-600 dark:text-red-400">Interval must be a whole number from 15 to 1440.</p>
+          )}
+          {dateInvalid && <p className="text-sm text-red-600 dark:text-red-400">Start date must be a valid date.</p>}
+
+          <button disabled={saving || intervalInvalid || dateInvalid} onClick={save} className={btnPrimary}>
+            {saving ? 'Saving…' : 'Save GitHub PR key search'}
           </button>
         </>
       )}

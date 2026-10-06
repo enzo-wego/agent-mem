@@ -47,6 +47,8 @@ type Deps struct {
 	SlackDMUserID string // default Slack user id (U…) to DM when a sub omits one
 	JiraEmail     string
 	JiraToken     string
+	GHToken       string // AGENT_MEM_GH_TOKEN; refresh_gh_key_search
+	GHBaseURL     string // AGENT_MEM_GH_BASE_URL
 	// SlackUserCreds returns a fresh, consistent runtime credential snapshot per download.
 	SlackUserCreds func() (token, cookie string)
 	Runner         string // target_runner for worker-affine periodic jobs ("any"|"vps"|"local")
@@ -69,6 +71,7 @@ func RegisterAll(reg *jobs.Registry, deps Deps) {
 	reg.Register("refresh_slack_members", NewRefreshSlackMembersHandler(deps))
 	reg.Register("refresh_jira_board", NewRefreshJiraBoardHandler(deps))
 	reg.Register("refresh_jira_updates", NewRefreshJiraUpdatesHandler(deps))
+	reg.Register("refresh_gh_key_search", NewRefreshGHKeySearchHandler(deps))
 	reg.Register("backfill_created_at", NewBackfillCreatedAtHandler(deps))
 	reg.Register("backfill_artifact_tsv", NewBackfillArtifactTSVHandler(deps))
 	reg.Register("merge_identities_by_name", NewMergeIdentitiesByNameHandler(deps))

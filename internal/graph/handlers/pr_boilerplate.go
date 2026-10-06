@@ -16,6 +16,17 @@ var prBoilerplateKey = regexp.MustCompile(`\b([A-Z]{2,10}-\d+)\b`)
 // stripPRBoilerplate drops body lines that also appear, normalized, in at least
 // prBoilerplateMinPRs other gh_pr bodies. Template text then can't create edges.
 func stripPRBoilerplate(ctx context.Context, db *pgxpool.Pool, nodeID, body string) string {
+	out, err := stripPRBoilerplateErr(ctx, db, nodeID, body)
+	if err != nil {
+		log.Warn().Err(err).Str("node_id", nodeID).Msg("fetch_body: PR boilerplate lookup failed; keeping full text")
+		return body
+	}
+	return out
+}
+
+// stripPRBoilerplateErr is stripPRBoilerplate but reports a lookup failure
+// instead of silently returning the original text.
+func stripPRBoilerplateErr(ctx context.Context, db *pgxpool.Pool, nodeID, body string) (string, error) {
 	lines := strings.Split(body, "\n")
 	norms := make([]string, len(lines))
 	var candidates, keys []string
@@ -41,7 +52,7 @@ func stripPRBoilerplate(ctx context.Context, db *pgxpool.Pool, nodeID, body stri
 		keys = append(keys, key)
 	}
 	if len(candidates) == 0 {
-		return body
+		return body, nil
 	}
 
 	// ponytail: scans every PR body for the key (about 1,990 today, ~0.9 s
@@ -55,25 +66,22 @@ WHERE (SELECT count(*) FROM graph.nodes n
          AND lower(regexp_replace(n.body, '[^A-Za-z0-9]', '', 'g')) LIKE '%' || c.norm || '%') >= $4
 `, nodeID, candidates, keys, prBoilerplateMinPRs)
 	if err != nil {
-		log.Warn().Err(err).Str("node_id", nodeID).Msg("fetch_body: PR boilerplate query failed; keeping full text")
-		return body
+		return "", err
 	}
 	defer rows.Close()
 	drop := make(map[string]bool)
 	for rows.Next() {
 		var norm string
 		if err := rows.Scan(&norm); err != nil {
-			log.Warn().Err(err).Str("node_id", nodeID).Msg("fetch_body: PR boilerplate scan failed; keeping full text")
-			return body
+			return "", err
 		}
 		drop[norm] = true
 	}
 	if err := rows.Err(); err != nil {
-		log.Warn().Err(err).Str("node_id", nodeID).Msg("fetch_body: PR boilerplate rows failed; keeping full text")
-		return body
+		return "", err
 	}
 	if len(drop) == 0 {
-		return body
+		return body, nil
 	}
 	kept := lines[:0]
 	for i, line := range lines {
@@ -81,5 +89,5 @@ WHERE (SELECT count(*) FROM graph.nodes n
 			kept = append(kept, line)
 		}
 	}
-	return strings.Join(kept, "\n")
+	return strings.Join(kept, "\n"), nil
 }

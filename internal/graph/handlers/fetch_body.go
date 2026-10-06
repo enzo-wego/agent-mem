@@ -422,7 +422,8 @@ func reconcileEdges(ctx context.Context, deps Deps, fromNodeID string, findings 
 			INSERT INTO graph.edges (from_node_id, to_node_id, kind, source_msg_id, machine_id)
 			VALUES ($1, $2, $3, $4, $5)
 			ON CONFLICT (from_node_id, to_node_id, kind) DO UPDATE SET
-				source_msg_id = EXCLUDED.source_msg_id
+				source_msg_id = CASE WHEN graph.edges.source_msg_id = 'gh_key_search'
+				                     THEN graph.edges.source_msg_id ELSE EXCLUDED.source_msg_id END
 			RETURNING id`,
 			fromNodeID, f.NodeID, f.EdgeKind, fromNodeID, deps.MachineID,
 		).Scan(&edgeID)

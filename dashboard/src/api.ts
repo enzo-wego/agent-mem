@@ -1106,6 +1106,43 @@ export async function saveJiraUpdates(cfg: JiraUpdatesConfig): Promise<JiraUpdat
   return res.json();
 }
 
+export interface GHKeySearchConfig {
+  enabled: boolean;
+  interval_minutes: number;
+  start_date: string;
+}
+
+export interface GHKeySearchStatus extends GHKeySearchConfig {
+  cursor: string | null;
+  last_run_at: string | null;
+  last_ok_at: string | null;
+  last_error: string;
+  last_linked: number | null;
+  last_unmatched: number | null;
+}
+
+export async function fetchGHKeySearch(): Promise<GHKeySearchStatus> {
+  const res = await authFetch(`${BASE}/api/graph/gh-key-search`);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Unknown error' }));
+    throw new Error(err.error || `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function saveGHKeySearch(cfg: GHKeySearchConfig): Promise<GHKeySearchStatus> {
+  const res = await authFetch(`${BASE}/api/graph/gh-key-search`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify(cfg),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Unknown error' }));
+    throw new Error(err.error || `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
 export interface SlackMembersConfig {
   interval_minutes: number;
 }

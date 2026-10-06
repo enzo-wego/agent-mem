@@ -77,6 +77,9 @@ func Mount(r chi.Router, deps Deps) {
 	jiraUpdates := NewJiraUpdatesHandler(deps)
 	r.Method("GET", "/api/graph/jira-updates", jiraUpdates)
 	r.Method("PUT", "/api/graph/jira-updates", jiraUpdates)
+	ghKeySearch := NewGHKeySearchHandler(deps)
+	r.Method("GET", "/api/graph/gh-key-search", ghKeySearch)
+	r.Method("PUT", "/api/graph/gh-key-search", ghKeySearch)
 
 	// Topic subscriptions (hot-topic enzobot alerts).
 	subs := NewSubscriptions(deps)
