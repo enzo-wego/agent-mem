@@ -17,6 +17,9 @@ import {
   fetchEpicBriefsConfig,
   saveEpicBriefsConfig,
   type EpicBriefsConfig,
+  fetchPurposeConfig,
+  savePurposeConfig,
+  type PurposeConfig,
   fetchJiraUpdates,
   saveJiraUpdates,
   fetchSlackMembersConfig,
@@ -205,6 +208,7 @@ export function SettingsPage() {
       <BoostAlphasSection />
       <TimeZoneSection />
       <EpicBriefsSection />
+      <PurposeSection />
       <JiraUpdatesSection />
       <SlackMembersSection />
 
@@ -777,6 +781,78 @@ function EpicBriefsSection() {
                 void save({ min_interval_minutes: n })
               }}
               placeholder="60"
+            />
+          </Field>
+        </>
+      )}
+    </Section>
+  )
+}
+
+// --- Purpose line ---
+
+function PurposeSection() {
+  const [cfg, setCfg] = useState<PurposeConfig | null>(null)
+  const [saving, setSaving] = useState(false)
+  const [toast, setToast] = useState<{ type: 'ok' | 'err'; msg: string } | null>(null)
+
+  useEffect(() => {
+    fetchPurposeConfig()
+      .then(setCfg)
+      .catch(() => setToast({ type: 'err', msg: 'Failed to load purpose line config' }))
+  }, [])
+
+  const save = async (patch: Partial<PurposeConfig>) => {
+    if (!cfg) return
+    setSaving(true)
+    setToast(null)
+    try {
+      setCfg(await savePurposeConfig({ ...cfg, ...patch }))
+      setToast({ type: 'ok', msg: 'Saved — applies to the next index run and to queued jobs' })
+    } catch (e: unknown) {
+      setToast({ type: 'err', msg: e instanceof Error ? e.message : 'Save failed' })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Section title="Purpose line">
+      {toast && (
+        <div className={`text-sm px-3 py-1.5 rounded-md ${toast.type === 'ok' ? 'bg-green-50 text-green-700 dark:bg-green-900/30 dark:text-green-300' : 'bg-red-50 text-red-700 dark:bg-red-900/30 dark:text-red-300'}`}>
+          {toast.msg}
+        </div>
+      )}
+      {cfg === null ? (
+        <p className="text-sm text-gray-500">Loading…</p>
+      ) : (
+        <>
+          <Field
+            label="Enabled (graph.purpose.enabled)"
+            hint="Writes one model sentence per Jira ticket, Confluence page and PR (cheap tier)."
+          >
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={cfg.enabled}
+                disabled={saving}
+                onChange={(e) => save({ enabled: e.target.checked })}
+                className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+              />
+              <span className={`text-sm font-medium ${cfg.enabled ? 'text-green-600 dark:text-green-400' : 'text-gray-500 dark:text-gray-400'}`}>
+                {cfg.enabled ? 'Enabled' : 'Disabled'}
+              </span>
+            </label>
+          </Field>
+          <Field
+            label="Canary allowlist (graph.purpose.allowlist)"
+            hint="Comma-separated node ids. When set, only these nodes get a purpose."
+          >
+            <EditableField
+              value={cfg.allowlist}
+              saving={saving}
+              onSave={(v) => void save({ allowlist: v })}
+              placeholder="jira:PAY-2424,jira:PAY-2418"
             />
           </Field>
         </>

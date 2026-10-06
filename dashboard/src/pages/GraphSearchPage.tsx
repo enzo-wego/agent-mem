@@ -305,7 +305,7 @@ function buildFreeItems(results: HybridSearchResult[]): Item[] {
       url: r.url || '',
       overview: r.summary || '',
       author: r.author || '',
-      snippet: railSnippet(r.title || '', r.type === 'jira' ? r.node_id.replace(/^jira:/, '') : '', r.summary || ''),
+      snippet: r.purpose || railSnippet(r.title || '', r.type === 'jira' ? r.node_id.replace(/^jira:/, '') : '', r.summary || ''),
       decisions: r.decisions || [],
       openQuestions: r.open_questions || [],
       channel: r.channel || '',

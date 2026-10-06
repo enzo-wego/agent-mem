@@ -1236,6 +1236,35 @@ export async function saveEpicBriefsConfig(cfg: EpicBriefsConfig): Promise<EpicB
   return res.json();
 }
 
+// ── Purpose line (summarize_purpose job) ─────────────────────────────────────
+
+export interface PurposeConfig {
+  enabled: boolean; // graph.purpose.enabled
+  allowlist: string; // graph.purpose.allowlist — comma-separated node ids; non-empty = canary mode
+}
+
+export async function fetchPurposeConfig(): Promise<PurposeConfig> {
+  const res = await authFetch(`${BASE}/api/graph/purpose`);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Unknown error' }));
+    throw new Error(err.error || `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function savePurposeConfig(cfg: PurposeConfig): Promise<PurposeConfig> {
+  const res = await authFetch(`${BASE}/api/graph/purpose`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify(cfg),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Unknown error' }));
+    throw new Error(err.error || `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
 // graphNeighborsCards is graphNeighbors with ?cards=1: Slack rows also carry
 // thread_root, root_author, msg_count, participants and participant_count; Jira
 // rows carry pr_count/prs, and seed_prs is set when the seed itself is Jira.
@@ -1268,6 +1297,7 @@ export interface HybridSearchResult {
   title: string;
   url: string;
   summary: string;
+  purpose?: string;
   decisions?: ThreadDecision[];
   open_questions?: string[];
   score: number;
