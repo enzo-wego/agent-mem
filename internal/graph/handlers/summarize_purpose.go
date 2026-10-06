@@ -29,18 +29,25 @@ const (
 
 // purposeSigVersion prefixes every signature; bump it (with a prompt change) to
 // make every stored purpose stale.
-const purposeSigVersion = "v1"
+const purposeSigVersion = "v2"
 
 const (
 	purposeBodyRunes = 6000 // body code points fed to the model and the signature
-	purposeMaxRunes  = 200  // hard limit on the stored sentence
+	purposeMaxRunes  = 160  // hard limit enforced by the parser; the prompt targets 140
 )
 
 const purposeSystemPrompt = `You write the purpose line for a Jira ticket, Confluence page or GitHub pull request.
 Reply with JSON only: {"purpose": "..."}
-The purpose is ONE plain sentence of at most 160 characters, in English, saying what the item is for: the outcome, decision or change it aims at.
-Do not restate the title. No markdown. No line breaks.
-Say only what the text supports. If the text gives no purpose, return {"purpose": ""}.`
+The purpose is ONE plain English sentence, ideally at most 20 words and 140 characters.
+It says WHY the item exists: the outcome, decision or effect it is for. The reader already sees the title, so do not repeat or paraphrase it; say what the title does not.
+Start with a verb or "So that". No markdown, no line breaks, no ticket keys.
+Say only what the text supports. If the text gives no purpose beyond the title, return {"purpose": ""}.
+
+Example
+Title: Store Checkout.com processing channel ID in partner_meta for Juspay payments
+Text: Finance cannot split Juspay-routed Checkout.com payments by processing channel in the monthly report, because we do not keep the channel ID.
+Bad: Store Checkout.com processing channel ID in partner_meta for Juspay-routed payments to enable channel-level reporting.
+Good: Lets finance split Juspay-routed Checkout.com payments by processing channel in the monthly report.`
 
 var purposeTypes = map[string]bool{"jira": true, "cf": true, "gh_pr": true}
 
@@ -208,11 +215,15 @@ ON CONFLICT (node_id) DO UPDATE SET purpose = EXCLUDED.purpose, signature = EXCL
   failed_signature = '', updated_at = now()`, p.NodeID, purpose, sig)
 		} else {
 			deps.Logger.Warn().Str("node_id", p.NodeID).Msg("summarize_purpose: invalid model output")
+			// A stored sentence from an older version must not survive an invalid
+			// current-version answer; a same-version one stays.
 			_, err = tx.Exec(ctx, `
 INSERT INTO graph.artifact_purposes (node_id, failed_signature, updated_at)
 VALUES ($1, $2, now())
-ON CONFLICT (node_id) DO UPDATE SET failed_signature = EXCLUDED.failed_signature, updated_at = now()`,
-				p.NodeID, sig)
+ON CONFLICT (node_id) DO UPDATE SET failed_signature = EXCLUDED.failed_signature, updated_at = now(),
+  purpose = CASE WHEN starts_with(graph.artifact_purposes.signature, $3) THEN graph.artifact_purposes.purpose ELSE '' END,
+  signature = CASE WHEN starts_with(graph.artifact_purposes.signature, $3) THEN graph.artifact_purposes.signature ELSE '' END`,
+				p.NodeID, sig, purposeSigVersion+":")
 		}
 		if err != nil {
 			return fmt.Errorf("summarize_purpose: store: %w", err)
