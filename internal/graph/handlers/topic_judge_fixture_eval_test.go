@@ -60,8 +60,9 @@ type judgeFixtureCounts struct {
 	Log []string
 }
 
-// tierGemini routes the production GenerateCheap call to the main tier when
-// tier == "main". Test-only: production keeps GenerateCheap.
+// tierGemini routes BOTH Generate and GenerateCheap by tier: "cheap" uses the
+// inner GenerateCheap, "main" the inner Generate. Test-only; it keeps the eval
+// valid whichever tier confirmTopicLink calls (base used cheap, r6 uses main).
 type tierGemini struct {
 	GeminiClient
 	tier string
@@ -72,6 +73,10 @@ func (g tierGemini) GenerateCheap(ctx context.Context, sys, user string) (string
 		return g.GeminiClient.Generate(ctx, sys, user)
 	}
 	return g.GeminiClient.GenerateCheap(ctx, sys, user)
+}
+
+func (g tierGemini) Generate(ctx context.Context, sys, user string) (string, error) {
+	return g.GenerateCheap(ctx, sys, user)
 }
 
 func withJudgeTier(inner GeminiClient, tier string) (GeminiClient, error) {

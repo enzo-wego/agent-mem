@@ -97,9 +97,9 @@ func (a *GeminiAdapter) Generate(ctx context.Context, systemPrompt, userMessage 
 	return a.client().Generate(ctx, systemPrompt, userMessage)
 }
 
-// GenerateCheap runs the cheap tier. The topic-link confirm gate is high-volume
-// (~15 calls per node) and already receives a cosine shortlist, so it must stay
-// on the cheap tier whichever model the gateway maps that to.
+// GenerateCheap runs the cheap tier. The topic-link judge moved to the main tier
+// (Generate) on 2026-10-06; the cheap tier now serves flat-memory observations
+// and session summaries.
 func (a *GeminiAdapter) GenerateCheap(ctx context.Context, systemPrompt, userMessage string) (string, error) {
 	return a.client().GenerateCheap(ctx, systemPrompt, userMessage)
 }

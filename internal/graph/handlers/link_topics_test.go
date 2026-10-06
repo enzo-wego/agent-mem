@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/agent-mem/agent-mem/internal/graph/jobs"
@@ -10,7 +11,7 @@ import (
 
 func TestConfirmTopicLinkReturnsTransientOnGenerateError(t *testing.T) {
 	gem := &mockGemini{}
-	gem.cheapGenerateResult = func() (string, error) {
+	gem.generateResult = func() (string, error) {
 		return "", errors.New("rate limited")
 	}
 	deps := Deps{Gemini: gem}
@@ -23,12 +24,14 @@ func TestConfirmTopicLinkReturnsTransientOnGenerateError(t *testing.T) {
 		t.Fatal("expected transient error")
 	} else if !errors.Is(err, jobs.ErrTransient) {
 		t.Fatalf("error = %v, want jobs.ErrTransient", err)
+	} else if !strings.Contains(err.Error(), "rate limited") {
+		t.Fatalf("error = %v, want it to carry the scripted \"rate limited\" error", err)
 	}
 }
 
 func TestConfirmTopicLinkReturnsTransientOnUnparseableJSON(t *testing.T) {
 	gem := &mockGemini{}
-	gem.cheapGenerateResult = func() (string, error) {
+	gem.generateResult = func() (string, error) {
 		return "not json", nil
 	}
 	deps := Deps{Gemini: gem}
@@ -41,12 +44,14 @@ func TestConfirmTopicLinkReturnsTransientOnUnparseableJSON(t *testing.T) {
 		t.Fatal("expected transient error")
 	} else if !errors.Is(err, jobs.ErrTransient) {
 		t.Fatalf("error = %v, want jobs.ErrTransient", err)
+	} else if !strings.Contains(err.Error(), "invalid JSON") {
+		t.Fatalf("error = %v, want the invalid JSON error", err)
 	}
 }
 
-func TestConfirmTopicLinkUsesCheapGeneratePath(t *testing.T) {
+func TestConfirmTopicLinkUsesMainGeneratePath(t *testing.T) {
 	gem := &mockGemini{}
-	gem.cheapGenerateResult = func() (string, error) {
+	gem.generateResult = func() (string, error) {
 		return `{"same_topic":true,"confidence":0.91,"topic":"Checkout blacklist","why":"Both describe blocking checkout emails","evidence_a":"Checkout email blacklist","evidence_b":"Checkout email blacklist"}`, nil
 	}
 	deps := Deps{Gemini: gem}
@@ -62,11 +67,11 @@ func TestConfirmTopicLinkUsesCheapGeneratePath(t *testing.T) {
 	if !j.SameTopic || j.Confidence != 0.91 {
 		t.Fatalf("judgment = %+v", j)
 	}
-	if gem.cheapGenerateCalls.Load() != 1 {
-		t.Fatalf("cheap generate calls = %d, want 1", gem.cheapGenerateCalls.Load())
+	if gem.generateCalls.Load() != 1 {
+		t.Fatalf("generate calls = %d, want 1", gem.generateCalls.Load())
 	}
-	if gem.generateUser != "" {
-		t.Fatalf("expensive Generate path was used: %q", gem.generateUser)
+	if gem.cheapGenerateCalls.Load() != 0 {
+		t.Fatalf("cheap generate calls = %d, want 0", gem.cheapGenerateCalls.Load())
 	}
 }
 

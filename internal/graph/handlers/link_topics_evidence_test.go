@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"strings"
 	"sync"
@@ -44,7 +45,9 @@ func TestEvidenceSupported(t *testing.T) {
 	}
 }
 
-// evidenceFake scripts GenerateCheap replies and records calls.
+// evidenceFake scripts Generate (main tier) replies and records calls. Its
+// GenerateCheap only counts and errors; it must not call t.Fatal because it is
+// invoked from errgroup goroutines.
 type evidenceFake struct {
 	GeminiClient
 	mu      sync.Mutex
@@ -56,21 +59,21 @@ type evidenceFake struct {
 	main    int
 }
 
-func (f *evidenceFake) GenerateCheap(_ context.Context, sys, user string) (string, error) {
+func (f *evidenceFake) GenerateCheap(_ context.Context, _, _ string) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.cheap++
+	return "", errors.New("evidenceFake: unexpected GenerateCheap call")
+}
+
+func (f *evidenceFake) Generate(_ context.Context, sys, user string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.main++
 	f.system, f.user = sys, user
 	r := f.replies[f.calls%len(f.replies)]
 	f.calls++
 	return r, nil
-}
-
-func (f *evidenceFake) Generate(_ context.Context, _, _ string) (string, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.main++
-	return "", nil
 }
 
 func (f *evidenceFake) callCount() int {
@@ -118,8 +121,8 @@ func TestConfirmTopicLinkEvidence(t *testing.T) {
 		if !j.SameTopic || j.EvidenceA != "Duplicated the payout record" || j.EvidenceB != evQB {
 			t.Fatalf("judgment = %+v", j)
 		}
-		if f.cheap != 1 || f.main != 0 {
-			t.Fatalf("cheap=%d main=%d, want 1/0", f.cheap, f.main)
+		if f.main != 1 || f.cheap != 0 {
+			t.Fatalf("main=%d cheap=%d, want 1/0", f.main, f.cheap)
 		}
 		if !strings.Contains(f.system, "evidence_a") || !strings.Contains(f.system, "SAME AREA IS NOT SAME TOPIC") {
 			t.Fatalf("system prompt missing evidence/tie-breaker text")

@@ -41,7 +41,7 @@ var loadedTopicRules = func() topicRules {
 }()
 
 // topicRulesPromptDigest renders the rules compactly for the judge's system
-// prompt. Kept terse: the confirm gate is high-volume on a cheap model.
+// prompt. Kept terse: the confirm gate is high-volume on the main tier.
 func topicRulesPromptDigest() string {
 	var b strings.Builder
 	b.WriteString("TAGS — classify each artifact into exactly one, then apply that tag's criteria:\n")

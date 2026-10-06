@@ -178,7 +178,7 @@ func TestCaseMateCandidatesDedupesSharedMate(t *testing.T) {
 // thread to "Payments service v0.48.5 deployment".
 func TestConfirmTopicLinkShowsCaseContextAsEvidence(t *testing.T) {
 	gem := &mockGemini{}
-	gem.cheapGenerateResult = func() (string, error) {
+	gem.generateResult = func() (string, error) {
 		return `{"tag":"bug_incident","same_topic":true,"confidence":0.9,"topic":"t","why":"w"}`, nil
 	}
 	deps := Deps{Logger: zerolog.Nop(), Gemini: gem}
@@ -194,8 +194,8 @@ func TestConfirmTopicLinkShowsCaseContextAsEvidence(t *testing.T) {
 		t.Fatalf("confirmTopicLink: %v", err)
 	}
 	for _, want := range []string{"p0yy6hmqdw", "same concrete case", "ALREADY CONFIRMED", "tie-breakers #2 and #3"} {
-		if !strings.Contains(gem.cheapGenerateUser, want) {
-			t.Errorf("prompt missing %q; got:\n%s", want, gem.cheapGenerateUser)
+		if !strings.Contains(gem.generateUser, want) {
+			t.Errorf("prompt missing %q; got:\n%s", want, gem.generateUser)
 		}
 	}
 }

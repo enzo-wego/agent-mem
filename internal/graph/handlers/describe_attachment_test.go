@@ -24,6 +24,7 @@ import (
 // mockGemini is a GeminiClient stub that records calls and returns canned values.
 type mockGemini struct {
 	describeCalls atomic.Int32
+	generateCalls atomic.Int32
 	embedCalls    atomic.Int32
 
 	describeResult      func() (string, string, []string, error)
@@ -56,6 +57,7 @@ func (m *mockGemini) EmbedWithOptions(ctx context.Context, text string, _ gemini
 }
 
 func (m *mockGemini) Generate(_ context.Context, _, user string) (string, error) {
+	m.generateCalls.Add(1)
 	m.generateUser = user
 	if m.generateResult != nil {
 		return m.generateResult()

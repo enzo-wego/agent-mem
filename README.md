@@ -30,7 +30,7 @@
 |---|---|---|
 | Captures | Coding-agent hook events (prompts, tool use, transcripts) | Cross-source artifacts (Slack, Jira, GitHub, …) |
 | Work queue | `pending_messages` (retry + backoff, no leases) | `graph.jobs` (leases, janitor, per-source rate caps) |
-| LLM tier | `cheap` (observations, session summaries) | `summary` + `cheap` (summaries, topic judge, describe) |
+| LLM tier | `cheap` (observations, session summaries) | `summary` (summaries, topic judge) + `cheap` (describe) |
 | Embeddings | `observations.embedding` `vector(768)` | `graph.artifact_index.embedding` `halfvec(3072)` |
 | Read path | Session-start context injection, `/api/search` | `/api/graph/*` (search / resolve / node), MCP, `/live` |
 
@@ -137,7 +137,7 @@ failover have a single place to live.
 | Path | Tier | Ultimately served by |
 |---|---|---|
 | Graph summaries (thread/cluster/feature/hot-topics) | `summary` | `claude-sonnet-5`, subscription seat |
-| Graph judge (`link_topics`) | `cheap` | `claude-haiku-4-5`, subscription seat |
+| Graph judge (`link_topics`) | `summary` | `claude-sonnet-5`, subscription seat |
 | Flat-memory observations + session summaries | `cheap` | `claude-haiku-4-5`, subscription seat |
 | Attachment `Describe` | `cheap` | Haiku vision, subscription seat |
 | **All embeddings** (flat 768 + graph 3072) | — | `gemini-embedding-001`, **OpenRouter** |

@@ -769,7 +769,9 @@ such a passage in BOTH artifacts, answer same_topic false.
 		cand.Type, blankAsUnknown(cand.Department), tc.CandWindow, cand.Cosine, cand.Summary,
 		extra.String(),
 	)
-	out, err := deps.Gemini.GenerateCheap(ctx, sys, user)
+	// The judge runs on the main tier because the 2026-10-06 eval measured 88% vs 76%
+	// precision; see docs/ai/plan-judge-evidence.md addendum r6.
+	out, err := deps.Gemini.Generate(ctx, sys, user)
 	if err != nil {
 		return topicLinkJudgment{}, fmt.Errorf("%w: link_topics confirm: %v", jobs.ErrTransient, err)
 	}
