@@ -92,14 +92,16 @@ func (a *GeminiAdapter) EmbedWithOptions(ctx context.Context, text string, opts 
 	return a.client().EmbedWithOptions(ctx, text, opts)
 }
 
-// Generate runs the expensive tier: thread, cluster and feature summaries.
+// Generate runs the expensive tier: thread, cluster and feature summaries, and
+// the topic-link judge (gateway tier "summary").
 func (a *GeminiAdapter) Generate(ctx context.Context, systemPrompt, userMessage string) (string, error) {
 	return a.client().Generate(ctx, systemPrompt, userMessage)
 }
 
-// GenerateCheap runs the cheap tier. The topic-link confirm gate is high-volume
-// (~15 calls per node) and already receives a cosine shortlist, so it must stay
-// on the cheap tier whichever model the gateway maps that to.
+// GenerateCheap runs the cheap tier. The topic-link judge moved to the main tier
+// (Generate) on 2026-10-06; the cheap tier serves the remaining high-volume
+// yes/no and extraction calls (eligibility gate, subject queries, flat-memory
+// observations, session summaries).
 func (a *GeminiAdapter) GenerateCheap(ctx context.Context, systemPrompt, userMessage string) (string, error) {
 	return a.client().GenerateCheap(ctx, systemPrompt, userMessage)
 }

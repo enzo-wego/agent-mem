@@ -30,7 +30,7 @@
 |---|---|---|
 | Captures | Coding-agent hook events (prompts, tool use, transcripts) | Cross-source artifacts (Slack, Jira, GitHub, …) |
 | Work queue | `pending_messages` (retry + backoff, no leases) | `graph.jobs` (leases, janitor, per-source rate caps) |
-| LLM tier | `cheap` (observations, session summaries) | `summary` + `cheap` (summaries, topic judge, describe) |
+| LLM tier | `cheap` (observations, session summaries) | `summary` (summaries, topic judge) + `cheap` (describe) |
 | Embeddings | `observations.embedding` `vector(768)` | `graph.artifact_index.embedding` `halfvec(3072)` |
 | Read path | Session-start context injection, `/api/search` | `/api/graph/*` (search / resolve / node), MCP, `/live` |
 
@@ -137,15 +137,19 @@ failover have a single place to live.
 | Path | Tier | Ultimately served by |
 |---|---|---|
 | Graph summaries (thread/cluster/feature/hot-topics) | `summary` | `claude-sonnet-5`, subscription seat |
-| Graph judge (`link_topics`) | `cheap` | `claude-haiku-4-5`, subscription seat |
+| Graph judge (`link_topics`) | `summary` | `claude-sonnet-5`, subscription seat |
 | Flat-memory observations + session summaries | `cheap` | `claude-haiku-4-5`, subscription seat |
 | Attachment `Describe` | `cheap` | Haiku vision, subscription seat |
 | **All embeddings** (flat 768 + graph 3072) | — | `gemini-embedding-001`, **OpenRouter** |
 
 Callers name a *tier*, never a model, so changing models is a systemd restart on
 the gateway rather than a Go deploy here. The gateway also has a per-tier backend
-switch (`LLM_GATEWAY_BACKEND_CHEAP=openrouter`), which is the escape hatch if the
-judge's volume starts straining the seat's five-hour window.
+switch. The judge runs on the `summary` tier, so the escape hatch if its volume
+strains the seat's five-hour window is `LLM_GATEWAY_BACKEND_SUMMARY=openrouter`;
+that also moves thread/cluster/feature summaries, hot-topic detection, scope
+refresh and feature-entity derivation to OpenRouter. (`LLM_GATEWAY_BACKEND_CHEAP`
+only moves observations, session summaries, the eligibility gate and subject
+queries.)
 
 Clear `llm_gateway_url` and LLM processing turns **off** — there is no
 direct-provider fallback in agent-mem. Observation extraction, session

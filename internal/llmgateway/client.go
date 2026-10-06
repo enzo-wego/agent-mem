@@ -352,10 +352,9 @@ func (c *Client) Generate(ctx context.Context, systemPrompt, userMessage string)
 	return c.generate(ctx, "summary", systemPrompt, userMessage)
 }
 
-// GenerateCheap runs the "cheap" tier. The topic-link confirm gate is
-// high-volume (~15 calls per node) and already receives a cosine shortlist, so
-// it must never share a tier with summaries — that volume on the expensive model
-// is what a seat's five-hour window cannot absorb.
+// GenerateCheap runs the "cheap" tier. The topic-link judge moved to Generate
+// (the summary tier) on 2026-10-06; seat-window pressure from that volume is
+// watched via gateway fallbacks to OpenRouter.
 func (c *Client) GenerateCheap(ctx context.Context, systemPrompt, userMessage string) (string, error) {
 	return c.generate(ctx, "cheap", systemPrompt, userMessage)
 }

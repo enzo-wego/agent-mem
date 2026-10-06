@@ -5,12 +5,15 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/sync/errgroup"
 
@@ -80,6 +83,10 @@ type topicLinkJudgment struct {
 	Tag        string
 	Topic      string
 	Why        string
+	// EvidenceA/B are the verbatim quotes from the judge's artifact A (source)
+	// and B (candidate); set only when the final verdict is SAME.
+	EvidenceA string
+	EvidenceB string
 }
 
 // NewLinkTopicsHandler returns the job entry for exact-topic link generation.
@@ -168,6 +175,7 @@ func linkTopicsHandler(deps Deps) jobs.Handler {
 				if err != nil {
 					return err
 				}
+				var evFrom, evTo string
 				if !cached || p.Force {
 					judgment, err = confirmTopicLink(gctx, deps, source, cand, topicLinkContext{
 						SourceWindow: formatWindow(srcStart, srcEnd, srcOK),
@@ -180,9 +188,19 @@ func linkTopicsHandler(deps Deps) jobs.Handler {
 					if err := saveTopicLinkJudgment(gctx, deps, from, to, contentHash, judgment); err != nil {
 						return err
 					}
+					// The judge's A is the source; the stored from may be the candidate.
+					evFrom, evTo = judgment.EvidenceA, judgment.EvidenceB
+					if source.NodeID != from {
+						evFrom, evTo = evTo, evFrom
+					}
+				} else if judgment.SameTopic {
+					var err error
+					if evFrom, evTo, err = existingEdgeEvidence(gctx, deps, from, to); err != nil {
+						return err
+					}
 				}
 				if judgment.SameTopic {
-					return upsertSameTopicEdge(gctx, deps, from, to, judgment, cand, timeDesc)
+					return upsertSameTopicEdge(gctx, deps, from, to, judgment, cand, timeDesc, evFrom, evTo)
 				}
 				return deleteSameTopicEdge(gctx, deps, from, to)
 			})
@@ -696,6 +714,20 @@ WHERE source_node_id=$1 AND target_node_id=$2`,
 	return j, cachedHash == contentHash, nil
 }
 
+// existingEdgeEvidence returns the evidence already stored on the SAME_TOPIC
+// edge (empty when there is no edge or no evidence). Any error other than
+// "no edge" is returned so the job retries instead of dropping stored evidence.
+func existingEdgeEvidence(ctx context.Context, deps Deps, from, to string) (evFrom, evTo string, err error) {
+	err = deps.DB.QueryRow(ctx, `
+SELECT COALESCE(metadata->>'evidence_from',''), COALESCE(metadata->>'evidence_to','')
+FROM graph.edges
+WHERE from_node_id=$1 AND to_node_id=$2 AND kind='SAME_TOPIC'`, from, to).Scan(&evFrom, &evTo)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return "", "", err
+	}
+	return evFrom, evTo, nil
+}
+
 func saveTopicLinkJudgment(ctx context.Context, deps Deps, from, to, contentHash string, j topicLinkJudgment) error {
 	_, err := deps.DB.Exec(ctx, `
 INSERT INTO graph.topic_link_judgments
@@ -718,7 +750,13 @@ ON CONFLICT (source_node_id, target_node_id) DO UPDATE SET
 func confirmTopicLink(ctx context.Context, deps Deps, source topicLinkNode, cand topicLinkCandidate, tc topicLinkContext) (topicLinkJudgment, error) {
 	sys := `You decide whether two graph artifacts are substantively about the same exact topic,
 by applying the tag rules below (the same rules humans see at /live/rules).
-Return JSON only: {"tag":"one tag from the list","same_topic":true|false,"confidence":0.0-1.0,"topic":"short shared topic label","why":"one short factual reason citing the rule applied"}.
+Return JSON only: {"tag":"one tag from the list","same_topic":true|false,"confidence":0.0-1.0,"topic":"short shared topic label","why":"one short factual reason citing the rule applied","evidence_a":"verbatim quote from artifact A","evidence_b":"verbatim quote from artifact B"}.
+
+evidence_a and evidence_b are REQUIRED when same_topic is true: copy, word for word, the
+shortest passage (at most 200 characters) from artifact A and from artifact B that names the
+SAME concrete case, defect, change or decision. Do not paraphrase. Quote only from the
+artifact texts, never from the "Shared identifiers" or "Case context" lines. If you cannot find
+such a passage in BOTH artifacts, answer same_topic false.
 
 ` + topicRulesPromptDigest()
 	var extra strings.Builder
@@ -740,7 +778,9 @@ Return JSON only: {"tag":"one tag from the list","same_topic":true|false,"confid
 		cand.Type, blankAsUnknown(cand.Department), tc.CandWindow, cand.Cosine, cand.Summary,
 		extra.String(),
 	)
-	out, err := deps.Gemini.GenerateCheap(ctx, sys, user)
+	// The judge runs on the main tier because the 2026-10-06 eval measured 88% vs 76%
+	// precision; see docs/ai/plan-judge-evidence.md addendum r6.
+	out, err := deps.Gemini.Generate(ctx, sys, user)
 	if err != nil {
 		return topicLinkJudgment{}, fmt.Errorf("%w: link_topics confirm: %v", jobs.ErrTransient, err)
 	}
@@ -753,20 +793,59 @@ Return JSON only: {"tag":"one tag from the list","same_topic":true|false,"confid
 		Confidence float64 `json:"confidence"`
 		Topic      string  `json:"topic"`
 		Why        string  `json:"why"`
+		EvidenceA  string  `json:"evidence_a"`
+		EvidenceB  string  `json:"evidence_b"`
 	}
 	if json.Unmarshal(llmjson.ExtractJSON(out), &parsed) != nil {
 		return topicLinkJudgment{}, fmt.Errorf("%w: link_topics confirm: invalid JSON", jobs.ErrTransient)
 	}
-	return topicLinkJudgment{
+	why := firstLine(parsed.Why, 240)
+	if parsed.SameTopic &&
+		(!evidenceSupported(parsed.EvidenceA, source.Summary) || !evidenceSupported(parsed.EvidenceB, cand.Summary)) {
+		parsed.SameTopic = false
+		why = firstLine("evidence not found: "+parsed.Why, 240)
+	}
+	j := topicLinkJudgment{
 		SameTopic:  parsed.SameTopic,
 		Confidence: clamp01(parsed.Confidence),
 		Tag:        firstLine(parsed.Tag, 40),
 		Topic:      firstLine(parsed.Topic, 120),
-		Why:        firstLine(parsed.Why, 240),
-	}, nil
+		Why:        why,
+	}
+	if j.SameTopic {
+		j.EvidenceA = normalizeEvidence(parsed.EvidenceA)
+		j.EvidenceB = normalizeEvidence(parsed.EvidenceB)
+	}
+	return j, nil
 }
 
-func upsertSameTopicEdge(ctx context.Context, deps Deps, from, to string, j topicLinkJudgment, cand topicLinkCandidate, timeDesc string) error {
+// normalizeEvidence collapses every whitespace run to one space and trims.
+func normalizeEvidence(s string) string {
+	return strings.Join(strings.Fields(s), " ")
+}
+
+var evidenceStripper = strings.NewReplacer(
+	"`", "", `"`, "", "'", "", "“", "", "”", "", "‘", "", "’", "", "*", "", "_", "",
+)
+
+// evidenceKey is the comparison form: lower-cased, quote/markup characters
+// removed, then whitespace collapsed (so a stripped standalone "*" leaves no gap).
+func evidenceKey(s string) string {
+	return normalizeEvidence(evidenceStripper.Replace(strings.ToLower(s)))
+}
+
+// evidenceSupported reports whether quote occurs verbatim (modulo case,
+// whitespace and quote characters) in text. Quotes under 12 runes (after
+// stripping) or over 300 runes (normalized) are rejected.
+func evidenceSupported(quote, text string) bool {
+	k := evidenceKey(quote)
+	if utf8.RuneCountInString(k) < 12 || utf8.RuneCountInString(normalizeEvidence(quote)) > 300 {
+		return false
+	}
+	return strings.Contains(evidenceKey(text), k)
+}
+
+func upsertSameTopicEdge(ctx context.Context, deps Deps, from, to string, j topicLinkJudgment, cand topicLinkCandidate, timeDesc, evidenceFrom, evidenceTo string) error {
 	method := "cosine-shortlist + llm-confirm"
 	switch {
 	case len(cand.SharedIDs) > 0:
@@ -789,6 +868,12 @@ func upsertSameTopicEdge(ctx context.Context, deps Deps, from, to string, j topi
 	if len(cand.CaseIDs) > 0 {
 		fields["case_ids"] = cand.CaseIDs
 		fields["case_via"] = cand.CaseVia
+	}
+	if evidenceFrom != "" {
+		fields["evidence_from"] = evidenceFrom
+	}
+	if evidenceTo != "" {
+		fields["evidence_to"] = evidenceTo
 	}
 	meta, _ := json.Marshal(fields)
 	_, err := deps.DB.Exec(ctx, `
