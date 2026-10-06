@@ -26,6 +26,7 @@ func TestEvidenceSupported(t *testing.T) {
 		{"multi-line quote on single-line text", "payout record\nfor partner", "the payout record for partner Acme", true},
 		{"quote chars stripped", "“duplicated” the `payout` record", text, true},
 		{"markup stripped from text", "payout record for partner", "payout *record* for _partner_ Acme", true},
+		{"quote crosses markdown bullet", "duplicated the payout settlement job", "Root cause:\n* refund retries duplicated the payout\n* settlement job double-counted Acme", true},
 		{"12 runes ok", "abcdefghijkl", "xx abcdefghijkl xx", true},
 		{"11 runes refused", "abcdefghijk", "xx abcdefghijk xx", false},
 		{"11 runes with multibyte refused", "abcdefghijé", "abcdefghijé", false},
@@ -142,7 +143,7 @@ func TestConfirmTopicLinkEvidence(t *testing.T) {
 	})
 	t.Run("evidence absent", func(t *testing.T) {
 		j, _ := run(`{"same_topic":true,"confidence":0.9,"topic":"x","why":"y"}`, b)
-		if j.SameTopic {
+		if j.SameTopic || !strings.HasPrefix(j.Why, "evidence not found: ") {
 			t.Fatalf("judgment = %+v", j)
 		}
 	})
@@ -242,4 +243,21 @@ func TestLinkTopicsEvidencePersistence(t *testing.T) {
 		t.Fatalf("run 3 total model calls = %d, want 2 (cache hit)", n)
 	}
 	checkEdge("run 3")
+
+	// Run 4: cached SAME but no edge yet (ErrNoRows path): edge is written without evidence.
+	if _, err := pool.Exec(ctx, `DELETE FROM graph.edges WHERE from_node_id=$1 AND to_node_id=$2 AND kind='SAME_TOPIC'`, from, to); err != nil {
+		t.Fatal(err)
+	}
+	runOne(from, to, false, "")
+	if n := fake.callCount(); n != 2 {
+		t.Fatalf("run 4 total model calls = %d, want 2 (cache hit)", n)
+	}
+	var ef, et string
+	if err := pool.QueryRow(ctx, `SELECT COALESCE(metadata->>'evidence_from',''), COALESCE(metadata->>'evidence_to','')
+ FROM graph.edges WHERE from_node_id=$1 AND to_node_id=$2 AND kind='SAME_TOPIC'`, from, to).Scan(&ef, &et); err != nil {
+		t.Fatalf("run 4: edge not written: %v", err)
+	}
+	if ef != "" || et != "" {
+		t.Fatalf("run 4: evidence = %q / %q, want none", ef, et)
+	}
 }

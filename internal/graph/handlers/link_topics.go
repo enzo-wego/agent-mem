@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"sort"
@@ -12,6 +13,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/sync/errgroup"
 
@@ -192,7 +194,10 @@ func linkTopicsHandler(deps Deps) jobs.Handler {
 						evFrom, evTo = evTo, evFrom
 					}
 				} else if judgment.SameTopic {
-					evFrom, evTo = existingEdgeEvidence(gctx, deps, from, to)
+					var err error
+					if evFrom, evTo, err = existingEdgeEvidence(gctx, deps, from, to); err != nil {
+						return err
+					}
 				}
 				if judgment.SameTopic {
 					return upsertSameTopicEdge(gctx, deps, from, to, judgment, cand, timeDesc, evFrom, evTo)
@@ -710,13 +715,17 @@ WHERE source_node_id=$1 AND target_node_id=$2`,
 }
 
 // existingEdgeEvidence returns the evidence already stored on the SAME_TOPIC
-// edge (empty when there is no edge or no evidence).
-func existingEdgeEvidence(ctx context.Context, deps Deps, from, to string) (evFrom, evTo string) {
-	_ = deps.DB.QueryRow(ctx, `
+// edge (empty when there is no edge or no evidence). Any error other than
+// "no edge" is returned so the job retries instead of dropping stored evidence.
+func existingEdgeEvidence(ctx context.Context, deps Deps, from, to string) (evFrom, evTo string, err error) {
+	err = deps.DB.QueryRow(ctx, `
 SELECT COALESCE(metadata->>'evidence_from',''), COALESCE(metadata->>'evidence_to','')
 FROM graph.edges
 WHERE from_node_id=$1 AND to_node_id=$2 AND kind='SAME_TOPIC'`, from, to).Scan(&evFrom, &evTo)
-	return evFrom, evTo
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return "", "", err
+	}
+	return evFrom, evTo, nil
 }
 
 func saveTopicLinkJudgment(ctx context.Context, deps Deps, from, to, contentHash string, j topicLinkJudgment) error {
@@ -819,10 +828,10 @@ var evidenceStripper = strings.NewReplacer(
 	"`", "", `"`, "", "'", "", "“", "", "”", "", "‘", "", "’", "", "*", "", "_", "",
 )
 
-// evidenceKey is the comparison form: normalized, lower-cased, quote/markup
-// characters removed.
+// evidenceKey is the comparison form: lower-cased, quote/markup characters
+// removed, then whitespace collapsed (so a stripped standalone "*" leaves no gap).
 func evidenceKey(s string) string {
-	return evidenceStripper.Replace(strings.ToLower(normalizeEvidence(s)))
+	return normalizeEvidence(evidenceStripper.Replace(strings.ToLower(s)))
 }
 
 // evidenceSupported reports whether quote occurs verbatim (modulo case,

@@ -206,7 +206,7 @@ func TestTopicJudgeFixture(t *testing.T) {
 	}
 	tier := os.Getenv("AGENT_MEM_EVAL_TIER")
 	if tier == "" {
-		tier = "cheap"
+		tier = "main"
 	}
 	entries, err := loadJudgeFixture(os.Getenv("AGENT_MEM_EVAL_FIXTURE"))
 	if err != nil {

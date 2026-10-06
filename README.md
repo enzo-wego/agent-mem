@@ -144,8 +144,12 @@ failover have a single place to live.
 
 Callers name a *tier*, never a model, so changing models is a systemd restart on
 the gateway rather than a Go deploy here. The gateway also has a per-tier backend
-switch (`LLM_GATEWAY_BACKEND_CHEAP=openrouter`), which is the escape hatch if the
-judge's volume starts straining the seat's five-hour window.
+switch. The judge runs on the `summary` tier, so the escape hatch if its volume
+strains the seat's five-hour window is `LLM_GATEWAY_BACKEND_SUMMARY=openrouter`;
+that also moves thread/cluster/feature summaries, hot-topic detection, scope
+refresh and feature-entity derivation to OpenRouter. (`LLM_GATEWAY_BACKEND_CHEAP`
+only moves observations, session summaries, the eligibility gate and subject
+queries.)
 
 Clear `llm_gateway_url` and LLM processing turns **off** — there is no
 direct-provider fallback in agent-mem. Observation extraction, session
