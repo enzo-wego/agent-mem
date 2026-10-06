@@ -1273,7 +1273,7 @@ export interface HybridSearchResult {
   score: number;
   author?: string;
   created_at: string;
-  match: string[]; // "keyword" and/or "semantic"
+  match: string[]; // "keyword" and/or "semantic", or ["linked"]
   thread_root?: string;
   channel?: string;
   root_author?: string;
@@ -1284,6 +1284,8 @@ export interface HybridSearchResult {
   last_ts_ms?: number;
   pr_count?: number; // Jira only
   prs?: PRRef[];
+  linked_via?: string; // linked thread rows: the Jira/Confluence node that brought it in
+  linked_via_title?: string; // Jira key, or Confluence page title
 }
 
 export interface HybridSearchResponse {

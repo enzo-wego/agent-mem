@@ -67,7 +67,7 @@ const GROUP_META = Object.fromEntries(GROUPS.map((g, i) => [g.key, { ...g, slot:
 >
 
 // ── evidence ─────────────────────────────────────────────────────────────────
-type Ev = 'direct' | 'judge' | 'similar' | 'hop2' | 'subject' | 'keyword' | 'semantic' | 'both'
+type Ev = 'direct' | 'judge' | 'similar' | 'hop2' | 'subject' | 'keyword' | 'semantic' | 'both' | 'linked'
 const EV_META: Record<Ev, { label: string; glyph: string; color: string; rank: number }> = {
   direct: { label: 'direct link', glyph: '━', color: C.text, rank: 0 },
   judge: { label: 'judge: same topic', glyph: '┅', color: C.blue, rank: 1 },
@@ -77,9 +77,10 @@ const EV_META: Record<Ev, { label: string; glyph: string; color: string; rank: n
   both: { label: 'keyword + semantic', glyph: '✦', color: C.green, rank: 0 },
   keyword: { label: 'keyword', glyph: '⌕', color: C.text, rank: 1 },
   semantic: { label: 'semantic', glyph: '≈', color: C.blue, rank: 2 },
+  linked: { label: 'linked', glyph: '↳', color: C.purple, rank: 5 },
 }
 const SEED_FILTERS: Ev[] = ['direct', 'judge', 'similar', 'hop2']
-const FREE_FILTERS: Ev[] = ['keyword', 'semantic', 'both']
+const FREE_FILTERS: Ev[] = ['keyword', 'semantic', 'both', 'linked']
 
 interface Item {
   key: string // sync id: thread root id for Slack, node id otherwise
@@ -98,6 +99,7 @@ interface Item {
   last: number
   ev: Ev
   why: string
+  linkedTitle?: string // free-text 'linked' rows: the Jira key / page title that brought it in
   jiraKey: string
   prCount: number // Jira only: linked PRs (full count)
   prs: PRRef[] // Jira only: first 20
@@ -265,7 +267,8 @@ function buildFreeItems(results: HybridSearchResult[]): Item[] {
     const created = Date.parse(r.created_at) || 0
     const kw = r.match?.includes('keyword')
     const sem = r.match?.includes('semantic')
-    const ev: Ev = kw && sem ? 'both' : sem ? 'semantic' : 'keyword'
+    const linked = !!r.match?.includes('linked')
+    const ev: Ev = linked ? 'linked' : kw && sem ? 'both' : sem ? 'semantic' : 'keyword'
     out.push({
       key: slack ? slackRootOf(r.node_id, undefined, r.thread_root) : r.node_id,
       group,
@@ -282,8 +285,11 @@ function buildFreeItems(results: HybridSearchResult[]): Item[] {
       first: r.first_ts_ms || created,
       last: r.last_ts_ms || created,
       ev,
+      linkedTitle: linked ? r.linked_via_title || '' : undefined,
       why:
-        ev === 'both'
+        ev === 'linked'
+          ? `linked from ${r.linked_via_title || r.linked_via || ''}`
+          : ev === 'both'
           ? 'Matched the query words and is semantically close.'
           : ev === 'keyword'
             ? 'Contains the query words.'
@@ -303,6 +309,11 @@ function threadOrder(items: Item[], mode: View['mode']): Item[] {
   const s = items.filter((i) => i.group === 'slack')
   if (mode === 'free') return s.sort((a, b) => a.idx - b.idx)
   return s.sort((a, b) => EV_META[a.ev].rank - EV_META[b.ev].rank || b.last - a.last)
+}
+
+// Badge text: a linked row names the item that brought it in.
+function evLabel(it: Item): string {
+  return it.ev === 'linked' && it.linkedTitle ? `linked · ${it.linkedTitle}` : EV_META[it.ev].label
 }
 
 function pickBanner(results: HybridSearchResult[]): View['banner'] {
@@ -925,7 +936,7 @@ export function GraphSearchPage() {
                 {it.participantCount > 3 ? ` +${it.participantCount - 3}` : ''}
               </span>
             )}
-            <span style={{ color: em.color }}>{em.label}</span>
+            <span style={{ color: em.color }}>{evLabel(it)}</span>
           </div>
         </div>
         <div className={`lr${it.last > 0 && isFresh(it.last) ? ' fresh' : ''}`}>{it.last > 0 ? `last reply ${ago(it.last)}` : ''}</div>
@@ -948,7 +959,7 @@ export function GraphSearchPage() {
       >
         <div className="h">
           <span style={{ color: em.color }}>
-            {em.glyph} {em.label}
+            {em.glyph} {evLabel(it)}
           </span>
           {it.group === 'slack' ? (
             <>

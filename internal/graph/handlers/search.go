@@ -75,6 +75,10 @@ type searchResult struct {
 	ScoreBreakdown scoring.Components `json:"score_breakdown"`
 	Author         string             `json:"author,omitempty"`
 	CreatedAt      time.Time          `json:"created_at"`
+	// LinkedVia/LinkedViaTitle are set only on hybrid linked-thread rows;
+	// hybridDisplay surfaces them. Never serialised in default mode.
+	LinkedVia      string `json:"-"`
+	LinkedViaTitle string `json:"-"`
 }
 
 type searchWindow struct {
@@ -351,6 +355,13 @@ func (s *Search) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(results) > limit {
 		results = results[:limit]
+	}
+	if hybrid {
+		results, err = s.addLinkedThreads(ctx, results, filter, hardWindow, win)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 	}
 
 	if hybrid {

@@ -35,6 +35,8 @@ type hybridResult struct {
 	LastTSMs         int64              `json:"last_ts_ms,omitempty"`
 	PRCount          int                `json:"pr_count,omitempty"`
 	PRs              []prRef            `json:"prs,omitempty"`
+	LinkedVia        string             `json:"linked_via,omitempty"`
+	LinkedViaTitle   string             `json:"linked_via_title,omitempty"`
 }
 
 // hybridResponse is the /search?match=hybrid envelope: the page's
@@ -127,6 +129,10 @@ WHERE (channel_id, thread_ts) IN (SELECT unnest($1::text[]), unnest($2::text[]))
 			if _, ok := r.ScoreBreakdown.Ranks[arm]; ok {
 				res.Match = append(res.Match, arm)
 			}
+		}
+		if r.LinkedVia != "" {
+			res.Match = []string{"linked"}
+			res.LinkedVia, res.LinkedViaTitle = r.LinkedVia, r.LinkedViaTitle
 		}
 		if res.Title == "" {
 			res.Title = firstLine(bodies[r.NodeID], 120)
