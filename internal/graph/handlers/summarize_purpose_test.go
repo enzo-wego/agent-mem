@@ -119,7 +119,7 @@ func TestPurpose_JiraStored(t *testing.T) {
 	if mg.cheapGenerateCalls.Load() != 1 || mg.generateCalls.Load() != 0 {
 		t.Fatalf("cheap=%d generate=%d", mg.cheapGenerateCalls.Load(), mg.generateCalls.Load())
 	}
-	if r.purpose != "Decide whether to X." || !strings.HasPrefix(r.sig, "v2:") || r.failed != "" {
+	if r.purpose != "Decide whether to X." || !strings.HasPrefix(r.sig, "v3:") || r.failed != "" {
 		t.Fatalf("row=%+v", r)
 	}
 }
@@ -297,24 +297,46 @@ func TestPurpose_ModelError(t *testing.T) {
 	}
 }
 
-func seedV1Purpose(t *testing.T, pool *pgxpool.Pool, id string) {
+// retiredSig is the real signature of (title, body) under the retired v2 prefix.
+func retiredSig(title, body string) string {
+	return "v2:" + strings.TrimPrefix(purposeSignature(title, body), purposeSigVersion+":")
+}
+
+func seedV2Purpose(t *testing.T, pool *pgxpool.Pool, id, title, body string) {
 	t.Helper()
 	if _, err := pool.Exec(context.Background(),
 		`INSERT INTO graph.artifact_purposes (node_id, purpose, signature) VALUES ($1,'old',$2)`,
-		id, "v1:"+strings.Repeat("0", 64)); err != nil {
+		id, retiredSig(title, body)); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestPurpose_VersionBumpRetriesFailedV2(t *testing.T) {
+	pool, mg, deps := ppSetup(t, true)
+	ppNode(t, pool, "jira:B-4", "jira", "T", "", sp("body"))
+	if _, err := pool.Exec(context.Background(),
+		`INSERT INTO graph.artifact_purposes (node_id, purpose, signature, failed_signature) VALUES ($1,'','',$2)`,
+		"jira:B-4", retiredSig("T", "body")); err != nil {
+		t.Fatal(err)
+	}
+	if err := runPurpose(deps, "jira:B-4"); err != nil {
+		t.Fatal(err)
+	}
+	r := readPurpose(t, pool, "jira:B-4")
+	if mg.cheapGenerateCalls.Load() != 1 || r.purpose != "Decide X." || r.sig != purposeSignature("T", "body") || !strings.HasPrefix(r.sig, "v3:") || r.failed != "" {
+		t.Fatalf("row=%+v calls=%d", r, mg.cheapGenerateCalls.Load())
 	}
 }
 
 func TestPurpose_VersionBumpRegenerates(t *testing.T) {
 	pool, mg, deps := ppSetup(t, true)
 	ppNode(t, pool, "jira:B-1", "jira", "T", "", sp("body"))
-	seedV1Purpose(t, pool, "jira:B-1")
+	seedV2Purpose(t, pool, "jira:B-1", "T", "body")
 	if err := runPurpose(deps, "jira:B-1"); err != nil {
 		t.Fatal(err)
 	}
 	r := readPurpose(t, pool, "jira:B-1")
-	if mg.cheapGenerateCalls.Load() != 1 || r.purpose != "Decide X." || r.sig != purposeSignature("T", "body") || !strings.HasPrefix(r.sig, "v2:") {
+	if mg.cheapGenerateCalls.Load() != 1 || r.purpose != "Decide X." || r.sig != purposeSignature("T", "body") || !strings.HasPrefix(r.sig, "v3:") {
 		t.Fatalf("row=%+v calls=%d", r, mg.cheapGenerateCalls.Load())
 	}
 }
@@ -326,7 +348,7 @@ func TestPurpose_VersionBumpInvalidClears(t *testing.T) {
 VALUES ('jira:B-2','zebracrossing summary','heuristic','{}','test')`); err != nil {
 		t.Fatal(err)
 	}
-	seedV1Purpose(t, pool, "jira:B-2")
+	seedV2Purpose(t, pool, "jira:B-2", "zebracrossing title", "zebracrossing body")
 	h, err := NewSearch(pool)
 	if err != nil {
 		t.Fatal(err)
@@ -355,7 +377,7 @@ VALUES ('jira:B-2','zebracrossing summary','heuristic','{}','test')`); err != ni
 		t.Fatal(err)
 	}
 	r := readPurpose(t, pool, "jira:B-2")
-	if r.purpose != "" || r.sig != "" || r.failed != purposeSignature("zebracrossing title", "zebracrossing body") || !strings.HasPrefix(r.failed, "v2:") {
+	if r.purpose != "" || r.sig != "" || r.failed != purposeSignature("zebracrossing title", "zebracrossing body") || !strings.HasPrefix(r.failed, "v3:") {
 		t.Fatalf("row=%+v", r)
 	}
 	if m := search(); m["id"] != "jira:B-2" {
@@ -370,7 +392,7 @@ func TestPurpose_VersionBumpModelErrorKeeps(t *testing.T) {
 	boom := errors.New("gateway down")
 	mg.cheapGenerateResult = func() (string, error) { return "", boom }
 	ppNode(t, pool, "jira:B-3", "jira", "T", "", sp("body"))
-	seedV1Purpose(t, pool, "jira:B-3")
+	seedV2Purpose(t, pool, "jira:B-3", "T", "body")
 	before := readPurpose(t, pool, "jira:B-3")
 	if err := runPurpose(deps, "jira:B-3"); !errors.Is(err, boom) {
 		t.Fatalf("err=%v", err)
@@ -380,17 +402,16 @@ func TestPurpose_VersionBumpModelErrorKeeps(t *testing.T) {
 	}
 }
 
-func TestPurpose_PromptExample(t *testing.T) {
-	for _, want := range []string{"Text: Finance cannot split", "Good: Lets finance split"} {
-		found := false
-		for _, l := range strings.Split(purposeSystemPrompt, "\n") {
-			if strings.HasPrefix(l, want) {
-				found = true
-			}
-		}
-		if !found {
-			t.Fatalf("prompt lacks line %q", want)
-		}
+func TestPurpose_PromptExact(t *testing.T) {
+	const want = `You write the purpose line for a Jira ticket, Confluence page or GitHub pull request.
+Reply with JSON only: {"purpose": "..."}
+The purpose is ONE plain English sentence, ideally at most 20 words and 140 characters.
+It says WHY the item exists: the outcome, decision or effect it is for. The reader already sees the title, so do not repeat or paraphrase it; say what the title does not.
+Start with a verb or "So that". No markdown, no line breaks, no ticket keys.
+Use only facts stated in the text. Do not add numbers, counts, money amounts, team or audience names, or goals that the text does not state. If unsure, leave the detail out.
+If the text gives no purpose beyond the title, return {"purpose": ""}.`
+	if purposeSystemPrompt != want {
+		t.Fatalf("prompt differs:\n%s", purposeSystemPrompt)
 	}
 }
 

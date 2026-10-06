@@ -29,7 +29,7 @@ const (
 
 // purposeSigVersion prefixes every signature; bump it (with a prompt change) to
 // make every stored purpose stale.
-const purposeSigVersion = "v2"
+const purposeSigVersion = "v3"
 
 const (
 	purposeBodyRunes = 6000 // body code points fed to the model and the signature
@@ -41,13 +41,8 @@ Reply with JSON only: {"purpose": "..."}
 The purpose is ONE plain English sentence, ideally at most 20 words and 140 characters.
 It says WHY the item exists: the outcome, decision or effect it is for. The reader already sees the title, so do not repeat or paraphrase it; say what the title does not.
 Start with a verb or "So that". No markdown, no line breaks, no ticket keys.
-Say only what the text supports. If the text gives no purpose beyond the title, return {"purpose": ""}.
-
-Example
-Title: Store Checkout.com processing channel ID in partner_meta for Juspay payments
-Text: Finance cannot split Juspay-routed Checkout.com payments by processing channel in the monthly report, because we do not keep the channel ID.
-Bad: Store Checkout.com processing channel ID in partner_meta for Juspay-routed payments to enable channel-level reporting.
-Good: Lets finance split Juspay-routed Checkout.com payments by processing channel in the monthly report.`
+Use only facts stated in the text. Do not add numbers, counts, money amounts, team or audience names, or goals that the text does not state. If unsure, leave the detail out.
+If the text gives no purpose beyond the title, return {"purpose": ""}.`
 
 var purposeTypes = map[string]bool{"jira": true, "cf": true, "gh_pr": true}
 
