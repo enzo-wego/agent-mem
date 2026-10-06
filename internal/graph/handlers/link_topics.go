@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"sort"
 	"strings"
 	"time"
 
@@ -201,16 +202,34 @@ func linkTopicsHandler(deps Deps) jobs.Handler {
 //     but in this corpus 4 such ids spanned 51 pairs — session/artifact ids, not
 //     cases (one linked a node titled "Claude Artifact" to a PWA service-worker
 //     PR). Rarity capping does not help: 3 of the 4 sit under the cap.
-//   - A word with a trailing counter is refused. "scheduler1" is a legal
-//     payment-ref shape (s + 9 body chars + a digit) and reached production as a
-//     shared identifier. Digit-count thresholds cannot separate these: the
-//     verified real ref pxx6xgkdtl also carries a single digit.
+//   - Stop-listed words with a trailing counter ("scheduler1") are refused,
+//     from the same notPaymentRefStems map extractIdentifiers uses. A shape
+//     regex (letters then one digit) was dropped: it also refused real refs such
+//     as pzxxyivdo4 and pzxxzkwud2.
 //
-// ponytail: the word-plus-counter guard covers the observed class only. The real
-// fix is in extractIdentifiers, which needs re-indexing to change — see the bead.
-const caseRefSQL = `(sid ~ '^[psd][0-9b-oqrt-z]{9}$' AND sid ~ '[0-9]'
-     AND sid !~ '^[psd][a-z]{8}[0-9]$')
+// ponytail: only observed words are refused; see notPaymentRefStems.
+var caseRefSQL = buildCaseRefSQL(sortedStems(notPaymentRefStems))
+
+func sortedStems(m map[string]bool) []string {
+	stems := make([]string, 0, len(m))
+	for k := range m {
+		stems = append(stems, k)
+	}
+	sort.Strings(stems)
+	return stems
+}
+
+// buildCaseRefSQL renders the case-ref predicate for the given stop-list stems
+// (lower-case letters only; they are inlined unescaped).
+func buildCaseRefSQL(stems []string) string {
+	quoted := make([]string, len(stems))
+	for i, k := range stems {
+		quoted[i] = "'" + k + "'"
+	}
+	return `(sid ~ '^[psd][0-9b-oqrt-z]{9}$' AND sid ~ '[0-9]'
+     AND lower(regexp_replace(sid, '[0-9]+$', '')) <> ALL(ARRAY[` + strings.Join(quoted, ",") + `]::text[]))
   OR sid ~ '^a[0-9b-oqrt-z]{14}$'`
+}
 
 // caseMateCandidates nominates the case-mates of the source's confirmed
 // partners: if P is confirmed same topic with the source and Q shares a
