@@ -15,8 +15,8 @@ func parseScratchDSN(dsn string) (*pgxpool.Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("refusing to run: invalid DATABASE_URL: %w", err)
 	}
-	if cfg.ConnConfig.Database != "agentmem_test" {
-		return nil, fmt.Errorf("refusing to run: DATABASE_URL database name %q is not \"agentmem_test\"; tests may delete graph rows", cfg.ConnConfig.Database)
+	if db := cfg.ConnConfig.Database; db != "agentmem_test" && db != "agentmem_test_keysearch" {
+		return nil, fmt.Errorf("refusing to run: DATABASE_URL database name %q is not a scratch database (\"agentmem_test\" or \"agentmem_test_keysearch\"); tests may delete graph rows", db)
 	}
 	return cfg, nil
 }

@@ -4,10 +4,12 @@ import {
   fetchHealth,
   fetchCloudStats,
   fetchJiraUpdates,
+  fetchGHKeySearch,
   type SyncInfo,
   type HealthResponse,
   type StatsResponse,
   type JiraUpdatesStatus,
+  type GHKeySearchStatus,
 } from '../api'
 import { jiraSyncState, type JiraSyncState } from '../jiraSyncState'
 
@@ -56,6 +58,7 @@ export function SyncPage() {
       </div>
 
       <JiraFreshnessRow />
+      <GHKeySearchRow />
 
       {/* Sync Status */}
       <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
@@ -262,6 +265,63 @@ function JiraFreshnessRow() {
         )}
       </div>
       {state === 'error' && cfg?.last_error && (
+        <p className="mt-2 text-xs text-amber-700 dark:text-amber-300 font-mono break-all">{cfg.last_error}</p>
+      )}
+    </div>
+  )
+}
+
+type GHKeyState = 'disabled' | 'never' | 'error' | 'ok'
+
+const GH_KEY_STATE_STYLE: Record<GHKeyState, { dot: string; label: string }> = {
+  disabled: { dot: 'bg-gray-400', label: 'disabled' },
+  never: { dot: 'bg-amber-500', label: 'never succeeded' },
+  error: { dot: 'bg-amber-500', label: 'error' },
+  ok: { dot: 'bg-green-500', label: 'ok' },
+}
+
+function ghKeyState(cfg: GHKeySearchStatus | null): GHKeyState {
+  if (!cfg || !cfg.enabled) return 'disabled'
+  if (cfg.last_error) return 'error'
+  return cfg.last_ok_at ? 'ok' : 'never'
+}
+
+// GitHub PR key search: health of the refresh_gh_key_search poll. Refetched every 60 s.
+function GHKeySearchRow() {
+  const [cfg, setCfg] = useState<GHKeySearchStatus | null>(null)
+  const [now, setNow] = useState(() => new Date())
+
+  useEffect(() => {
+    const load = () =>
+      fetchGHKeySearch()
+        .then(setCfg)
+        .catch(() => setCfg(null))
+        .finally(() => setNow(new Date()))
+    load()
+    const id = setInterval(load, 60_000)
+    return () => clearInterval(id)
+  }, [])
+
+  const state = ghKeyState(cfg)
+  const style = GH_KEY_STATE_STYLE[state]
+  return (
+    <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
+      <div className="flex items-center justify-between text-sm">
+        <div className="flex items-center gap-2">
+          <span className={`inline-block w-2.5 h-2.5 rounded-full ${style.dot}`} />
+          <span className="font-semibold">GitHub PR key search</span>
+          <span className="text-gray-500">{style.label}</span>
+        </div>
+        {cfg && (
+          <div className="flex items-center gap-4 text-gray-500">
+            <span>Last run: {cfg.last_run_at ? relativeTime(cfg.last_run_at, now) : 'never'}</span>
+            <span>{cfg.last_linked ?? 0} linked</span>
+            <span>{cfg.last_unmatched ?? 0} unmatched</span>
+            <span>Cursor: {cfg.cursor ?? 'none'}</span>
+          </div>
+        )}
+      </div>
+      {cfg?.last_error && (
         <p className="mt-2 text-xs text-amber-700 dark:text-amber-300 font-mono break-all">{cfg.last_error}</p>
       )}
     </div>
