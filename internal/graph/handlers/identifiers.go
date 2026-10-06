@@ -36,6 +36,21 @@ var (
 	reRequestID  = regexp.MustCompile(`\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b`)
 )
 
+// notPaymentRefStems are English words that fit the payment-ref shape once a
+// counter is appended ("scheduler1" = s + 8 letters + digit).
+//
+// ponytail: only observed words are refused; add a stem when a new one shows up
+// in graph.artifact_index.identifiers. No heuristic separates them: on the hub
+// (2026-10-06) the letters-then-one-digit refs were scheduler1, scheduler2
+// (words) and pzxxyivdo4, pzxxzkwud2 (real payment refs); a dictionary lacks
+// "scheduler" and a vowel count fails (real p9xxyiooow has 4 vowels).
+var notPaymentRefStems = map[string]bool{"scheduler": true}
+
+// isPaymentRefWord reports whether tok minus its trailing digits is a stop-listed stem.
+func isPaymentRefWord(tok string) bool {
+	return notPaymentRefStems[strings.ToLower(strings.TrimRight(tok, "0123456789"))]
+}
+
 // extractIdentifiers returns the deduplicated, sorted identifiers found in
 // text. Frequency-based noise (an error code every thread quotes) is not
 // filtered here — the candidate generator applies the rarity cap where the
@@ -59,9 +74,13 @@ func extractIdentifiersWithOwnKey(text, ownKey string) []string {
 	}
 	for _, re := range []*regexp.Regexp{rePaymentRef, reActionRef} {
 		for _, m := range re.FindAllString(text, -1) {
-			if strings.ContainsAny(m, "0123456789") {
-				add(m)
+			if !strings.ContainsAny(m, "0123456789") {
+				continue
 			}
+			if re == rePaymentRef && isPaymentRefWord(m) {
+				continue
+			}
+			add(m)
 		}
 	}
 	for _, m := range reJiraKey.FindAllString(text, -1) {
