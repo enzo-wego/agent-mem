@@ -119,7 +119,7 @@ func TestPurpose_JiraStored(t *testing.T) {
 	if mg.cheapGenerateCalls.Load() != 1 || mg.generateCalls.Load() != 0 {
 		t.Fatalf("cheap=%d generate=%d", mg.cheapGenerateCalls.Load(), mg.generateCalls.Load())
 	}
-	if r.purpose != "Decide whether to X." || !strings.HasPrefix(r.sig, "v1:") || r.failed != "" {
+	if r.purpose != "Decide whether to X." || !strings.HasPrefix(r.sig, "v2:") || r.failed != "" {
 		t.Fatalf("row=%+v", r)
 	}
 }
@@ -227,8 +227,8 @@ func TestPurpose_InvalidOutput(t *testing.T) {
 		"null purpose":  `{"purpose": null}`,
 		"number":        `{"purpose": 5}`,
 		"two lines":     `{"purpose": "a\nb"}`,
-		"201 code pts":  `{"purpose": "` + strings.Repeat("x", 201) + `"}`,
-		"201 multibyte": `{"purpose": "` + strings.Repeat("é", 201) + `"}`,
+		"161 code pts":  `{"purpose": "` + strings.Repeat("x", 161) + `"}`,
+		"161 multibyte": `{"purpose": "` + strings.Repeat("é", 161) + `"}`,
 	}
 	for name, bad := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -270,9 +270,9 @@ func TestPurpose_InvalidOutput(t *testing.T) {
 			}
 		})
 	}
-	t.Run("200 multibyte is valid", func(t *testing.T) {
+	t.Run("160 multibyte is valid", func(t *testing.T) {
 		pool, mg, deps := ppSetup(t, true)
-		s := strings.Repeat("é", 200)
+		s := strings.Repeat("é", 160)
 		mg.cheapGenerateResult = func() (string, error) { return `{"purpose":"` + s + `"}`, nil }
 		ppNode(t, pool, "jira:P-1", "jira", "T", "", sp("body"))
 		if err := runPurpose(deps, "jira:P-1"); err != nil {
@@ -294,6 +294,103 @@ func TestPurpose_ModelError(t *testing.T) {
 	}
 	if readPurpose(t, pool, "jira:P-1").exists {
 		t.Fatal("row written on model error")
+	}
+}
+
+func seedV1Purpose(t *testing.T, pool *pgxpool.Pool, id string) {
+	t.Helper()
+	if _, err := pool.Exec(context.Background(),
+		`INSERT INTO graph.artifact_purposes (node_id, purpose, signature) VALUES ($1,'old',$2)`,
+		id, "v1:"+strings.Repeat("0", 64)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPurpose_VersionBumpRegenerates(t *testing.T) {
+	pool, mg, deps := ppSetup(t, true)
+	ppNode(t, pool, "jira:B-1", "jira", "T", "", sp("body"))
+	seedV1Purpose(t, pool, "jira:B-1")
+	if err := runPurpose(deps, "jira:B-1"); err != nil {
+		t.Fatal(err)
+	}
+	r := readPurpose(t, pool, "jira:B-1")
+	if mg.cheapGenerateCalls.Load() != 1 || r.purpose != "Decide X." || r.sig != purposeSignature("T", "body") || !strings.HasPrefix(r.sig, "v2:") {
+		t.Fatalf("row=%+v calls=%d", r, mg.cheapGenerateCalls.Load())
+	}
+}
+
+func TestPurpose_VersionBumpInvalidClears(t *testing.T) {
+	pool, mg, deps := ppSetup(t, true)
+	ppNode(t, pool, "jira:B-2", "jira", "zebracrossing title", "", sp("zebracrossing body"))
+	if _, err := pool.Exec(context.Background(), `INSERT INTO graph.artifact_index (node_id, summary, summary_kind, identifiers, machine_id)
+VALUES ('jira:B-2','zebracrossing summary','heuristic','{}','test')`); err != nil {
+		t.Fatal(err)
+	}
+	seedV1Purpose(t, pool, "jira:B-2")
+	h, err := NewSearch(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	search := func() map[string]any {
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, httptest.NewRequest("GET", "/api/graph/search?q=zebracrossing&match=hybrid", nil))
+		if w.Code != 200 {
+			t.Fatalf("status %d: %s", w.Code, w.Body)
+		}
+		var top map[string]any
+		if err := json.Unmarshal(w.Body.Bytes(), &top); err != nil {
+			t.Fatal(err)
+		}
+		rs := top["results"].([]any)
+		if len(rs) != 1 {
+			t.Fatalf("want node once, got %d", len(rs))
+		}
+		return rs[0].(map[string]any)
+	}
+	if m := search(); m["id"] != "jira:B-2" || m["purpose"] != "old" {
+		t.Fatalf("before: %v", m)
+	}
+	mg.cheapGenerateResult = func() (string, error) { return `not json`, nil }
+	if err := runPurpose(deps, "jira:B-2"); err != nil {
+		t.Fatal(err)
+	}
+	r := readPurpose(t, pool, "jira:B-2")
+	if r.purpose != "" || r.sig != "" || r.failed != purposeSignature("zebracrossing title", "zebracrossing body") || !strings.HasPrefix(r.failed, "v2:") {
+		t.Fatalf("row=%+v", r)
+	}
+	if m := search(); m["id"] != "jira:B-2" {
+		t.Fatalf("after: %v", m)
+	} else if _, ok := m["purpose"]; ok {
+		t.Fatalf("purpose key survived: %v", m)
+	}
+}
+
+func TestPurpose_VersionBumpModelErrorKeeps(t *testing.T) {
+	pool, mg, deps := ppSetup(t, true)
+	boom := errors.New("gateway down")
+	mg.cheapGenerateResult = func() (string, error) { return "", boom }
+	ppNode(t, pool, "jira:B-3", "jira", "T", "", sp("body"))
+	seedV1Purpose(t, pool, "jira:B-3")
+	before := readPurpose(t, pool, "jira:B-3")
+	if err := runPurpose(deps, "jira:B-3"); !errors.Is(err, boom) {
+		t.Fatalf("err=%v", err)
+	}
+	if after := readPurpose(t, pool, "jira:B-3"); after != before || after.purpose != "old" {
+		t.Fatalf("row changed: %+v -> %+v", before, after)
+	}
+}
+
+func TestPurpose_PromptExample(t *testing.T) {
+	for _, want := range []string{"Text: Finance cannot split", "Good: Lets finance split"} {
+		found := false
+		for _, l := range strings.Split(purposeSystemPrompt, "\n") {
+			if strings.HasPrefix(l, want) {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("prompt lacks line %q", want)
+		}
 	}
 }
 
