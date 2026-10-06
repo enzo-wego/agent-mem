@@ -13,7 +13,7 @@ export default mergeConfig(
     server: {
       port: 5199,
       strictPort: true,
-      proxy: undefined,
+      proxy: {},
     },
     plugins: [
       {

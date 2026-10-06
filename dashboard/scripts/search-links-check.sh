@@ -3,6 +3,9 @@
 set -u
 cd "$(dirname "$0")/.."
 SESSION=h07v-links
+if curl -s -o /dev/null http://localhost:5199/ || lsof -iTCP:5199 -sTCP:LISTEN >/dev/null 2>&1; then
+  echo "port 5199 already in use"; exit 1
+fi
 LOG=$(mktemp)
 npx vite --config scripts/vite.mock.config.ts >"$LOG" 2>&1 &
 SRV=$!

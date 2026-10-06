@@ -54,12 +54,16 @@ func (f *linkFixture) thread(seed, reply string) {
 
 // resolve returns the raw artifact JSON objects by node id.
 func (f *linkFixture) resolve(seeds []string, depth int) map[string]map[string]json.RawMessage {
+	return f.resolveAs(seeds, depth, 0)
+}
+
+func (f *linkFixture) resolveAs(seeds []string, depth, eeid int) map[string]map[string]json.RawMessage {
 	f.t.Helper()
 	h, err := handlers.NewResolve(f.pool)
 	if err != nil {
 		f.t.Fatal(err)
 	}
-	body, _ := json.Marshal(map[string]any{"seeds": seeds, "depth": depth, "asker_eeid": 0, "include_bodies": false, "budget_tokens": 100000})
+	body, _ := json.Marshal(map[string]any{"seeds": seeds, "depth": depth, "asker_eeid": eeid, "include_bodies": false, "budget_tokens": 100000})
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	req := httptest.NewRequest("POST", "/api/graph/resolve", strings.NewReader(string(body))).WithContext(ctx)
@@ -148,10 +152,11 @@ func TestResolveLinks_MultiSeedBestConfidence(t *testing.T) {
 	f.node(s1, "slack_thread")
 	f.node(s2, "slack_thread")
 	f.node(o, "slack_thread")
-	f.edge(s1, o, "SAME_TOPIC", `{"confidence":0.70,"why":"w1"}`)
-	f.edge(o, s2, "SAME_TOPIC", `{"confidence":0.90,"why":"w2"}`)
+	// Higher confidence belongs to the edge that LOSES the (from,to) tie-break.
+	f.edge(s1, o, "SAME_TOPIC", `{"confidence":0.90,"why":"w1"}`)
+	f.edge(o, s2, "SAME_TOPIC", `{"confidence":0.70,"why":"w2"}`)
 	arts := f.resolve([]string{s1, s2}, 2)
-	f.wantLinks(arts, o, []map[string]any{{"kind": "SAME_TOPIC", "why": "w2", "confidence": 0.9}})
+	f.wantLinks(arts, o, []map[string]any{{"kind": "SAME_TOPIC", "why": "w1", "confidence": 0.9}})
 }
 
 func TestResolveLinks_TieSmallestEdge(t *testing.T) {
@@ -211,8 +216,33 @@ func TestResolveLinks_ThreadSiblingWithStoredThread(t *testing.T) {
 		f := newLinkFixture(t)
 		s, r := "slack:C9:100.000001", "slack:C9:100.000002"
 		f.thread(s, r)
-		f.edge(s, r, "THREAD", "")
+		f.edge(s, r, "THREAD", `{"why":"stored"}`)
 		arts := f.resolve([]string{s}, depth)
-		f.wantLinks(arts, r, []map[string]any{{"kind": "THREAD"}})
+		f.wantLinks(arts, r, []map[string]any{{"kind": "THREAD", "why": "stored"}})
 	}
+}
+
+func TestResolveLinks_HiddenSeedDerivesNoLinks(t *testing.T) {
+	f := newLinkFixture(t)
+	s, n := "slack:SEED:1", "jira:VIS"
+	f.node(s, "slack_thread")
+	f.node(n, "jira")
+	if _, err := f.pool.Exec(context.Background(), `UPDATE graph.nodes SET scope='slack:PRIVATE' WHERE id=$1`, s); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.pool.Exec(context.Background(), `UPDATE graph.nodes SET scope='public' WHERE id=$1`, n); err != nil {
+		t.Fatal(err)
+	}
+	f.edge(s, n, "REFERENCES", "")
+	// Unfiltered asker sees the link (guards the fixture).
+	f.wantLinks(f.resolve([]string{s}, 2), n, []map[string]any{{"kind": "REFERENCES"}})
+	// Asker 424242 has no scopes: seed hidden, neighbour visible, no links.
+	arts := f.resolveAs([]string{s}, 2, 424242)
+	if _, ok := arts[s]; ok {
+		t.Fatal("hidden seed returned")
+	}
+	if _, ok := arts[n]; !ok {
+		t.Fatal("visible neighbour missing")
+	}
+	f.wantLinks(arts, n, nil)
 }

@@ -376,7 +376,14 @@ WHERE n.id = ANY($1)`, ids); aErr == nil {
 		resp.ContextTokens += hyd.Tokens
 	}
 	// Why each non-seed artifact is joined to a seed (best-effort).
-	linksByID := h.seedLinks(ctx, canonSeeds, seedSibs, hydrated)
+	// Only seeds the asker may see: a hidden seed must not leak via its links.
+	visibleSeeds := make([]string, 0, len(canonSeeds))
+	for _, s := range canonSeeds {
+		if aclErr == nil && allowedIDs[s] {
+			visibleSeeds = append(visibleSeeds, s)
+		}
+	}
+	linksByID := h.seedLinks(ctx, visibleSeeds, seedSibs, hydrated)
 	for i := range resp.Artifacts {
 		resp.Artifacts[i].Links = linksByID[resp.Artifacts[i].NodeID]
 	}
