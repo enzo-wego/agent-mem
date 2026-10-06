@@ -18,6 +18,7 @@ type hybridResult struct {
 	Title            string             `json:"title"`
 	URL              string             `json:"url"`
 	Summary          string             `json:"summary"`
+	Purpose          string             `json:"purpose,omitempty"`
 	Decisions        []threadDecision   `json:"decisions,omitempty"`
 	OpenQuestions    []string           `json:"open_questions,omitempty"`
 	Score            float64            `json:"score"`
@@ -122,7 +123,7 @@ WHERE (channel_id, thread_ts) IN (SELECT unnest($1::text[]), unnest($2::text[]))
 	for _, r := range results {
 		res := hybridResult{
 			NodeID: r.NodeID, ID: r.ID, Type: r.Type, Title: r.Title, URL: r.URL,
-			Summary: r.Summary, Score: r.Score, ScoreBreakdown: r.ScoreBreakdown,
+			Summary: r.Summary, Purpose: r.Purpose, Score: r.Score, ScoreBreakdown: r.ScoreBreakdown,
 			Author: r.Author, CreatedAt: r.CreatedAt, Match: []string{},
 		}
 		for _, arm := range []string{armKeyword, armSemantic} {

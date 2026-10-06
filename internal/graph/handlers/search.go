@@ -75,6 +75,8 @@ type searchResult struct {
 	ScoreBreakdown scoring.Components `json:"score_breakdown"`
 	Author         string             `json:"author,omitempty"`
 	CreatedAt      time.Time          `json:"created_at"`
+	// Purpose is the model-written purpose sentence (hybrid display only).
+	Purpose string `json:"-"`
 	// LinkedVia/LinkedViaTitle are set only on hybrid linked-thread rows;
 	// hybridDisplay surfaces them. Never serialised in default mode.
 	LinkedVia      string `json:"-"`
@@ -427,6 +429,7 @@ func (s *Search) hydrateResults(ctx context.Context, ids []string, f searchFilte
 	rows, err := s.db.Query(ctx, `
 SELECT n.id, n.type, COALESCE(n.title,''), COALESCE(n.url,''),
        COALESCE(ai.summary,''),
+       COALESCE(ap.purpose,''),
        COALESCE(p.display_name,''),
        n.updated_at,
        COALESCE(n.created_at, n.first_seen_at) AS created_at,
@@ -434,6 +437,7 @@ SELECT n.id, n.type, COALESCE(n.title,''), COALESCE(n.url,''),
        COALESCE(p.eeid, 0)
 FROM graph.nodes n
 LEFT JOIN graph.artifact_index ai ON ai.node_id = n.id
+LEFT JOIN graph.artifact_purposes ap ON ap.node_id = n.id
 LEFT JOIN graph.people p ON p.id = n.author_person_id
 WHERE n.id = ANY($1)
   AND `+f.sql(2, 3, 4), append([]any{ids}, f.args()...)...)
@@ -442,16 +446,16 @@ WHERE n.id = ANY($1)
 	}
 	defer rows.Close()
 	type hydrated struct {
-		id, typ, title, url, summary, authorName string
-		updatedAt, createdAt                     time.Time
-		depth                                    int16
-		authorEEID                               int
+		id, typ, title, url, summary, purpose, authorName string
+		updatedAt, createdAt                              time.Time
+		depth                                             int16
+		authorEEID                                        int
 	}
 	var loaded []hydrated
 	var authors []int
 	for rows.Next() {
 		var h hydrated
-		if err := rows.Scan(&h.id, &h.typ, &h.title, &h.url, &h.summary, &h.authorName,
+		if err := rows.Scan(&h.id, &h.typ, &h.title, &h.url, &h.summary, &h.purpose, &h.authorName,
 			&h.updatedAt, &h.createdAt, &h.depth, &h.authorEEID); err != nil {
 			return nil, err
 		}
@@ -483,6 +487,7 @@ WHERE n.id = ANY($1)
 		results = append(results, searchResult{
 			NodeID: h.id, ID: h.id, Type: h.typ, Title: h.title, URL: h.url,
 			Summary:        h.summary,
+			Purpose:        h.purpose,
 			Score:          scoring.Boost(fz.Score, alphas, c.Rec, c.Team, c.Temporal, c.Auth),
 			ScoreBreakdown: c,
 			Author:         h.authorName, CreatedAt: h.createdAt,

@@ -76,6 +76,12 @@ WHERE ai.node_id = $1`, nodeID,
 		if err == nil && refreshedAt != nil && time.Since(*refreshedAt) < 24*time.Hour &&
 			(summaryUpdatedAt == nil || !summaryUpdatedAt.After(*refreshedAt)) &&
 			(bodyFetchedAt == nil || !bodyFetchedAt.After(*refreshedAt)) {
+			// Also queue on this path: a lost enqueue after the commit would
+			// otherwise never be retried (the retry lands here).
+			var freshType string
+			if deps.DB.QueryRow(ctx, `SELECT type FROM graph.nodes WHERE id = $1`, nodeID).Scan(&freshType) == nil {
+				enqueuePurpose(ctx, deps, nodeID, freshType)
+			}
 			return nil // fresh enough
 		}
 	}
@@ -218,6 +224,7 @@ SELECT EXISTS (
 	if (nodeType != "slack" && nodeType != "slack_thread") || summaryKind == "thread_summary" {
 		enqueueLinkTopics(ctx, deps, nodeID, linkTopicsForceFromIndexArtifact(force), skipJudging)
 	}
+	enqueuePurpose(ctx, deps, nodeID, nodeType)
 	return nil
 }
 

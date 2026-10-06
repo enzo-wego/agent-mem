@@ -70,6 +70,8 @@ func Mount(r chi.Router, deps Deps) {
 	r.Put("/api/graph/boost-alphas", channels.putBoostAlphas)
 	r.Get("/api/graph/epic-briefs", channels.getEpicBriefsConfig)
 	r.Put("/api/graph/epic-briefs", channels.putEpicBriefsConfig)
+	r.Get("/api/graph/purpose", channels.getPurposeConfig)
+	r.Put("/api/graph/purpose", channels.putPurposeConfig)
 	r.Get("/api/graph/slack-members", channels.getSlackMembersConfig)
 	r.Put("/api/graph/slack-members", channels.putSlackMembersConfig)
 	jiraUpdates := NewJiraUpdatesHandler(deps)
