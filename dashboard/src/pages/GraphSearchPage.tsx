@@ -82,6 +82,31 @@ const EV_META: Record<Ev, { label: string; glyph: string; color: string; rank: n
 const SEED_FILTERS: Ev[] = ['direct', 'judge', 'similar', 'hop2']
 const FREE_FILTERS: Ev[] = ['keyword', 'semantic', 'both', 'linked']
 
+const SNIPPET_MAX = 160
+
+// railSnippet turns a search summary (usually "<title> <body>") into a short
+// body-only blurb for the resource rail.
+export function railSnippet(title: string, jiraKey: string, summary: string): string {
+  const t = title.replace(/\s+/g, ' ').trim()
+  let s = summary.replace(/\s+/g, ' ').trim()
+  const prefixes = jiraKey ? [`${jiraKey} ${t}`, `${jiraKey}: ${t}`, `${jiraKey} - ${t}`, t] : [t]
+  for (const p of prefixes) {
+    if (p && s.startsWith(p) && (s.length === p.length || ' :-.,'.includes(s[p.length]))) {
+      s = s.slice(p.length)
+      break
+    }
+  }
+  s = s.replace(/^[ :\-.,—]+/, '')
+  const chars = Array.from(s)
+  if (chars.length > SNIPPET_MAX) {
+    let cut = chars.slice(0, SNIPPET_MAX - 1).join('')
+    const sp = cut.lastIndexOf(' ')
+    if (sp >= 0) cut = cut.slice(0, sp)
+    s = cut.trim() + '…'
+  }
+  return s
+}
+
 interface Item {
   key: string // sync id: thread root id for Slack, node id otherwise
   group: Group
@@ -92,6 +117,8 @@ interface Item {
   openQuestions: string[]
   channel: string
   rootAuthor: string
+  author: string // reporter for Jira, page author for docs; '' in seed mode
+  snippet: string // short rail summary; free-text mode only
   participants: string[]
   participantCount: number
   msgCount: number
@@ -218,6 +245,8 @@ function buildSeedItems(rows: GraphNeighbor[], seedRoot: string): { items: Item[
         openQuestions: nd.open_questions || [],
         channel: nd.channel || '',
         rootAuthor: nd.root_author || '',
+        author: '',
+        snippet: '',
         participants: nd.participants || [],
         participantCount: nd.participant_count || 0,
         msgCount: nd.msg_count || 0,
@@ -275,6 +304,8 @@ function buildFreeItems(results: HybridSearchResult[]): Item[] {
       title: r.title || '',
       url: r.url || '',
       overview: r.summary || '',
+      author: r.author || '',
+      snippet: railSnippet(r.title || '', r.type === 'jira' ? r.node_id.replace(/^jira:/, '') : '', r.summary || ''),
       decisions: r.decisions || [],
       openQuestions: r.open_questions || [],
       channel: r.channel || '',
@@ -415,7 +446,7 @@ const PAGE_CSS = `
 .sp-top form{flex:1;min-width:160px}
 .sp-top input{font:inherit;color:${C.text};background:${C.bg};border:1px solid ${C.border};border-radius:6px;padding:9px 12px;width:100%;outline:none}
 .sp-top input:focus{border-color:${C.green}}
-.sp-wrap{max-width:1440px;margin:0 auto;padding:16px;display:grid;grid-template-columns:minmax(0,1fr) 360px;gap:20px;align-items:start}
+.sp-wrap{max-width:none;margin:0 auto;padding:16px;display:grid;grid-template-columns:minmax(0,1fr) 420px;gap:20px;align-items:start}
 .sp-main{display:flex;flex-direction:column;gap:16px;min-width:0}
 .sp-card{background:${C.panel};border:1px solid ${C.border};border-radius:8px;padding:16px 18px}
 .sp-kick{font-size:11px;color:${C.dim};letter-spacing:.08em;text-transform:uppercase;display:flex;gap:10px;flex-wrap:wrap}
@@ -495,6 +526,8 @@ const PAGE_CSS = `
 .sp-rr.sel{outline:1px solid ${C.green}}
 .sp-rr .t{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .sp-rr .a{color:${C.dim2};font-size:10.5px}
+.sp-rr .by,.sp-rr .sn{grid-column:2 / -1;color:${C.dim2};font-size:10.5px}
+.sp-rr .sn{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .sp-ppl{display:flex;flex-wrap:wrap;gap:4px}
 .sp-ppl span{font-size:11px;padding:2px 8px;border:1px solid ${C.border};border-radius:999px}
 .sp-ppl span i{font-style:normal;color:${C.dim}}
@@ -1106,7 +1139,7 @@ export function GraphSearchPage() {
       <div className="sp-rail">
         <div className="sp-card">
           <div className="sp-rt">By resource</div>
-          {GROUPS.map((g) => {
+          {GROUPS.filter((g) => g.key !== 'slack').map((g) => {
             const rows = items.filter((i) => i.group === g.key).sort((a, b) => b.last - a.last)
             if (rows.length === 0) return null
             const latest = rows[0].last
@@ -1128,12 +1161,13 @@ export function GraphSearchPage() {
                     <span style={{ color: EV_META[it.ev].color, textAlign: 'center' }}>{EV_META[it.ev].glyph}</span>
                     <span className="t">
                       {it.jiraKey ? `${it.jiraKey} ` : ''}
-                      {it.group === 'slack' && it.channel ? `#${it.channel} · ` : ''}
                       {it.title}
                     </span>
                     <span className="a">
                       {it.group === 'jira' && it.prCount > 0 ? `⎇ ${it.prCount}${it.last > 0 ? ` · ${ago(it.last)}` : ''}` : it.last > 0 ? ago(it.last) : ''}
                     </span>
+                    {it.author && <span className="by">by {it.author}</span>}
+                    {it.snippet && <span className="sn">{it.snippet}</span>}
                   </div>
                 ))}
               </div>
