@@ -10,7 +10,7 @@ import (
 func TestConfirmTopicLinkPreambleWrappedJSON(t *testing.T) {
 	gem := &mockGemini{cheapGenerateResult: func() (string, error) {
 		return "Here is the judgment:\n```json\n" +
-			`{"same_topic":true,"confidence":0.91,"topic":"Checkout blacklist","why":"same issue"}` + "\n```", nil
+			`{"same_topic":true,"confidence":0.91,"topic":"Checkout blacklist","why":"same issue","evidence_a":"Checkout blacklist","evidence_b":"Checkout blacklist"}` + "\n```", nil
 	}}
 
 	got, err := confirmTopicLink(context.Background(), Deps{Gemini: gem},

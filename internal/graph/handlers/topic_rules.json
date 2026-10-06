@@ -1,6 +1,6 @@
 {
-  "version": 4,
-  "updated": "2026-07-27",
+  "version": 5,
+  "updated": "2026-10-06",
   "purpose": "Single source of truth for how the topic linker decides two artifacts are the SAME topic. The LLM judge applies these rules at runtime, /live/rules renders them for humans, and agents read this same file in the repo. Candidates are only nominations; these rules decide.",
   "how_it_works": [
     "1. Candidates come from three generators: (a) embedding cosine over thread/resource summaries (adaptive cutoff: mean+2σ over the corpus, floor 0.65), (b) shared RARE identifiers extracted from raw thread text — payment refs, Jira keys, PR refs, request ids — regardless of cosine and regardless of age, (c) explicit references: a pasted Slack permalink becomes a deterministic REFERS_TO edge, no LLM.",
@@ -74,6 +74,7 @@
     "Same partner or same vocabulary is NEVER sufficient on its own.",
     "SIBLING CASES OF ONE DEFECT: different payment/order/booking ids are NOT on their own a DIFFERENT signal. Two artifacts reporting the SAME symptom on the SAME object (e.g. duplicated refund records on a payment), the same partner and the same flow, whose activity windows overlap or sit ≤7 days apart, are the SAME topic — one defect observed on two cases. Answer DIFFERENT only when the artifacts name genuinely distinct mechanisms, not merely distinct ids.",
     "DISCRIMINATORS — clear all three before answering SAME; a mismatch in any one means DIFFERENT however similar the wording and however high the cosine: (a) TRANSACTION TYPE (authorize / capture / refund / void / dispute / payout) — a duplicated PAYMENT is not a duplicated REFUND; (b) THE OBJECT WHOSE STATE IS WRONG — a wrong payment STATUS (Voided vs Captured, a status-sync mismatch) is not a duplicated refund RECORD; (c) METHOD FAMILY (card / wallet / BNPL / bank / crypto) — a crypto (TripleA) overpayment is not a card refund defect even when routed through the same partner.",
+    "SAME AREA IS NOT SAME TOPIC: two artifacts in the same programme, epic, partner integration or bug class are DIFFERENT unless both name the same concrete work item, case, defect or decision. Sibling tickets under one epic are DIFFERENT; a ticket and the PR that implements it are SAME; a change and its direct follow-up, rollout or rollback are SAME. The same kind of bug years apart is DIFFERENT unless both name the same mechanism.",
     "When genuinely uncertain after applying the rules, answer DIFFERENT (precision over recall — a missed link is cheaper than a wrong one)."
   ],
   "domains": {

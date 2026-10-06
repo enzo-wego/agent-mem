@@ -47,7 +47,7 @@ func TestConfirmTopicLinkReturnsTransientOnUnparseableJSON(t *testing.T) {
 func TestConfirmTopicLinkUsesCheapGeneratePath(t *testing.T) {
 	gem := &mockGemini{}
 	gem.cheapGenerateResult = func() (string, error) {
-		return `{"same_topic":true,"confidence":0.91,"topic":"Checkout blacklist","why":"Both describe blocking checkout emails"}`, nil
+		return `{"same_topic":true,"confidence":0.91,"topic":"Checkout blacklist","why":"Both describe blocking checkout emails","evidence_a":"Checkout email blacklist","evidence_b":"Checkout email blacklist"}`, nil
 	}
 	deps := Deps{Gemini: gem}
 
