@@ -298,7 +298,10 @@ func queueStaleJiraNodes(ctx context.Context, deps Deps, baseURL, email, token, 
 	rows, err := deps.DB.Query(ctx, `
 		SELECT n.id FROM unnest($1::text[], $2::timestamptz[]) AS j(key, upd)
 		JOIN graph.nodes n ON n.id = 'jira:' || j.key
-		WHERE n.type='jira' AND n.deleted_at IS NULL AND coalesce(n.body,'') <> ''
+		WHERE n.type='jira' AND n.deleted_at IS NULL
+		  -- skip never-fetched stubs; a node fetched while its description was
+		  -- still empty has body_ts set and must be re-fetched once Jira changes
+		  AND (coalesce(n.body,'') <> '' OR n.body_ts IS NOT NULL)
 		  AND (n.body_ts IS NULL OR n.body_ts < j.upd)`, keys, updated)
 	if err != nil {
 		return 0, fmt.Errorf("select candidates: %w", err)
