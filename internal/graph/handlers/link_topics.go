@@ -208,16 +208,26 @@ func linkTopicsHandler(deps Deps) jobs.Handler {
 //     as pzxxyivdo4 and pzxxzkwud2.
 //
 // ponytail: only observed words are refused; see notPaymentRefStems.
-var caseRefSQL = buildCaseRefSQL()
+var caseRefSQL = buildCaseRefSQL(sortedStems(notPaymentRefStems))
 
-func buildCaseRefSQL() string {
-	stems := make([]string, 0, len(notPaymentRefStems))
-	for k := range notPaymentRefStems {
-		stems = append(stems, "'"+k+"'")
+func sortedStems(m map[string]bool) []string {
+	stems := make([]string, 0, len(m))
+	for k := range m {
+		stems = append(stems, k)
 	}
 	sort.Strings(stems)
+	return stems
+}
+
+// buildCaseRefSQL renders the case-ref predicate for the given stop-list stems
+// (lower-case letters only; they are inlined unescaped).
+func buildCaseRefSQL(stems []string) string {
+	quoted := make([]string, len(stems))
+	for i, k := range stems {
+		quoted[i] = "'" + k + "'"
+	}
 	return `(sid ~ '^[psd][0-9b-oqrt-z]{9}$' AND sid ~ '[0-9]'
-     AND lower(regexp_replace(sid, '[0-9]+$', '')) <> ALL(ARRAY[` + strings.Join(stems, ",") + `]))
+     AND lower(regexp_replace(sid, '[0-9]+$', '')) <> ALL(ARRAY[` + strings.Join(quoted, ",") + `]::text[]))
   OR sid ~ '^a[0-9b-oqrt-z]{14}$'`
 }
 
