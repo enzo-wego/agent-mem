@@ -6,6 +6,7 @@ import {
   type SearchResult,
   type ResolveArtifact,
 } from '../api'
+import { linkChips } from './linkChips'
 
 export function SearchPage({ project }: { project: string }) {
   const [query, setQuery] = useState('')
@@ -113,26 +114,40 @@ export function SearchPage({ project }: { project: string }) {
         </p>
       )}
       <div className="space-y-3">
-        {linked.map((a) => (
-          <div key={a.node_id} className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
+        {linked.map((a) => {
+          const { chips, why } = linkChips(a.links)
+          return (
+          <div key={a.node_id} data-linked-item className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
             <div className="flex items-center gap-2 mb-1">
               <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400">
                 {a.type}
               </span>
-              <span className="text-xs text-gray-400">hop {a.hop}</span>
+              {chips.map((c) => (
+                <span
+                  key={c.label}
+                  data-link-chip
+                  title={c.title}
+                  className="text-xs px-2 py-0.5 rounded-full bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400"
+                >
+                  {c.label}
+                </span>
+              ))}
+              <span data-hop className="text-xs text-gray-400">hop {a.hop}</span>
               {a.score !== undefined && (
                 <span className="text-xs text-gray-400">score: {a.score.toFixed(2)}</span>
               )}
               {a.author && <span className="text-xs text-gray-400">{a.author}</span>}
             </div>
             <h4 className="font-medium text-sm">{a.title || a.node_id}</h4>
+            {why && <p data-link-why className="text-xs text-gray-400">{why}</p>}
             {a.url && (
               <a href={a.url} target="_blank" rel="noreferrer" className="text-xs text-blue-500 hover:underline">
                 {a.url}
               </a>
             )}
           </div>
-        ))}
+          )
+        })}
       </div>
 
       {/* ── Keyword search mode ── */}

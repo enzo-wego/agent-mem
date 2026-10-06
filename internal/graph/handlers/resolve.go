@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/rs/zerolog/log"
 
 	"github.com/agent-mem/agent-mem/internal/graph/acl"
 	"github.com/agent-mem/agent-mem/internal/graph/bfs"
@@ -51,6 +52,16 @@ type resolveArtifact struct {
 	Body           string             `json:"body,omitempty"`
 	Hop            int                `json:"hop"`
 	Via            []string           `json:"via,omitempty"`
+	Links          []resolveLink      `json:"links,omitempty"`
+}
+
+// resolveLink says how a non-seed artifact is joined directly to a seed.
+type resolveLink struct {
+	Kind       string  `json:"kind"`
+	Tag        string  `json:"tag,omitempty"`
+	Topic      string  `json:"topic,omitempty"`
+	Why        string  `json:"why,omitempty"`
+	Confidence float64 `json:"confidence,omitempty"`
 }
 
 type resolveTrace struct {
@@ -201,6 +212,7 @@ func (h *Resolve) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	sort.Strings(level)
 	nbrs := make(map[string][]bfs.Neighbor)
+	var seedSibs map[string]map[string]bool
 	for c := 0; c < req.Depth && len(level) > 0; c++ {
 		sibs := make(map[string]map[string]bool)
 		for _, id := range level {
@@ -219,6 +231,9 @@ func (h *Resolve) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					sibs[id][sibling] = true
 				}
 			}
+		}
+		if c == 0 {
+			seedSibs = sibs
 		}
 		if c+1 == req.Depth {
 			break
@@ -359,6 +374,18 @@ WHERE n.id = ANY($1)`, ids); aErr == nil {
 			Body: body, Hop: hop,
 		})
 		resp.ContextTokens += hyd.Tokens
+	}
+	// Why each non-seed artifact is joined to a seed (best-effort).
+	// Only seeds the asker may see: a hidden seed must not leak via its links.
+	visibleSeeds := make([]string, 0, len(canonSeeds))
+	for _, s := range canonSeeds {
+		if aclErr == nil && allowedIDs[s] {
+			visibleSeeds = append(visibleSeeds, s)
+		}
+	}
+	linksByID := h.seedLinks(ctx, visibleSeeds, seedSibs, hydrated)
+	for i := range resp.Artifacts {
+		resp.Artifacts[i].Links = linksByID[resp.Artifacts[i].NodeID]
 	}
 	// The seed must stay identifiable even when its own body blows the budget
 	// and hydration skips it (a 16KB Slack thread root does). The dashboard
@@ -578,4 +605,135 @@ INSERT INTO graph.jobs (type, payload, priority, machine_id)
 VALUES ('fetch_body', jsonb_build_object('node_id', $1::text), 0, 'resolver')
 ON CONFLICT DO NOTHING
 `, nodeID)
+}
+
+var resolveLinkOrder = map[string]int{"REFERENCES": 0, "REFERS_TO": 1, "THREAD": 2, "SAME_TOPIC": 3, "PART_OF": 4}
+
+type linkPick struct {
+	link     resolveLink
+	from, to string
+}
+
+// better reports whether p beats q: higher confidence, then smaller (from, to).
+func (p linkPick) better(q linkPick) bool {
+	if p.link.Confidence != q.link.Confidence {
+		return p.link.Confidence > q.link.Confidence
+	}
+	if p.from != q.from {
+		return p.from < q.from
+	}
+	return p.to < q.to
+}
+
+// seedLinks maps each hydrated non-seed node joined directly to a seed to one
+// entry per edge kind (the most confident stored edge, complete tuple) plus a
+// synthetic THREAD entry for thread siblings. Best-effort: on failure it logs
+// and returns nil.
+func (h *Resolve) seedLinks(ctx context.Context, seeds []string, seedSibs map[string]map[string]bool, hydrated []hydrate.Hydrated) map[string][]resolveLink {
+	seedSet := make(map[string]bool, len(seeds))
+	for _, s := range seeds {
+		seedSet[s] = true
+	}
+	var others []string
+	otherSet := make(map[string]bool, len(hydrated))
+	for _, hyd := range hydrated {
+		if !seedSet[hyd.NodeID] {
+			others = append(others, hyd.NodeID)
+			otherSet[hyd.NodeID] = true
+		}
+	}
+	if len(others) == 0 || len(seeds) == 0 {
+		return nil
+	}
+	rows, err := h.db.Query(ctx, `
+SELECT from_node_id, to_node_id, kind, metadata
+FROM graph.edges
+WHERE (from_node_id = ANY($1) AND to_node_id = ANY($2))
+   OR (to_node_id = ANY($1) AND from_node_id = ANY($2))`, seeds, others)
+	if err != nil {
+		log.Warn().Err(err).Msg("resolve: link query failed")
+		return nil
+	}
+	defer rows.Close()
+	best := make(map[string]map[string]linkPick)
+	for rows.Next() {
+		var from, to, kind string
+		var meta map[string]any
+		if err := rows.Scan(&from, &to, &kind, &meta); err != nil {
+			log.Warn().Err(err).Msg("resolve: link scan failed")
+			return nil
+		}
+		other := to
+		if otherSet[from] {
+			other = from
+		}
+		l := resolveLink{Kind: kind}
+		l.Tag, _ = meta["tag"].(string)
+		l.Topic, _ = meta["topic"].(string)
+		l.Why, _ = meta["why"].(string)
+		l.Confidence, _ = meta["confidence"].(float64)
+		p := linkPick{link: l, from: from, to: to}
+		if best[other] == nil {
+			best[other] = make(map[string]linkPick)
+		}
+		if cur, ok := best[other][kind]; !ok || p.better(cur) {
+			best[other][kind] = p
+		}
+	}
+	if err := rows.Err(); err != nil {
+		log.Warn().Err(err).Msg("resolve: link rows failed")
+		return nil
+	}
+
+	for _, s := range seeds {
+		if !strings.HasPrefix(s, "slack:") {
+			continue
+		}
+		sibs, ok := seedSibs[s]
+		if !ok {
+			list, err := h.exp.ThreadSiblings(ctx, s)
+			if err != nil {
+				log.Warn().Err(err).Str("seed", s).Msg("resolve: thread siblings failed")
+				continue
+			}
+			sibs = make(map[string]bool, len(list))
+			for _, id := range list {
+				sibs[id] = true
+			}
+		}
+		for id := range sibs {
+			if !otherSet[id] {
+				continue
+			}
+			if best[id] == nil {
+				best[id] = make(map[string]linkPick)
+			}
+			if _, ok := best[id]["THREAD"]; !ok {
+				best[id]["THREAD"] = linkPick{link: resolveLink{Kind: "THREAD"}}
+			}
+		}
+	}
+
+	out := make(map[string][]resolveLink, len(best))
+	for id, byKind := range best {
+		links := make([]resolveLink, 0, len(byKind))
+		for _, p := range byKind {
+			links = append(links, p.link)
+		}
+		rank := func(k string) int {
+			if r, ok := resolveLinkOrder[k]; ok {
+				return r
+			}
+			return len(resolveLinkOrder)
+		}
+		sort.Slice(links, func(i, j int) bool {
+			ri, rj := rank(links[i].Kind), rank(links[j].Kind)
+			if ri != rj {
+				return ri < rj
+			}
+			return links[i].Kind < links[j].Kind
+		})
+		out[id] = links
+	}
+	return out
 }

@@ -1,0 +1,15 @@
+{
+  "context_tokens": 100,
+  "graph_trace": {"seeds": ["slack:C012A121AQJ:1783576586.388629"], "expanded_nodes": 9, "after_acl": 9, "after_score_threshold": 9, "took_ms": 1},
+  "artifacts": [
+    {"node_id": "slack:C012A121AQJ:1783576586.388629", "type": "slack_thread", "title": "Seed thread", "url": "https://wego.slack.com/archives/C012A121AQJ/p1783576586388629", "score": 1, "hop": 0},
+    {"node_id": "gh_pr:wego/x#1", "type": "gh_pr", "title": "Hop two item", "score": 0.30, "hop": 2},
+    {"node_id": "jira:EPIC-1", "type": "jira", "title": "Part of item", "score": 0.40, "hop": 1, "links": [{"kind": "PART_OF"}]},
+    {"node_id": "slack:C1:2", "type": "slack", "title": "Topic with why", "score": 0.80, "hop": 1, "links": [{"kind": "SAME_TOPIC", "tag": "bug_incident", "topic": "refund dup", "why": "same mechanism", "confidence": 0.91}]},
+    {"node_id": "jira:REF-1", "type": "jira", "title": "Reference item", "score": 0.90, "hop": 1, "links": [{"kind": "REFERENCES"}, {"kind": "REFERS_TO"}]},
+    {"node_id": "jira:NOLINK-1", "type": "jira", "title": "Hop one no links", "score": 0.35, "hop": 1},
+    {"node_id": "slack:C1:3", "type": "slack", "title": "Topic bare", "score": 0.60, "hop": 1, "links": [{"kind": "SAME_TOPIC"}]},
+    {"node_id": "slack:C9:100.2", "type": "slack", "title": "Thread reply", "score": 0.70, "hop": 1, "links": [{"kind": "THREAD"}]},
+    {"node_id": "feature:m", "type": "feature", "title": "Mentions item", "score": 0.50, "hop": 1, "links": [{"kind": "MENTIONS"}]}
+  ]
+}
