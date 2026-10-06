@@ -209,11 +209,12 @@ func TestJiraUpdates_Candidates(t *testing.T) {
 		seedNode{key: "PAY-1", body: "b", bodyTS: tp(older), updatedAt: older},
 		seedNode{key: "PAY-2", body: "b", bodyTS: tp(older), updatedAt: jiraUpdT.Add(time.Hour)}, // updated_at > updated > body_ts
 		seedNode{key: "PAY-3", body: "b", bodyTS: tp(jiraUpdT), updatedAt: older},                // equal body_ts
-		seedNode{key: "PAY-4", body: "", bodyTS: tp(older), updatedAt: older},                    // empty body
+		seedNode{key: "PAY-4", body: "", bodyTS: tp(older), updatedAt: older},                    // fetched while empty
 		seedNode{key: "PAY-5", body: "b", bodyTS: tp(older), updatedAt: older, deleted: true},    // deleted
 		seedNode{key: "PAY-6", body: "b", bodyTS: tp(older), updatedAt: older},                   // queued fetch
 		seedNode{key: "PAY-7", body: "b", bodyTS: tp(older), updatedAt: older},                   // running fetch
 		seedNode{key: "PAY-8", body: "b", updatedAt: older},                                      // null body_ts
+		seedNode{key: "PAY-9", body: "", updatedAt: older},                                       // never-fetched stub
 	)
 	ctx := context.Background()
 	for id, status := range map[string]string{"jira:PAY-6": "queued", "jira:PAY-7": "running"} {
@@ -224,18 +225,18 @@ func TestJiraUpdates_Candidates(t *testing.T) {
 	}
 	f := &fakeJira{pages: []string{issuesJSON(
 		"PAY-1", jiraUpd, "PAY-2", jiraUpd, "PAY-3", jiraUpd, "PAY-4", jiraUpd,
-		"PAY-5", jiraUpd, "PAY-6", jiraUpd, "PAY-7", jiraUpd, "PAY-8", jiraUpd, "PAY-99", jiraUpd,
+		"PAY-5", jiraUpd, "PAY-6", jiraUpd, "PAY-7", jiraUpd, "PAY-8", jiraUpd, "PAY-9", jiraUpd, "PAY-99", jiraUpd,
 	)}}
 	f.start(t)
 	runJiraUpdates(t, ctx, pool)
 
 	got := queuedFetchNodes(t, pool, "jira-updates")
-	want := []string{"jira:PAY-1", "jira:PAY-2", "jira:PAY-8"}
+	want := []string{"jira:PAY-1", "jira:PAY-2", "jira:PAY-4", "jira:PAY-8"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("queued = %v, want %v", got, want)
 	}
-	if v, _ := setting(t, pool, jiraUpdatesKeyQueued); v != "3" {
-		t.Errorf("last_queued = %q, want 3", v)
+	if v, _ := setting(t, pool, jiraUpdatesKeyQueued); v != "4" {
+		t.Errorf("last_queued = %q, want 4", v)
 	}
 }
 
