@@ -183,7 +183,7 @@ func NewIngestContentHandler(deps Deps) http.Handler {
 		if req.Source == "slack" {
 			// Per-channel ingest filters (graph.channel_filters): ignore-list and
 			// content keep/drop regex — runs before any LLM/embedding work.
-			if skip, outcome := channelContentSkip(ctx, deps, req.Metadata.ChannelID, req.Body); skip {
+			if skip, outcome := channelContentSkip(ctx, deps, req.Metadata.ChannelID, req.Body, liveAuthorIdents(req.Metadata.Author)...); skip {
 				writeJSON(w, http.StatusOK, ingestResponse{NodeID: nodeID, Outcome: outcome})
 				return
 			}

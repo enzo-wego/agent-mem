@@ -989,6 +989,8 @@ export interface ChannelFilters {
   incident_only?: Record<string, string[]>; // channel id -> allowed author display names
   keep_regex?: Record<string, string>; // channel id -> keep only bodies matching
   drop_regex?: Record<string, string>; // channel id -> drop bodies matching
+  drop_authors?: Record<string, string[]>; // channel id -> Slack ids (B…/U…) whose messages are dropped
+  names?: Record<string, string>; // server-derived channel id -> name (GET only, never saved)
 }
 
 export async function fetchChannelFilters(): Promise<ChannelFilters> {
