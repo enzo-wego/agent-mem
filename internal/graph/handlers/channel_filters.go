@@ -3,8 +3,10 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"regexp"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -21,6 +23,7 @@ import (
 //
 //	{
 //	  "ignore": ["C01T60D80JV"],
+//	  "drop_authors": {"CUV9EAYGY": ["B085CSTBTS8"]},
 //	  "incident_only": {"C08S954G2LX": ["PagerDuty"]},
 //	  "keep_regex": {"CPP5EH3A8": "(?i)pending.?payment|process[- ]?taxes"},
 //	  "drop_regex": {"CPP5EH3A8": "(?i)white_check_mark[\\s\\S]*->\\s*200"}
@@ -28,6 +31,9 @@ import (
 //
 // Rules per channel id:
 //   - ignore:        drop every message.
+//   - drop_authors:  drop messages whose author Slack id is listed (bot id B…,
+//     user id U…/W…, or prefixed ref bot:B… / slack_uid:U…). Display names are
+//     not matched. Applies to live ingest and Slack backfill.
 //   - incident_only: keep only if the resolved author's display_name is in the
 //     allow list (e.g. "PagerDuty"); drop all other (bot) noise.
 //   - keep_regex:    keep only messages whose body matches; drop the rest.
@@ -40,6 +46,7 @@ type channelFiltersConfig struct {
 	IncidentOnly map[string][]string `json:"incident_only"`
 	KeepRegex    map[string]string   `json:"keep_regex"`
 	DropRegex    map[string]string   `json:"drop_regex"`
+	DropAuthors  map[string][]string `json:"drop_authors"`
 }
 
 // compiledChannelFilters is the parsed+compiled form cached in-process.
@@ -48,6 +55,7 @@ type compiledChannelFilters struct {
 	incidentOnly map[string][]string
 	keepRe       map[string]*regexp.Regexp
 	dropRe       map[string]*regexp.Regexp
+	dropAuthors  map[string][]string
 }
 
 var (
@@ -95,6 +103,7 @@ func compileChannelFilters(raw string) *compiledChannelFilters {
 		incidentOnly: map[string][]string{},
 		keepRe:       map[string]*regexp.Regexp{},
 		dropRe:       map[string]*regexp.Regexp{},
+		dropAuthors:  map[string][]string{},
 	}
 	if raw == "" {
 		return out
@@ -113,6 +122,20 @@ func compileChannelFilters(raw string) *compiledChannelFilters {
 			out.incidentOnly[id] = authors
 		}
 	}
+	for id, entries := range cfg.DropAuthors {
+		if id == "" {
+			continue
+		}
+		var clean []string
+		for _, e := range entries {
+			if e = strings.TrimSpace(e); e != "" {
+				clean = append(clean, e)
+			}
+		}
+		if len(clean) > 0 {
+			out.dropAuthors[id] = clean
+		}
+	}
 	for id, pat := range cfg.KeepRegex {
 		if re, err := regexp.Compile(pat); err == nil {
 			out.keepRe[id] = re
@@ -129,19 +152,22 @@ func compileChannelFilters(raw string) *compiledChannelFilters {
 // channelContentSkip applies the channel-only rules (ignore + keep/drop regex)
 // that need no author resolution, so they can run at the earliest chokepoint.
 // Returns (skip, outcome) where outcome names why for the ingest response.
-func channelContentSkip(ctx context.Context, deps Deps, channelID, body string) (bool, string) {
+func channelContentSkip(ctx context.Context, deps Deps, channelID, body string, authorIdents ...string) (bool, string) {
 	if channelID == "" {
 		return false, ""
 	}
-	return loadChannelFilters(ctx, deps.DB).contentSkip(channelID, body)
+	return loadChannelFilters(ctx, deps.DB).contentSkip(channelID, body, authorIdents...)
 }
 
 // contentSkip is the pure decision (no DB): ignore-list wins, then a keep_regex
 // that doesn't match drops the message, then a drop_regex that matches drops it.
 // keep+drop together = "keep this topic but not its routine successes".
-func (f *compiledChannelFilters) contentSkip(channelID, body string) (bool, string) {
+func (f *compiledChannelFilters) contentSkip(channelID, body string, authorIdents ...string) (bool, string) {
 	if f.ignore[channelID] {
 		return true, "skipped_ignored_channel"
+	}
+	if f.authorDropped(channelID, authorIdents...) {
+		return true, "skipped_dropped_author"
 	}
 	if re, ok := f.keepRe[channelID]; ok && !re.MatchString(body) {
 		return true, "skipped_off_topic"
@@ -180,4 +206,121 @@ func authorAllowed(ctx context.Context, deps Deps, authorPersonID *int64, allowe
 		return false
 	}
 	return slices.Contains(allowed, name)
+}
+
+// authorDropped reports whether any Slack identity string (bare id or
+// prefixed ref such as bot:B… / slack_uid:U…) is on the channel's drop_authors
+// list. Never pass a display name.
+func (f *compiledChannelFilters) authorDropped(channelID string, idents ...string) bool {
+	entries := f.dropAuthors[channelID]
+	if len(entries) == 0 {
+		return false
+	}
+	for _, i := range idents {
+		if i == "" {
+			continue
+		}
+		for _, e := range entries {
+			if i == e || strings.HasSuffix(i, ":"+e) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// liveAuthorIdents returns the Slack identity of a live-ingest author (its ref).
+func liveAuthorIdents(a ingestAuthorRef) []string {
+	if a.Ref == "" {
+		return nil
+	}
+	return []string{a.Ref}
+}
+
+// backfillAuthorIdents returns the Slack identities of a backfilled message in
+// the same ref shapes live ingest uses.
+func backfillAuthorIdents(msg slackMessage) []string {
+	var out []string
+	if msg.User != "" {
+		out = append(out, "slack_uid:"+msg.User)
+	}
+	if msg.BotID != "" {
+		out = append(out, "bot:"+msg.BotID)
+	}
+	return out
+}
+
+// channelFilterIDs collects channel ids referenced by a filters object. Fields
+// of unexpected shape are skipped.
+func channelFilterIDs(m map[string]json.RawMessage) []string {
+	seen := map[string]bool{}
+	var out []string
+	add := func(id string) {
+		if id != "" && !seen[id] {
+			seen[id] = true
+			out = append(out, id)
+		}
+	}
+	if raw, ok := m["ignore"]; ok {
+		var l []string
+		if json.Unmarshal(raw, &l) == nil {
+			for _, id := range l {
+				add(id)
+			}
+		}
+	}
+	for _, k := range []string{"keep_regex", "drop_regex", "incident_only", "drop_authors"} {
+		if raw, ok := m[k]; ok {
+			var o map[string]json.RawMessage
+			if json.Unmarshal(raw, &o) == nil {
+				for id := range o {
+					add(id)
+				}
+			}
+		}
+	}
+	slices.Sort(out)
+	return out
+}
+
+// stripNames removes the server-derived "names" key from a PUT body. The body
+// must be a JSON object.
+func stripNames(body []byte) ([]byte, error) {
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(body, &m); err != nil || m == nil {
+		return nil, errors.New("filters must be a JSON object")
+	}
+	delete(m, "names")
+	return json.Marshal(m)
+}
+
+// withChannelNames assembles the GET response: the stored object plus a
+// "names" map of channel id -> name from lookup.
+func withChannelNames(raw string, lookup func(ids []string) (map[string]string, error)) []byte {
+	if raw == "" {
+		return []byte("{}")
+	}
+	var m map[string]json.RawMessage
+	if json.Unmarshal([]byte(raw), &m) != nil || m == nil {
+		return []byte(raw)
+	}
+	delete(m, "names")
+	if ids := channelFilterIDs(m); len(ids) > 0 {
+		if found, err := lookup(ids); err == nil {
+			names := map[string]string{}
+			for id, n := range found {
+				if n != "" {
+					names[id] = n
+				}
+			}
+			if b, e := json.Marshal(names); e == nil {
+				m["names"] = b
+			}
+		}
+	}
+	b, err := json.Marshal(m)
+	if err != nil {
+		return []byte(raw)
+	}
+	return b
 }

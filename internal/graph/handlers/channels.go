@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net/http"
 	"regexp"
 	"sort"
@@ -721,14 +722,36 @@ func (h *Channels) putContinents(w http.ResponseWriter, r *http.Request) {
 func (h *Channels) getChannelFilters(w http.ResponseWriter, r *http.Request) {
 	var value string
 	err := h.db.QueryRow(r.Context(), `SELECT value FROM settings WHERE key=$1`, channelFiltersKey).Scan(&value)
-	if errors.Is(err, pgx.ErrNoRows) || value == "" {
-		value = "{}"
+	if errors.Is(err, pgx.ErrNoRows) {
+		value = ""
 	} else if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	out := withChannelNames(value, func(ids []string) (map[string]string, error) {
+		rows, qerr := h.db.Query(r.Context(),
+			`SELECT slack_channel_id, COALESCE(name,'') FROM graph.slack_channels WHERE slack_channel_id = ANY($1)`, ids)
+		if qerr != nil {
+			log.Printf("channel-filters: name lookup: %v", qerr)
+			return nil, qerr
+		}
+		defer rows.Close()
+		m := map[string]string{}
+		for rows.Next() {
+			var id, name string
+			if serr := rows.Scan(&id, &name); serr != nil {
+				log.Printf("channel-filters: name scan: %v", serr)
+				return nil, serr
+			}
+			m[id] = name
+		}
+		if rows.Err() != nil {
+			return nil, rows.Err()
+		}
+		return m, nil
+	})
 	w.Header().Set("Content-Type", "application/json")
-	io.WriteString(w, value)
+	w.Write(out)
 }
 
 // putChannelFilters handles PUT /api/graph/channel-filters. Validates JSON, upserts
@@ -741,8 +764,9 @@ func (h *Channels) putChannelFilters(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"failed to read body"}`, http.StatusBadRequest)
 		return
 	}
-	if !json.Valid(body) {
-		http.Error(w, `{"error":"invalid JSON"}`, http.StatusBadRequest)
+	body, err = stripNames(body)
+	if err != nil {
+		http.Error(w, `{"error":"filters must be a JSON object"}`, http.StatusBadRequest)
 		return
 	}
 	if _, err := h.db.Exec(r.Context(),

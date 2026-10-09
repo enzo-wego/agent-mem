@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { cfgFromState, channelLabel, rulesFromCfg, type FilterRule } from '../channelFilters'
 import {
   fetchSettings,
   updateSettings,
@@ -35,7 +36,6 @@ import {
   type Settings,
   type SettingsUpdate,
   type ChannelCount,
-  type ChannelFilters,
   type EligibilityGateConfig,
   type JiraUpdatesConfig,
   type GatewayHealth,
@@ -471,43 +471,11 @@ function GatewayPanel() {
 
 // --- Channel Filters ---
 
-// A row in the rules table. Union of the per-channel keep_regex / drop_regex /
-// incident_only maps, edited together and serialized back into those maps on save.
-type FilterRule = { id: string; keep: string; drop: string; incident: string }
-
-function rulesFromCfg(cfg: ChannelFilters): FilterRule[] {
-  const ids = new Set<string>([
-    ...Object.keys(cfg.keep_regex ?? {}),
-    ...Object.keys(cfg.drop_regex ?? {}),
-    ...Object.keys(cfg.incident_only ?? {}),
-  ])
-  return Array.from(ids).map((id) => ({
-    id,
-    keep: cfg.keep_regex?.[id] ?? '',
-    drop: cfg.drop_regex?.[id] ?? '',
-    incident: (cfg.incident_only?.[id] ?? []).join(', '),
-  }))
-}
-
-function cfgFromState(ignore: string[], rules: FilterRule[]): ChannelFilters {
-  const keep_regex: Record<string, string> = {}
-  const drop_regex: Record<string, string> = {}
-  const incident_only: Record<string, string[]> = {}
-  for (const r of rules) {
-    const id = r.id.trim()
-    if (!id) continue
-    if (r.keep.trim()) keep_regex[id] = r.keep.trim()
-    if (r.drop.trim()) drop_regex[id] = r.drop.trim()
-    const authors = r.incident.split(',').map((a) => a.trim()).filter(Boolean)
-    if (authors.length) incident_only[id] = authors
-  }
-  return { ignore, keep_regex, drop_regex, incident_only }
-}
-
 // ChannelFiltersSection edits settings key graph.channel_filters via its own
 // GET/PUT endpoint (separate from the config-struct settings above). Muted/filtered
 // messages never reach the LLM extractor — a cost lever, not just noise control.
 function ChannelFiltersSection() {
+  const [names, setNames] = useState<Record<string, string>>({})
   const [ignore, setIgnore] = useState<string[]>([])
   const [rules, setRules] = useState<FilterRule[]>([])
   const [channels, setChannels] = useState<ChannelCount[]>([])
@@ -520,6 +488,7 @@ function ChannelFiltersSection() {
     Promise.all([fetchChannelFilters(), fetchChannels()])
       .then(([cfg, ch]) => {
         setIgnore(cfg.ignore ?? [])
+        setNames(cfg.names ?? {})
         setRules(rulesFromCfg(cfg))
         setChannels(ch || [])
         setLoaded(true)
@@ -528,7 +497,7 @@ function ChannelFiltersSection() {
   }, [])
 
   // channelId -> display name; falls back to the id when unresolved.
-  const nameOf = (id: string) => channels.find((c) => c.channel_id === id)?.name || id
+  const nameOf = (id: string) => channelLabel(id, channels, names)
   const labelOf = (c: ChannelCount) => (c.name ? `${c.name} (${c.channel_id})` : c.channel_id)
 
   const save = async () => {
@@ -553,7 +522,7 @@ function ChannelFiltersSection() {
 
   const setRule = (i: number, patch: Partial<FilterRule>) =>
     setRules(rules.map((r, idx) => (idx === i ? { ...r, ...patch } : r)))
-  const addRule = () => setRules([...rules, { id: '', keep: '', drop: '', incident: '' }])
+  const addRule = () => setRules([...rules, { id: '', keep: '', drop: '', incident: '', dropAuthors: '' }])
   const removeRule = (i: number) => setRules(rules.filter((_, idx) => idx !== i))
 
   // Channels not already on the ignore list, for the picker.
@@ -575,7 +544,7 @@ function ChannelFiltersSection() {
             <div className="flex flex-wrap gap-1.5 mb-2">
               {ignore.length === 0 && <span className="text-xs text-gray-400">No channels ignored.</span>}
               {ignore.map((id) => (
-                <span key={id} className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs font-mono bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800">
+                <span key={id} title={id} className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs font-mono bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800">
                   {nameOf(id)}
                   <button onClick={() => removeIgnore(id)} className="ml-0.5 hover:text-red-500 font-sans font-bold" title="Remove">x</button>
                 </span>
@@ -591,13 +560,13 @@ function ChannelFiltersSection() {
             </div>
           </Field>
 
-          <Field label="Rules (ignore-by-rule)" hint="Per-channel regex filters, evaluated after ignore. keep_regex: keep only bodies that match. drop_regex: drop bodies that match (runs after keep, so keep+drop = 'keep this topic but not its routine successes'). incident_only: comma-separated author display names to keep (e.g. PagerDuty) — all other senders dropped. Leave a field blank to skip that rule.">
+          <Field label="Rules (ignore-by-rule)" hint="Per-channel regex filters, evaluated after ignore. keep_regex: keep only bodies that match. drop_regex: drop bodies that match (runs after keep, so keep+drop = 'keep this topic but not its routine successes'). incident_only: comma-separated author display names to keep (e.g. PagerDuty) — all other senders dropped. drop_authors: comma-separated Slack ids whose messages are dropped. Use the bot id (B…) for bots, the user id (U…) for people. Display names are not matched. Leave a field blank to skip that rule.">
             <div className="space-y-2">
               {rules.map((r, i) => (
                 <div key={i} className="flex flex-wrap gap-2 items-start">
                   <select value={r.id} onChange={(e) => setRule(i, { id: e.target.value })} className={`${selectCls} min-w-[10rem]`}>
                     <option value="">channel…</option>
-                    {r.id && !channels.some((c) => c.channel_id === r.id) && <option value={r.id}>{r.id}</option>}
+                    {r.id && !channels.some((c) => c.channel_id === r.id) && <option value={r.id}>{`${names[r.id] || 'unknown channel'} (${r.id})`}</option>}
                     {channels.map((c) => (
                       <option key={c.channel_id} value={c.channel_id}>{labelOf(c)}</option>
                     ))}
@@ -605,6 +574,7 @@ function ChannelFiltersSection() {
                   <input type="text" value={r.keep} onChange={(e) => setRule(i, { keep: e.target.value })} placeholder="keep_regex" className={`${inputCls} font-mono text-xs`} />
                   <input type="text" value={r.drop} onChange={(e) => setRule(i, { drop: e.target.value })} placeholder="drop_regex" className={`${inputCls} font-mono text-xs`} />
                   <input type="text" value={r.incident} onChange={(e) => setRule(i, { incident: e.target.value })} placeholder="incident_only authors" className={`${inputCls} text-xs`} />
+                  <input type="text" value={r.dropAuthors} onChange={(e) => setRule(i, { dropAuthors: e.target.value })} placeholder="drop authors" className={`${inputCls} font-mono text-xs`} />
                   <button onClick={() => removeRule(i)} className={btnSecondary} title="Remove rule">x</button>
                 </div>
               ))}
@@ -1397,7 +1367,7 @@ function EligibilityChannelPicker({
       <div className="flex flex-wrap gap-1.5 mb-2">
         {value.length === 0 && <span className="text-xs text-gray-400">No channels selected.</span>}
         {value.map((id) => (
-          <span key={id} className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800">
+          <span key={id} title={id} className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800">
             {nameOf(id)}
             <button
               type="button"

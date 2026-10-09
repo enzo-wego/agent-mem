@@ -212,6 +212,10 @@ func fetchConversationsHistory(ctx context.Context, token, channelID, oldestTS, 
 
 // ingestSlackMessage calls ingestContent with the data for a single Slack message.
 func ingestSlackMessage(ctx context.Context, deps Deps, channelID string, msg slackMessage) error {
+	// drop_authors: runs before any write, extraction or job enqueue.
+	if loadChannelFilters(ctx, deps.DB).authorDropped(channelID, backfillAuthorIdents(msg)...) {
+		return nil
+	}
 	nodeID := ids.SlackMessage(channelID, msg.Ts)
 	naturalKey, _ := ids.ParseNaturalKey(nodeID)
 	nodeType, _ := ids.ParseType(nodeID)
