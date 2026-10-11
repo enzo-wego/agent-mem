@@ -35,7 +35,7 @@ func TestGraphContextCasesCoverManifestAndUseCases(t *testing.T) {
 		if err := validateEvalCaseState(c); err != nil {
 			t.Error(err)
 		}
-		for _, name := range []string{"resolve-asker0", "resolve-asker", "search-hybrid"} {
+		for _, name := range []string{"resolve-admin", "resolve-asker", "search-hybrid"} {
 			if _, ok := c.Requests[name]; !ok {
 				t.Errorf("%s missing %s", c.ID, name)
 			}
@@ -73,7 +73,7 @@ func TestGraphContextCasesCoverManifestAndUseCases(t *testing.T) {
 		if _, ok := c.Requests["search-hybrid"].Headers["X-Asker-User"]; ok {
 			t.Errorf("%s unexpectedly sends X-Asker-User", p.ID)
 		}
-		if _, ok := c.Requests["resolve-asker0"].Body["budget_tokens"]; ok {
+		if _, ok := c.Requests["resolve-admin"].Body["budget_tokens"]; ok {
 			t.Errorf("%s null budget_tokens was not omitted", p.ID)
 		}
 	}

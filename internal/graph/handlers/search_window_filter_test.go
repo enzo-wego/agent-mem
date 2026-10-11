@@ -84,7 +84,7 @@ type whfResponse struct {
 func whfRequest(t *testing.T, s *Search, q string) whfResponse {
 	t.Helper()
 	w := httptest.NewRecorder()
-	s.ServeHTTP(w, httptest.NewRequest("GET", "/api/graph/search?"+q, nil))
+	s.ServeHTTP(w, adminRequest("GET", "/api/graph/search?"+q, nil))
 	if w.Code != 200 {
 		t.Fatalf("status %d: %s", w.Code, w.Body.String())
 	}
@@ -375,7 +375,7 @@ func TestWindowFilter_FailClosed(t *testing.T) {
 			defer pool.Close()
 			s := whfSearch(t, pool, true)
 			w := httptest.NewRecorder()
-			s.ServeHTTP(w, httptest.NewRequest("GET", "/api/graph/search?q=needle"+mode+whfBounds, nil))
+			s.ServeHTTP(w, adminRequest("GET", "/api/graph/search?q=needle"+mode+whfBounds, nil))
 			if !failure.reached {
 				t.Fatal("eligibility failure seam not reached")
 			}

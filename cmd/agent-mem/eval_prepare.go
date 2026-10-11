@@ -77,7 +77,7 @@ func rewriteCanonicalSeeds(raw []byte, seeds []string) ([]byte, error) {
 
 func caseSeedInput(c evalCase) []string {
 	var out []string
-	if b, ok := c.Requests["resolve-asker0"]; ok {
+	if b, ok := c.Requests["resolve-admin"]; ok {
 		if raw, ok := b.Body["seeds"].([]any); ok {
 			for _, s := range raw {
 				if str, ok := s.(string); ok {
@@ -125,11 +125,11 @@ func runEvalPrepare(ctx context.Context, out io.Writer, o evalPrepareOpts) error
 		ids = append(ids, seeds[c.ID]...)
 		ids = append(ids, labelIDs(c.evalCase)...)
 		for _, name := range evalVariants {
-			method, pathURL, body, err := buildEvalRequest(c.evalCase, name)
+			method, pathURL, body, headers, err := buildEvalRequest(c.evalCase, name)
 			if err != nil {
 				return err
 			}
-			call := client.do(method, pathURL, body)
+			call := client.do(method, pathURL, body, headers)
 			if call.Err != nil {
 				return fmt.Errorf("%s %s: %w", c.ID, name, call.Err)
 			}
@@ -369,7 +369,7 @@ func runLabelSheet(ctx context.Context, out io.Writer, o labelSheetOpts) error {
 }
 
 func caseQuery(c evalCase) string {
-	if b, ok := c.Requests["resolve-asker0"]; ok {
+	if b, ok := c.Requests["resolve-admin"]; ok {
 		if q, ok := b.Body["query"].(string); ok {
 			return q
 		}

@@ -60,7 +60,7 @@ func TestContextTraceP95Overhead(t *testing.T) {
 	}
 }
 func timedRequest(h http.Handler, method, target, body string) time.Duration {
-	r := httptest.NewRequest(method, target, bytes.NewBufferString(body))
+	r := adminRequest(method, target, bytes.NewBufferString(body))
 	w := httptest.NewRecorder()
 	start := time.Now()
 	h.ServeHTTP(w, r)

@@ -38,7 +38,7 @@ type armResp struct {
 
 func doSearch(t *testing.T, h http.Handler, rawQuery string) (int, armResp) {
 	t.Helper()
-	r := httptest.NewRequest("GET", "/api/graph/search?"+rawQuery, nil)
+	r := adminRequest("GET", "/api/graph/search?"+rawQuery, nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
 	var resp armResp

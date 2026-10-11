@@ -1,21 +1,72 @@
 package handlers
 
-import "github.com/go-chi/chi/v5"
+import (
+	"net/http"
+	"strings"
+
+	"github.com/go-chi/chi/v5"
+)
 
 // Mount wires the graph ingest, admin, and read endpoints onto r.
 //
 // Auth/trust model: the caller MUST gate these routes with auth middleware
 // (the worker mounts them behind the API-key middleware). The API key is the
-// privilege boundary — any key-bearing caller is trusted internal infra
-// (EnzoBot, the admin dashboard). The per-request asker identity used for ACL
-// (`X-Asker-User` on search/node/neighbors/epic, `asker_eeid` in resolve) is an
-// ADVISORY hint asserted by that trusted caller, not independently authenticated.
-// On header-based endpoints, an absent (trimmed empty) header is the trusted
-// unfiltered view; a present header is always filtered, and an unresolved one
-// sees only public/unscoped nodes. Resolve retains its numeric eeid 0 convention.
-// Other admin/dashboard routes do not implement this header contract. A real
-// per-user boundary requires binding asker identity to a verified principal.
+// privilege boundary: any key-bearing caller can send X-Graph-Admin: 1, so the
+// ACL protects against mistakes, not against a hostile key holder.
+//
+// Read policy: the five filtered routes (search, node, neighbors, epic, resolve)
+// need a named asker (X-Asker-User, or asker_slack_id / asker_eeid on resolve)
+// and return only what that asker may see, or X-Graph-Admin: 1 for the
+// unfiltered view. Every other GET under /api/graph/ is admin-only by default
+// (see graphReadPolicy), so a GET route added later fails closed.
 func Mount(r chi.Router, deps Deps) {
+	r.Group(func(r chi.Router) {
+		r.Use(graphReadPolicy)
+		mountRoutes(r, deps)
+	})
+}
+
+// askerFilteredGET reports whether a GET path (as chi routes it: RawPath when
+// set) is one of the asker-filtered read routes.
+func askerFilteredGET(path string) bool {
+	rest, ok := strings.CutPrefix(path, "/api/graph/")
+	if !ok {
+		return false
+	}
+	switch rest {
+	case "search", "node":
+		return true
+	}
+	if key, ok := strings.CutPrefix(rest, "epic/"); ok {
+		return key != "" && !strings.Contains(key, "/")
+	}
+	if id, ok := strings.CutPrefix(rest, "node/"); ok {
+		if id, ok = strings.CutSuffix(id, "/neighbors"); ok {
+			return id != "" && !strings.Contains(id, "/")
+		}
+	}
+	return false
+}
+
+// graphReadPolicy makes every GET/HEAD under /api/graph/ that is not an
+// asker-filtered route require X-Graph-Admin: 1.
+func graphReadPolicy(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet || r.Method == http.MethodHead {
+			path := r.URL.RawPath
+			if path == "" {
+				path = r.URL.Path
+			}
+			if strings.HasPrefix(path, "/api/graph/") && !askerFilteredGET(path) && !isAdminRequest(r) {
+				writeAskerError(w, &askerError{http.StatusForbidden, "admin_required"})
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func mountRoutes(r chi.Router, deps Deps) {
 	r.Post("/api/graph/ingest/content", NewIngestContentHandler(deps).ServeHTTP)
 	r.Post("/api/graph/ingest/url", NewIngestURLHandler(deps).ServeHTTP)
 	r.Get("/api/graph/jobs", NewJobsListHandler(deps).ServeHTTP)

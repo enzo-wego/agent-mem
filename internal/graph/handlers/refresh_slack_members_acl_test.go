@@ -73,9 +73,9 @@ func TestRefreshSlackMembers_ACL(t *testing.T) {
 		const control = "jira:MEMBERS-CONTROL"
 		for _, n := range []struct{ id, typ, scope string }{
 			{message, "slack", "slack:CPRIV"},
-			// The attachment's own scope is not granted. Its only visibility
-			// comes from the live message parent.
-			{attachment, "slack_file", "slack:CATTACHMENT"},
+			// The attachment lives in the same channel: it needs its own scope
+			// (the granted one) and the live message parent.
+			{attachment, "slack_file", "slack:CPRIV"},
 			{control, "jira", "public"},
 		} {
 			seedKeywordNode(t, pool, n.id, "memberquokka resource", n.scope, "memberquokka indexed resource")

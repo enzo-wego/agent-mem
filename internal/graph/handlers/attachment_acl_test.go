@@ -59,7 +59,11 @@ func attachmentResolve(t *testing.T, h http.Handler, id string, eeid, budget int
 	t.Helper()
 	b, _ := json.Marshal(resolveRequest{Seeds: []string{id, "jira:ACL-CONTROL"}, AskerEEID: eeid, Depth: 1, BudgetTokens: budget, IncludeBodies: true})
 	w := httptest.NewRecorder()
-	h.ServeHTTP(w, httptest.NewRequest("POST", "/api/graph/resolve", bytes.NewReader(b)))
+	r := httptest.NewRequest("POST", "/api/graph/resolve", bytes.NewReader(b))
+	if eeid == 0 {
+		r.Header.Set(adminHeader, "1")
+	}
+	h.ServeHTTP(w, r)
 	if w.Code != 200 {
 		t.Fatalf("resolve status=%d body=%s", w.Code, w.Body.String())
 	}
@@ -68,6 +72,16 @@ func attachmentResolve(t *testing.T, h http.Handler, id string, eeid, budget int
 		t.Fatal(err)
 	}
 	return resp
+}
+
+func TestAttachmentACL_UnknownAskerDenied(t *testing.T) {
+	pool := openTestDB(t)
+	h := attachmentACLFixture(t, pool)
+	for _, path := range []string{"/api/graph/node?id=slack_file:F3", "/api/graph/search?q=attachquokka", "/api/graph/node/jira:ACL-CONTROL/neighbors"} {
+		if w := askerRequest(t, h, path, "nobody@example.com"); w.Code != http.StatusForbidden {
+			t.Errorf("%s status=%d body=%s", path, w.Code, w.Body.String())
+		}
+	}
 }
 
 func TestAttachmentACL(t *testing.T) {
@@ -80,9 +94,8 @@ func TestAttachmentACL(t *testing.T) {
 		want         []bool
 	}{
 		{"unfiltered", "", 0, []bool{true, true, true, true, true}},
-		{"unknown", "nobody@example.com", -1, []bool{false, false, false, false, false}},
-		{"private_member", "private@example.com", 81, []bool{true, true, false, false, false}},
-		{"no_memberships", "plain@example.com", 82, []bool{false, true, false, false, false}},
+		{"private_member", "private@example.com", 81, []bool{true, true, false, false, true}},
+		{"no_memberships", "plain@example.com", 82, []bool{false, true, false, false, true}},
 		{"jira_member", "jira@example.com", 83, []bool{false, true, false, false, true}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -116,8 +129,8 @@ func TestAttachmentACL(t *testing.T) {
 							t.Errorf("%s %s visible=%v want=%v", mode, id, got[id], tc.want[i])
 						}
 					}
-					// Resolve's numeric contract is distinct: zero is unfiltered, any nonzero is resolved.
-					if tc.name != "unknown" {
+					// Resolve names the asker by eeid in the body; eeid 0 here means the admin arm.
+					{
 						resp := attachmentResolve(t, h, id, tc.eeid, 4000)
 						got := map[string]bool{}
 						for _, n := range resp.Artifacts {
@@ -213,7 +226,7 @@ func TestAttachmentACL_DynamicParents(t *testing.T) {
 	for _, s := range []any{nil, "", "public"} {
 		aclExec(t, pool, `UPDATE graph.nodes SET scope=$1 WHERE id='slack:PUBLIC:3'`, s)
 		assertNode("slack_file:F3", "plain@example.com", 200)
-		assertNode("slack_file:F3", "nobody@example.com", 404)
+		assertNode("slack_file:F3", "nobody@example.com", 403)
 	}
 	aclExec(t, pool, `UPDATE graph.nodes SET deleted_at=NULL WHERE id='slack:CPRIV:1'`)
 	aclExec(t, pool, `UPDATE graph.nodes SET scope='slack:CPRIV' WHERE id='slack:COTHER:2'`)
@@ -240,18 +253,10 @@ func TestAttachmentACL_ErrorsFailClosed(t *testing.T) {
 		{"lookup_error", closed, acl.NewBuilder(pool, time.Minute), false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			eeid, scopes, noFilter := askerScopeSet(context.Background(), tc.lookupDB, tc.builder, "private@example.com")
-			a := askerACL{noFilter: noFilter, resolved: eeid != 0, scopes: scopes}
-			for _, id := range []string{"slack_file:F1", "slack_file:F3", "slack_file:F4"} {
-				got, err := nodeVisible(context.Background(), pool, a, id, "slack_file", nil)
-				want := id == "slack_file:F3" && tc.wantPublic
-				if err != nil || got != want {
-					t.Errorf("%s visible=%v err=%v want=%v", id, got, err, want)
-				}
-			}
-			var control bool
-			if err := pool.QueryRow(context.Background(), `SELECT `+aclVisibleSQL("n", 1, 2)+` FROM graph.nodes n WHERE n.id='jira:ACL-CONTROL'`, a.scopeArg(), a.resolved).Scan(&control); err != nil || !control {
-				t.Fatalf("control visible=%v err=%v", control, err)
+			r := httptest.NewRequest(http.MethodGet, "/", nil)
+			_, _, _, aerr := resolveAsker(context.Background(), tc.lookupDB, tc.builder, r, askerIdentities{header: "private@example.com"})
+			if aerr == nil || aerr.status != http.StatusServiceUnavailable || aerr.code != "acl_unavailable" {
+				t.Fatalf("resolve error = %v, want 503 acl_unavailable", aerr)
 			}
 		})
 	}
@@ -276,7 +281,6 @@ func TestAttachmentACL_FileLeaves(t *testing.T) {
 		name, header string
 		want         bool
 	}{
-		{"unknown", "nobody@example.com", false},
 		{"non_member", "plain@example.com", false},
 		{"member", "private@example.com", true},
 	} {

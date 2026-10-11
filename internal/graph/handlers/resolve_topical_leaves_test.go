@@ -222,7 +222,7 @@ func TestResolveLeaves_Acceptance(t *testing.T) {
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			req := httptest.NewRequest("POST", "/api/graph/resolve", strings.NewReader(string(body))).WithContext(ctx)
+			req := adminRequest("POST", "/api/graph/resolve", strings.NewReader(string(body))).WithContext(ctx)
 			w := httptest.NewRecorder()
 			start := time.Now()
 			h.ServeHTTP(w, req)

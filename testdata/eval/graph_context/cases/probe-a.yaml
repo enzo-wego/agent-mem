@@ -16,7 +16,7 @@ requests:
                 - https://wego.slack.com/archives/CUV9EAYGY/p1791450444383399
                 - jira:PAY-1731
         headers: {}
-    resolve-asker0:
+    resolve-admin:
         body:
             asker_eeid: 0
             depth: 2

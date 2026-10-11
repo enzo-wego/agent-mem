@@ -3,7 +3,6 @@ package handlers
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -13,7 +12,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/agent-mem/agent-mem/internal/gemini"
@@ -114,6 +112,10 @@ const (
 
 func (s *Search) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	acl, askerEEID, ok := requireAsker(w, r, s.db, s.aclBld, askerIdentities{})
+	if !ok {
+		return
+	}
 	qv := r.URL.Query()
 	q := strings.TrimSpace(qv.Get("q"))
 	if q == "" {
@@ -155,23 +157,6 @@ func (s *Search) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// An absent header is the trusted unfiltered view; a present header is
-	// always filtered, with unresolved askers limited to public/unscoped nodes.
-	// The API key remains the privilege boundary; identity is advisory.
-	askerEEID, scopeSet, noFilter, membershipErr := askerScopeSetDiag(ctx, s.db, s.aclBld, r.Header.Get("X-Asker-User"))
-	if diag, _ := ctx.Value(requestTraceDiagKey{}).(*requestTraceDiag); diag != nil {
-		switch {
-		case noFilter:
-			diag.aclMode = "unfiltered"
-		case membershipErr != nil:
-			diag.aclMode = "filtered-membership-error"
-		case askerEEID == 0:
-			diag.aclMode = "public-only"
-		default:
-			diag.aclMode = "filtered"
-		}
-	}
-	acl := askerACL{noFilter: noFilter, resolved: askerEEID != 0, scopes: scopeSet}
 	scopeArg := acl.scopeArg()
 	var typesArg any
 	if t := splitCSV(qv.Get("types")); len(t) > 0 {
@@ -743,25 +728,4 @@ func sortByScore(rs []searchResult) {
 		}
 		return rs[i].CreatedAt.After(rs[j].CreatedAt)
 	})
-}
-
-// lookupAsker resolves a trimmed X-Asker-User identity to an eeid.
-// Missing people and NULL eeids resolve to zero; database errors are preserved.
-func lookupAsker(ctx context.Context, db *pgxpool.Pool, ref string) (int, error) {
-	ref = strings.TrimSpace(ref)
-	if ref == "" {
-		return 0, nil
-	}
-	row := db.QueryRow(ctx, `
-SELECT COALESCE(eeid, 0) FROM graph.people
-WHERE slack_user_id = $1 OR email = $1 OR github_login = $1 OR jira_account_id = $1
-LIMIT 1`, ref)
-	var eeid int
-	if err := row.Scan(&eeid); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return 0, nil
-		}
-		return 0, err
-	}
-	return eeid, nil
 }

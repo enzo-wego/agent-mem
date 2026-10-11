@@ -56,6 +56,7 @@ func branchRepo(t *testing.T, branch string) string {
 
 func TestEpicBriefForCwd_HubFallback(t *testing.T) {
 	pool := emptyLocalPool(t)
+	t.Setenv("AGENT_MEM_ASKER", "U0TEST")
 	repo := branchRepo(t, "feat/PAY-1234-x")
 
 	run := func(t *testing.T, h http.HandlerFunc, syncURL bool) (string, *int32, *http.Request, time.Duration) {
@@ -85,7 +86,8 @@ func TestEpicBriefForCwd_HubFallback(t *testing.T) {
 			t.Fatalf("context = %q", out)
 		}
 		if *hits != 1 || seen.URL.Path != "/api/graph/epic/PAY-1234" ||
-			seen.Header.Get("Authorization") != "Bearer k-secret" || seen.Header.Get("X-Asker-User") != "" {
+			seen.Header.Get("Authorization") != "Bearer k-secret" ||
+			seen.Header.Get("X-Asker-User") != "U0TEST" || seen.Header.Get("X-Graph-Admin") != "" {
 			t.Fatalf("hits=%d path=%q headers=%v", *hits, seen.URL.Path, seen.Header)
 		}
 	})
@@ -102,6 +104,15 @@ func TestEpicBriefForCwd_HubFallback(t *testing.T) {
 		out, hits, _, _ := run(t, func(w http.ResponseWriter, r *http.Request) {
 			_, _ = w.Write([]byte(`{"epic_key":"PAY-1000","brief":"x"}`))
 		}, false)
+		if out != "" || *hits != 0 {
+			t.Fatalf("out=%q hits=%d", out, *hits)
+		}
+	})
+	t.Run("no_asker", func(t *testing.T) {
+		t.Setenv("AGENT_MEM_ASKER", "  ")
+		out, hits, _, _ := run(t, func(w http.ResponseWriter, r *http.Request) {
+			_, _ = w.Write([]byte(`{"epic_key":"PAY-1000","brief":"x"}`))
+		}, true)
 		if out != "" || *hits != 0 {
 			t.Fatalf("out=%q hits=%d", out, *hits)
 		}

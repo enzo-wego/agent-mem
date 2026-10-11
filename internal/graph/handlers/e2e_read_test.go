@@ -30,6 +30,7 @@ func TestReadE2E_TabbyIncident(t *testing.T) {
 		"include_bodies": true
 	}`)
 	r := httptest.NewRequest("POST", "/api/graph/resolve", body)
+	r.Header.Set("X-Graph-Admin", "1")
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
 

@@ -6,7 +6,7 @@ asker_eeid: 259
 needs_context: yes
 canonical_seeds: ["slack:C0597404MS6:1790921650.721779"]
 requests:
-  resolve-asker0: {body: {seeds: ["https://wego.slack.com/archives/C0597404MS6/p1790921650721779"], query: &query "@[colleague-agent] review this\n@EnzoBot review this", depth: 2, include_bodies: false, asker_eeid: 0}, headers: {}}
+  resolve-admin: {body: {seeds: ["https://wego.slack.com/archives/C0597404MS6/p1790921650721779"], query: &query "@[colleague-agent] review this\n@EnzoBot review this", depth: 2, include_bodies: false, asker_eeid: 0}, headers: {}}
   resolve-asker: {body: {seeds: ["https://wego.slack.com/archives/C0597404MS6/p1790921650721779"], query: *query, depth: 2, include_bodies: false, asker_eeid: 259}, headers: {}}
   search-hybrid: {params: {q: *query, match: hybrid, limit: 10, types: "slack,slack_thread,gh_pr,jira,cf,cf_page,gws,gws_doc,gdoc,wegohub,claude_artifact,pagerduty,sentry,datadog"}, headers: {}}
 labels:

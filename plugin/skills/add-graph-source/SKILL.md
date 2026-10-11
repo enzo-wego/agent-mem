@@ -91,7 +91,7 @@ curl -s -H "Authorization: Bearer $AGENT_MEM_API_KEY" -X POST \
   localhost:34567/api/graph/ingest/url -d '{"url":"https://internal.wego.com/hub/apps/<slug>"}'
 # Watch it flow: queued fetch_body → index_artifact → embedding populated
 # Then it is searchable:
-curl -s -H "Authorization: Bearer $AGENT_MEM_API_KEY" \
+curl -s -H "Authorization: Bearer $AGENT_MEM_API_KEY" -H "X-Graph-Admin: 1" \
   "localhost:34567/api/graph/search?q=<something in the doc>&limit=5"
 ```
 

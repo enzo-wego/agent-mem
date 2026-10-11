@@ -20,9 +20,9 @@ import (
 // shRaw runs a search and returns the status plus the decoded top-level object.
 func shRaw(t *testing.T, h *handlers.Search, rawQuery, asker string) (int, map[string]any) {
 	t.Helper()
-	r := httptest.NewRequest("GET", "/api/graph/search?"+rawQuery, nil)
+	r := adminRequest("GET", "/api/graph/search?"+rawQuery, nil)
 	if asker != "" {
-		r.Header.Set("X-Asker-User", asker)
+		setAsker(r, asker)
 	}
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)

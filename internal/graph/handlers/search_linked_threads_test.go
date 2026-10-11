@@ -390,7 +390,7 @@ func TestLinkedEmptyMatchKeepsKey(t *testing.T) {
 	// ticket is only pinned by pinOwnKey and has no keyword/semantic rank.
 	spNode(t, pool, "jira:PAY-16", "jira", "unrelated ledger", "ledger export", "", "", "{}", 0, false)
 	root := lkMsg(t, pool, "CLK16", 100, 100, "jira:PAY-16")
-	r := httptest.NewRequest("GET", "/api/graph/search?q=PAY-16&match=hybrid", nil)
+	r := adminRequest("GET", "/api/graph/search?q=PAY-16&match=hybrid", nil)
 	w := httptest.NewRecorder()
 	lkHandler(t, pool).ServeHTTP(w, r)
 	if w.Code != 200 {

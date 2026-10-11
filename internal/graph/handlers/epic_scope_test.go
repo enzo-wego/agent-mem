@@ -40,7 +40,7 @@ func TestSearch_EpicScope(t *testing.T) {
 	}
 	ids := func(rawQuery string) []string {
 		t.Helper()
-		r := httptest.NewRequest("GET", "/api/graph/search?"+rawQuery, nil)
+		r := adminRequest("GET", "/api/graph/search?"+rawQuery, nil)
 		w := httptest.NewRecorder()
 		h.ServeHTTP(w, r)
 		if w.Code != http.StatusOK {
@@ -72,7 +72,7 @@ func TestSearch_EpicScope(t *testing.T) {
 		t.Errorf("unknown epic = %v, want none", got)
 	}
 
-	r := httptest.NewRequest("GET", "/api/graph/search?q=GST&business=loyalty", nil)
+	r := adminRequest("GET", "/api/graph/search?q=GST&business=loyalty", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
 	if w.Code != http.StatusBadRequest {
@@ -91,7 +91,7 @@ func TestNeighbors_EpicScope(t *testing.T) {
 
 	r := chi.NewRouter()
 	r.Mount("/api/graph", handlers.NewNeighbors(pool))
-	req := httptest.NewRequest("GET", "/api/graph/node/root/neighbors?depth=1&epic=PAY-2307", nil)
+	req := adminRequest("GET", "/api/graph/node/root/neighbors?depth=1&epic=PAY-2307", nil)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
@@ -135,7 +135,7 @@ func TestResolve_EpicSeedAndScope(t *testing.T) {
 		"depth": 1,
 		"epic":  []string{"PAY-100"},
 	})
-	r := httptest.NewRequest("POST", "/api/graph/resolve", bytes.NewReader(body))
+	r := adminRequest("POST", "/api/graph/resolve", bytes.NewReader(body))
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
 	if w.Code != http.StatusOK {

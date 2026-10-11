@@ -6,7 +6,7 @@ asker_eeid: 708
 needs_context: yes
 canonical_seeds: ["slack:CUV9EAYGY:1790583455.729009"]
 requests:
-  resolve-asker0: {body: {seeds: ["https://wego.slack.com/archives/CUV9EAYGY/p1790583455729009"], query: &query "@EnzoBot Share logs for Razorpay payments with order ID - `[payment-ref]` `[payment-ref]`", depth: 2, include_bodies: false, asker_eeid: 0}, headers: {}}
+  resolve-admin: {body: {seeds: ["https://wego.slack.com/archives/CUV9EAYGY/p1790583455729009"], query: &query "@EnzoBot Share logs for Razorpay payments with order ID - `[payment-ref]` `[payment-ref]`", depth: 2, include_bodies: false, asker_eeid: 0}, headers: {}}
   resolve-asker: {body: {seeds: ["https://wego.slack.com/archives/CUV9EAYGY/p1790583455729009"], query: *query, depth: 2, include_bodies: false, asker_eeid: 708}, headers: {}}
   search-hybrid: {params: {q: *query, match: hybrid, limit: 10, types: "slack,slack_thread,gh_pr,jira,cf,cf_page,gws,gws_doc,gdoc,wegohub,claude_artifact,pagerduty,sentry,datadog"}, headers: {}}
 labels:

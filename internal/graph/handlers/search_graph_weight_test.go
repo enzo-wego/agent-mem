@@ -77,7 +77,7 @@ func TestSearch_GraphArmWeight(t *testing.T) {
 		t.Helper()
 		exec(`INSERT INTO public.settings(key,value) VALUES($1,$2) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, scoring.GraphArmWeightKey, weight)
 		w := httptest.NewRecorder()
-		h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/graph/search?q=unmatchablequasar&limit=30", nil))
+		h.ServeHTTP(w, adminRequest(http.MethodGet, "/api/graph/search?q=unmatchablequasar&limit=30", nil))
 		if w.Code != http.StatusOK {
 			t.Fatalf("status %d: %s", w.Code, w.Body.String())
 		}

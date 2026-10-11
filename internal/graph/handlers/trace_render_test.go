@@ -48,7 +48,7 @@ INSERT INTO graph.thread_summaries(channel_id,thread_ts,signature,summary,overvi
 		}
 		store := &captureTraceStore{}
 		recorder := graphtrace.NewRecorder(store, graphtrace.Options{})
-		withContextTrace(search, "search", "test", recorder).ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, target, nil))
+		withContextTrace(search, "search", "test", recorder).ServeHTTP(httptest.NewRecorder(), adminRequest(http.MethodGet, target, nil))
 		recorder.Close(time.Second)
 		items := store.one(t).Items.([]map[string]any)
 		if len(items) == 0 {

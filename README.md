@@ -639,10 +639,30 @@ DM and non-Slack grants remain intact.
 
 ### Read endpoints
 
-Query the graph that ingest + processing built. All require the Bearer API key;
-reads carry the asker identity (`asker_eeid` in the body, or `X-Asker-User`
-header) so results are ACL-filtered and person-weighted. Design:
-[docs/plans/12-graph-memory-read.md](docs/plans/12-graph-memory-read.md).
+Query the graph that ingest + processing built. All require the Bearer API key.
+Design: [docs/plans/12-graph-memory-read.md](docs/plans/12-graph-memory-read.md).
+
+**Asker contract.** `search`, `node`, `node/{id}/neighbors`, `epic/{key}` and
+`resolve` must name who is asking, and return only what that person may see
+(unscoped/public nodes, their Slack channel and other member scopes, and all Jira,
+GitHub and Confluence content). Identity is the `X-Asker-User` header (Slack id,
+email, GitHub login, Jira account id, or an all-digit employee id) and, on
+`resolve`, `asker_slack_id` or `asker_eeid` in the body. Errors are JSON
+`{"error": code}`:
+
+| Status | Code | When |
+|---|---|---|
+| 403 | `asker_required` | no identity and no admin header |
+| 400 | `asker_invalid` | negative / non-int32 `asker_eeid`, or an all-digit header that is not a positive int32 |
+| 403 | `asker_unknown` | identity matches no person, or the person has no employee id |
+| 400 | `asker_conflict` | identities resolve to different people |
+| 503 | `acl_unavailable` | database or scope lookup failed |
+
+`X-Graph-Admin: 1` returns the unfiltered view (any other value is ignored; it
+needs the API key). The dashboard sends it on every request. Every other
+`GET /api/graph/*` route (jobs, channels, continents, person, slack-user,
+cluster summary, pins, subscriptions, ...) returns `403 admin_required` without
+it. Writes are unchanged.
 
 **GET /api/graph/search** — keyword + semantic candidate search:
 
@@ -678,7 +698,7 @@ Seeds may be canonical node ids (`jira:PAY-2128`, `slack:C…:ts`) or raw URLs.
 **GET /api/graph/node/{id}/neighbors** — adjacency walk; `?depth=1|2|3`,
 `?kind=REFERENCES`, `?direction=in|out|both`.
 
-**GET /api/graph/person** — person lookup by name substring, exact email,
+**GET /api/graph/person** (admin-only) — person lookup by name substring, exact email,
 all-digits employee id, or `U…` Slack id. Returns each candidate's profile,
 manager chain, derived role with evidence, and recent artifacts they authored;
 `q` required, `limit` optional (default 5, max 20).
@@ -692,36 +712,43 @@ curl -s -H "Authorization: Bearer $AGENT_MEM_API_KEY" \
 ## Graph MCP server
 
 `agent-mem mcp` serves the graph read API as a stdio MCP server for trusted
-operators. It exposes six tools:
+operators. It exposes five tools, and needs `AGENT_MEM_ASKER` (the asker's Slack
+user id) in its environment; without it every graph tool returns an error and
+makes no request. It sends the id as `X-Asker-User` and never the admin header.
+Because the server runs inside the worker container, pass the value into it:
+`docker exec -i -e AGENT_MEM_ASKER=U0123ABCD agent-mem-worker-1 agent-mem mcp`
+(over ssh, put the whole command in one quoted string so the variable is set on
+the remote side).
+The session-start epic brief (hub fallback) uses the same `AGENT_MEM_ASKER`; without it no brief is fetched.
 
 - `graph_search` discovers candidate Slack threads, Jira issues, pull requests,
   and documents.
 - `graph_node` fetches one artifact by canonical ID or exact source URL.
 - `graph_neighbors` walks a bounded set of related artifacts.
-- `graph_cluster_summary` returns synthesized review or decision context with
-  provenance. It can take roughly 15 seconds and return tens of kilobytes.
 - `graph_resolve` builds a question-focused context bundle from one or more
   IDs or ingested source URLs.
-- `graph_person` looks up a person by name, email, employee id, or Slack user
-  id, returning their profile, manager chain, inferred role, and recent
-  artifacts they authored.
+- `graph_epic` lists a Jira epic's members and standing brief.
+
+`graph_cluster_summary` and `graph_person` were removed: their endpoints are
+admin-only, and the MCP never sends the admin header.
 
 The production registration runs the image-shipped binary inside the worker
-container over SSH. The SSH account and the worker API key are the security
-boundary; this is an operator/admin integration, not a per-user authorization
-surface. Do not expose it through an unauthenticated network listener.
+container over SSH. Results are filtered to the named `AGENT_MEM_ASKER`, but the
+SSH account and the worker API key are still the security boundary: the asker is
+asserted by whoever launches the process, not authenticated. Do not expose it
+through an unauthenticated network listener.
 
 Register it with any supported client:
 
 ```bash
 claude mcp add --scope user agent-mem-graph -- \
-  ssh enzo@payments /opt/homebrew/bin/docker exec -i agent-mem-worker-1 agent-mem mcp
+  ssh enzo@payments /opt/homebrew/bin/docker exec -i -e AGENT_MEM_ASKER=<slack user id> agent-mem-worker-1 agent-mem mcp
 
 codex mcp add agent-mem-graph -- \
-  ssh enzo@payments /opt/homebrew/bin/docker exec -i agent-mem-worker-1 agent-mem mcp
+  ssh enzo@payments /opt/homebrew/bin/docker exec -i -e AGENT_MEM_ASKER=<slack user id> agent-mem-worker-1 agent-mem mcp
 
 gemini mcp add --scope user agent-mem-graph \
-  ssh enzo@payments /opt/homebrew/bin/docker exec -i agent-mem-worker-1 agent-mem mcp
+  ssh enzo@payments /opt/homebrew/bin/docker exec -i -e AGENT_MEM_ASKER=<slack user id> agent-mem-worker-1 agent-mem mcp
 ```
 
 Two differences from the old VPS registration, both of which fail silently if

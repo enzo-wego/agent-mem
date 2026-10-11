@@ -143,6 +143,10 @@ func TestTraceShowNotFoundPrintsWriterCounters(t *testing.T) {
 			http.NotFound(w, r)
 			return
 		}
+		if r.Header.Get("X-Graph-Admin") != "1" {
+			http.Error(w, "admin_required", http.StatusForbidden)
+			return
+		}
 		_, _ = fmt.Fprint(w, `{"Attempted":7,"Written":4,"Dropped":2,"Failed":1}`)
 	}))
 	defer server.Close()

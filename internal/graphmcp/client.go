@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -23,6 +24,23 @@ type Client struct {
 	baseURL    string
 	apiKey     string
 	httpClient *http.Client
+	asker      string
+}
+
+// ErrAskerRequired is returned by the graph read methods when no asker is set.
+var ErrAskerRequired = errors.New("agent-mem MCP needs AGENT_MEM_ASKER (Slack user id) set by the caller")
+
+// SetAsker sets the Slack user id sent as X-Asker-User on graph reads. The
+// client never sends the admin header.
+func (c *Client) SetAsker(asker string) { c.asker = strings.TrimSpace(asker) }
+
+// askerHeaders returns the per-request headers for a filtered read, or
+// ErrAskerRequired without touching the network when no asker is set.
+func (c *Client) askerHeaders() (http.Header, error) {
+	if c.asker == "" {
+		return nil, ErrAskerRequired
+	}
+	return http.Header{"X-Asker-User": []string{c.asker}}, nil
 }
 
 // ResolveRequest is the worker payload for /api/graph/resolve.
@@ -74,6 +92,10 @@ func NewClient(rawBaseURL, apiKey string, httpClient *http.Client) (*Client, err
 
 // Search searches graph nodes.
 func (c *Client) Search(ctx context.Context, req SearchRequest) (map[string]any, error) {
+	headers, err := c.askerHeaders()
+	if err != nil {
+		return nil, err
+	}
 	values := url.Values{
 		"q":     []string{req.Q},
 		"limit": []string{strconv.Itoa(req.Limit)},
@@ -96,61 +118,59 @@ func (c *Client) Search(ctx context.Context, req SearchRequest) (map[string]any,
 	if len(req.Arms) > 0 {
 		values.Set("arms", strings.Join(req.Arms, ","))
 	}
-	return c.doJSON(ctx, http.MethodGet, "/api/graph/search", values, nil)
+	return c.doJSON(ctx, http.MethodGet, "/api/graph/search", values, nil, headers)
 }
 
 // Epic returns an epic's (or the business root's) members and window.
 func (c *Client) Epic(ctx context.Context, key string) (map[string]any, error) {
-	return c.doJSON(ctx, http.MethodGet, "/api/graph/epic/"+url.PathEscape(key), nil, nil)
+	headers, err := c.askerHeaders()
+	if err != nil {
+		return nil, err
+	}
+	return c.doJSON(ctx, http.MethodGet, "/api/graph/epic/"+url.PathEscape(key), nil, nil, headers)
 }
 
 // Node fetches a graph node by ID or URL.
 func (c *Client) Node(ctx context.Context, id, rawURL string) (map[string]any, error) {
+	headers, err := c.askerHeaders()
+	if err != nil {
+		return nil, err
+	}
 	values := url.Values{}
 	if id != "" {
 		values.Set("id", id)
 	} else {
 		values.Set("url", rawURL)
 	}
-	return c.doJSON(ctx, http.MethodGet, "/api/graph/node", values, nil)
+	return c.doJSON(ctx, http.MethodGet, "/api/graph/node", values, nil, headers)
 }
 
 // Neighbors traverses neighbors from a graph node.
 func (c *Client) Neighbors(ctx context.Context, id string, depth int, kinds []string) (map[string]any, error) {
+	headers, err := c.askerHeaders()
+	if err != nil {
+		return nil, err
+	}
 	values := url.Values{"depth": []string{strconv.Itoa(depth)}}
 	for _, kind := range kinds {
 		values.Add("kind", kind)
 	}
 	path := "/api/graph/node/" + url.PathEscape(id) + "/neighbors"
-	return c.doJSON(ctx, http.MethodGet, path, values, nil)
-}
-
-// ClusterSummary returns a generated summary around a graph node.
-func (c *Client) ClusterSummary(ctx context.Context, node string, depth int) (map[string]any, error) {
-	values := url.Values{
-		"node":  []string{node},
-		"depth": []string{strconv.Itoa(depth)},
-	}
-	return c.doJSON(ctx, http.MethodGet, "/api/graph/cluster/summary", values, nil)
-}
-
-// Person looks up a person profile by name, email, employee id, or Slack id.
-func (c *Client) Person(ctx context.Context, query string, limit int) (map[string]any, error) {
-	values := url.Values{
-		"q":     []string{query},
-		"limit": []string{strconv.Itoa(limit)},
-	}
-	return c.doJSON(ctx, http.MethodGet, "/api/graph/person", values, nil)
+	return c.doJSON(ctx, http.MethodGet, path, values, nil, headers)
 }
 
 // Resolve resolves a set of graph seeds into a bounded context bundle.
 func (c *Client) Resolve(ctx context.Context, request ResolveRequest) (map[string]any, error) {
-	return c.doJSON(ctx, http.MethodPost, "/api/graph/resolve", nil, request)
+	headers, err := c.askerHeaders()
+	if err != nil {
+		return nil, err
+	}
+	return c.doJSON(ctx, http.MethodPost, "/api/graph/resolve", nil, request, headers)
 }
 
 // Probe verifies that the worker API is reachable and authorized.
 func (c *Client) Probe(ctx context.Context) error {
-	_, err := c.doJSON(ctx, http.MethodGet, "/api/settings", nil, nil)
+	_, err := c.doJSON(ctx, http.MethodGet, "/api/settings", nil, nil, nil)
 	return err
 }
 
@@ -160,6 +180,7 @@ func (c *Client) doJSON(
 	path string,
 	query url.Values,
 	body any,
+	headers http.Header,
 ) (map[string]any, error) {
 	var requestBody io.Reader
 	if body != nil {
@@ -185,6 +206,9 @@ func (c *Client) doJSON(
 		request.Header.Set("Authorization", "Bearer "+c.apiKey)
 	}
 	request.Header.Set("X-Graph-Caller", "mcp")
+	for key, values := range headers {
+		request.Header[key] = values
+	}
 
 	response, err := c.httpClient.Do(request)
 	if err != nil {

@@ -27,6 +27,7 @@ type resolveRequest struct {
 	Seeds         []string `json:"seeds"`
 	Query         string   `json:"query"`
 	AskerEEID     int      `json:"asker_eeid"`
+	AskerSlackID  string   `json:"asker_slack_id"`
 	Depth         int      `json:"depth"`
 	BudgetTokens  int      `json:"budget_tokens"`
 	IncludeBodies bool     `json:"include_bodies"`
@@ -80,7 +81,7 @@ type resolveTrace struct {
 // Resolve handles POST /api/graph/resolve.
 type Resolve struct {
 	db                 *pgxpool.Pool
-	aclBld             *acl.Builder
+	aclBld             scopeBuilder
 	exp                *bfs.Expander
 	weights            scoring.Weights
 	enqueueFetchBodyFn func(context.Context, string)
@@ -187,7 +188,12 @@ func (h *Resolve) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if diag, _ := ctx.Value(requestTraceDiagKey{}).(*requestTraceDiag); diag != nil {
 		diag.askerEEID = req.AskerEEID
+		diag.askerSlackID = req.AskerSlackID
 		diag.askerDecoded = true
+	}
+	acl, _, ok := requireAsker(w, r, h.db, h.aclBld, askerIdentities{slackID: req.AskerSlackID, eeid: req.AskerEEID})
+	if !ok {
+		return
 	}
 	if len(req.Seeds) == 0 {
 		http.Error(w, "seeds required", http.StatusBadRequest)
@@ -203,12 +209,6 @@ func (h *Resolve) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
-	}
-
-	scopes, _ := h.aclBld.For(ctx, req.AskerEEID)
-	scopeSet := map[string]bool{"public": true}
-	for _, s := range scopes {
-		scopeSet[s] = true
 	}
 
 	// As in neighbors.go, topical edges and hub nodes are leaves, not corridors.
@@ -268,14 +268,7 @@ func (h *Resolve) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	visited := displayHops(canonSeeds, nbrs, req.Depth)
 
-	// ACL filter. noFilter is keyed on whether a *principal was asserted at all*,
-	// NOT on whether the membership set is empty: a real asker (eeid != 0) with
-	// zero memberships must still be filtered (sees only unscoped + "public"),
-	// never the whole graph. eeid == 0 means no asker was asserted — the trusted
-	// dashboard/integration calling behind the API key — which gets the unfiltered
-	// admin view (same contract as /search). See checkScope for "public".
-	// (The API key is the privilege boundary here; asker_eeid is advisory until
-	// the asker identity is authenticated — see Mount's auth note.)
+	// ACL filter: see resolveAsker for the asker policy.
 	//
 	// Epic scope sits next to it: a candidate outside the requested epics is
 	// dropped exactly like a hidden one, except the seeds, which the caller
@@ -294,15 +287,7 @@ func (h *Resolve) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var filtered []bfs.Candidate
-	noFilter := req.AskerEEID == 0
-	if diag, _ := ctx.Value(requestTraceDiagKey{}).(*requestTraceDiag); diag != nil {
-		if noFilter {
-			diag.aclMode = "unfiltered"
-		} else {
-			diag.aclMode = "filtered"
-		}
-	}
-	allowedIDs, aclErr := h.checkScopes(ctx, visitedIDs, askerACL{noFilter: noFilter, resolved: !noFilter, scopes: scopeSet})
+	allowedIDs, aclErr := h.checkScopes(ctx, visitedIDs, acl)
 	for _, c := range visited {
 		if !inEpic[c.NodeID] && !seedSet[c.NodeID] {
 			continue

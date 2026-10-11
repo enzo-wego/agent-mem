@@ -18,7 +18,7 @@ func TestNode_LookupByURL(t *testing.T) {
 	h := handlers.NewNode(pool)
 	r := httptest.NewRequest("GET",
 		"/api/graph/node?url=https%3A%2F%2Fwegomushi.atlassian.net%2Fbrowse%2FPAY-2128", nil)
-	r.Header.Set("X-Asker-User", "U07UAC0J7T3")
+	r.Header.Set("X-Graph-Admin", "1")
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
 
@@ -38,8 +38,8 @@ func TestNode_LookupByURL(t *testing.T) {
 func TestNode_404OnMissing(t *testing.T) {
 	pool := testDB(t)
 	h := handlers.NewNode(pool)
-	r := httptest.NewRequest("GET", "/api/graph/node?url=https%3A%2F%2Fnope", nil)
-	r.Header.Set("X-Asker-User", "U07UAC0J7T3")
+	r := adminRequest("GET", "/api/graph/node?url=https%3A%2F%2Fnope", nil)
+	r.Header.Set("X-Graph-Admin", "1")
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
 	if w.Code != http.StatusNotFound {
@@ -61,8 +61,8 @@ func TestNode_SlackPermalinkResolvesIgnoringQueryAndFragment(t *testing.T) {
 		{"trailing slash", "https://wego.slack.com/archives/C0AV14LGPMG/p1782118242921599/"},
 		{"fragment", "https://wego.slack.com/archives/C0AV14LGPMG/p1782118242921599#thread-anchor"},
 	} {
-		r := httptest.NewRequest("GET", "/api/graph/node?url="+url.QueryEscape(tc.rawURL), nil)
-		r.Header.Set("X-Asker-User", "U07UAC0J7T3")
+		r := adminRequest("GET", "/api/graph/node?url="+url.QueryEscape(tc.rawURL), nil)
+		r.Header.Set("X-Graph-Admin", "1")
 		w := httptest.NewRecorder()
 		h.ServeHTTP(w, r)
 		if w.Code != http.StatusOK {
@@ -90,8 +90,8 @@ func TestNode_NonSlackURLIgnoresTrackingParams(t *testing.T) {
 	seedNodeURL(t, pool, nodeID, bareURL)
 
 	h := handlers.NewNode(pool)
-	r := httptest.NewRequest("GET", "/api/graph/node?url="+url.QueryEscape(bareURL+"?utm_source=slack"), nil)
-	r.Header.Set("X-Asker-User", "U07UAC0J7T3")
+	r := adminRequest("GET", "/api/graph/node?url="+url.QueryEscape(bareURL+"?utm_source=slack"), nil)
+	r.Header.Set("X-Graph-Admin", "1")
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
 	if w.Code != http.StatusOK {

@@ -66,7 +66,14 @@ func (f *linkFixture) resolveAs(seeds []string, depth, eeid int) map[string]map[
 	body, _ := json.Marshal(map[string]any{"seeds": seeds, "depth": depth, "asker_eeid": eeid, "include_bodies": false, "budget_tokens": 100000})
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	req := httptest.NewRequest("POST", "/api/graph/resolve", strings.NewReader(string(body))).WithContext(ctx)
+	req := adminRequest("POST", "/api/graph/resolve", strings.NewReader(string(body))).WithContext(ctx)
+	if eeid != 0 {
+		// A named asker, not admin; the person must exist.
+		req.Header.Del("X-Graph-Admin")
+		if _, err := f.pool.Exec(ctx, `INSERT INTO graph.people (eeid, display_name, machine_id) VALUES ($1,'Link Asker','test') ON CONFLICT DO NOTHING`, eeid); err != nil {
+			f.t.Fatal(err)
+		}
+	}
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 	if w.Code != 200 {

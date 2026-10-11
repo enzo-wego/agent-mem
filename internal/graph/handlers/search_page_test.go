@@ -124,9 +124,9 @@ type searchResp struct {
 
 func spSearch(t *testing.T, h *handlers.Search, rawQuery string, asker string) (int, searchResp, map[string]json.RawMessage) {
 	t.Helper()
-	r := httptest.NewRequest("GET", "/api/graph/search?"+rawQuery, nil)
+	r := adminRequest("GET", "/api/graph/search?"+rawQuery, nil)
 	if asker != "" {
-		r.Header.Set("X-Asker-User", asker)
+		setAsker(r, asker)
 	}
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
@@ -181,7 +181,7 @@ func spNeighbors(t *testing.T, pool *pgxpool.Pool, id, query string) ([]nbRow, m
 	t.Helper()
 	r := chi.NewRouter()
 	r.Mount("/api/graph", handlers.NewNeighbors(pool))
-	req := httptest.NewRequest("GET", "/api/graph/node/"+url.PathEscape(id)+"/neighbors?"+query, nil)
+	req := adminRequest("GET", "/api/graph/node/"+url.PathEscape(id)+"/neighbors?"+query, nil)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	if w.Code != 200 {

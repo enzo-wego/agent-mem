@@ -140,7 +140,7 @@ func TestSearch_TimezoneWiring(t *testing.T) {
 	ids := func() map[string]bool {
 		t.Helper()
 		w := httptest.NewRecorder()
-		s.ServeHTTP(w, httptest.NewRequest("GET", "/api/graph/search?q=yesterday&arms=temporal&limit=20", nil))
+		s.ServeHTTP(w, adminRequest("GET", "/api/graph/search?q=yesterday&arms=temporal&limit=20", nil))
 		if w.Code != 200 {
 			t.Fatalf("code %d: %s", w.Code, w.Body.String())
 		}

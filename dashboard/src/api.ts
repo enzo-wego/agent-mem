@@ -8,8 +8,12 @@ function authHeaders(): HeadersInit {
   return { Authorization: `Bearer ${key}` };
 }
 
-async function authFetch(url: string, init?: RequestInit): Promise<Response> {
-  const headers = { ...authHeaders(), ...(init?.headers || {}) };
+// The dashboard is the unfiltered admin view: every request carries
+// X-Graph-Admin: 1, set last so a caller's own headers cannot drop it.
+export async function authFetch(url: string, init?: RequestInit): Promise<Response> {
+  const headers = new Headers(authHeaders());
+  new Headers(init?.headers).forEach((value, key) => headers.set(key, value));
+  headers.set('X-Graph-Admin', '1');
   const res = await fetch(url, { ...init, headers });
   if (res.status === 401) {
     // Dispatch event so the app can show a login prompt

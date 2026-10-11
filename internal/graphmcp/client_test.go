@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -21,6 +22,8 @@ type observedRequest struct {
 	auth        string
 	caller      string
 	contentType string
+	asker       string
+	admin       string
 	body        map[string]any
 }
 
@@ -37,6 +40,8 @@ func TestClient_ProxiesGraphEndpoints(t *testing.T) {
 			auth:        r.Header.Get("Authorization"),
 			caller:      r.Header.Get("X-Graph-Caller"),
 			contentType: r.Header.Get("Content-Type"),
+			asker:       r.Header.Get("X-Asker-User"),
+			admin:       r.Header.Get("X-Graph-Admin"),
 		}
 		if r.Body != nil {
 			_ = json.NewDecoder(r.Body).Decode(&item.body)
@@ -53,6 +58,7 @@ func TestClient_ProxiesGraphEndpoints(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	client.SetAsker("  U07TEST ")
 	ctx := context.Background()
 
 	calls := []func() (map[string]any, error){
@@ -69,9 +75,6 @@ func TestClient_ProxiesGraphEndpoints(t *testing.T) {
 			return client.Neighbors(ctx, "gh_pr:wego/payments#2198", 2, []string{"REFERENCES", "SAME_TOPIC"})
 		},
 		func() (map[string]any, error) {
-			return client.ClusterSummary(ctx, "jira:PAY-2223", 3)
-		},
-		func() (map[string]any, error) {
 			return client.Resolve(ctx, ResolveRequest{
 				Seeds:         []string{"https://github.com/wego/payments/pull/2198"},
 				Query:         "is WithRebateRepo safe to remove?",
@@ -83,9 +86,6 @@ func TestClient_ProxiesGraphEndpoints(t *testing.T) {
 		func() (map[string]any, error) {
 			err := client.Probe(ctx)
 			return map[string]any{"ok": err == nil}, err
-		},
-		func() (map[string]any, error) {
-			return client.Person(ctx, "Lei", 5)
 		},
 		func() (map[string]any, error) {
 			return client.Search(ctx, SearchRequest{Q: "GST invoice", Limit: 10, Epic: []string{"PAY-2307", "PAY-2197"}, Business: "payments",
@@ -110,10 +110,8 @@ func TestClient_ProxiesGraphEndpoints(t *testing.T) {
 		{method: http.MethodGet, escapedPath: "/api/graph/node", query: "id=jira%3APAY-2223"},
 		{method: http.MethodGet, escapedPath: "/api/graph/node", query: "url=https%3A%2F%2Fexample.com%2Fpath%3Fa%3D1%26b%3D2"},
 		{method: http.MethodGet, escapedPath: "/api/graph/node/gh_pr:wego%2Fpayments%232198/neighbors", query: "depth=2&kind=REFERENCES&kind=SAME_TOPIC"},
-		{method: http.MethodGet, escapedPath: "/api/graph/cluster/summary", query: "depth=3&node=jira%3APAY-2223"},
 		{method: http.MethodPost, escapedPath: "/api/graph/resolve", contentType: "application/json"},
 		{method: http.MethodGet, escapedPath: "/api/settings"},
-		{method: http.MethodGet, escapedPath: "/api/graph/person", query: "limit=5&q=Lei"},
 		{method: http.MethodGet, escapedPath: "/api/graph/search", query: "arms=keyword%2Ctemporal&business=payments&epic=PAY-2307&epic=PAY-2197&limit=10&q=GST+invoice&since=2026-08-01&until=2026-08-31"},
 		{method: http.MethodGet, escapedPath: "/api/graph/epic/PAY-2307"},
 	}
@@ -129,6 +127,12 @@ func TestClient_ProxiesGraphEndpoints(t *testing.T) {
 		if got.auth != "Bearer worker-secret" {
 			t.Errorf("request %d Authorization = %q", i, got.auth)
 		}
+		if wantAsker := want.escapedPath != "/api/settings"; (got.asker == "U07TEST") != wantAsker || (!wantAsker && got.asker != "") {
+			t.Errorf("request %d X-Asker-User = %q (filtered read: %v)", i, got.asker, wantAsker)
+		}
+		if got.admin != "" {
+			t.Errorf("request %d sent X-Graph-Admin = %q; the MCP never sends it", i, got.admin)
+		}
 		if got.caller != "mcp" {
 			t.Errorf("request %d X-Graph-Caller = %q", i, got.caller)
 		}
@@ -136,7 +140,7 @@ func TestClient_ProxiesGraphEndpoints(t *testing.T) {
 			t.Errorf("request %d Content-Type = %q, want %q", i, got.contentType, want.contentType)
 		}
 	}
-	resolveBody := observed[5].body
+	resolveBody := observed[4].body
 	if resolveBody["query"] != "is WithRebateRepo safe to remove?" ||
 		resolveBody["depth"] != float64(2) ||
 		resolveBody["budget_tokens"] != float64(4000) ||
@@ -167,6 +171,7 @@ func TestClient_WorkerAndJSONErrors(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			client.SetAsker("U07TEST")
 			_, err = client.Node(context.Background(), "jira:PAY-1", "")
 			if err == nil || !strings.Contains(err.Error(), tt.want) {
 				t.Fatalf("error = %v, want substring %q", err, tt.want)
@@ -189,6 +194,7 @@ func TestClient_CancellationReachesWorker(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	client.SetAsker("U07TEST")
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
 	go func() {
@@ -220,5 +226,39 @@ func TestNewClient_RejectsInvalidBaseURL(t *testing.T) {
 				t.Fatalf("NewClient(%q) succeeded", raw)
 			}
 		})
+	}
+}
+
+func TestClient_FilteredReadsNeedAskerAndMakeNoRequest(t *testing.T) {
+	var hits atomic.Int32
+	worker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		fmt.Fprint(w, `{"ok":true}`)
+	}))
+	defer worker.Close()
+	ctx := context.Background()
+	for _, asker := range []string{"", "   ", "\t\n"} {
+		client, err := NewClient(worker.URL, "secret", worker.Client())
+		if err != nil {
+			t.Fatal(err)
+		}
+		client.SetAsker(asker)
+		for name, call := range map[string]func() error{
+			"search":    func() error { _, err := client.Search(ctx, SearchRequest{Q: "x", Limit: 1}); return err },
+			"node":      func() error { _, err := client.Node(ctx, "jira:X-1", ""); return err },
+			"neighbors": func() error { _, err := client.Neighbors(ctx, "jira:X-1", 1, nil); return err },
+			"resolve":   func() error { _, err := client.Resolve(ctx, ResolveRequest{Seeds: []string{"jira:X-1"}}); return err },
+			"epic":      func() error { _, err := client.Epic(ctx, "PAY-1"); return err },
+		} {
+			if err := call(); !errors.Is(err, ErrAskerRequired) {
+				t.Errorf("%s with asker %q: err=%v, want ErrAskerRequired", name, asker, err)
+			}
+		}
+		if err := client.Probe(ctx); err != nil {
+			t.Errorf("Probe without asker: %v", err)
+		}
+	}
+	if got := hits.Load(); got != 3 { // only the three Probe calls
+		t.Fatalf("worker saw %d requests, want 3 (Probe only)", got)
 	}
 }

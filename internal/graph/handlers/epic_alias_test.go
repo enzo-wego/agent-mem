@@ -74,8 +74,13 @@ func TestEpicEndpoint_ResolvesIssueKey(t *testing.T) {
 			t.Fatalf("allowed asker: status %d resp %+v", code, resp)
 		}
 	})
-	t.Run("alias_unresolved_asker", func(t *testing.T) {
-		code, _, resp, m := aclGet(t, "PAY-1234", "nobody@example.com")
+	t.Run("alias_unknown_asker", func(t *testing.T) {
+		if code, body, _, _ := aclGet(t, "PAY-1234", "nobody@example.com"); code != 403 || !strings.Contains(body, "asker_unknown") {
+			t.Fatalf("status %d body %q", code, body)
+		}
+	})
+	t.Run("alias_no_membership_asker", func(t *testing.T) {
+		code, _, resp, m := aclGet(t, "PAY-1234", "plain@example.com")
 		if code != 200 || resp.Total != 1 || len(resp.Members["slack"]) != 0 || len(resp.Members["jira"]) != 1 {
 			t.Fatalf("status %d total=%d members=%v", code, resp.Total, resp.Members)
 		}

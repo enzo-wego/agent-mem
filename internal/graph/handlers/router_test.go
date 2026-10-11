@@ -17,7 +17,7 @@ func TestSearchWeightsRouteRemoved(t *testing.T) {
 	handlers.Mount(r, handlers.Deps{DB: pool})
 	for _, method := range []string{http.MethodGet, http.MethodPut} {
 		w := httptest.NewRecorder()
-		r.ServeHTTP(w, httptest.NewRequest(method, "/api/graph/search-weights", strings.NewReader(`{}`)))
+		r.ServeHTTP(w, adminRequest(method, "/api/graph/search-weights", strings.NewReader(`{}`)))
 		if w.Code != http.StatusNotFound {
 			t.Errorf("%s /api/graph/search-weights = %d, want 404", method, w.Code)
 		}

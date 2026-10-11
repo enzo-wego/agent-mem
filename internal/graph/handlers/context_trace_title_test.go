@@ -35,7 +35,7 @@ INSERT INTO graph.artifact_bodies(node_id,body_full,machine_id) VALUES ('slack:C
 	for _, seed := range []string{"jira_attachment:empty", "slack:CGC0:200.000001"} {
 		store := &captureTraceStore{}
 		recorder := graphtrace.NewRecorder(store, graphtrace.Options{})
-		r := httptest.NewRequest(http.MethodPost, "/api/graph/resolve", bytes.NewBufferString(`{"seeds":["`+seed+`"]}`))
+		r := adminRequest(http.MethodPost, "/api/graph/resolve", bytes.NewBufferString(`{"seeds":["`+seed+`"]}`))
 		withContextTrace(resolve, "resolve", "test", recorder).ServeHTTP(httptest.NewRecorder(), r)
 		recorder.Close(time.Second)
 		items := store.one(t).Items.([]map[string]any)

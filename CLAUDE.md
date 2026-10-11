@@ -88,7 +88,7 @@ runs on the **payments Mac mini**: `ssh enzo@payments` (Tailscale
 
 - **Verify the live API** with `Authorization: Bearer $AGENT_MEM_API_KEY`. Enzo keeps
   the key in `~/.zshrc`; `source ~/.zshrc` first and never print the value. Example:
-  `curl -s -H "Authorization: Bearer $AGENT_MEM_API_KEY" "http://100.125.54.118:34567/api/graph/node/<node-id>/neighbors?depth=2&cards=1"`.
+  `curl -s -H "Authorization: Bearer $AGENT_MEM_API_KEY" -H "X-Graph-Admin: 1" "http://100.125.54.118:34567/api/graph/node/<node-id>/neighbors?depth=2&cards=1"`.
   Never ask Enzo for the key.
 
 - **p-agent (EnzoBot) runs on the same Mac mini** as LaunchDaemon
@@ -118,6 +118,31 @@ runs on the **payments Mac mini**: `ssh enzo@payments` (Tailscale
 - Dashboard changes still require the embed rebuild BEFORE committing:
   `cd dashboard && npm run build`, then from the repo root
   `rm -rf internal/worker/dashboard/* && cp -R dashboard/dist/* internal/worker/dashboard/`.
+
+## Graph read ACL (asker contract)
+
+- The five filtered read routes (`GET /api/graph/search`, `/node`, `/node/{id}/neighbors`,
+  `/epic/{key}`, `POST /api/graph/resolve`) need a named asker: `X-Asker-User`
+  (Slack id, email, GitHub login, Jira account id, or an all-digit eeid) and, on
+  `/resolve`, `asker_slack_id` / `asker_eeid` in the body. No asker is `403
+  asker_required`; unknown or eeid-less is `403 asker_unknown`; two identities for
+  different people is `400 asker_conflict`; a DB or scope-builder error is `503
+  acl_unavailable`. All other `GET /api/graph/*` routes are admin-only by default
+  (`graphReadPolicy` in `internal/graph/handlers/router.go`): a new GET route is
+  gated until someone deliberately adds it to `askerFilteredGET`.
+- `X-Graph-Admin: 1` (exact value) is the only unfiltered access. Any API-key
+  holder can send it, so the ACL guards against mistakes, not a hostile key holder.
+  The dashboard's `authFetch` always sends it.
+- Visibility: unscoped / `public` nodes, the asker's `graph.member_scopes`, and
+  every source whose prefix (text before the first `:`) is exactly `jira`, `github` or `confluence` (`orgScopeSources` in
+  `acl_guard.go`, one list shared by the Go and SQL predicates). GWS stays per
+  file, Slack per channel.
+- MCP: `agent-mem mcp` sends `AGENT_MEM_ASKER` (a Slack user id) as `X-Asker-User`
+  and never the admin header; unset makes every graph tool fail without an HTTP
+  call. It runs inside the worker container, so pass it explicitly:
+  `docker exec -i -e AGENT_MEM_ASKER=U0123ABCD agent-mem-worker-1 agent-mem mcp`.
+- Eval: `resolve-admin` (admin header) is the unfiltered comparison arm;
+  `resolve-asker` and `search-hybrid` send the case's asker and never the admin header.
 
 ## Architecture Overview
 

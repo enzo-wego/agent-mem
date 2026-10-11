@@ -57,7 +57,7 @@ asker_eeid: 1
 needs_context: yes
 canonical_seeds: []
 requests:
-  resolve-asker0: {body: {seeds: [%q], query: %s, asker_eeid: 0}, headers: {}}
+  resolve-admin: {body: {seeds: [%q], query: %s, asker_eeid: 0}, headers: {}}
   resolve-asker: {body: {seeds: [%q], query: %s, asker_eeid: 1}, headers: {}}
   search-hybrid: {params: {q: %s, match: hybrid, limit: 10}, headers: {}}
 labels:
@@ -342,7 +342,7 @@ func TestRelevanceMetricsOnFixedServer(t *testing.T) {
 		t.Fatalf("primary=%d linked=%d returned=%d", s.Primary, s.Linked, s.Returned)
 	}
 	// first measured run failed: ranking uses the first successful measured run, never the warm-up.
-	ff := result.PerCase[get("firstfail", "resolve-asker0")]
+	ff := result.PerCase[get("firstfail", "resolve-admin")]
 	if ff.Failed || strings.Join(ff.NonSeed, ",") != "must1,reply1" {
 		t.Fatalf("firstfail: failed=%v ids=%v", ff.Failed, ff.NonSeed)
 	}
@@ -350,7 +350,7 @@ func TestRelevanceMetricsOnFixedServer(t *testing.T) {
 		t.Fatalf("firstfail runs/unstable wrong: %+v unstable=%d", ff.Runs[0], ff.Unstable)
 	}
 	// unstable: two distinct ordered lists.
-	if u := result.PerCase[get("unstable", "resolve-asker0")]; u.Unstable != 2 {
+	if u := result.PerCase[get("unstable", "resolve-admin")]; u.Unstable != 2 {
 		t.Fatalf("unstable=%d want 2", u.Unstable)
 	}
 	// degraded: only the search variant has arm_errors.
@@ -358,12 +358,12 @@ func TestRelevanceMetricsOnFixedServer(t *testing.T) {
 		t.Fatal("degraded flag wrong")
 	}
 	// always failing: failed, never scored as empty.
-	af := result.PerCase[get("alwaysfail", "resolve-asker0")]
+	af := result.PerCase[get("alwaysfail", "resolve-admin")]
 	if !af.Failed || af.Precision != nil || af.Recall != nil || af.Returned != 0 {
 		t.Fatalf("alwaysfail: %+v", af)
 	}
 	// unlabelled: no relevance metrics, duplicate replies still counted.
-	ul := result.PerCase[get("unlabelled", "resolve-asker0")]
+	ul := result.PerCase[get("unlabelled", "resolve-admin")]
 	if !ul.Unlabelled || ul.Precision != nil || ul.Recall != nil || ul.Harmful != nil || ul.DupReplies != 1 {
 		t.Fatalf("unlabelled: %+v", ul)
 	}

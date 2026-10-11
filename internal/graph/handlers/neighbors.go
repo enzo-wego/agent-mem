@@ -64,7 +64,7 @@ func NewNeighbors(db *pgxpool.Pool) chi.Router {
 type neighborsHandler struct {
 	db     *pgxpool.Pool
 	exp    *bfs.Expander
-	aclBld *acl.Builder
+	aclBld scopeBuilder
 }
 
 type neighborItem struct {
@@ -122,6 +122,10 @@ type neighborItem struct {
 
 func (h *neighborsHandler) serve(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	acl, _, ok := requireAsker(w, r, h.db, h.aclBld, askerIdentities{})
+	if !ok {
+		return
+	}
 	id := chi.URLParam(r, "id")
 	// Node ids contain ':' which the client URL-encodes (%3A); chi does not decode
 	// path params, so unescape here or the node lookup misses.
@@ -143,10 +147,8 @@ func (h *neighborsHandler) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	epicArg := epicScopeArg(epicKeys)
 
-	// Present headers are always filtered, including unresolved identities.
 	// Reject hidden roots before either expansion path can derive metadata.
-	eeid, scopeSet, noFilter := askerScopeSet(ctx, h.db, h.aclBld, r.Header.Get("X-Asker-User"))
-	acl := askerACL{noFilter: noFilter, resolved: eeid != 0, scopes: scopeSet}
+	scopeSet, noFilter := acl.scopes, acl.noFilter
 	if !noFilter {
 		var rootScope *string
 		var rootType string
