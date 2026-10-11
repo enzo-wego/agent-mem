@@ -1,0 +1,122 @@
+{
+  "status": 200,
+  "content_type": "application/json",
+  "body": {
+    "arms": [
+      "semantic",
+      "keyword"
+    ],
+    "query": "phase zero",
+    "results": [
+      {
+        "created_at": "2026-10-10T08:00:00+08:00",
+        "first_ts_ms": 1791590400000,
+        "id": "slack:CGC0:100.000001",
+        "last_ts_ms": 1791590400000,
+        "match": [
+          "keyword"
+        ],
+        "node_id": "slack:CGC0:100.000001",
+        "score": 0.017315838534641376,
+        "score_breakdown": {
+          "auth": 1,
+          "edge": 0,
+          "ranks": {
+            "keyword": 1
+          },
+          "rec": 0.9672161004820059,
+          "rrf": 0.01639344262295082,
+          "sem": 0,
+          "team": 0.1,
+          "temporal": 0.5
+        },
+        "summary": "root summary",
+        "title": "Phase zero root",
+        "type": "slack",
+        "url": ""
+      },
+      {
+        "created_at": "2026-10-09T08:00:00+08:00",
+        "first_ts_ms": 1791504000000,
+        "id": "slack:CGC0:101.000001",
+        "last_ts_ms": 1791504000000,
+        "match": [
+          "keyword"
+        ],
+        "node_id": "slack:CGC0:101.000001",
+        "score": 0.016937741121098523,
+        "score_breakdown": {
+          "auth": 1,
+          "edge": 0,
+          "ranks": {
+            "keyword": 2
+          },
+          "rec": 0.9355069850316178,
+          "rrf": 0.016129032258064516,
+          "sem": 0,
+          "team": 0.1,
+          "temporal": 0.5
+        },
+        "summary": "reply summary",
+        "title": "Phase zero reply",
+        "type": "slack",
+        "url": ""
+      },
+      {
+        "created_at": "2026-10-08T08:00:00+08:00",
+        "first_ts_ms": 1791417600000,
+        "id": "jira:GC0-1",
+        "last_ts_ms": 1791417600000,
+        "match": [
+          "keyword"
+        ],
+        "node_id": "jira:GC0-1",
+        "score": 0.01657483474864361,
+        "score_breakdown": {
+          "auth": 1,
+          "edge": 0,
+          "ranks": {
+            "keyword": 3
+          },
+          "rec": 0.9048374180359595,
+          "rrf": 0.015873015873015872,
+          "sem": 0,
+          "team": 0.1,
+          "temporal": 0.5
+        },
+        "summary": "issue summary",
+        "title": "Phase zero issue",
+        "type": "jira",
+        "url": ""
+      },
+      {
+        "created_at": "2026-10-07T08:00:00+08:00",
+        "first_ts_ms": 1791331200000,
+        "id": "jira:GC0-MISS",
+        "last_ts_ms": 1791331200000,
+        "match": [
+          "keyword"
+        ],
+        "node_id": "jira:GC0-MISS",
+        "score": 0.0162263044568609,
+        "score_breakdown": {
+          "auth": 1,
+          "edge": 0,
+          "ranks": {
+            "keyword": 4
+          },
+          "rec": 0.8751733190429475,
+          "rrf": 0.015625,
+          "sem": 0,
+          "team": 0.1,
+          "temporal": 0.5
+        },
+        "summary": "missing summary",
+        "title": "Phase zero missing body",
+        "type": "jira",
+        "url": ""
+      }
+    ],
+    "total": 4
+  }
+}

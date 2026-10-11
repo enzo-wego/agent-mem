@@ -50,7 +50,7 @@ func NewSearch(db *pgxpool.Pool) (*Search, error) {
 		embed:  nil, // wired at server level via NewSearchWithEmbedder
 		aclBld: acl.NewBuilder(db, 5*time.Minute),
 		exp:    bfs.NewExpander(db),
-		now:    time.Now,
+		now:    nowFunc,
 	}, nil
 }
 

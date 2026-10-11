@@ -19,6 +19,8 @@ import (
 	"github.com/agent-mem/agent-mem/internal/graph/scoring"
 )
 
+var nowFunc = time.Now
+
 type resolveRequest struct {
 	Seeds         []string `json:"seeds"`
 	Query         string   `json:"query"`
@@ -170,7 +172,7 @@ func displayHops(seeds []string, nbrs map[string][]bfs.Neighbor, depth int) map[
 }
 
 func (h *Resolve) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	t0 := time.Now()
+	t0 := nowFunc()
 	ctx := r.Context()
 	var req resolveRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -543,7 +545,7 @@ type scoredCand struct {
 }
 
 func (h *Resolve) scoreAll(ctx context.Context, req resolveRequest, cands []bfs.Candidate) []scoredCand {
-	now := time.Now()
+	now := nowFunc()
 	out := make([]scoredCand, 0, len(cands))
 	for _, c := range cands {
 		row := h.db.QueryRow(ctx, `

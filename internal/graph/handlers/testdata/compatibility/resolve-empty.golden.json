@@ -1,0 +1,17 @@
+{
+  "status": 200,
+  "content_type": "application/json",
+  "body": {
+    "artifacts": [],
+    "context_tokens": 0,
+    "graph_trace": {
+      "after_acl": 0,
+      "after_score_threshold": 0,
+      "expanded_nodes": 1,
+      "seeds": [
+        "jira:UNKNOWN"
+      ],
+      "took_ms": 0
+    }
+  }
+}

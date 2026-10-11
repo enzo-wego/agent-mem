@@ -1,0 +1,58 @@
+{
+  "status": 200,
+  "content_type": "application/json",
+  "body": {
+    "artifacts": [
+      {
+        "hop": 0,
+        "node_id": "slack:CGC0:100.000001",
+        "score": 0.3600824150723009,
+        "score_breakdown": {
+          "auth": 1,
+          "edge": 1,
+          "rec": 0.9672161004820059,
+          "sem": 0,
+          "team": 0.1
+        },
+        "thread_ts": "100.000001",
+        "title": "Phase zero root",
+        "type": "slack",
+        "url": ""
+      },
+      {
+        "hop": 1,
+        "links": [
+          {
+            "confidence": 0.91,
+            "kind": "REFERENCES"
+          }
+        ],
+        "node_id": "jira:GC0-1",
+        "score": 0.2757256127053939,
+        "score_breakdown": {
+          "auth": 1,
+          "edge": 0.5,
+          "rec": 0.9048374180359595,
+          "sem": 0,
+          "team": 0.1
+        },
+        "title": "Phase zero issue",
+        "type": "jira",
+        "url": ""
+      }
+    ],
+    "cache_misses": [
+      "jira:GC0-MISS"
+    ],
+    "context_tokens": 12,
+    "graph_trace": {
+      "after_acl": 3,
+      "after_score_threshold": 3,
+      "expanded_nodes": 3,
+      "seeds": [
+        "slack:CGC0:101.000001"
+      ],
+      "took_ms": 0
+    }
+  }
+}

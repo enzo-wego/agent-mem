@@ -1,0 +1,17 @@
+{
+  "status": 200,
+  "content_type": "application/json",
+  "body": {
+    "arm_errors": {
+      "temporal": "no time window in query or since/until"
+    },
+    "arms": [
+      "semantic",
+      "keyword",
+      "graph"
+    ],
+    "query": "unfindabletoken",
+    "results": [],
+    "total": 0
+  }
+}
