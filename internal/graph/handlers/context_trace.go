@@ -51,8 +51,13 @@ func (h *traceHTTP) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	started := time.Now()
 	id := newContextID()
 	w.Header().Set("X-Graph-Request-Id", id)
-	requestBytes, _ := io.ReadAll(r.Body)
-	r.Body = io.NopCloser(bytes.NewReader(requestBytes))
+	const maxTraceRequestBody = 1 << 20
+	prefix, _ := io.ReadAll(io.LimitReader(r.Body, maxTraceRequestBody+1))
+	requestBytes := prefix
+	if len(requestBytes) > maxTraceRequestBody {
+		requestBytes = requestBytes[:maxTraceRequestBody]
+	}
+	r.Body = io.NopCloser(io.MultiReader(bytes.NewReader(prefix), r.Body))
 	diag := &requestTraceDiag{}
 	r = r.WithContext(context.WithValue(contextWithTraceBody(r, requestBytes), requestTraceDiagKey{}, diag))
 	bw := &bufferedResponse{header: make(http.Header)}
@@ -62,13 +67,8 @@ func (h *traceHTTP) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		status = http.StatusOK
 	}
 	body := bw.body.Bytes()
-	if status >= 200 && status < 300 && strings.HasPrefix(bw.header.Get("Content-Type"), "application/json") {
-		var top map[string]any
-		if json.Unmarshal(body, &top) == nil {
-			top["request_id"] = id
-			body, _ = json.Marshal(top)
-			body = append(body, '\n')
-		}
+	if status >= 200 && status < 300 && strings.HasPrefix(bw.header.Get("Content-Type"), "application/json") && json.Valid(body) {
+		body = insertRequestID(body, id)
 	}
 	for key, values := range bw.header {
 		for _, value := range values {
@@ -79,13 +79,11 @@ func (h *traceHTTP) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(status)
 	_, _ = w.Write(body)
 	hash := sha256.Sum256(body)
-	record := graphtrace.Record{ID: id, CreatedAt: started.UTC(), Route: h.route, BuildRev: unknownIfEmpty(h.buildRev), Caller: capString(defaultString(r.Header.Get("X-Graph-Caller"), "unknown"), 64), Status: status, ACLMode: "not-evaluated", Request: traceRequest(r, h.route), AskerInput: traceAsker(r, h.route), Items: traceItems(body, h.route), ResponseSHA256: hex.EncodeToString(hash[:]), LatencyMS: time.Since(started).Milliseconds()}
+	record := graphtrace.Record{ID: id, CreatedAt: started.UTC(), Route: h.route, BuildRev: unknownIfEmpty(h.buildRev), Caller: capString(defaultString(r.Header.Get("X-Graph-Caller"), "unknown"), 64), Status: status, ACLMode: traceACLMode(r), Request: traceRequest(r, h.route), AskerInput: traceAsker(r, h.route), Items: traceItems(body, h.route), ResponseSHA256: hex.EncodeToString(hash[:]), LatencyMS: time.Since(started).Milliseconds()}
 	mergeTraceItemMeta(record.Items, diag)
 	if status >= 400 {
 		message := capString(strings.TrimSpace(string(body)), 500)
 		record.Error = &message
-	} else {
-		record.ACLMode = traceACLMode(r, h.route)
 	}
 	if items, ok := record.Items.([]map[string]any); ok && len(items) > 200 {
 		record.Items = items[:200]
@@ -113,21 +111,27 @@ func defaultString(s, d string) string {
 	return s
 }
 func capString(s string, n int) string {
-	if len(s) > n {
-		return s[:n]
+	s = strings.ReplaceAll(s, "\x00", "")
+	runes := []rune(s)
+	if len(runes) > n {
+		return string(runes[:n])
 	}
 	return s
 }
 func traceAsker(r *http.Request, route string) map[string]any {
 	out := map[string]any{"body_asker_eeid": nil, "header_asker_user": nil}
 	if v := r.Header.Get("X-Asker-User"); v != "" {
-		out["header_asker_user"] = v
+		out["header_asker_user"] = capString(v, 2000)
 	}
 	if route == "resolve" {
-		var body map[string]any
-		_ = json.NewDecoder(bytes.NewReader(requestBody(r))).Decode(&body)
-		if v, ok := body["asker_eeid"]; ok {
-			out["body_asker_eeid"] = v
+		if diag, _ := r.Context().Value(requestTraceDiagKey{}).(*requestTraceDiag); diag != nil && diag.askerDecoded {
+			out["body_asker_eeid"] = diag.askerEEID
+		} else {
+			var body map[string]any
+			_ = json.NewDecoder(bytes.NewReader(requestBody(r))).Decode(&body)
+			if v, ok := body["asker_eeid"]; ok {
+				out["body_asker_eeid"] = capTraceValue(v)
+			}
 		}
 	}
 	return out
@@ -144,37 +148,82 @@ type traceBodyKey struct{}
 func traceRequest(r *http.Request, route string) any {
 	if route == "search" {
 		out := map[string]any{}
-		for k, v := range r.URL.Query() {
-			if len(v) == 1 {
-				out[k] = capString(v[0], 2000)
+		for k, values := range r.URL.Query() {
+			values = capStrings(values, 50)
+			if len(values) == 1 {
+				out[capString(k, 2000)] = capString(values[0], 2000)
 			} else {
-				out[k] = v
+				out[capString(k, 2000)] = values
 			}
 		}
-		if top, ok := traceItemsRaw(r).(map[string]any); ok {
-			if e, ok := top["arm_errors"]; ok {
-				out["arm_errors"] = e
+		if diag, _ := r.Context().Value(requestTraceDiagKey{}).(*requestTraceDiag); diag != nil && len(diag.armErrors) > 0 {
+			armErrors := make(map[string]string, len(diag.armErrors))
+			for arm, reason := range diag.armErrors {
+				armErrors[capString(arm, 2000)] = capString(reason, 2000)
 			}
+			out["arm_errors"] = armErrors
 		}
 		return out
 	}
-	var out any
-	if json.Unmarshal(requestBody(r), &out) != nil {
+	var decoded map[string]any
+	if json.Unmarshal(requestBody(r), &decoded) != nil {
 		return map[string]any{}
+	}
+	out := capTraceValue(decoded).(map[string]any)
+	if diag, _ := r.Context().Value(requestTraceDiagKey{}).(*requestTraceDiag); diag != nil && diag.canonicalSeeds != nil {
+		out["canonical_seeds"] = capStrings(diag.canonicalSeeds, 50)
 	}
 	return out
 }
-func traceItemsRaw(r *http.Request) any { return r.Context().Value(traceResponseKey{}) }
 
-type traceResponseKey struct{}
+func capStrings(values []string, max int) []string {
+	if len(values) > max {
+		values = values[:max]
+	}
+	out := make([]string, len(values))
+	for i, value := range values {
+		out[i] = capString(value, 2000)
+	}
+	return out
+}
+
+// capTraceValue returns value with every string capped at 2,000 runes, every
+// array at 50 entries and every NUL byte removed (jsonb rejects U+0000), in
+// object keys as well as values.
+func capTraceValue(value any) any {
+	switch typed := value.(type) {
+	case string:
+		return capString(typed, 2000)
+	case map[string]any:
+		out := make(map[string]any, len(typed))
+		for key, child := range typed {
+			out[capString(key, 2000)] = capTraceValue(child)
+		}
+		return out
+	case []any:
+		if len(typed) > 50 {
+			typed = typed[:50]
+		}
+		out := make([]any, len(typed))
+		for i, child := range typed {
+			out[i] = capTraceValue(child)
+		}
+		return out
+	}
+	return value
+}
 
 func contextWithTraceBody(r *http.Request, body []byte) context.Context {
 	return context.WithValue(r.Context(), traceBodyKey{}, body)
 }
 
 type requestTraceDiag struct {
-	aclMode  string
-	itemMeta map[string]map[string]any
+	aclMode        string
+	itemMeta       map[string]map[string]any
+	armErrors      map[string]string
+	canonicalSeeds []string
+	askerEEID      int
+	askerDecoded   bool
 }
 type requestTraceDiagKey struct{}
 
@@ -231,20 +280,37 @@ func mergeTraceItemMeta(items any, diag *requestTraceDiag) {
 	}
 }
 
-func traceACLMode(r *http.Request, route string) string {
+// traceACLMode reports the decision the handler recorded in diag; it never
+// recomputes one from the raw request.
+func traceACLMode(r *http.Request) string {
 	if diag, _ := r.Context().Value(requestTraceDiagKey{}).(*requestTraceDiag); diag != nil && diag.aclMode != "" {
 		return diag.aclMode
 	}
-	if route == "resolve" {
-		var body map[string]any
-		_ = json.Unmarshal(requestBody(r), &body)
-		if n, ok := body["asker_eeid"].(float64); !ok || n == 0 {
-			return "unfiltered"
-		}
-		return "filtered"
+	return "not-evaluated"
+}
+
+// insertRequestID adds "request_id" right after the leading brace of a JSON
+// object without re-encoding the rest. Non-objects are returned unchanged.
+func insertRequestID(body []byte, id string) []byte {
+	space := func(b byte) bool { return b == ' ' || b == '\t' || b == '\r' || b == '\n' }
+	i := 0
+	for i < len(body) && space(body[i]) {
+		i++
 	}
-	if strings.TrimSpace(r.Header.Get("X-Asker-User")) == "" {
-		return "unfiltered"
+	if i >= len(body) || body[i] != '{' {
+		return body
 	}
-	return "public-only"
+	j := i + 1
+	for j < len(body) && space(body[j]) {
+		j++
+	}
+	member, _ := json.Marshal(id)
+	insert := append([]byte(`"request_id":`), member...)
+	if j < len(body) && body[j] != '}' {
+		insert = append(insert, ',')
+	}
+	out := make([]byte, 0, len(body)+len(insert))
+	out = append(out, body[:i+1]...)
+	out = append(out, insert...)
+	return append(out, body[i+1:]...)
 }

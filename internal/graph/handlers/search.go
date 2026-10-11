@@ -36,7 +36,7 @@ type Embedder interface {
 type Search struct {
 	db     *pgxpool.Pool
 	embed  Embedder
-	aclBld *acl.Builder
+	aclBld scopeBuilder
 	exp    *bfs.Expander
 	// now is injectable so the temporal window parser is testable.
 	now func() time.Time
@@ -376,6 +376,10 @@ func (s *Search) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+	}
+
+	if diag, _ := ctx.Value(requestTraceDiagKey{}).(*requestTraceDiag); diag != nil {
+		diag.armErrors = nilIfEmpty(armErrs)
 	}
 
 	if hybrid {

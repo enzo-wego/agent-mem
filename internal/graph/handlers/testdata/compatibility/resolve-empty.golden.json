@@ -1,17 +1,5 @@
 {
   "status": 200,
   "content_type": "application/json",
-  "body": {
-    "artifacts": [],
-    "context_tokens": 0,
-    "graph_trace": {
-      "after_acl": 0,
-      "after_score_threshold": 0,
-      "expanded_nodes": 1,
-      "seeds": [
-        "jira:UNKNOWN"
-      ],
-      "took_ms": 0
-    }
-  }
+  "body": "{\"context_tokens\":0,\"artifacts\":[],\"graph_trace\":{\"seeds\":[\"jira:UNKNOWN\"],\"expanded_nodes\":1,\"after_acl\":0,\"after_score_threshold\":0,\"took_ms\":0}}\n"
 }

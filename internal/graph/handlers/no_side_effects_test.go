@@ -9,7 +9,9 @@ import (
 	"os"
 	"sync"
 	"testing"
+	"time"
 
+	graphtrace "github.com/agent-mem/agent-mem/internal/graph/trace"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -35,6 +37,7 @@ func (c *readOnlyErrorCollector) Count() int { c.mu.Lock(); defer c.mu.Unlock();
 
 func TestNoSideEffectsRequestsUseReadOnlyPoolAndSkipEnqueue(t *testing.T) {
 	normal := compatibilityPool(t)
+	resetEpicACL(t, normal)
 	fixture, err := os.ReadFile(compatibilityFixture)
 	if err != nil {
 		t.Fatal(err)
@@ -42,6 +45,7 @@ func TestNoSideEffectsRequestsUseReadOnlyPoolAndSkipEnqueue(t *testing.T) {
 	if _, err = normal.Exec(context.Background(), string(fixture)); err != nil {
 		t.Fatal(err)
 	}
+	aclPerson(t, normal, 504, "ro-member@example.com", "slack:CGC0")
 	cfg, err := pgxpool.ParseConfig(os.Getenv("DATABASE_URL"))
 	if err != nil {
 		t.Fatal(err)
@@ -67,18 +71,39 @@ func TestNoSideEffectsRequestsUseReadOnlyPoolAndSkipEnqueue(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Request handlers run on the read-only pool; the trace row is written
+	// through the normal pool, outside the measured path.
+	recorder := graphtrace.NewRecorder(graphtrace.PostgresStore{DB: normal}, graphtrace.Options{})
+	t.Cleanup(func() { recorder.Close(5 * time.Second) })
 	cases := []struct {
-		method, target, body string
-		handler              http.Handler
-		status               int
-	}{{"POST", "/api/graph/resolve", `{"seeds":["jira:GC0-MISS"],"no_side_effects":true}`, resolve, 200}, {"POST", "/api/graph/resolve", `{}`, resolve, 400}, {"GET", "/api/graph/search?q=phase+zero", "", search, 200}, {"GET", "/api/graph/search?q=phase+zero&match=hybrid", "", search, 200}, {"GET", "/api/graph/search", "", search, 400}}
+		route, method, target, body string
+		headers                     map[string]string
+		handler                     http.Handler
+		status                      int
+		bodyContains                string
+	}{
+		{"resolve", "POST", "/api/graph/resolve", `{"seeds":["slack:CGC0:100.000001"],"include_bodies":true}`, map[string]string{"X-Graph-No-Side-Effects": "TrUe"}, resolve, 200, `"body":"phase zero root body"`},
+		{"resolve", "POST", "/api/graph/resolve", `{"seeds":["jira:GC0-MISS"]}`, map[string]string{"X-Graph-No-Side-Effects": "TrUe"}, resolve, 200, `"cache_misses":["jira:GC0-MISS"]`},
+		{"resolve", "POST", "/api/graph/resolve", `{"seeds":["jira:GC0-MISS"],"no_side_effects":true}`, nil, resolve, 200, `"cache_misses":["jira:GC0-MISS"]`},
+		{"resolve", "POST", "/api/graph/resolve", `{"seeds":["slack:CGC0:100.000001"],"asker_eeid":504,"include_bodies":true}`, map[string]string{"X-Graph-No-Side-Effects": "1"}, resolve, 200, `"body":"phase zero root body"`},
+		{"resolve", "POST", "/api/graph/resolve", `{}`, map[string]string{"X-Graph-No-Side-Effects": "1"}, resolve, 400, "seeds required"},
+		{"search", "GET", "/api/graph/search?q=phase+zero", "", map[string]string{"X-Graph-No-Side-Effects": "1", "X-Asker-User": "UUNKNOWN"}, search, 200, `"results"`},
+		{"search", "GET", "/api/graph/search?q=phase+zero", "", map[string]string{"X-Graph-No-Side-Effects": "1", "X-Asker-User": "ro-member@example.com"}, search, 200, `"node_id":"slack:CGC0:100.000001"`},
+		{"search", "GET", "/api/graph/search?q=phase+zero&match=hybrid", "", map[string]string{"X-Graph-No-Side-Effects": "true"}, search, 200, `"results"`},
+		{"search", "GET", "/api/graph/search", "", map[string]string{"X-Graph-No-Side-Effects": "1"}, search, 400, "q required"},
+	}
 	for _, tc := range cases {
 		r := httptest.NewRequest(tc.method, tc.target, bytes.NewBufferString(tc.body))
-		r.Header.Set("X-Graph-No-Side-Effects", "1")
+		for key, value := range tc.headers {
+			r.Header.Set(key, value)
+		}
 		w := httptest.NewRecorder()
-		tc.handler.ServeHTTP(w, r)
+		withContextTrace(tc.handler, tc.route, "no-side-effects", recorder).ServeHTTP(w, r)
 		if w.Code != tc.status {
 			t.Fatalf("%s %s status=%d body=%s", tc.method, tc.target, w.Code, w.Body.String())
+		}
+		if !bytes.Contains(w.Body.Bytes(), []byte(tc.bodyContains)) {
+			t.Fatalf("%s %s body=%q missing %q", tc.method, tc.target, w.Body.String(), tc.bodyContains)
 		}
 	}
 	if enqueues != 0 {

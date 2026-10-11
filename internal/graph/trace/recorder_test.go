@@ -109,10 +109,49 @@ func TestRecorderCountsWriteFailureAndBoundedShutdown(t *testing.T) {
 	}
 }
 
+func TestRecorderCloseDoesNotDoubleCountDroppedRecords(t *testing.T) {
+	store := &blockingStore{started: make(chan struct{}, 1), release: make(chan struct{})}
+	r := NewRecorder(store, Options{MaxEntries: 2, MaxBytes: 4096, WriteTimeout: time.Second})
+	r.Enqueue(context.Background(), Record{ID: "ctx_writing"})
+	<-store.started
+	r.Enqueue(context.Background(), Record{ID: "ctx_queued"})
+	r.Close(time.Millisecond)
+	first := r.Stats().Dropped
+	r.Close(time.Millisecond)
+	if got := r.Stats().Dropped; got != first {
+		t.Fatalf("dropped changed across second Close: first=%d second=%d", first, got)
+	}
+	close(store.release)
+}
+
+type ageStore struct{ rows map[string]time.Time }
+
+func (*ageStore) Write(context.Context, Record) error { return nil }
+func (s *ageStore) Prune(_ context.Context, cutoff time.Time) (int64, error) {
+	var deleted int64
+	for id, created := range s.rows {
+		if created.Before(cutoff) {
+			delete(s.rows, id)
+			deleted++
+		}
+	}
+	return deleted, nil
+}
+
 func TestPruneUsesThirtyDayCutoff(t *testing.T) {
-	store := &fakeStore{}
 	now := time.Date(2026, 10, 11, 0, 0, 0, 0, time.UTC)
-	if _, err := Prune(context.Background(), store, now); err != nil {
+	store := &ageStore{rows: map[string]time.Time{
+		"29d": now.Add(-29 * 24 * time.Hour),
+		"31d": now.Add(-31 * 24 * time.Hour),
+	}}
+	deleted, err := Prune(context.Background(), store, now)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if _, kept := store.rows["29d"]; deleted != 1 || !kept {
+		t.Fatalf("deleted=%d rows=%v; want only the 31-day row deleted", deleted, store.rows)
+	}
+	if _, gone := store.rows["31d"]; gone {
+		t.Fatal("31-day row survived prune")
 	}
 }

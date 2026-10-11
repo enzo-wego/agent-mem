@@ -10,7 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"reflect"
+	"regexp"
 	"testing"
 	"time"
 
@@ -60,6 +60,9 @@ func TestResolveSearchCompatibility(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	oldLocal := time.Local
+	time.Local = time.UTC
+	t.Cleanup(func() { time.Local = oldLocal })
 	fixed := time.Date(2026, 10, 11, 0, 0, 0, 0, time.UTC)
 	oldNow := nowFunc
 	nowFunc = func() time.Time { return fixed }
@@ -116,7 +119,7 @@ func TestResolveSearchCompatibility(t *testing.T) {
 			if err := json.Unmarshal(wantBytes, &want); err != nil {
 				t.Fatal(err)
 			}
-			if !reflect.DeepEqual(got, want) {
+			if got != want {
 				t.Fatalf("response changed\ngot:  %s\nwant: %s", compatibilityJSON(got), compatibilityJSON(want))
 			}
 			assertNoResolveScoreTies(t, got.Body)
@@ -127,33 +130,37 @@ func TestResolveSearchCompatibility(t *testing.T) {
 type compatibilityEnvelope struct {
 	Status      int    `json:"status"`
 	ContentType string `json:"content_type"`
-	Body        any    `json:"body"`
+	Body        string `json:"body"`
 }
 
-func normalizeCompatibilityBody(t *testing.T, body []byte) any {
+var compatibilityTiming = regexp.MustCompile(`("took_ms"\s*:\s*)-?\d+`)
+
+func normalizeCompatibilityBody(t *testing.T, body []byte) string {
 	t.Helper()
-	var v any
-	if json.Unmarshal(body, &v) != nil {
+	if !json.Valid(body) {
 		return string(body)
 	}
-	if top, ok := v.(map[string]any); ok {
-		delete(top, "request_id")
-		if trace, ok := top["graph_trace"].(map[string]any); ok {
-			trace["took_ms"] = float64(0)
-		}
-		for k := range top {
-			if len(k) >= 3 && k[len(k)-3:] == "_ms" {
-				top[k] = float64(0)
-			}
-		}
+	open := bytes.IndexByte(body, '{')
+	const prefix = `"request_id":"`
+	if open < 0 || !bytes.HasPrefix(body[open+1:], []byte(prefix)) {
+		t.Fatalf("successful JSON response missing leading request_id: %s", body)
 	}
-	return v
+	end := bytes.Index(body[open+1+len(prefix):], []byte(`",`))
+	if end < 0 {
+		t.Fatalf("malformed request_id member: %s", body)
+	}
+	memberEnd := open + 1 + len(prefix) + end + 2
+	normalized := make([]byte, 0, len(body))
+	normalized = append(normalized, body[:open+1]...)
+	normalized = append(normalized, body[memberEnd:]...)
+	normalized = compatibilityTiming.ReplaceAll(normalized, []byte(`${1}0`))
+	return string(normalized)
 }
 
-func assertNoResolveScoreTies(t *testing.T, body any) {
+func assertNoResolveScoreTies(t *testing.T, body string) {
 	t.Helper()
-	top, ok := body.(map[string]any)
-	if !ok {
+	var top map[string]any
+	if json.Unmarshal([]byte(body), &top) != nil {
 		return
 	}
 	items, ok := top["artifacts"].([]any)
@@ -178,7 +185,8 @@ func TestCompatibilityFixtureHashIsStable(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := fmt.Sprintf("%x", sha256.Sum256(b))
-	if len(got) != 64 {
-		t.Fatal(got)
+	const want = "69fcc93fb2829413325eb397f745eeadc310c882be61f77990475f565161cc1f"
+	if got != want {
+		t.Fatalf("fixture sha256=%s want=%s", got, want)
 	}
 }

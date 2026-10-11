@@ -6,9 +6,11 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-
-	"github.com/agent-mem/agent-mem/internal/graph/acl"
 )
+
+type scopeBuilder interface {
+	For(context.Context, int) ([]string, error)
+}
 
 // askerScopeSet resolves the X-Asker-User header to an eeid and builds the set
 // of scopes that asker may read (their real memberships plus "public").
@@ -16,12 +18,12 @@ import (
 // An absent (trimmed empty) header is the trusted unfiltered view. A present
 // header is always filtered; unresolved identities and lookup/build errors see
 // only public and unscoped nodes. Identity remains advisory; see router.go.
-func askerScopeSet(ctx context.Context, db *pgxpool.Pool, bld *acl.Builder, askerRef string) (eeid int, scopeSet map[string]bool, noFilter bool) {
+func askerScopeSet(ctx context.Context, db *pgxpool.Pool, bld scopeBuilder, askerRef string) (eeid int, scopeSet map[string]bool, noFilter bool) {
 	eeid, scopeSet, noFilter, _ = askerScopeSetDiag(ctx, db, bld, askerRef)
 	return
 }
 
-func askerScopeSetDiag(ctx context.Context, db *pgxpool.Pool, bld *acl.Builder, askerRef string) (eeid int, scopeSet map[string]bool, noFilter bool, membershipErr error) {
+func askerScopeSetDiag(ctx context.Context, db *pgxpool.Pool, bld scopeBuilder, askerRef string) (eeid int, scopeSet map[string]bool, noFilter bool, membershipErr error) {
 	if strings.TrimSpace(askerRef) == "" {
 		return 0, nil, true, nil
 	}

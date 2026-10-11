@@ -121,10 +121,12 @@ func (r *Recorder) Stats() Stats {
 
 func (r *Recorder) Close(timeout time.Duration) {
 	r.mu.Lock()
-	if !r.closed {
-		r.closed = true
-		close(r.queue)
+	if r.closed {
+		r.mu.Unlock()
+		return
 	}
+	r.closed = true
+	close(r.queue)
 	r.mu.Unlock()
 	done := make(chan struct{})
 	go func() { r.wg.Wait(); close(done) }()

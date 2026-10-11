@@ -185,6 +185,10 @@ func (h *Resolve) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
+	if diag, _ := ctx.Value(requestTraceDiagKey{}).(*requestTraceDiag); diag != nil {
+		diag.askerEEID = req.AskerEEID
+		diag.askerDecoded = true
+	}
 	if len(req.Seeds) == 0 {
 		http.Error(w, "seeds required", http.StatusBadRequest)
 		return
@@ -210,6 +214,9 @@ func (h *Resolve) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// As in neighbors.go, topical edges and hub nodes are leaves, not corridors.
 	// Corridor distance decides expansion; display distance is computed separately.
 	canonSeeds := h.canonicalizeSeeds(ctx, req.Seeds)
+	if diag, _ := ctx.Value(requestTraceDiagKey{}).(*requestTraceDiag); diag != nil {
+		diag.canonicalSeeds = append([]string(nil), canonSeeds...)
+	}
 	level := make([]string, 0, len(canonSeeds))
 	decided := make(map[string]bool, len(canonSeeds))
 	for _, id := range canonSeeds {
@@ -288,6 +295,13 @@ func (h *Resolve) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	var filtered []bfs.Candidate
 	noFilter := req.AskerEEID == 0
+	if diag, _ := ctx.Value(requestTraceDiagKey{}).(*requestTraceDiag); diag != nil {
+		if noFilter {
+			diag.aclMode = "unfiltered"
+		} else {
+			diag.aclMode = "filtered"
+		}
+	}
 	allowedIDs, aclErr := h.checkScopes(ctx, visitedIDs, askerACL{noFilter: noFilter, resolved: !noFilter, scopes: scopeSet})
 	for _, c := range visited {
 		if !inEpic[c.NodeID] && !seedSet[c.NodeID] {
@@ -431,10 +445,12 @@ WHERE n.id = $1 AND n.deleted_at IS NULL`, s).Scan(
 	}
 	// Enqueue fetch_body jobs for misses (so subsequent calls are fast).
 	// Eval calls explicitly suppress this graph mutation. An explicit header
-	// overrides the body field so transports can enforce one policy.
+	// overrides the body field so transports can enforce one policy. Header
+	// values "1" and "true" (case-insensitive) enable it; any other non-empty
+	// value disables it.
 	noSideEffects := req.NoSideEffects
 	if value := r.Header.Get("X-Graph-No-Side-Effects"); value != "" {
-		noSideEffects = value == "1"
+		noSideEffects = value == "1" || strings.EqualFold(value, "true")
 	}
 	if !noSideEffects {
 		for _, m := range missed {
@@ -457,19 +473,24 @@ WHERE n.id = $1 AND n.deleted_at IS NULL`, s).Scan(
 			}
 		}
 		rows, err := h.db.Query(ctx, `
-SELECT n.id, NULLIF(n.title,'') IS NOT NULL, octet_length(b.body_full)
+SELECT n.id, NULLIF(n.title,'') IS NOT NULL, n.type,
+       CASE WHEN n.type IN ('slack','slack_thread') THEN NULLIF(ts.summary,'') IS NOT NULL ELSE false END,
+       octet_length(b.body_full)
 FROM graph.nodes n
 LEFT JOIN graph.artifact_bodies b ON b.node_id=n.id
+LEFT JOIN graph.thread_summaries ts
+  ON ts.channel_id = REPLACE(n.scope,'slack:','')
+ AND ts.thread_ts = COALESCE(NULLIF(n.metadata->>'thread_ts',''), split_part(n.id,':',3))
 WHERE n.id=ANY($1)`, ids)
 		if err == nil {
 			for rows.Next() {
-				var id string
-				var nodeTitle bool
+				var id, nodeType string
+				var nodeTitle, hasThreadSummary bool
 				var fullBytes *int
-				if rows.Scan(&id, &nodeTitle, &fullBytes) == nil {
-					titleSource := "thread_summary"
-					if nodeTitle {
-						titleSource = "node"
+				if rows.Scan(&id, &nodeTitle, &nodeType, &hasThreadSummary, &fullBytes) == nil {
+					titleSource := "node"
+					if !nodeTitle && hasThreadSummary && (nodeType == "slack" || nodeType == "slack_thread") {
+						titleSource = "thread_summary"
 					}
 					meta := map[string]any{"is_seed": seedSet[id], "title_source": titleSource, "body_truncated": false}
 					if returned, ok := returnedBodyBytes[id]; ok && fullBytes != nil {
