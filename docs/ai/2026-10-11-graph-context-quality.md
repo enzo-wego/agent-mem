@@ -353,3 +353,39 @@ Coverage caveats (pi, `docs/reviews/2026-10-11-graph-context-labels-r2.md`):
   Open label questions for that check: case-03/case-14
   `slack:C08S954G2LX:1779709917.613979`, probe-d
   `slack:C0C6RMYH5U6:1791515190.996339`, the identity match in case-08.
+
+### Phase 1 ACL deployed (2026-10-11 23:55 SGT, hub, build `15d2a14` = #93 `27e927c` + local bd commit)
+
+Live checks on the hub: `/search` with no asker 403 `asker_required`; unknown asker
+403; `/resolve` with `asker_eeid: 0` 403; `/slack-users` without admin 403; admin
+header 200; named asker 200; dashboard 200. Traces carry `acl_mode` admin /
+filtered / rejected with the new build rev. MCP: without `AGENT_MEM_ASKER` the tool
+returns the fail-closed error; with it, search works. The payments MCP entry in
+`~/.claude.json` passes the caller's env through (`-e AGENT_MEM_ASKER`, no value),
+so EnzoBot panes fail closed until the p-agent round sets the requester per pane.
+
+Eval rerun (2026-10-12 00:01 SGT, same draft labels, no `prepare --refresh`):
+
+| | resolve, admin (was asker 0) | resolve, real asker | hybrid search (now real asker) |
+|---|---|---|---|
+| recall (n) | 0.500 (6) | 0.583 -> **0.833** (6) | 0.857 -> 0.786 (7) |
+| precision@10 (n) | 0.500 (2) | 0.667 (3) -> 0.300 (10) | 0.087 -> 0.046 (20) |
+| harmful, mean | 0.05 | 0.20 -> 0.20 | 0.45 -> **0.20** |
+| unlabelled@10, mean | 0.10 | 0.05 -> 0.35 | 5.80 -> 6.45 |
+| unknown_meta | 1 | 2 -> 10 | 4 -> 41 |
+| latency p50 / p95 | 25 / 101 ms | 24 / 143 ms | 1,008 / 2,304 ms |
+
+- Gate met: probes A, C, E now get their Jira (and for A the PR) items back for the
+  real asker, where before they got Slack only. UC10 (case-04): every Slack channel
+  returned is one the asker is a member of. 0 failed requests, so 0 `asker_unknown`
+  for the 20 case askers.
+- Real-asker resolve recall rose from 0.583 to 0.833 because Jira/GitHub items are
+  now visible. Search harm halved (0.45 to 0.20) because it is filtered by the asker.
+- Precision and unlabelled moved the wrong way, but this is a labelling artefact:
+  the newly visible Jira/PR items were never in the label pool (`unknown_meta` 10 and
+  41 nodes). Before comparing precision again: `eval prepare --refresh`, label the new
+  candidates, rerun.
+- Code review found and fixed a leak before merge: org-wide Jira/GitHub/Confluence
+  parents would have exposed linked Slack files (all 4,536 have NULL scope; 10 were
+  linked from Jira or Confluence). Slack files now need a visible Slack parent.
+
