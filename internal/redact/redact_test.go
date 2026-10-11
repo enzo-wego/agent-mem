@@ -185,3 +185,46 @@ func TestMaskURLBoundariesAndUnicodeDigits(t *testing.T) {
 		})
 	}
 }
+
+func TestMaskURLAllowlistFixRound2(t *testing.T) {
+	t.Parallel()
+	const u = "https://jira.example/PAY-1"
+	const ph = "+6591234567"
+	tests := []struct{ name, in, want string }{
+		{"md link then phone", "[text](" + u + ")" + ph, "[text](" + u + ")[phone]"},
+		{"paren url then card", "(" + u + ")" + pan, "(" + u + ")[card]"},
+		{"paren dot phone", u + ")." + ph, u + ").[phone]"},
+		{"paren colon card", u + "):" + pan, u + "):[card]"},
+		{"dot phone", u + "." + ph, u + ".[phone]"},
+		{"dot card", u + "." + pan, u + ".[card]"},
+		{"colon card", u + ":" + pan, u + ":[card]"},
+		{"bang card", u + "!" + pan, u + "![card]"},
+		{"bang phone", u + "!" + ph, u + "![phone]"},
+		{"open paren phone", u + "(" + ph, u + "([phone]"},
+		{"open paren card", u + "(" + pan, u + "([card]"},
+		{"plus phone glued", u + ph, u + "[phone]"},
+		{"nbsp phone", u + "\u00a0" + ph, u + "\u00a0[phone]"},
+		{"nbsp card", u + "\u00a0" + pan, u + "\u00a0[card]"},
+		{"ideographic space card", u + "\u3000" + pan, u + "\u3000[card]"},
+		{"thin space phone", u + "\u2009" + ph, u + "\u2009[phone]"},
+		{"zero width space card", u + "\u200b" + pan, u + "\u200b[card]"},
+		{"arabic comma phone", u + "\u060c" + ph, u + "\u060c[phone]"},
+		{"fullwidth comma card", u + "\uff0c" + pan, u + "\uff0c[card]"},
+		{"url dot plus phone", "https://x.example/p." + ph, "https://x.example/p.[phone]"},
+		{"nbsp separated phone", "+96650\u00a01234567", "[phone]"},
+		{"narrow nbsp phone", "+966\u202f501\u202f234567", "[phone]"},
+		{"ideographic grouped card", "4111\u30001111\u30001111\u30001111", "[card]"},
+		{"wa.me kept", "https://wa.me/6591234567", "https://wa.me/6591234567"},
+		{"permalink kept", "https://wego.slack.com/archives/C012ABCDEF/p1700000000123456", "https://wego.slack.com/archives/C012ABCDEF/p1700000000123456"},
+		{"percent query kept", "https://e.example/?q=a%40b", "https://e.example/?q=a%40b"},
+		{"path digits kept", "https://x.example/items/4111111111111111/view", "https://x.example/items/4111111111111111/view"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := Mask(tt.in); got != tt.want {
+				t.Fatalf("Mask(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}

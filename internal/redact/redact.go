@@ -35,10 +35,12 @@ const (
 
 var (
 	reEmail = regexp.MustCompile(`[A-Za-z0-9._%+-]+(?:@|%40)[A-Za-z0-9.-]+\.[A-Za-z]{2,}`)
-	reURL   = regexp.MustCompile("https?://[^\\s\"'`<>\\[\\]{}|,;]+")
-	reTS    = regexp.MustCompile(`\d{10}\.\d{6}`)
-	reUUID  = regexp.MustCompile(`(?i)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`)
-	reFRef  = regexp.MustCompile(`F\.[a-z0-9]+`)
+	reURL   = regexp.MustCompile(`https?://[A-Za-z0-9\-._~:/?#@!$&*+=%]+`)
+	// reURLTail is a digit run glued to a URL after '.', ':' or '!'.
+	reURLTail = regexp.MustCompile(`[.:!][0-9]+(?:[-.][0-9]+)*$`)
+	reTS      = regexp.MustCompile(`\d{10}\.\d{6}`)
+	reUUID    = regexp.MustCompile(`(?i)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`)
+	reFRef    = regexp.MustCompile(`F\.[a-z0-9]+`)
 	// reBooking binds a label to exactly one value (group 1).
 	reBooking = regexp.MustCompile(`(?i)\b(?:booking|order|pnr|itinerary)(?:\s*(?:ref(?:erence)?|no\.?|number|id|#))?\s*[:#=]\s*([A-Za-z0-9-]{5,20})`)
 	reNodeID  = buildNodeIDRegexp()
@@ -72,7 +74,7 @@ func Mask(s string) string {
 	if !hasDigit(s) {
 		return s
 	}
-	prot := protectedSpans(s)
+	prot, forcePlus := protectedSpans(s)
 	var out strings.Builder
 	out.Grow(len(s))
 	flushed, pi, i := 0, 0, 0
@@ -90,7 +92,7 @@ func Mask(s string) string {
 		}
 		c := s[i]
 		if w, _ := digitAt(s, i); w > 0 || (c == '+' && i+1 < limit && (isDigit(s[i+1]) || s[i+1] == '(' || func() bool { w, _ := digitAt(s, i+1); return w > 0 }())) {
-			if end, mask := matchAt(s, i, limit); mask != "" {
+			if end, mask := matchAt(s, i, limit, c == '+' && forcePlus[i]); mask != "" {
 				out.WriteString(s[flushed:i])
 				out.WriteString(mask)
 				i, flushed = end, end
@@ -108,17 +110,33 @@ func Mask(s string) string {
 
 // protectedSpans returns sorted, merged byte spans copied through unchanged by
 // the phone/card step.
-func protectedSpans(s string) [][2]int {
-	var spans [][2]int
+func protectedSpans(s string) (spans [][2]int, forcePlus map[int]bool) {
 	add := func(a, b int) { spans = append(spans, [2]int{a, b}) }
 	for _, m := range reURL.FindAllStringIndex(s, -1) {
+		if !leftOK(s, m[0]) {
+			continue
+		}
 		e := m[1]
-		for e > m[0] && strings.IndexByte(".):", s[e-1]) >= 0 {
+		// An international phone (+ then digits) is masked even inside a URL
+		// span: cut the span at the first '+digit'.
+		for k := m[0]; k+1 < e; k++ {
+			if s[k] == '+' && isDigit(s[k+1]) {
+				e = k
+				if forcePlus == nil {
+					forcePlus = map[int]bool{}
+				}
+				forcePlus[k] = true
+				break
+			}
+		}
+		// A digit tail glued after . : ! is a phone/card, not a path.
+		if loc := reURLTail.FindStringIndex(s[m[0]:e]); loc != nil {
+			e = m[0] + loc[0]
+		}
+		for e > m[0] && strings.IndexByte(".:!", s[e-1]) >= 0 {
 			e--
 		}
-		if leftOK(s, m[0]) {
-			add(m[0], e)
-		}
+		add(m[0], e)
 	}
 	for _, m := range reNodeID.FindAllStringIndex(s, -1) {
 		if leftOK(s, m[0]) {
@@ -151,7 +169,7 @@ func protectedSpans(s string) [][2]int {
 		}
 	}
 	if len(spans) == 0 {
-		return nil
+		return nil, forcePlus
 	}
 	sort.Slice(spans, func(i, j int) bool { return spans[i][0] < spans[j][0] })
 	merged := spans[:1]
@@ -165,7 +183,7 @@ func protectedSpans(s string) [][2]int {
 		}
 		merged = append(merged, sp)
 	}
-	return merged
+	return merged, forcePlus
 }
 
 func isDigit(c byte) bool { return c >= '0' && c <= '9' }
@@ -244,6 +262,31 @@ var phoneSeps = map[string]bool{
 	"(": true, ")": true, " (": true, ") ": true, ")-": true, ").": true, "-(": true, ".(": true,
 }
 
+// isSepRune reports whether r may appear in a phone/card separator: ASCII
+// space-like punctuation or a non-ASCII space (NBSP, thin, narrow NBSP,
+// ideographic).
+func isSepRune(r rune) bool {
+	switch r {
+	case ' ', '-', '.', '(', ')', '\u00a0', '\u2009', '\u202f', '\u3000':
+		return true
+	}
+	return false
+}
+
+// normSep maps the non-ASCII separator spaces to ' ' for phoneSeps lookup.
+func normSep(sep string) string {
+	if sep == "" || sep[0] < utf8.RuneSelf && !strings.ContainsAny(sep, "\u00a0\u2009\u202f\u3000") {
+		return sep
+	}
+	return strings.Map(func(r rune) rune {
+		switch r {
+		case '\u00a0', '\u2009', '\u202f', '\u3000':
+			return ' '
+		}
+		return r
+	}, sep)
+}
+
 const maxDigits = 19
 
 type group struct {
@@ -254,8 +297,8 @@ type group struct {
 
 // matchAt tries to match a phone or card candidate starting at i (a digit, or
 // '+'). Longest span wins; phone beats card on the same span.
-func matchAt(s string, i, limit int) (end int, mask string) {
-	if !candLeftOK(s, i) {
+func matchAt(s string, i, limit int, force bool) (end int, mask string) {
+	if !force && !candLeftOK(s, i) {
 		return 0, ""
 	}
 	p := i
@@ -296,14 +339,19 @@ func matchAt(s string, i, limit int) (end int, mask string) {
 		g := group{end: q, digits: digits, cardOK: cardOK}
 		groups = append(groups, g)
 		// Look for a separator then another digit group.
-		r := q
-		for r < limit && r-q < 2 && s[r] < utf8.RuneSelf && !isDigit(s[r]) && strings.IndexByte(" -.()", s[r]) >= 0 {
-			r++
+		r, nr := q, 0
+		for r < limit && nr < 2 {
+			rn, w := utf8.DecodeRuneInString(s[r:])
+			if !isSepRune(rn) {
+				break
+			}
+			r += w
+			nr++
 		}
-		if wr, _ := digitAt(s, min(r, len(s)-1)); r >= limit || wr == 0 || !phoneSeps[s[q:r]] {
+		sep := normSep(s[q:r])
+		if wr, _ := digitAt(s, min(r, len(s)-1)); r >= limit || wr == 0 || !phoneSeps[sep] {
 			break
 		}
-		sep := s[q:r]
 		opens += strings.Count(sep, "(")
 		if opens > 1 {
 			break

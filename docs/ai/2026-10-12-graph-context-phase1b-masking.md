@@ -217,3 +217,12 @@ Notes: the real refs in `case_ref_sql_test.go`, `link_topics.go` and `identifier
 - **F1 (HIGH):** URL protected span was `https?://\S+`, swallowing text after a URL (`<url|+65…>`, `<url|4111…>`, `url,+65…`, space-less JSON). Now `https?://[^\s"'`<>\[\]{}|,;]+` with a trailing `.` `)` `:` trimmed. Five review inputs are must-mask tests. Digits inside a real URL path stay readable; listed in README accepted false negatives.
 - **Non-ASCII digits (PDPL):** phone/card matching uses any Unicode Nd digit (`digitAt`, value from block offset) for plus/label rules and Luhn (`digitsOf`). Tests: Arabic-Indic, Extended Arabic-Indic, full-width.
 - **Percent-encoded emails:** `user%40example.com` (`%40` has no case) masked as `[email]`.
+
+## Fix round 2 (code review r2 F1)
+
+Review: `docs/reviews/2026-10-12-graph-context-phase1b-masking-code-r2.md`.
+
+- **F1 (HIGH), URL span:** exclusion list replaced by the allowlist `https?://[A-Za-z0-9\-._~:/?#@!$&*+=%]+`, so `(`, `)`, `'`, `,`, `;` and every non-ASCII character (NBSP, U+3000, U+2009, U+200B, U+060C, U+FF0C) end the span. Trailing `.` `:` `!` are trimmed. A digit run glued after `.` `:` `!` (`url!4111…`, `url.4111…`) is cut out of the span and masked when it classifies as phone/card.
+- **International phone inside a URL span:** the span is cut at the first `+` followed by a digit and that `+` is exempt from the left-neighbour check, so `url+65…` and `url.+65…` are masked. Accepted over-masking: a `+digits` run inside a real URL query (the rest of that URL is unprotected).
+- **Separators:** phone and card grouping also accept U+00A0, U+2009, U+202F and U+3000 (normalised to a space; card grouping still requires single space/hyphen).
+- **Tests:** `TestMaskURLAllowlistFixRound2` has every r2 shape as must-mask, plus must-keep rows (`wa.me`, Slack permalink, `%40` query, digits in a URL path).
