@@ -48,7 +48,12 @@ test-db: ## Run graph DB tests serially; starts isolated pgvector when TEST_DATA
 	  container="agentmem-test-$$$$-$$RANDOM"; \
 	  trap '"'"'test -z "$$container" || docker rm -f "$$container" >/dev/null 2>&1 || true'"'"' EXIT; \
 	  docker run -d --name "$$container" -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=agentmem_test -p 127.0.0.1::5432 pgvector/pgvector:pg16 >/dev/null; \
-	  for i in $$(seq 1 60); do docker exec "$$container" pg_isready -U postgres >/dev/null 2>&1 && break; sleep 1; done; \
+	  ready=""; \
+	  for i in $$(seq 1 60); do \
+	    if docker exec "$$container" pg_isready -h 127.0.0.1 -d agentmem_test >/dev/null 2>&1; then ready=1; break; fi; \
+	    sleep 1; \
+	  done; \
+	  test -n "$$ready" || { echo "test database did not become ready" >&2; exit 1; }; \
 	  port=$$(docker port "$$container" 5432/tcp | cut -d: -f2); \
 	  dsn="postgres://postgres:postgres@127.0.0.1:$$port/agentmem_test?sslmode=disable"; \
 	  DATABASE_URL="$$dsn" $(GO) run ./cmd/agent-mem migrate; \
@@ -56,7 +61,7 @@ test-db: ## Run graph DB tests serially; starts isolated pgvector when TEST_DATA
 	drop="$(AGENT_MEM_TEST_DROP_VAR)"; \
 	if [ -n "$$drop" ]; then child_env=(env -u "$$drop"); else child_env=(env); fi; \
 	DATABASE_URL="$$dsn" AGENT_MEM_TEST_DATABASE_URL="$$dsn" AGENT_MEM_EVAL= \
-	  "$${child_env[@]}" $(GO) test -p=1 -count=1 -json ./internal/graph/... | $(GO) run ./scripts/check-db-skips.go'
+	  "$${child_env[@]}" $(GO) test -p=1 -count=1 -json ./internal/graph/... ./cmd/agent-mem/... | $(GO) run ./scripts/check-db-skips.go'
 
 install-cli: ## Install the agent-mem CLI. Override with GO=/path/to/go and GOBIN=/path, e.g. /usr/local/bin.
 ifdef GOBIN
@@ -99,7 +104,7 @@ migrate-fix: up ## Force-delete a failed migration record. Usage: make migrate-f
 	$(compose) exec worker agent-mem migrate-fix -v $(version)
 
 restart: ## Rebuild and restart worker.
-	$(compose) up -d --build worker
+	BUILD_REV=$$(git rev-parse HEAD) $(compose) up -d --build worker
 
 deploy: ## Build amd64 image here, push to GHCR, and pull-only deploy on the VPS (no build on the box).
 	@echo "${YELLOW}>> building + pushing $(IMAGE) (linux/amd64)${RESET}"
@@ -127,7 +132,7 @@ deploy-payments: ## Sync source to payments and build+restart there natively (ar
 		--exclude 'docker-compose.override.yml' \
 		./ $(PAYMENTS):$(PAYMENTS_DIR)/
 	@echo "${YELLOW}>> building + restarting worker on $(PAYMENTS)${RESET}"
-	ssh $(PAYMENTS) 'export PATH=/opt/homebrew/bin:$$PATH && cd $(PAYMENTS_DIR) && docker compose up -d --build worker'
+	ssh $(PAYMENTS) 'export PATH=/opt/homebrew/bin:$$PATH && cd $(PAYMENTS_DIR) && BUILD_REV=$$(git rev-parse HEAD) docker compose up -d --build worker'
 	@echo "${GREEN}>> deployed to $(PAYMENTS)${RESET}"
 
 db-reset: ## Clear the database and re-run migrations.

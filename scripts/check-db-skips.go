@@ -17,8 +17,10 @@ type state struct {
 func main() {
 	scanner := bufio.NewScanner(os.Stdin)
 	scanner.Buffer(make([]byte, 64<<10), 4<<20)
+	seen := false
 	states := map[string]*state{}
 	for scanner.Scan() {
+		seen = true
 		line := scanner.Bytes()
 		fmt.Println(string(line))
 		var e event
@@ -40,6 +42,10 @@ func main() {
 	}
 	if err := scanner.Err(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	if !seen {
+		fmt.Fprintln(os.Stderr, "no go test JSON input")
 		os.Exit(1)
 	}
 	failed := false
