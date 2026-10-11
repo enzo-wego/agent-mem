@@ -742,13 +742,13 @@ Register it with any supported client:
 
 ```bash
 claude mcp add --scope user agent-mem-graph -- \
-  ssh enzo@payments /opt/homebrew/bin/docker exec -i agent-mem-worker-1 agent-mem mcp
+  ssh enzo@payments /opt/homebrew/bin/docker exec -i -e AGENT_MEM_ASKER=<slack user id> agent-mem-worker-1 agent-mem mcp
 
 codex mcp add agent-mem-graph -- \
-  ssh enzo@payments /opt/homebrew/bin/docker exec -i agent-mem-worker-1 agent-mem mcp
+  ssh enzo@payments /opt/homebrew/bin/docker exec -i -e AGENT_MEM_ASKER=<slack user id> agent-mem-worker-1 agent-mem mcp
 
 gemini mcp add --scope user agent-mem-graph \
-  ssh enzo@payments /opt/homebrew/bin/docker exec -i agent-mem-worker-1 agent-mem mcp
+  ssh enzo@payments /opt/homebrew/bin/docker exec -i -e AGENT_MEM_ASKER=<slack user id> agent-mem-worker-1 agent-mem mcp
 ```
 
 Two differences from the old VPS registration, both of which fail silently if

@@ -193,7 +193,10 @@ func TestEvalRelevanceDryRunShowsNewVariantsAndHeaders(t *testing.T) {
 func TestEvalCaseLabelsUnchangedFromBase(t *testing.T) {
 	const base = "483d03d"
 	if err := exec.Command("git", "cat-file", "-e", base+"^{commit}").Run(); err != nil {
-		t.Skipf("base commit %s not available: %v", base, err)
+		if os.Getenv("AGENT_MEM_SKIP_GIT_HISTORY_TESTS") == "1" {
+			t.Skipf("base commit %s not available and AGENT_MEM_SKIP_GIT_HISTORY_TESTS=1: %v", base, err)
+		}
+		t.Fatalf("base commit %s not available (shallow clone?); fetch full history or set AGENT_MEM_SKIP_GIT_HISTORY_TESTS=1: %v", base, err)
 	}
 	paths, err := filepath.Glob(filepath.Join(checkedInEvalData, "cases", "*.yaml"))
 	if err != nil || len(paths) != 20 {

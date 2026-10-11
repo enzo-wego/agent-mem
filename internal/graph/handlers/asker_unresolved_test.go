@@ -7,13 +7,9 @@ import (
 	"net/url"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
-
-	"github.com/agent-mem/agent-mem/internal/graph/acl"
-	"github.com/agent-mem/agent-mem/internal/graph/bfs"
 )
 
 const (
@@ -225,23 +221,6 @@ func TestAskerUnresolved_NoMetadataLeak(t *testing.T) {
 		}
 		if !found {
 			t.Fatalf("missing public neighbor: %s", w.Body.String())
-		}
-	})
-	t.Run("neighbors_root_query_error", func(t *testing.T) {
-		closedPool := openTestDB(t)
-		closedPool.Close()
-		// The asker lookup shares the closed pool, so the request fails closed
-		// before the root query: 503, never a 200.
-		handler := &neighborsHandler{
-			db:     closedPool,
-			exp:    bfs.NewExpander(pool),
-			aclBld: acl.NewBuilder(pool, 5*time.Minute),
-		}
-		r := chi.NewRouter()
-		r.Get("/api/graph/node/{id}/neighbors", handler.serve)
-		w := askerRequest(t, r, "/api/graph/node/"+url.QueryEscape(askerRoot)+"/neighbors?kind=REFERENCES", "nobody@example.com")
-		if w.Code != http.StatusServiceUnavailable {
-			t.Fatalf("root query error: status=%d body=%s", w.Code, w.Body.String())
 		}
 	})
 }

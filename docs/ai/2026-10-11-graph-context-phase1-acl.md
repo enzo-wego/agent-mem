@@ -121,9 +121,10 @@ Steps, first match wins:
 | 8 | otherwise | filtered as that eeid, `acl_mode='filtered'` |
 
 - Header lookup: all digits means `graph.people.eeid`; otherwise the four identity
-  columns as today. A row with `merged_into` set is followed until a row with
-  `merged_into IS NULL`, at most 3 hops; a loop, a missing target or a NULL eeid at
-  the end gives `asker_unknown`.
+  columns as today. A matched row with its own eeid is used as is and `merged_into` is
+  not followed from it. Only a row with a NULL eeid follows `merged_into`, until a row
+  with an eeid, at most 3 hops; a loop, a missing target or a NULL eeid at the end
+  gives `asker_unknown`.
 - Every 4xx / 5xx above on a traced route is traced with `acl_mode='rejected'` and
   no items (guard runs inside the trace wrapper). `asker_input` also records
   `body_asker_slack_id`.
@@ -164,7 +165,7 @@ SQL predicates agree on a table of scopes.
   never sends the admin header. `graph_cluster_summary` and `graph_person` are
   removed from the tool list in this phase (their endpoints are admin-only); the
   README says so. Because the MCP runs inside the container, the
-  caller's value reaches it only via `docker exec -i -e AGENT_MEM_ASKER ...`; the
+  caller's value reaches it only via `docker exec -i -e AGENT_MEM_ASKER=<slack user id> ...`; the
   worker documents that `~/.claude.json` arg change in the README / CLAUDE.md but does
   not edit `~/.claude.json` (conductor does it after deploy, with Enzo's OK).
 - Eval harness (`cmd/agent-mem/eval*.go`): variant `resolve-asker0` becomes
@@ -243,7 +244,7 @@ No migration: the org list is a constant (D1 is a fixed decision, not runtime co
    the parent plan's Results. Gate: probes A, C, E get their Jira / PR seeds back for
    the real asker; UC10 returns nothing from the hidden channel; 0 `asker_unknown`
    for the 20 case askers.
-4. Update the payments-project MCP entry to pass `-e AGENT_MEM_ASKER` (Enzo's OK),
+4. Update the payments-project MCP entry to pass `-e AGENT_MEM_ASKER=<slack user id>` (Enzo's OK),
    then one MCP search from a session with and without the env set.
 
 ## Risks
@@ -262,9 +263,11 @@ No migration: the org list is a constant (D1 is a fixed decision, not runtime co
   EnzoBot panes in the payments repo and Enzo's own sessions. Intended (D3, fails
   closed). Enzo sets his own value; bot panes get the requester's id in the later
   p-agent plan.
-- If `AGENT_MEM_ASKER` is set in a shell profile, bot panes inherit Enzo's identity.
-  Still narrower than today's unfiltered access; the p-agent plan must override it
-  per pane.
+- `docker exec` does not forward host env, so a shell-profile `AGENT_MEM_ASKER` never
+  reaches the MCP process; each registration must pass
+  `-e AGENT_MEM_ASKER=<slack user id>`. The real shared-identity risk is setting
+  `AGENT_MEM_ASKER` in the worker's `.env` / `docker-compose.yml` `env_file`: every MCP
+  session would then be the same person. Do not do that.
 - The 78 people without an eeid get 403 everywhere. Accepted: no context beats
   unfiltered context.
 - Anyone with the API key can send the admin header (D3 accepts this).
@@ -367,3 +370,32 @@ Worker: acl-worker, 2026-10-11, branch `feat/graph-context-phase1-acl` (base `48
   `internal/hooks` (1) and `internal/skills` (3); the same tests fail on base `483d03d`,
   unrelated to this change. `internal/context` passes with a DB.
 - Not run: anything against the hub, a deploy, a live MCP session.
+
+### Fix round 1
+
+Review: `docs/reviews/2026-10-11-graph-context-phase1-acl-code.md` (REQUEST_CHANGES).
+Decisions D1 and D3 unchanged.
+
+- F1 (HIGH): `parentVisibleSQL` now also requires a `slack_file`'s own scope to be NULL,
+  empty, `public` or in the asker's member scopes (never the org rule), in addition to a
+  visible non-attachment parent. `aclVisibleSQL` and `nodeVisible` both use it, so Go
+  and SQL agree. `jira_attachment` keeps the parent rule. Test: a `slack_file` in a
+  private channel referenced by a visible `jira:PAY` parent gives a non-member 404 on
+  `/node` and nothing from `/search`, `/neighbors` (plain and `cards=1`), `/epic` and
+  `/resolve`; a channel member and admin get it.
+- F2: README MCP registration examples and the "Verify after merge" step 4 use
+  `-e AGENT_MEM_ASKER=<slack user id>`; the shell-profile risk is rewritten (see Risks).
+- F3: the resolver uses a row's own eeid and follows `merged_into` only from NULL-eeid
+  rows (3-hop cap, loop and missing target still `asker_unknown`). Test: A(eeid 10) merged
+  into B(no eeid) merged into C(eeid 20); `10` resolves as eeid 10.
+- F4: `add-graph-source` SKILL.md and CLAUDE.md curl examples send `X-Graph-Admin: 1`;
+  CLAUDE.md describes the org rule as an exact source-prefix match.
+- F5: the admin log line formats the route with `%q`.
+- F6: new tests in `acl_fix2_test.go`: neighbors root-query 500 (a limited role can read
+  `graph.people` only, so the asker resolves and the root query fails; replaces the
+  mis-named 503 subtest), hidden thread reachable only by a linking Slack row absent from
+  hybrid `/search`, org scopes on `/neighbors`, `/epic`, `/resolve`. `mcp_test.go` checks
+  `AGENT_MEM_ASKER` reaches the client as `X-Asker-User` without the admin header.
+  `dashboard` `npm test` runs `scripts/*.test.ts` (includes `authFetch.test.ts`).
+  `TestEvalCaseLabelsUnchangedFromBase` fails when git history is missing unless
+  `AGENT_MEM_SKIP_GIT_HISTORY_TESTS=1`.

@@ -88,3 +88,31 @@ func TestMCPCmd_RequiresAPIKeyAfterRuntimeLoad(t *testing.T) {
 		t.Fatalf("error = %v", err)
 	}
 }
+
+// AGENT_MEM_ASKER from the process env reaches the MCP client as X-Asker-User,
+// and the admin header is never sent.
+func TestMCPCmd_AskerEnvReachesClient(t *testing.T) {
+	t.Setenv("AGENT_MEM_API_KEY", "environment-secret")
+	t.Setenv("AGENT_MEM_ASKER", "  U0ENVASK ")
+	var gotAsker, gotAdmin string
+	worker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/api/graph/search" {
+			gotAsker = request.Header.Get("X-Asker-User")
+			gotAdmin = request.Header.Get("X-Graph-Admin")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer worker.Close()
+	command := newMCPCmdWithRunner(config.Load, func(ctx context.Context, client *graphmcp.Client) error {
+		_, err := client.Search(ctx, graphmcp.SearchRequest{Q: "x"})
+		return err
+	})
+	command.SetArgs([]string{"--worker-url", worker.URL})
+	if err := command.ExecuteContext(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if gotAsker != "U0ENVASK" || gotAdmin != "" {
+		t.Fatalf("X-Asker-User=%q X-Graph-Admin=%q", gotAsker, gotAdmin)
+	}
+}

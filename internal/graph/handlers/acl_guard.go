@@ -69,7 +69,7 @@ type askerIdentities struct {
 // unfiltered ACL; otherwise the asker must resolve to exactly one eeid.
 func resolveAsker(ctx context.Context, db *pgxpool.Pool, bld scopeBuilder, r *http.Request, ids askerIdentities) (askerACL, int, string, *askerError) {
 	if isAdminRequest(r) {
-		log.Printf("graph: admin read route=%s caller=%q", r.URL.Path, r.Header.Get("X-Graph-Caller"))
+		log.Printf("graph: admin read route=%q caller=%q", r.URL.Path, r.Header.Get("X-Graph-Caller"))
 		return askerACL{noFilter: true}, 0, "admin", nil
 	}
 	ids.header = strings.TrimSpace(ids.header)
@@ -186,7 +186,8 @@ func lookupPersonEEIDs(ctx context.Context, db *pgxpool.Pool, where string, arg 
 		cur := rw
 		hops := 0
 		ok := true
-		for cur.merged != nil {
+		// A row with its own eeid is that employee; never follow merged_into from it.
+		for cur.eeid == nil && cur.merged != nil {
 			hops++
 			if hops > maxMergeHops {
 				ok = false
@@ -274,12 +275,16 @@ func (a askerACL) scopeArg() any {
 	return scopes
 }
 
+// parentVisibleSQL: an attachment is visible via a visible non-attachment
+// REFERENCES parent. A slack_file must also pass its own scope (NULL, empty,
+// public or a member scope; never the org rule), so a Jira/GitHub/Confluence
+// parent cannot expose a private-channel file.
 func parentVisibleSQL(alias string, scopeParam int) string {
-	return fmt.Sprintf(`EXISTS (
+	return fmt.Sprintf(`(%[1]s.type <> 'slack_file' OR %[1]s.scope IS NULL OR %[1]s.scope = '' OR %[1]s.scope = 'public' OR %[1]s.scope = ANY($%[2]d::text[])) AND EXISTS (
  SELECT 1 FROM graph.edges e JOIN graph.nodes p ON p.id = e.from_node_id
- WHERE e.to_node_id = %s.id AND e.kind = 'REFERENCES'
+ WHERE e.to_node_id = %[1]s.id AND e.kind = 'REFERENCES'
    AND p.deleted_at IS NULL AND p.type NOT IN ('slack_file','jira_attachment')
-   AND (p.scope IS NULL OR p.scope = '' OR p.scope = 'public' OR p.scope = ANY($%d::text[]) OR %s)
+   AND (p.scope IS NULL OR p.scope = '' OR p.scope = 'public' OR p.scope = ANY($%[2]d::text[]) OR %[3]s)
 )`, alias, scopeParam, orgScopeSQL("p.scope"))
 }
 
