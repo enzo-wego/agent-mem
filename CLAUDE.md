@@ -84,6 +84,35 @@ runs on the **payments Mac mini**: `ssh enzo@payments` (Tailscale
     grep -c "<new string literal>" /usr/local/bin/agent-mem'
   ```
 
+- **Verify the live API** with `Authorization: Bearer $AGENT_MEM_API_KEY`. Enzo keeps
+  the key in `~/.zshrc`; `source ~/.zshrc` first and never print the value. Example:
+  `curl -s -H "Authorization: Bearer $AGENT_MEM_API_KEY" "http://100.125.54.118:34567/api/graph/node/<node-id>/neighbors?depth=2&cards=1"`.
+  Never ask Enzo for the key.
+
+- **p-agent (EnzoBot) runs on the same Mac mini** as LaunchDaemon
+  `system/com.enzo.p-agent`, repo `~/go/src/github.com/p-agent`. A change that also
+  touches p-agent ships with it. Enzo pre-approved restarting it:
+
+  ```bash
+  ssh enzo@payments 'cd ~/go/src/github.com/p-agent && git pull --ff-only \
+    && sudo -n launchctl kickstart -k system/com.enzo.p-agent'
+  # verify: new pid with a short uptime, and HEAD is the merged commit
+  ssh enzo@payments 'ps -o pid=,etime= -p $(pgrep -f start-slack-socket.js); git -C ~/go/src/github.com/p-agent log --oneline -1'
+  ```
+
+  `sudo -n` works through the NOPASSWD rule in `/etc/sudoers.d/p-agent-restart`, which
+  allows that single command and nothing else. If it fails with "a password is
+  required", the rule is missing: ask Enzo to reinstall it in a real terminal (not via
+  `!`, which has no TTY):
+  `ssh -t enzo@payments 'echo "enzo ALL=(root) NOPASSWD: /bin/launchctl kickstart -k system/com.enzo.p-agent" | sudo tee /etc/sudoers.d/p-agent-restart >/dev/null && sudo chmod 440 /etc/sudoers.d/p-agent-restart && sudo visudo -cf /etc/sudoers.d/p-agent-restart'`.
+  Never restart p-agent with `kill`: SIGTERM exits 0, so launchd leaves the bot dead,
+  and SIGKILL skips the graceful flush.
+
+- **Prod repair jobs** for types missing from the `/api/graph/jobs/enqueue` allowlist
+  (e.g. `fetch_body`, `backfill_slack_thread`) go straight into `graph.jobs` after Enzo
+  approves the repair. `machine_id` is NOT NULL: copy `target_runner`/`machine_id` from
+  recent rows of the same type (`backfill_slack_thread` uses `'vps'`/`''`).
+
 - Dashboard changes still require the embed rebuild BEFORE committing:
   `cd dashboard && npm run build`, then from the repo root
   `rm -rf internal/worker/dashboard/* && cp -R dashboard/dist/* internal/worker/dashboard/`.
