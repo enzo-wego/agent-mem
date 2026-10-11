@@ -11,6 +11,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/agent-mem/agent-mem/internal/graph/extractor"
+	"github.com/agent-mem/agent-mem/internal/graph/normalizer"
 )
 
 func TestSlackFetcher_Matches(t *testing.T) {
@@ -216,6 +217,7 @@ func TestSlackShareURL(t *testing.T) {
 		{"original_url", "", "https://x/orig", "C1", "1.2", "https://x/orig"},
 		{"channel_ts", "", "", "C019B36KGNR", "1791548199.239769", "https://wego.slack.com/archives/C019B36KGNR/p1791548199239769"},
 		{"none", "", "", "C1", "", ""},
+		{"non_dotted_ts", "", "", "C1", "1718000000", ""},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -241,7 +243,12 @@ func TestSlackFetcher_ShareURL(t *testing.T) {
 	if !strings.Contains(raw, fromURL) {
 		t.Fatalf("from_url missing from body: %q", raw)
 	}
-	res, err := extractor.New(nil, zerolog.Nop()).Extract(context.Background(), raw)
+	// Mirror fetch_body: normalize before extracting.
+	norm, err := normalizer.NewSlackNormalizer(normalizer.NewMemoryCache(nil)).Normalize(context.Background(), []byte(raw), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := extractor.New(nil, zerolog.Nop()).Extract(context.Background(), norm.Text)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -267,5 +274,45 @@ func TestSlackFetcher_ShareURL(t *testing.T) {
 	})
 	if want := "x\n\n--- shared ---\n" + fromURL + "\n"; raw != want {
 		t.Errorf("url-only body: got %q want %q", raw, want)
+	}
+}
+
+func TestSlackTSUnmarshal(t *testing.T) {
+	for _, c := range []struct{ name, in, want string }{
+		{"string", `{"ts":"1791548199.239769"}`, "1791548199.239769"},
+		{"integer", `{"ts":1718000000}`, "1718000000"},
+		{"absent", `{}`, ""},
+		{"null", `{"ts":null}`, ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			var a slackAttachment
+			if err := json.Unmarshal([]byte(c.in), &a); err != nil {
+				t.Fatal(err)
+			}
+			if string(a.Ts) != c.want {
+				t.Errorf("got %q want %q", a.Ts, c.want)
+			}
+		})
+	}
+}
+
+func TestSlackFetcher_IntegerAttachmentTS(t *testing.T) {
+	const fromURL = "https://wego.slack.com/archives/C019B36KGNR/p1791548199239769"
+	payload := `{"ok":true,"messages":[` +
+		`{"user":"U1","text":"parent","ts":"1779710863.216389"},` +
+		`{"user":"B1","text":"","ts":"1779710864.000001","attachments":[{"text":"alert fired","ts":1718000000}]},` +
+		`{"user":"U2","text":"","ts":"1779710865.000001","attachments":[{"is_share":true,"is_msg_unfurl":true,"channel_id":"C019B36KGNR","ts":"1791548199.239769","from_url":"` + fromURL + `","text":"fwd"}]}]}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(payload))
+	}))
+	defer srv.Close()
+	cfg := Config{SlackBotToken: "test-token", HTTPClient: newRewriteClient(srv.URL, srv.Client())}
+	body, err := newSlackFetcher(cfg, noLogger()).Fetch(context.Background(), "slack:C08S954G2LX:1779710863.216389")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(string(body.Raw), fromURL) {
+		t.Errorf("share url missing: %q", body.Raw)
 	}
 }

@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -50,4 +51,24 @@ func TestBuildSlackBackfillBody(t *testing.T) {
 			t.Errorf("got %q", got)
 		}
 	})
+}
+
+func TestSlackHistoryIntegerAttachmentTS(t *testing.T) {
+	page := `{"ok":true,"messages":[{"ts":"1779710864.000001","text":"x","attachments":[{"text":"alert fired","ts":1718000000},{"is_share":true,"ts":"1791548199.239769","channel_id":"C1"}]}]}`
+	var r slackHistoryResponse
+	if err := json.Unmarshal([]byte(page), &r); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got := string(r.Messages[0].Attachments[0].Ts); got != "1718000000" {
+		t.Errorf("ts = %q", got)
+	}
+}
+
+func TestSlackTSUnmarshalHandlers(t *testing.T) {
+	var a slackAttachment
+	for _, in := range []string{`{"ts":"1791548199.239769"}`, `{"ts":1718000000}`, `{}`} {
+		if err := json.Unmarshal([]byte(in), &a); err != nil {
+			t.Errorf("%s: %v", in, err)
+		}
+	}
 }

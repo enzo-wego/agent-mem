@@ -148,15 +148,15 @@ type slackMessage struct {
 // slackAttachment is the subset of a Slack message attachment needed to link
 // shared/forwarded messages to their source.
 type slackAttachment struct {
-	AuthorName  string `json:"author_name"`
-	Text        string `json:"text"`
-	Fallback    string `json:"fallback"`
-	IsShare     bool   `json:"is_share"`
-	IsMsgUnfurl bool   `json:"is_msg_unfurl"`
-	FromURL     string `json:"from_url"`
-	OriginalURL string `json:"original_url"`
-	ChannelID   string `json:"channel_id"`
-	Ts          string `json:"ts"`
+	AuthorName  string           `json:"author_name"`
+	Text        string           `json:"text"`
+	Fallback    string           `json:"fallback"`
+	IsShare     bool             `json:"is_share"`
+	IsMsgUnfurl bool             `json:"is_msg_unfurl"`
+	FromURL     string           `json:"from_url"`
+	OriginalURL string           `json:"original_url"`
+	ChannelID   string           `json:"channel_id"`
+	Ts          fetchers.SlackTS `json:"ts"`
 }
 
 // buildSlackBackfillBody returns the normalized message text plus one block per
@@ -168,7 +168,7 @@ func buildSlackBackfillBody(normalizedText string, atts []slackAttachment, norma
 		if !at.IsShare && !at.IsMsgUnfurl {
 			continue
 		}
-		url := fetchers.SlackShareURL(at.FromURL, at.OriginalURL, at.ChannelID, at.Ts)
+		url := fetchers.SlackShareURL(at.FromURL, at.OriginalURL, at.ChannelID, string(at.Ts))
 		text := at.Text
 		if text == "" {
 			text = at.Fallback

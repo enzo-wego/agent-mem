@@ -68,13 +68,42 @@ type slackAttachment struct {
 	Fallback   string      `json:"fallback"`
 	Files      []slackFile `json:"files"`
 
-	IsShare     bool   `json:"is_share"`
-	IsMsgUnfurl bool   `json:"is_msg_unfurl"`
-	FromURL     string `json:"from_url"`
-	OriginalURL string `json:"original_url"`
-	ChannelID   string `json:"channel_id"`
-	Ts          string `json:"ts"`
+	IsShare     bool    `json:"is_share"`
+	IsMsgUnfurl bool    `json:"is_msg_unfurl"`
+	FromURL     string  `json:"from_url"`
+	OriginalURL string  `json:"original_url"`
+	ChannelID   string  `json:"channel_id"`
+	Ts          SlackTS `json:"ts"`
 }
+
+// SlackTS is an attachment timestamp. Slack sends it as a dotted string on
+// share/unfurl attachments and as an integer on legacy bot attachments.
+type SlackTS string
+
+// UnmarshalJSON accepts a JSON string, number or null.
+func (t *SlackTS) UnmarshalJSON(b []byte) error {
+	s := strings.TrimSpace(string(b))
+	if s == "null" {
+		*t = ""
+		return nil
+	}
+	if strings.HasPrefix(s, `"`) {
+		var v string
+		if err := json.Unmarshal(b, &v); err != nil {
+			return err
+		}
+		*t = SlackTS(v)
+		return nil
+	}
+	var n json.Number
+	if err := json.Unmarshal(b, &n); err != nil {
+		return err
+	}
+	*t = SlackTS(n.String())
+	return nil
+}
+
+var slackDottedTS = regexp.MustCompile(`^\d{10}\.\d{6}$`)
 
 // SlackShareURL returns the permalink of a shared/forwarded Slack message.
 func SlackShareURL(fromURL, originalURL, channelID, ts string) string {
@@ -84,7 +113,7 @@ func SlackShareURL(fromURL, originalURL, channelID, ts string) string {
 	if originalURL != "" {
 		return originalURL
 	}
-	if channelID != "" && ts != "" {
+	if channelID != "" && slackDottedTS.MatchString(ts) {
 		return "https://wego.slack.com/archives/" + channelID + "/p" + strings.Replace(ts, ".", "", 1)
 	}
 	return ""
@@ -125,7 +154,7 @@ func (f *slackFetcher) Fetch(ctx context.Context, node string) (FetchedBody, err
 			}
 			shareURL := ""
 			if at.IsShare || at.IsMsgUnfurl {
-				shareURL = SlackShareURL(at.FromURL, at.OriginalURL, at.ChannelID, at.Ts)
+				shareURL = SlackShareURL(at.FromURL, at.OriginalURL, at.ChannelID, string(at.Ts))
 			}
 			if at.AuthorName == "" && at.Title == "" && text == "" && shareURL == "" {
 				continue
