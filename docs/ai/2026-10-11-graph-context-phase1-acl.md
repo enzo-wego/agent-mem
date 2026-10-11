@@ -399,3 +399,23 @@ Decisions D1 and D3 unchanged.
   `dashboard` `npm test` runs `scripts/*.test.ts` (includes `authFetch.test.ts`).
   `TestEvalCaseLabelsUnchangedFromBase` fails when git history is missing unless
   `AGENT_MEM_SKIP_GIT_HISTORY_TESTS=1`.
+
+### Fix round 2
+
+Review: `docs/reviews/2026-10-11-graph-context-phase1-acl-code-r2.md`. F1 still open after
+round 1: the round 1 fixture seeded `slack_file` with a non-NULL-equivalent scope path, but
+production `slack_file` nodes all have NULL scope. Hub DB read-only count (conductor): all
+4,536 `slack_file` nodes have NULL scope and 10 are REFERENCES targets of a
+jira/github/confluence parent, so the own-scope gate passed every real file and the org
+rule on the parent still exposed them.
+
+- F1 (HIGH): in `parentVisibleSQL` the parent org rule is now
+  `OR (<alias>.type <> 'slack_file' AND <orgScopeSQL(p.scope)>)`; the own-scope gate stays.
+  A `slack_file` is visible only through a NULL, empty, `public` or member-scope parent
+  (in practice its Slack message). `jira_attachment` keeps the org rule. `nodeVisible`
+  runs the same SQL, so Go and SQL agree.
+- Test `TestACLRoutes_NullScopeSlackFileNotExposedByOrgParent`: NULL-scope file referenced
+  only by `jira:PAY` gives non-member and member-of-nothing askers 404 on `/node` and
+  nothing from `/search`, `/neighbors` (plain and `cards=1`), `/epic`, `/resolve`; the
+  same NULL-scope file also referenced by a member channel's Slack message is visible to
+  that member and to admin. Round 1 scoped-file tests kept.

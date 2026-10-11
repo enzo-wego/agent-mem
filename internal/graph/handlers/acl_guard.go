@@ -284,7 +284,7 @@ func parentVisibleSQL(alias string, scopeParam int) string {
  SELECT 1 FROM graph.edges e JOIN graph.nodes p ON p.id = e.from_node_id
  WHERE e.to_node_id = %[1]s.id AND e.kind = 'REFERENCES'
    AND p.deleted_at IS NULL AND p.type NOT IN ('slack_file','jira_attachment')
-   AND (p.scope IS NULL OR p.scope = '' OR p.scope = 'public' OR p.scope = ANY($%[2]d::text[]) OR %[3]s)
+   AND (p.scope IS NULL OR p.scope = '' OR p.scope = 'public' OR p.scope = ANY($%[2]d::text[]) OR (%[1]s.type <> 'slack_file' AND %[3]s))
 )`, alias, scopeParam, orgScopeSQL("p.scope"))
 }
 

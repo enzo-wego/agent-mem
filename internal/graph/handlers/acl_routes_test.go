@@ -196,6 +196,70 @@ func TestACLRoutes_OrgScopes(t *testing.T) {
 	}
 }
 
+// F1 (round 2): production slack_file nodes have NULL scope. A jira:PAY parent
+// (org rule) must not expose one; a member Slack parent still does.
+func TestACLRoutes_NullScopeSlackFileNotExposedByOrgParent(t *testing.T) {
+	pool := openTestDB(t)
+	resetEpicACL(t, pool)
+	seed := func(id, typ, title, scope string) {
+		seedKeywordNode(t, pool, id, title, scope, title+" body")
+		aclExec(t, pool, `UPDATE graph.nodes SET type=$2, body=$3 WHERE id=$1`, id, typ, title+" body")
+	}
+	seed("jira:F1-PAY", "jira", "f1token parent", "jira:PAY")
+	seed("slack_file:F1ONLY", "slack_file", "f1token onlyfile", "")
+	seed("slack:CF1MEM:1.0", "slack", "f1token slackmsg", "slack:CF1MEM")
+	seed("slack_file:F1BOTH", "slack_file", "f1token bothfile", "")
+	aclExec(t, pool, `INSERT INTO graph.edges (from_node_id,to_node_id,kind,metadata,machine_id) VALUES
+		('jira:F1-PAY','slack_file:F1ONLY','REFERENCES','{}','test'),
+		('jira:F1-PAY','slack_file:F1BOTH','REFERENCES','{}','test'),
+		('slack:CF1MEM:1.0','slack_file:F1BOTH','REFERENCES','{}','test')`)
+	aclMember(t, pool, "jira:F1-PAY", "F1-PAY", viaEpicSelf)
+	aclMember(t, pool, "slack_file:F1ONLY", "F1-PAY", viaKey)
+	aclPerson(t, pool, 5401, "nothing@example.com")
+	aclPerson(t, pool, 5402, "other@example.com", "slack:COTHER")
+	aclPerson(t, pool, 5403, "member@example.com", "slack:CF1MEM")
+	h := mountedGraph(t, pool)
+	targets := []string{
+		"/api/graph/search?q=f1token&limit=50",
+		"/api/graph/node/" + url.PathEscape("jira:F1-PAY") + "/neighbors?depth=2",
+		"/api/graph/node/" + url.PathEscape("jira:F1-PAY") + "/neighbors?depth=2&cards=1",
+		"/api/graph/epic/F1-PAY",
+	}
+	for _, who := range []string{"nothing@example.com", "other@example.com"} {
+		hd := map[string]string{"X-Asker-User": who}
+		if c := graphGet(h, "/api/graph/node?id="+url.QueryEscape("slack_file:F1ONLY"), hd).Code; c != 404 {
+			t.Errorf("%s /node F1ONLY status=%d want 404", who, c)
+		}
+		if c := graphGet(h, "/api/graph/node?id="+url.QueryEscape("slack_file:F1BOTH"), hd).Code; c != 404 {
+			t.Errorf("%s /node F1BOTH status=%d want 404", who, c)
+		}
+		for _, tg := range targets {
+			if body := graphGet(h, tg, hd).Body.String(); strings.Contains(body, "F1ONLY") || strings.Contains(body, "F1BOTH") || strings.Contains(body, "onlyfile") || strings.Contains(body, "bothfile") {
+				t.Errorf("%s leaked file via %s: %s", who, tg, body)
+			}
+		}
+		hd["Content-Type"] = "application/json"
+		w := graphDo(h, "POST", "/api/graph/resolve", `{"seeds":["jira:F1-PAY"],"depth":2,"include_bodies":true}`, hd)
+		if body := w.Body.String(); strings.Contains(body, "F1ONLY") || strings.Contains(body, "F1BOTH") || strings.Contains(body, "onlyfile") || strings.Contains(body, "bothfile") {
+			t.Errorf("%s leaked file via resolve: %s", who, body)
+		}
+	}
+
+	member := map[string]string{"X-Asker-User": "member@example.com"}
+	if c := graphGet(h, "/api/graph/node?id="+url.QueryEscape("slack_file:F1BOTH"), member).Code; c != 200 {
+		t.Errorf("member /node F1BOTH status=%d want 200", c)
+	}
+	if c := graphGet(h, "/api/graph/node?id="+url.QueryEscape("slack_file:F1ONLY"), member).Code; c != 404 {
+		t.Errorf("member /node F1ONLY status=%d want 404", c)
+	}
+	admin := map[string]string{adminHeader: "1"}
+	for _, id := range []string{"slack_file:F1ONLY", "slack_file:F1BOTH"} {
+		if c := graphGet(h, "/api/graph/node?id="+url.QueryEscape(id), admin).Code; c != 200 {
+			t.Errorf("admin /node %s status=%d want 200", id, c)
+		}
+	}
+}
+
 // The Go predicate and the SQL predicate must agree on every scope.
 func TestACLScopePredicatesAgree(t *testing.T) {
 	pool := openTestDB(t)

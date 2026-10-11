@@ -24,8 +24,10 @@ func TestACLRoutes_SlackFileNeedsOwnScopeEvenWithOrgParent(t *testing.T) {
 	seedKeywordNode(t, pool, "jira:PAY-1", "sfiletoken parent", "jira:PAY", "sfiletoken parent body")
 	seedKeywordNode(t, pool, "slack_file:FPRIVATE", "sfiletoken file", "slack:GPRIV", "sfiletoken file body")
 	aclExec(t, pool, `UPDATE graph.nodes SET type='slack_file' WHERE id='slack_file:FPRIVATE'`)
+	seedKeywordNode(t, pool, "slack:GPRIV:1.0", "sfiletoken msg", "slack:GPRIV", "sfiletoken msg body")
 	aclExec(t, pool, `INSERT INTO graph.edges (from_node_id,to_node_id,kind,metadata,machine_id) VALUES
-		('jira:PAY-1','slack_file:FPRIVATE','REFERENCES','{}','test')`)
+		('jira:PAY-1','slack_file:FPRIVATE','REFERENCES','{}','test'),
+		('slack:GPRIV:1.0','slack_file:FPRIVATE','REFERENCES','{}','test')`)
 	aclMember(t, pool, "jira:PAY-1", "PAY-1", viaEpicSelf)
 	aclMember(t, pool, "slack_file:FPRIVATE", "PAY-1", viaKey)
 	aclPerson(t, pool, 5601, "nonmember@example.com")
