@@ -95,6 +95,10 @@ func traceShow(cmd *cobra.Command, dsn, id, counters string) error {
 		return err
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "%s %s status=%d caller=%s acl=%s build=%s latency_ms=%d truncated=%t response_sha256=%s\nrequest: %s\n", id, route, status, caller, acl, rev, latency, truncated, hash, request)
+	if acl == handlers.ACLModeFilteredMasked {
+		fmt.Fprintln(cmd.OutOrStdout(), "masked v1: digest not replayed")
+		return nil
+	}
 	var rows []map[string]any
 	_ = json.Unmarshal(items, &rows)
 	var requestFields map[string]any

@@ -143,6 +143,14 @@ runs on the **payments Mac mini**: `ssh enzo@payments` (Tailscale
   `docker exec -i -e AGENT_MEM_ASKER=U0123ABCD agent-mem-worker-1 agent-mem mcp`.
 - Eval: `resolve-admin` (admin header) is the unfiltered comparison arm;
   `resolve-asker` and `search-hybrid` send the case's asker and never the admin header.
+- Masking (D2): non-admin responses on those five routes are masked by
+  `maskGraphResponse` (`internal/graph/handlers/mask.go`, patterns in
+  `internal/redact`): emails, phones, card-like numbers; payment/booking refs and
+  structural ids survive. A new filtered route MUST be wrapped with it (inside
+  `withContextTrace`, so traces hash the masked body). Plain-text error bodies (>= 400) are masked with the status kept; other non-JSON or invalid JSON
+  fails closed as `500 mask_failed`. Adding a node type means updating
+  `ids.AllTypes` (a test enforces it). Details and accepted false negatives: README
+  "Masking".
 
 ## Architecture Overview
 

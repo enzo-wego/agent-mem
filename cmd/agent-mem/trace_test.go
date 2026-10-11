@@ -126,6 +126,35 @@ func TestTraceShowDetectsAppendedTextOnUntruncatedItem(t *testing.T) {
 	}
 }
 
+func TestTraceShowMaskedRowSkipsReplay(t *testing.T) {
+	pool, dsn := traceTestPool(t)
+	seedResolveTrace(t, pool, "ctx_trace_show_masked")
+	if _, err := pool.Exec(context.Background(), `UPDATE graph.context_traces SET acl_mode='filtered-masked:v1' WHERE id='ctx_trace_show_masked'`); err != nil {
+		t.Fatal(err)
+	}
+	out := runTraceShow(t, dsn, "ctx_trace_show_masked")
+	if !strings.Contains(out, "masked v1: digest not replayed") {
+		t.Fatalf("masked notice missing:\n%s", out)
+	}
+	for _, bad := range []string{"same as returned", "differs from returned", "no longer exists"} {
+		if strings.Contains(out, bad) {
+			t.Fatalf("masked row must not be compared (%q):\n%s", bad, out)
+		}
+	}
+}
+
+func TestTraceShowLegacyFilteredRowStillReplays(t *testing.T) {
+	pool, dsn := traceTestPool(t)
+	seedResolveTrace(t, pool, "ctx_trace_show_legacy")
+	if _, err := pool.Exec(context.Background(), `UPDATE graph.context_traces SET acl_mode='filtered' WHERE id='ctx_trace_show_legacy'`); err != nil {
+		t.Fatal(err)
+	}
+	out := runTraceShow(t, dsn, "ctx_trace_show_legacy")
+	if !strings.Contains(out, "title: same as returned") || !strings.Contains(out, "body: same as returned") || strings.Contains(out, "masked v1") {
+		t.Fatalf("legacy filtered row not replayed:\n%s", out)
+	}
+}
+
 func TestTraceSinceAcceptsDays(t *testing.T) {
 	d, err := parseTraceSince("7d")
 	if err != nil || d != 7*24*time.Hour {

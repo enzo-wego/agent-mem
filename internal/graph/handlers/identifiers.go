@@ -10,11 +10,12 @@ import (
 	"time"
 
 	"github.com/agent-mem/agent-mem/internal/graph/jobs"
+	"github.com/agent-mem/agent-mem/internal/redact"
 )
 
 // Identifier extraction (plan 15, C1). Concrete identifiers are pulled from
 // RAW text — summaries drop them (verified: the ext-wego-juspay raise of
-// pxx6xgkdtl summarized to "Juspay API limit on order age for refunds" with
+// a payment ref (shape p + 9 chars) summarized to "Juspay API limit on order age for refunds" with
 // zero identifiers). Two artifacts sharing a rare identifier become topic-link
 // candidates regardless of embedding distance.
 
@@ -26,8 +27,8 @@ const maxIdentifiersPerNode = 64
 // a, p, s — which alone rules out most English words; requiring at least one
 // digit (checked in Go, RE2 has no lookahead) removes the rest ("prevention").
 var (
-	rePaymentRef = regexp.MustCompile(`\b[psd][0-9b-oqrt-z]{9}\b`)
-	reActionRef  = regexp.MustCompile(`\ba[0-9b-oqrt-z]{14}\b`)
+	rePaymentRef = redact.PaymentRef // shared with the response masker
+	reActionRef  = redact.ActionRef
 	reJiraKey    = regexp.MustCompile(`\b[A-Z][A-Z0-9]{1,9}-[0-9]{1,6}\b`)
 	reOwnJiraKey = regexp.MustCompile(`^[A-Z][A-Z0-9]{1,9}-[0-9]{1,6}$`)
 	reOwnGHPR    = regexp.MustCompile(`^wego/[\w.-]+#[0-9]+$`)
@@ -42,8 +43,8 @@ var (
 // ponytail: only observed words are refused; add a stem when a new one shows up
 // in graph.artifact_index.identifiers. No heuristic separates them: on the hub
 // (2026-10-06) the letters-then-one-digit refs were scheduler1, scheduler2
-// (words) and pzxxyivdo4, pzxxzkwud2 (real payment refs); a dictionary lacks
-// "scheduler" and a vowel count fails (real p9xxyiooow has 4 vowels).
+// (words) and two p-prefixed refs ending in one digit (real payment refs); a dictionary lacks
+// "scheduler" and a vowel count fails (a real ref with 4 vowels exists).
 var notPaymentRefStems = map[string]bool{"scheduler": true}
 
 // isPaymentRefWord reports whether tok minus its trailing digits is a stop-listed stem.
