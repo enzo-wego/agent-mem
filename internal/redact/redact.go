@@ -54,7 +54,7 @@ func buildNodeIDRegexp() *regexp.Regexp {
 	}
 	// Longest first so slack_file wins over slack.
 	sort.Slice(names, func(i, j int) bool { return len(names[i]) > len(names[j]) })
-	return regexp.MustCompile(`(?:` + strings.Join(names, "|") + "):[^\\s\"'`<>\\[\\]{}|,;]+")
+	return regexp.MustCompile(`(?:` + strings.Join(names, "|") + `):[A-Za-z0-9\-._~:/#@!$&*=%]+`)
 }
 
 var (
@@ -90,9 +90,9 @@ func Mask(s string) string {
 		if pi < len(prot) {
 			limit = prot[pi][0]
 		}
-		c := s[i]
-		if w, _ := digitAt(s, i); w > 0 || (c == '+' && i+1 < limit && (isDigit(s[i+1]) || s[i+1] == '(' || func() bool { w, _ := digitAt(s, i+1); return w > 0 }())) {
-			if end, mask := matchAt(s, i, limit, c == '+' && forcePlus[i]); mask != "" {
+		pw := plusStart(s, i, true)
+		if w, _ := digitAt(s, i); w > 0 || pw > 0 {
+			if end, mask := matchAt(s, i, limit, pw > 0 && forcePlus[i]); mask != "" {
 				out.WriteString(s[flushed:i])
 				out.WriteString(mask)
 				i, flushed = end, end
@@ -120,7 +120,7 @@ func protectedSpans(s string) (spans [][2]int, forcePlus map[int]bool) {
 		// An international phone (+ then digits) is masked even inside a URL
 		// span: cut the span at the first '+digit'.
 		for k := m[0]; k+1 < e; k++ {
-			if s[k] == '+' && isDigit(s[k+1]) {
+			if plusStart(s, k, false) > 0 {
 				e = k
 				if forcePlus == nil {
 					forcePlus = map[int]bool{}
@@ -187,6 +187,57 @@ func protectedSpans(s string) (spans [][2]int, forcePlus map[int]bool) {
 }
 
 func isDigit(c byte) bool { return c >= '0' && c <= '9' }
+
+// isPct2B reports whether s[k:] starts with a percent-encoded '+' (%2B, %2b).
+func isPct2B(s string, k int) bool {
+	return k+2 < len(s) && s[k] == '%' && s[k+1] == '2' && (s[k+2] == 'B' || s[k+2] == 'b')
+}
+
+// isDateAfter reports whether s[k:] starts with YYYY-MM-DD.
+func isDateAfter(s string, k int) bool {
+	if k+10 > len(s) {
+		return false
+	}
+	for j := range 10 {
+		c := s[k+j]
+		if j == 4 || j == 7 {
+			if c != '-' {
+				return false
+			}
+		} else if !isDigit(c) {
+			return false
+		}
+	}
+	return true
+}
+
+// plusStart returns the byte width (1 for '+', 3 for %2B) of a phone-leading
+// plus at s[k] followed by a digit (or '(' when paren), else 0. A plus
+// followed by an ISO date is not a phone (Confluence titles: Incident+2026-10-12).
+func plusStart(s string, k int, paren bool) int {
+	w := 0
+	switch {
+	case s[k] == '+':
+		w = 1
+	case isPct2B(s, k):
+		w = 3
+	default:
+		return 0
+	}
+	n := k + w
+	if n >= len(s) {
+		return 0
+	}
+	if !isDigit(s[n]) {
+		if dw, _ := digitAt(s, n); dw == 0 && !(paren && s[n] == '(') {
+			return 0
+		}
+	}
+	if isDateAfter(s, n) {
+		return 0
+	}
+	return w
+}
 
 // digitAt reports the byte width and numeric value of the Unicode decimal
 // digit (category Nd) at s[p]; width 0 when none.
@@ -304,9 +355,9 @@ func matchAt(s string, i, limit int, force bool) (end int, mask string) {
 	p := i
 	plus := false
 	opens := 0
-	if s[p] == '+' {
+	if pw := plusStart(s, p, true); pw > 0 {
 		plus = true
-		p++
+		p += pw
 		if p < limit && s[p] == '(' {
 			opens++
 			p++

@@ -226,3 +226,13 @@ Review: `docs/reviews/2026-10-12-graph-context-phase1b-masking-code-r2.md`.
 - **International phone inside a URL span:** the span is cut at the first `+` followed by a digit and that `+` is exempt from the left-neighbour check, so `url+65…` and `url.+65…` are masked. Accepted over-masking: a `+digits` run inside a real URL query (the rest of that URL is unprotected).
 - **Separators:** phone and card grouping also accept U+00A0, U+2009, U+202F and U+3000 (normalised to a space; card grouping still requires single space/hyphen).
 - **Tests:** `TestMaskURLAllowlistFixRound2` has every r2 shape as must-mask, plus must-keep rows (`wa.me`, Slack permalink, `%40` query, digits in a URL path).
+
+## Fix round 3 (code review r3 F2)
+
+Review: `docs/reviews/2026-10-12-graph-context-phase1b-masking-code-r3.md`.
+
+- **F2 (HIGH):** `%2B`/`%2b` is treated as `+` for the phone rule (`isPct2B`, `plusStart`): in the `Mask` candidate check (forced, exempt from the left-neighbour rule), in `matchAt` (`plus=true`, advance 3) and in the `protectedSpans` cut beside `+digit`. Must-mask: `customer_phone=%2B…`, `msisdn=%2b…`, `?to=%2B…`, JSON `"phone":"%2B…"`.
+- **Node-id span:** now the allowlist `[A-Za-z0-9\-._~:/#@!$&*=%]+` (no `+`), so `jira:PAY-1` followed by NBSP, `)` or `،` and then `+65…` is masked, as is `person:+65…`. `partner:4111…` is still kept: a Luhn-exempt rule broke the must-keep `cf:4111111111111111` canary (numeric page ids), so it stays an accepted over-keep.
+- **Over-masking:** a `+` followed by `YYYY-MM-DD` is not a phone (`Incident+2026-10-12+Payments` unchanged); `+65 9123 4567` still masked.
+- **Tests:** `TestMaskFixRound3`.
+- Residual risks accepted (README): PII inside URL syntax, zero-width/soft-hyphen characters inside digit runs.

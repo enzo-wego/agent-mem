@@ -228,3 +228,28 @@ func TestMaskURLAllowlistFixRound2(t *testing.T) {
 		})
 	}
 }
+
+func TestMaskFixRound3(t *testing.T) {
+	t.Parallel()
+	tests := []struct{ name, in, want string }{
+		{"pct2B form field", "customer_phone=%2B966501234567&x=1", "customer_phone=[phone]&x=1"},
+		{"pct2b lowercase", "msisdn=%2b966501234567", "msisdn=[phone]"},
+		{"pct2B in url query", "https://x.example/?to=%2B6591234567", "https://x.example/?to=[phone]"},
+		{"pct2B in json", `{"phone":"%2B6591234567"}`, `{"phone":"[phone]"}`},
+		{"jira id nbsp plus phone", "jira:PAY-1\u00a0+6591234567", "jira:PAY-1\u00a0[phone]"},
+		{"jira id paren plus phone", "(jira:PAY-1)+6591234567", "(jira:PAY-1)[phone]"},
+		{"jira id arabic comma phone", "jira:PAY-1\u060c+6591234567", "jira:PAY-1\u060c[phone]"},
+		{"person type plus phone", "person:+6591234567", "person:[phone]"},
+		{"date plus kept", "https://wiki.example/display/X/Incident+2026-10-12+Payments", "https://wiki.example/display/X/Incident+2026-10-12+Payments"},
+		{"date title kept", "Incident+2026-10-12+Payments", "Incident+2026-10-12+Payments"},
+		{"spaced plus phone masked", "+65 9123 4567", "[phone]"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := Mask(tt.in); got != tt.want {
+				t.Fatalf("Mask(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}
