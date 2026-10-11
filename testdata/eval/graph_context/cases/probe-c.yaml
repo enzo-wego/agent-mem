@@ -11,7 +11,7 @@ requests:
             asker_eeid: 708
             depth: 2
             include_bodies: false
-            query: Check if we received the Cardholder name, last 4, and BIN for this payment - p0z60lckqr
+            query: Check if we received the Cardholder name, last 4, and BIN for this payment - [payment-ref]
             seeds:
                 - https://wego.slack.com/archives/CUV9EAYGY/p1791457916047199
         headers: {}
@@ -20,7 +20,7 @@ requests:
             asker_eeid: 0
             depth: 2
             include_bodies: false
-            query: Check if we received the Cardholder name, last 4, and BIN for this payment - p0z60lckqr
+            query: Check if we received the Cardholder name, last 4, and BIN for this payment - [payment-ref]
             seeds:
                 - https://wego.slack.com/archives/CUV9EAYGY/p1791457916047199
         headers: {}
@@ -28,7 +28,7 @@ requests:
         params:
             limit: 10
             match: hybrid
-            q: Check if we received the Cardholder name, last 4, and BIN for this payment - p0z60lckqr
+            q: Check if we received the Cardholder name, last 4, and BIN for this payment - [payment-ref]
             types: slack,slack_thread,gh_pr,jira,cf,cf_page,gws,gws_doc,gdoc,wegohub,claude_artifact,pagerduty,sentry,datadog
         headers: {}
 labels:
@@ -41,6 +41,6 @@ labels:
         may: []
         must_not: []
 label_reasons: {}
-labelled_by: fable-draft
+labelled_by: none
 checked_by: null
-notes: 'Payment ref lookup - cardholder name, last 4 and BIN for payment p0z60lckqr; manifest variants: - note: include_bodies=true, asker_eeid 708 -> 27 artifacts, summary empty on all'
+notes: 'Payment ref lookup - cardholder name, last 4 and BIN for payment [payment-ref]; manifest variants: - note: include_bodies=true, asker_eeid 708 -> 27 artifacts, summary empty on all'

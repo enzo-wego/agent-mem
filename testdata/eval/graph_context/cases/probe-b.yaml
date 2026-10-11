@@ -41,6 +41,6 @@ labels:
         may: []
         must_not: []
 label_reasons: {}
-labelled_by: fable-draft
+labelled_by: none
 checked_by: null
 notes: How does X work - Tabby UAE Pay in 3 vs Pay in 4 request parameter

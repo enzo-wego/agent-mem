@@ -41,6 +41,6 @@ labels:
         may: []
         must_not: []
 label_reasons: {}
-labelled_by: fable-draft
+labelled_by: none
 checked_by: null
 notes: Config question - is IN tax enabled on staging

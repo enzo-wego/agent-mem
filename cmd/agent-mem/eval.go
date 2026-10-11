@@ -2,14 +2,18 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
@@ -103,7 +107,11 @@ func importProbes() error {
 			b, _ := yaml.Marshal(p.Variants)
 			notes += "; manifest variants: " + strings.TrimSpace(string(b))
 		}
-		c := evalCase{ID: p.ID, UseCase: p.UseCase, SourceThread: p.SourceThread, AskerSlackID: p.AskerSlackUID, AskerEEID: p.AskerEEID, NeedsContext: "yes", Requests: map[string]evalRequest{"resolve-asker0": {Body: zero, Headers: map[string]string{}}, "resolve-asker": {Body: real, Headers: map[string]string{}}, "search-hybrid": {Params: params, Headers: map[string]string{}}}, Labels: map[string]evalLabels{"resolve": {}, "search": {}}, LabelReasons: map[string]string{}, LabelledBy: "fable-draft", CheckedBy: nil, Notes: notes}
+		needsContext := "yes"
+		if p.UseCase == "UC9" {
+			needsContext = "no"
+		}
+		c := evalCase{ID: p.ID, UseCase: p.UseCase, SourceThread: p.SourceThread, AskerSlackID: p.AskerSlackUID, AskerEEID: p.AskerEEID, NeedsContext: needsContext, Requests: map[string]evalRequest{"resolve-asker0": {Body: zero, Headers: map[string]string{}}, "resolve-asker": {Body: real, Headers: map[string]string{}}, "search-hybrid": {Params: params, Headers: map[string]string{}}}, Labels: map[string]evalLabels{"resolve": {}, "search": {}}, LabelReasons: map[string]string{}, LabelledBy: "none", CheckedBy: nil, Notes: notes}
 		out, err := yaml.Marshal(c)
 		if err != nil {
 			return err
@@ -148,17 +156,33 @@ func runRelevance(cmd *cobra.Command, baseURL string, dryRun bool, jsonPath stri
 	if len(paths) == 0 {
 		return fmt.Errorf("no case files")
 	}
+	started := time.Now().UTC()
+	casesHash := sha256.New()
+	result := map[string]any{
+		"build_rev":        unknownBuildRev(buildRev),
+		"started_at":       started.Format(time.RFC3339Nano),
+		"per_case":         []map[string]any{},
+		"aggregate":        map[string]any{"scored": 0, "unlabelled": 0, "failed": 0},
+		"request_ids":      []string{},
+		"node_meta_sha256": fileSHA256(filepath.Join(filepath.Dir(evalCaseDir), "node_meta.json")),
+	}
 	client := http.DefaultClient
-	for _, path := range paths {
-		data, err := os.ReadFile(path)
+	for _, casePath := range paths {
+		data, err := os.ReadFile(casePath)
 		if err != nil {
 			return err
 		}
+		_, _ = casesHash.Write(data)
 		var c evalCase
 		if err := yaml.Unmarshal(data, &c); err != nil {
-			return fmt.Errorf("%s: %w", path, err)
+			return fmt.Errorf("%s: %w", casePath, err)
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "case %s needs_context=%s\n", c.ID, c.NeedsContext)
+		fmt.Fprintf(cmd.OutOrStdout(), "case %s needs_context=%s", c.ID, c.NeedsContext)
+		if c.LabelledBy == "none" {
+			fmt.Fprint(cmd.OutOrStdout(), " unlabelled")
+			result["aggregate"].(map[string]any)["unlabelled"] = result["aggregate"].(map[string]any)["unlabelled"].(int) + 1
+		}
+		fmt.Fprintln(cmd.OutOrStdout())
 		for _, name := range []string{"resolve-asker0", "resolve-asker", "search-hybrid"} {
 			req, ok := c.Requests[name]
 			if !ok {
@@ -198,16 +222,70 @@ func runRelevance(cmd *cobra.Command, baseURL string, dryRun bool, jsonPath stri
 			if err != nil {
 				return err
 			}
+			responseBody, readErr := io.ReadAll(resp.Body)
 			resp.Body.Close()
+			if readErr != nil {
+				return readErr
+			}
 			if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 				return fmt.Errorf("%s %s: %s", c.ID, name, resp.Status)
 			}
+			var decoded struct {
+				RequestID string            `json:"request_id"`
+				Artifacts []json.RawMessage `json:"artifacts"`
+				Results   []json.RawMessage `json:"results"`
+				ArmErrors map[string]string `json:"arm_errors"`
+			}
+			if err := json.Unmarshal(responseBody, &decoded); err != nil {
+				return fmt.Errorf("%s %s: decode response: %w", c.ID, name, err)
+			}
+			requestID := resp.Header.Get("X-Graph-Request-Id")
+			if requestID == "" {
+				requestID = decoded.RequestID
+			}
+			if requestID != "" {
+				result["request_ids"] = append(result["request_ids"].([]string), requestID)
+			}
+			if rev := resp.Header.Get("X-Graph-Build-Rev"); rev != "" {
+				result["build_rev"] = rev
+			}
+			count := len(decoded.Artifacts)
+			if name == "search-hybrid" {
+				count = len(decoded.Results)
+			}
+			entry := map[string]any{"case_id": c.ID, "variant": name, "request_id": requestID, "returned": count, "unlabelled": c.LabelledBy == "none"}
+			if len(decoded.ArmErrors) > 0 {
+				entry["arm_errors"] = decoded.ArmErrors
+				entry["degraded"] = true
+			}
+			result["per_case"] = append(result["per_case"].([]map[string]any), entry)
 		}
 	}
+	result["cases_sha256"] = hex.EncodeToString(casesHash.Sum(nil))
 	if jsonPath != "" {
-		if err := os.WriteFile(jsonPath, []byte("{}\n"), 0644); err != nil {
+		encoded, err := json.MarshalIndent(result, "", "  ")
+		if err != nil {
+			return err
+		}
+		if err := os.WriteFile(jsonPath, append(encoded, '\n'), 0644); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func unknownBuildRev(rev string) string {
+	if strings.TrimSpace(rev) == "" {
+		return "unknown"
+	}
+	return rev
+}
+
+func fileSHA256(path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
 }

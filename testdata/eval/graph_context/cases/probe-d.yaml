@@ -41,6 +41,6 @@ labels:
         may: []
         must_not: []
 label_reasons: {}
-labelled_by: fable-draft
+labelled_by: none
 checked_by: null
 notes: 'Data question - Sift fraud-score band 90-92.99 after threshold raise to 93; manifest variants: - note: resolve with query "Sift fraud score threshold 90 to 93 unblocked band performance", asker_eeid 334, no include_bodies -> 6 artifacts, score_breakdown.sem = 0 on every artifact'

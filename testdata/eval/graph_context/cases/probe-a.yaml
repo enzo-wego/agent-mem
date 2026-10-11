@@ -43,7 +43,7 @@ labels:
         may: []
         must_not: []
 label_reasons: {}
-labelled_by: fable-draft
+labelled_by: none
 checked_by: null
 notes: |-
     Jira question - trace PAY-1731 translated availability message; manifest variants: - note: include_bodies=true, asker_eeid 651 -> 6 artifacts, summary empty on all, seed body_len 14540 (16 replies, 12 EnzoBot references)

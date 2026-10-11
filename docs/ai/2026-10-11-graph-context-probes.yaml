@@ -77,7 +77,7 @@ probes:
 
   - id: probe-c
     use_case: UC4
-    label: Payment ref lookup - cardholder name, last 4 and BIN for payment p0z60lckqr
+    label: Payment ref lookup - cardholder name, last 4 and BIN for payment [payment-ref]
     source_thread: https://wego.slack.com/archives/CUV9EAYGY/p1791457916047199
     asker_slack_uid: U061HHMF540
     asker_eeid: 708
@@ -85,10 +85,10 @@ probes:
       <<: *resolve_defaults
       seeds:
         - https://wego.slack.com/archives/CUV9EAYGY/p1791457916047199
-      query: "Check if we received the Cardholder name, last 4, and BIN for this payment - p0z60lckqr"
+      query: "Check if we received the Cardholder name, last 4, and BIN for this payment - [payment-ref]"
       asker_eeid: [0, 708]
     hybrid_request:
-      q: "Check if we received the Cardholder name, last 4, and BIN for this payment - p0z60lckqr"
+      q: "Check if we received the Cardholder name, last 4, and BIN for this payment - [payment-ref]"
       match: hybrid
       limit: 10
       types: *hybrid_types

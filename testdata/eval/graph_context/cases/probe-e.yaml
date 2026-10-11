@@ -43,6 +43,6 @@ labels:
         may: []
         must_not: []
 label_reasons: {}
-labelled_by: fable-draft
+labelled_by: none
 checked_by: null
 notes: PR review request - payments#2424 disable_pdf_generation_countries switch

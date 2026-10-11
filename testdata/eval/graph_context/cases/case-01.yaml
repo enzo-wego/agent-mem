@@ -6,11 +6,11 @@ asker_eeid: 651
 needs_context: yes
 canonical_seeds: []
 requests:
-  resolve-asker0: {body: {seeds: ["https://wego.slack.com/archives/C05RNSE8TBR/p1791587834751759"], query: "Find relevant prior context for this thread.", depth: 2, include_bodies: false, asker_eeid: 0}, headers: {}}
-  resolve-asker: {body: {seeds: ["https://wego.slack.com/archives/C05RNSE8TBR/p1791587834751759"], query: "Find relevant prior context for this thread.", depth: 2, include_bodies: false, asker_eeid: 651}, headers: {}}
-  search-hybrid: {params: {q: "Find relevant prior context for this thread.", match: hybrid, limit: 10, types: "slack,slack_thread,gh_pr,jira,cf,cf_page,gws,gws_doc,gdoc,wegohub,claude_artifact,pagerduty,sentry,datadog"}, headers: {}}
+  resolve-asker0: {body: {seeds: ["https://wego.slack.com/archives/C05RNSE8TBR/p1791587834751759"], query: &query "@EnzoBot Can you help to go through the payment or order refs provided in this Slack thread, for each of them, check the db status and also pull the API logs between us -> Juspay?", depth: 2, include_bodies: false, asker_eeid: 0}, headers: {}}
+  resolve-asker: {body: {seeds: ["https://wego.slack.com/archives/C05RNSE8TBR/p1791587834751759"], query: *query, depth: 2, include_bodies: false, asker_eeid: 651}, headers: {}}
+  search-hybrid: {params: {q: *query, match: hybrid, limit: 10, types: "slack,slack_thread,gh_pr,jira,cf,cf_page,gws,gws_doc,gdoc,wegohub,claude_artifact,pagerduty,sentry,datadog"}, headers: {}}
 labels: {resolve: {must: [], may: [], must_not: []}, search: {must: [], may: [], must_not: []}}
 label_reasons: {}
-labelled_by: fable-draft
+labelled_by: none
 checked_by: null
 notes: "Draft from EnzoBot bot_mentions; labels await oracle preparation and owner review."
