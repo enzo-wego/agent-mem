@@ -1,0 +1,1631 @@
+{
+  "prepared_at": "2026-10-11T10:23:17Z",
+  "build_rev": "unknown",
+  "cases_sha256": "0af85efb6d44f472ee4a803fc46fa0a5562382937d0520cddee3f87c47c3bf50",
+  "cases": {
+    "case-01": {
+      "canonical_seeds": [
+        "slack:C05RNSE8TBR:1791587834.751759"
+      ],
+      "variants": {
+        "resolve-asker": {
+          "status": 200,
+          "request_id": "ctx_5qfpqswaasjluy7wipjs",
+          "returned": [
+            "slack:C05RNSE8TBR:1791587834.751759",
+            "slack:C05RNSE8TBR:1791587889.453639",
+            "slack:C019B36KGNR:1791526199.928429",
+            "slack:C05RNSE8TBR:1791706487.822609",
+            "slack:C05RNSE8TBR:1791706457.936859",
+            "slack:C05RNSE8TBR:1791588186.762269",
+            "slack:C05RNSE8TBR:1791588186.458969",
+            "slack:C05RNSE8TBR:1791587856.737589",
+            "slack:C05RNSE8TBR:1791587983.678559",
+            "slack:C019B36KGNR:1791548199.239769",
+            "slack_file:F0BQ8MNPHU1",
+            "slack_file:F0B5D2UCCP5",
+            "slack_file:F0B87535P8W",
+            "slack_file:F0B5JSWBCD8",
+            "slack:C019B36KGNR:1787296531.074889",
+            "slack:C019B36KGNR:1779443460.574969",
+            "slack:C019B36KGNR:1779444531.517859",
+            "slack:C019B36KGNR:1779443938.213489",
+            "slack:C019B36KGNR:1779444518.824219",
+            "slack:C019B36KGNR:1786686430.689919",
+            "slack:C019B36KGNR:1791706013.342769",
+            "slack:C019B36KGNR:1779444669.677019"
+          ]
+        },
+        "resolve-asker0": {
+          "status": 200,
+          "request_id": "ctx_j5m5lqjk6eaklsb5gjdo",
+          "returned": [
+            "slack:C05RNSE8TBR:1791587834.751759",
+            "slack:C05RNSE8TBR:1791706487.822609",
+            "slack:C05RNSE8TBR:1791706457.936859",
+            "slack:C05RNSE8TBR:1791588186.762269",
+            "slack:C05RNSE8TBR:1791588186.458969",
+            "slack:C05RNSE8TBR:1791587856.737589",
+            "slack:C05RNSE8TBR:1791587983.678559",
+            "slack:C019B36KGNR:1791548199.239769",
+            "slack:C05RNSE8TBR:1791587889.453639",
+            "slack_file:F0BQ8MNPHU1",
+            "slack_file:F0B5D2UCCP5",
+            "slack_file:F0B87535P8W",
+            "slack_file:F0B5JSWBCD8",
+            "slack:C019B36KGNR:1791706013.342769",
+            "slack:C019B36KGNR:1791705732.813769",
+            "slack:C019B36KGNR:1791526199.928429",
+            "slack:C019B36KGNR:1787296531.074889",
+            "slack:C019B36KGNR:1779444669.677019"
+          ]
+        },
+        "search-hybrid": {
+          "status": 200,
+          "request_id": "ctx_i4ubn6dkrtegmmhjnk27",
+          "returned": [
+            "slack:C05RNSE8TBR:1791587834.751759",
+            "slack:C08S954G2LX:1779709917.613979",
+            "slack:CUV9EAYGY:1790579932.705169",
+            "slack:C09USC3U9A9:1789227442.590279",
+            "slack:C05RNSE8TBR:1783430781.007079",
+            "slack:C05RNSE8TBR:1782981959.887309",
+            "slack:C05RNSE8TBR:1790834828.596929",
+            "slack:CUV9EAYGY:1782304774.725899",
+            "slack:C05RNSE8TBR:1789024318.585359",
+            "slack:CUV9EAYGY:1783944865.018889"
+          ]
+        }
+      }
+    },
+    "case-02": {
+      "canonical_seeds": [
+        "slack:CUV9EAYGY:1791545149.856259"
+      ],
+      "variants": {
+        "resolve-asker": {
+          "status": 200,
+          "request_id": "ctx_i7deovexg6ig5k4w36a4",
+          "returned": [
+            "slack:CUV9EAYGY:1791545149.856259",
+            "slack:CUV9EAYGY:1791545524.384889",
+            "slack:CUV9EAYGY:1791545466.736779",
+            "slack:C0597404MS6:1791564134.946149",
+            "slack:CUV9EAYGY:1791545511.974189",
+            "slack:CUV9EAYGY:1791545398.006239",
+            "slack:CUV9EAYGY:1791545675.670659",
+            "slack_file:F0C7ZFG0EFQ",
+            "slack_file:F0C7ZFG60AJ",
+            "slack:C0597404MS6:1791598453.694649",
+            "slack:C0597404MS6:1791587998.712849",
+            "slack:C012A121AQJ:1788233552.703659"
+          ]
+        },
+        "resolve-asker0": {
+          "status": 200,
+          "request_id": "ctx_ps2deezhjbjrc6xur5a5",
+          "returned": [
+            "slack:CUV9EAYGY:1791545149.856259",
+            "jira:PAY-2443",
+            "slack:CUV9EAYGY:1791545675.670659",
+            "slack_file:F0C7ZFG0EFQ",
+            "slack_file:F0C7ZFG60AJ",
+            "slack:C0597404MS6:1791598453.694649",
+            "slack:C0597404MS6:1791587998.712849",
+            "slack:CUV9EAYGY:1791545524.384889",
+            "slack:CUV9EAYGY:1791545466.736779",
+            "slack:C0597404MS6:1791564134.946149",
+            "slack:CUV9EAYGY:1791545511.974189",
+            "slack:CUV9EAYGY:1791545398.006239",
+            "jira:PAY-2307",
+            "slack:C012A121AQJ:1788233552.703659"
+          ]
+        },
+        "search-hybrid": {
+          "status": 200,
+          "request_id": "ctx_x2ndp7wd2ilv3wp2ff6q",
+          "returned": [
+            "slack:C04U4KATYUV:1776925780.510689",
+            "slack:CUV9EAYGY:1790675479.191359",
+            "slack:CUV9EAYGY:1790058352.770889",
+            "slack:CUV9EAYGY:1790214709.406839",
+            "slack:C0BBJAHV4G1:1788350714.195559",
+            "slack:CUV9EAYGY:1790322750.699769",
+            "slack:C09H1QMK882:1780380612.840289",
+            "slack:CUV9EAYGY:1775790876.159429",
+            "slack:C05RNSE8TBR:1789644261.366439",
+            "slack:CUV9EAYGY:1790218829.228679"
+          ]
+        }
+      }
+    },
+    "case-03": {
+      "canonical_seeds": [
+        "slack:C08S954G2LX:1791537007.335589"
+      ],
+      "variants": {
+        "resolve-asker": {
+          "status": 200,
+          "request_id": "ctx_26xupryicd5ypnjg6nqs",
+          "returned": []
+        },
+        "resolve-asker0": {
+          "status": 200,
+          "request_id": "ctx_ekdxtyr4z5p7s75filit",
+          "returned": []
+        },
+        "search-hybrid": {
+          "status": 200,
+          "request_id": "ctx_kdu5jevnj73wcg2ppzkb",
+          "returned": [
+            "gh_pr:wego/payments#2399",
+            "slack:CUV9EAYGY:1788524333.214009",
+            "slack:CUV9EAYGY:1790322750.699769",
+            "slack:C09USC3U9A9:1790434099.376099",
+            "slack:C08S954G2LX:1779709917.613979",
+            "slack:C05RNSE8TBR:1789644261.366439",
+            "slack:CUV9EAYGY:1781062889.467509",
+            "slack:C02NA2MA5K5:1790050904.785109",
+            "slack:CUV9EAYGY:1790218829.228679",
+            "slack:C05RNSE8TBR:1791272672.072949"
+          ]
+        }
+      }
+    },
+    "case-04": {
+      "canonical_seeds": [
+        "slack:C0C6RMYH5U6:1791515190.996339"
+      ],
+      "variants": {
+        "resolve-asker": {
+          "status": 200,
+          "request_id": "ctx_dqkx2qmdqvhy3erhx6j2",
+          "returned": [
+            "slack:C0C6RMYH5U6:1791519545.738949",
+            "slack:C0C6RMYH5U6:1791519257.468329",
+            "slack:C0C6RMYH5U6:1791519046.916619",
+            "slack:C0C6RMYH5U6:1791518932.123249",
+            "slack:C0C6RMYH5U6:1791518090.494719",
+            "slack:C0C6RMYH5U6:1791519732.196019",
+            "slack:C0C6RMYH5U6:1791538416.092029",
+            "slack:C0C6RMYH5U6:1791519917.200569",
+            "slack:C0C6RMYH5U6:1791538228.717109",
+            "slack:C0C6RMYH5U6:1791515190.996339",
+            "slack:C0C6RMYH5U6:1791519592.842909",
+            "slack:C0C6RMYH5U6:1791519340.715519",
+            "slack:C0C6RMYH5U6:1791519138.170219",
+            "slack:C0C6RMYH5U6:1791518979.648459",
+            "slack:C0C6RMYH5U6:1791518141.160509",
+            "slack:C0C6RMYH5U6:1791515195.011879",
+            "slack:C0C6RMYH5U6:1791538509.999749",
+            "slack:C0C6RMYH5U6:1791525449.928719",
+            "slack_file:F0C82JES88Z",
+            "slack_file:F0C7YHFGXB8"
+          ]
+        },
+        "resolve-asker0": {
+          "status": 200,
+          "request_id": "ctx_co4rroqpdp7rfyibs2c2",
+          "returned": [
+            "slack:C0C6RMYH5U6:1791515190.996339",
+            "slack:C0C6RMYH5U6:1791519592.842909",
+            "slack:C0C6RMYH5U6:1791519340.715519",
+            "slack:C0C6RMYH5U6:1791519138.170219",
+            "slack:C0C6RMYH5U6:1791518979.648459",
+            "slack:C0C6RMYH5U6:1791518141.160509",
+            "slack:C0C6RMYH5U6:1791515195.011879",
+            "slack:C0C6RMYH5U6:1791538509.999749",
+            "slack:C0C6RMYH5U6:1791525449.928719",
+            "slack:C0C6RMYH5U6:1791519545.738949",
+            "slack:C0C6RMYH5U6:1791519257.468329",
+            "slack:C0C6RMYH5U6:1791519046.916619",
+            "slack:C0C6RMYH5U6:1791518932.123249",
+            "slack:C0C6RMYH5U6:1791518090.494719",
+            "slack:C0C6RMYH5U6:1791519732.196019",
+            "slack:C0C6RMYH5U6:1791538416.092029",
+            "slack_file:F0C82JES88Z",
+            "slack_file:F0C7YHFGXB8",
+            "slack:C0C6RMYH5U6:1791519917.200569",
+            "slack_file:F0C823E4A2G"
+          ]
+        },
+        "search-hybrid": {
+          "status": 200,
+          "request_id": "ctx_kkfcawkgopmjnmsxlour",
+          "returned": [
+            "slack:C0C6RMYH5U6:1791515190.996339",
+            "slack:CUV9EAYGY:1789090120.679309",
+            "slack:CUV9EAYGY:1790675479.191359",
+            "slack:CUV9EAYGY:1779685135.038209",
+            "slack:C02NA2MA5K5:1790050904.785109",
+            "slack:C05RNSE8TBR:1790687262.932899",
+            "jira:PAY-2",
+            "slack:C05RNSE8TBR:1789434997.643049",
+            "gh_pr:wego/payments#1828",
+            "slack:C08SVNFA30R:1789370248.499599"
+          ]
+        }
+      }
+    },
+    "case-05": {
+      "canonical_seeds": [
+        "slack:C0597404MS6:1791515040.101179"
+      ],
+      "variants": {
+        "resolve-asker": {
+          "status": 200,
+          "request_id": "ctx_4jfqyrsahvnt5fmwnmpj",
+          "returned": [
+            "slack:C0597404MS6:1791515040.101179",
+            "slack:C0597404MS6:1791517965.355539",
+            "slack:C0597404MS6:1791518389.120009",
+            "slack:C0597404MS6:1791524738.005939",
+            "slack:C0597404MS6:1791524025.391769",
+            "slack:C0597404MS6:1791517392.118449",
+            "slack:C0597404MS6:1791520100.391429",
+            "slack:C0597404MS6:1791519969.489609",
+            "slack:C0597404MS6:1791519969.600939",
+            "slack:C0597404MS6:1791519968.835479",
+            "slack:C0597404MS6:1791518423.965479",
+            "slack:C0597404MS6:1791517980.756599",
+            "slack:C0597404MS6:1791516257.080299",
+            "slack:C0597404MS6:1791516048.419969",
+            "slack:C0597404MS6:1791516047.969509",
+            "slack:C0597404MS6:1791515242.788819",
+            "slack:C0597404MS6:1791515223.055179"
+          ]
+        },
+        "resolve-asker0": {
+          "status": 200,
+          "request_id": "ctx_3dh4xj53pd6aqx5oo4uk",
+          "returned": [
+            "slack:C0597404MS6:1791515040.101179",
+            "slack:C0597404MS6:1791524738.005939",
+            "slack:C0597404MS6:1791524025.391769",
+            "slack:C0597404MS6:1791517392.118449",
+            "slack:C0597404MS6:1791520100.391429",
+            "slack:C0597404MS6:1791519969.489609",
+            "slack:C0597404MS6:1791519969.600939",
+            "slack:C0597404MS6:1791519968.835479",
+            "slack:C0597404MS6:1791518423.965479",
+            "slack:C0597404MS6:1791517980.756599",
+            "slack:C0597404MS6:1791516257.080299",
+            "slack:C0597404MS6:1791516048.419969",
+            "slack:C0597404MS6:1791516047.969509",
+            "slack:C0597404MS6:1791515242.788819",
+            "slack:C0597404MS6:1791515223.055179",
+            "slack:C0597404MS6:1791517965.355539",
+            "slack:C0597404MS6:1791518389.120009",
+            "jira:PAY-2439",
+            "jira:PAY-2189"
+          ]
+        },
+        "search-hybrid": {
+          "status": 200,
+          "request_id": "ctx_w3q2piq65c2wai5ypdqn",
+          "returned": [
+            "gh_pr:wego/payments#2421",
+            "slack:C0597404MS6:1791515040.101179",
+            "slack:CUV9EAYGY:1791449691.061749",
+            "slack:C0597404MS6:1790776998.846049",
+            "slack:C0597404MS6:1791463615.025999",
+            "slack:CUV9EAYGY:1791458667.701669",
+            "slack:CUV9EAYGY:1790760806.607149",
+            "slack:CUV9EAYGY:1791513581.715739",
+            "slack:CUV9EAYGY:1791464133.279469",
+            "slack:C0597404MS6:1790436394.043429"
+          ]
+        }
+      }
+    },
+    "case-06": {
+      "canonical_seeds": [
+        "slack:C0C6RMYH5U6:1791432306.826199"
+      ],
+      "variants": {
+        "resolve-asker": {
+          "status": 200,
+          "request_id": "ctx_deijb3tvtfhlhkgqlqaw",
+          "returned": [
+            "slack:C0C6RMYH5U6:1791437332.984619",
+            "slack:C0C6RMYH5U6:1791437156.280619",
+            "slack:C0C6RMYH5U6:1791437304.597919",
+            "slack:C05RNSE8TBR:1790834828.596929",
+            "slack:C05RNSE8TBR:1791272672.072949",
+            "slack:C05RNSE8TBR:1791208343.030929",
+            "slack:C05RNSE8TBR:1791199187.749279",
+            "slack:C05RNSE8TBR:1791275549.204199",
+            "slack:C05RNSE8TBR:1790836255.188369",
+            "slack:C05RNSE8TBR:1791208802.105439",
+            "slack:C05RNSE8TBR:1791273919.254379",
+            "slack:C05RNSE8TBR:1791285847.167609",
+            "slack:C05RNSE8TBR:1791280728.055209",
+            "slack:C05RNSE8TBR:1791275862.630959",
+            "slack:C05RNSE8TBR:1791204654.260619",
+            "slack:C05RNSE8TBR:1791208581.280589",
+            "slack:C05RNSE8TBR:1791208548.628709",
+            "slack:C05RNSE8TBR:1791204174.484819",
+            "slack:C05RNSE8TBR:1791203271.429169",
+            "slack:C05RNSE8TBR:1790940763.733369",
+            "slack:C05RNSE8TBR:1791205585.835889",
+            "slack:C05RNSE8TBR:1790836272.972269",
+            "slack:C05RNSE8TBR:1790940207.301819",
+            "slack:C05RNSE8TBR:1790836298.828969",
+            "slack:C0C6RMYH5U6:1791428761.127289",
+            "slack:C0C6RMYH5U6:1791356438.494459",
+            "slack:C05RNSE8TBR:1791285247.315549",
+            "slack:C05RNSE8TBR:1791204714.706519",
+            "slack:C05RNSE8TBR:1791286327.219409",
+            "slack:C05RNSE8TBR:1791285553.438069",
+            "slack:C05RNSE8TBR:1791277313.359689",
+            "slack:C05RNSE8TBR:1791275930.373949",
+            "slack:C05RNSE8TBR:1791276890.218429",
+            "slack:C05RNSE8TBR:1791275771.798879",
+            "slack:C05RNSE8TBR:1791275987.293559",
+            "slack:C05RNSE8TBR:1791208421.846449",
+            "slack:C05RNSE8TBR:1791199528.045029",
+            "slack:C05RNSE8TBR:1790835507.061979",
+            "slack:C05RNSE8TBR:1791284780.236479",
+            "slack:C0C6RMYH5U6:1791432306.826199"
+          ]
+        },
+        "resolve-asker0": {
+          "status": 200,
+          "request_id": "ctx_guidu6xqjb2q6quhyyie",
+          "returned": [
+            "slack:C0C6RMYH5U6:1791432306.826199",
+            "slack:C0C6RMYH5U6:1791428761.127289",
+            "slack:C0C6RMYH5U6:1791356438.494459",
+            "slack:C05RNSE8TBR:1791285247.315549",
+            "slack:C05RNSE8TBR:1791204714.706519",
+            "slack:C05RNSE8TBR:1791286327.219409",
+            "slack:C05RNSE8TBR:1791285553.438069",
+            "slack:C05RNSE8TBR:1791277313.359689",
+            "slack:C05RNSE8TBR:1791283392.773919",
+            "slack:C05RNSE8TBR:1791275930.373949",
+            "slack:C05RNSE8TBR:1791276890.218429",
+            "slack:C05RNSE8TBR:1791275771.798879",
+            "slack:C05RNSE8TBR:1791208421.846449",
+            "slack:C05RNSE8TBR:1791199528.045029",
+            "slack:C05RNSE8TBR:1790835507.061979",
+            "slack:C0C6RMYH5U6:1791437332.984619"
+          ]
+        },
+        "search-hybrid": {
+          "status": 200,
+          "request_id": "ctx_3ir327sutgm7mvgrad2x",
+          "returned": [
+            "gh_pr:wego/payments#1695",
+            "slack:C08S954G2LX:1779709917.613979",
+            "jira:FBOWINT-1980",
+            "slack:C04M1R6NQNB:1788846163.521369",
+            "slack:C048WV1BZTK:1790153746.509909",
+            "slack:C09USC3U9A9:1790434099.376099",
+            "slack:CUV9EAYGY:1791193639.851299",
+            "jira:FS-829",
+            "slack:C05RNSE8TBR:1789644261.366439",
+            "slack:C09H1QMK882:1786709371.372099",
+            "slack:C0BBJAHV4G1:1789094920.230489"
+          ]
+        }
+      }
+    },
+    "case-07": {
+      "canonical_seeds": [
+        "slack:C0C6RMYH5U6:1791284126.466789"
+      ],
+      "variants": {
+        "resolve-asker": {
+          "status": 200,
+          "request_id": "ctx_dpt255lpvuqghu2fp7rr",
+          "returned": [
+            "slack:C0C6RMYH5U6:1791284126.466789",
+            "slack:C0C6RMYH5U6:1791355354.512909",
+            "slack:C0C6RMYH5U6:1791292260.525959",
+            "slack:C0C6RMYH5U6:1791361148.483229",
+            "slack:C0C6RMYH5U6:1791361015.454359",
+            "slack:C0C6RMYH5U6:1791301666.911449",
+            "slack:C0C6RMYH5U6:1791293382.685849",
+            "slack:C0C6RMYH5U6:1791293379.608379",
+            "slack:C0C6RMYH5U6:1791293344.921329",
+            "slack:C0C6RMYH5U6:1791284277.083159",
+            "slack:C0C6RMYH5U6:1791284272.892279",
+            "slack_file:F0C77G3SZHS",
+            "slack_file:F0C74G9SJ01"
+          ]
+        },
+        "resolve-asker0": {
+          "status": 200,
+          "request_id": "ctx_rzlt76ghjtvuftjr3cim",
+          "returned": [
+            "slack:C0C6RMYH5U6:1791284126.466789",
+            "slack:C0C6RMYH5U6:1791293382.685849",
+            "slack:C0C6RMYH5U6:1791293379.608379",
+            "slack:C0C6RMYH5U6:1791293344.921329",
+            "slack:C0C6RMYH5U6:1791284277.083159",
+            "slack:C0C6RMYH5U6:1791284272.892279",
+            "slack_file:F0C77G3SZHS",
+            "slack:C0C6RMYH5U6:1791355354.512909",
+            "slack:C0C6RMYH5U6:1791292260.525959",
+            "slack:C0C6RMYH5U6:1791361148.483229",
+            "slack_file:F0C74G9SJ01",
+            "slack:C0C6RMYH5U6:1791361015.454359",
+            "slack:C0C6RMYH5U6:1791301666.911449"
+          ]
+        },
+        "search-hybrid": {
+          "status": 200,
+          "request_id": "ctx_y2ls6ktqbipzvkvylq7u",
+          "returned": [
+            "slack:C0C6RMYH5U6:1791284126.466789",
+            "slack:C05RNSE8TBR:1790834828.596929",
+            "slack:C05RNSE8TBR:1790687262.932899",
+            "slack:C0C6RMYH5U6:1791707896.766609",
+            "slack:CUV9EAYGY:1790586724.385709",
+            "slack:CUV9EAYGY:1790214705.915929",
+            "slack:CUV9EAYGY:1784702183.924389",
+            "slack:C0C6RMYH5U6:1791432306.826199",
+            "slack:C05RNSE8TBR:1787624960.795129",
+            "slack:C05RNSE8TBR:1789652993.421099"
+          ]
+        }
+      }
+    },
+    "case-08": {
+      "canonical_seeds": [
+        "slack:CUV9EAYGY:1790583455.729009"
+      ],
+      "variants": {
+        "resolve-asker": {
+          "status": 200,
+          "request_id": "ctx_kztp2zb3b35jy2u6pifp",
+          "returned": [
+            "slack:CUV9EAYGY:1790583455.729009",
+            "slack:CUV9EAYGY:1791275711.697059",
+            "slack:CUV9EAYGY:1791275487.527819",
+            "slack:CUV9EAYGY:1790596401.054029",
+            "slack:CUV9EAYGY:1790595685.855469",
+            "slack:CUV9EAYGY:1791275848.972429",
+            "slack:CUV9EAYGY:1791275561.730099",
+            "slack:CUV9EAYGY:1790596423.212039",
+            "slack:CUV9EAYGY:1790595892.815329",
+            "slack:CUV9EAYGY:1790583677.251599",
+            "slack:CUV9EAYGY:1790583676.032269",
+            "slack:C0597404MS6:1791463615.025999",
+            "slack:CUV9EAYGY:1791275545.338249",
+            "slack_file:F0C4S3TBZ9B"
+          ]
+        },
+        "resolve-asker0": {
+          "status": 200,
+          "request_id": "ctx_bx67oom3waej4ueg2v7y",
+          "returned": [
+            "slack:CUV9EAYGY:1790583455.729009",
+            "slack:CUV9EAYGY:1791275848.972429",
+            "slack:CUV9EAYGY:1791275561.730099",
+            "slack:CUV9EAYGY:1790596423.212039",
+            "slack:CUV9EAYGY:1790595892.815329",
+            "slack:CUV9EAYGY:1790583677.251599",
+            "slack:CUV9EAYGY:1790583676.032269",
+            "slack:C0597404MS6:1791463615.025999",
+            "jira:PAY-2427",
+            "slack:CUV9EAYGY:1791275545.338249",
+            "slack:CUV9EAYGY:1791275711.697059",
+            "slack:CUV9EAYGY:1791275487.527819",
+            "slack:CUV9EAYGY:1790596401.054029",
+            "slack:CUV9EAYGY:1790595685.855469",
+            "slack_file:F0C4S3TBZ9B",
+            "jira:PAY-1983"
+          ]
+        },
+        "search-hybrid": {
+          "status": 200,
+          "request_id": "ctx_sb25p2vkve3tehdzkana",
+          "returned": [
+            "slack:C08S954G2LX:1779709917.613979",
+            "slack:CUV9EAYGY:1791457916.047199",
+            "slack:CUV9EAYGY:1790579932.705169",
+            "slack:CUV9EAYGY:1782304774.725899",
+            "slack:C05RNSE8TBR:1783430781.007079",
+            "slack:C05RNSE8TBR:1782981959.887309",
+            "slack:C05RNSE8TBR:1789024318.585359",
+            "slack:CUV9EAYGY:1786958802.872889",
+            "slack:C05RNSE8TBR:1790834828.596929",
+            "slack:C08S954G2LX:1789938274.391289"
+          ]
+        }
+      }
+    },
+    "case-09": {
+      "canonical_seeds": [
+        "slack:C05RNSE8TBR:1791208918.334959"
+      ],
+      "variants": {
+        "resolve-asker": {
+          "status": 200,
+          "request_id": "ctx_vt526pc7pkd2pqykxmam",
+          "returned": [
+            "slack:C05RNSE8TBR:1791208918.334959",
+            "slack:C05RNSE8TBR:1791542549.391509",
+            "slack:C05RNSE8TBR:1791522005.870059",
+            "slack:C05RNSE8TBR:1791271713.969649",
+            "slack:C05RNSE8TBR:1791268420.610969",
+            "slack:C05RNSE8TBR:1791212312.066289",
+            "slack:C05RNSE8TBR:1791212242.966279",
+            "slack:C05RNSE8TBR:1791209395.305489",
+            "slack:C05RNSE8TBR:1791542714.011239",
+            "slack:C05RNSE8TBR:1791540260.592949",
+            "slack:C05RNSE8TBR:1791205551.719379",
+            "slack:C05RNSE8TBR:1791203122.696099",
+            "slack:C05RNSE8TBR:1791278228.088509",
+            "slack:C05RNSE8TBR:1791277222.032309",
+            "slack:C05RNSE8TBR:1791221520.183349",
+            "slack:C05RNSE8TBR:1791221430.807879",
+            "slack:C05RNSE8TBR:1791221241.406569",
+            "slack:C05RNSE8TBR:1791210656.291659",
+            "slack:C05RNSE8TBR:1791202861.280829",
+            "slack:C05RNSE8TBR:1791206002.352359",
+            "slack:C05RNSE8TBR:1791206120.047869",
+            "slack:C05RNSE8TBR:1791205657.313659",
+            "slack:C05RNSE8TBR:1791205050.038929",
+            "slack:C05RNSE8TBR:1791268428.140569",
+            "slack:C05RNSE8TBR:1791268543.061059",
+            "slack:C05RNSE8TBR:1791209023.812489"
+          ]
+        },
+        "resolve-asker0": {
+          "status": 200,
+          "request_id": "ctx_7ikx7jjtnkljzwa2p5ez",
+          "returned": [
+            "slack:C05RNSE8TBR:1791208918.334959",
+            "slack:C05RNSE8TBR:1791268804.790359",
+            "slack:C05RNSE8TBR:1791209215.016989",
+            "slack:C05RNSE8TBR:1791268428.140569",
+            "slack:C05RNSE8TBR:1791268543.061059",
+            "slack:C05RNSE8TBR:1791542549.391509",
+            "slack:C05RNSE8TBR:1791209023.812489",
+            "slack:C05RNSE8TBR:1791522005.870059",
+            "slack:C05RNSE8TBR:1791271713.969649",
+            "slack:C05RNSE8TBR:1791268420.610969",
+            "slack:C05RNSE8TBR:1791542714.011239",
+            "slack:C05RNSE8TBR:1791540260.592949",
+            "slack:C05RNSE8TBR:1791212312.066289",
+            "slack:C05RNSE8TBR:1791212242.966279",
+            "slack:C05RNSE8TBR:1791209395.305489",
+            "slack_file:F0C74GXT49J",
+            "slack_file:F0C6L87LSUT",
+            "slack_file:F0C6L8EFLKD",
+            "slack_file:F0C6SSF4SDU",
+            "slack:C05RNSE8TBR:1791221430.807879"
+          ]
+        },
+        "search-hybrid": {
+          "status": 200,
+          "request_id": "ctx_noehwg57nqpjfwijeygi",
+          "returned": [
+            "slack:C05RNSE8TBR:1791208918.334959",
+            "slack:C0C6RMYH5U6:1791515190.996339",
+            "slack:C05RNSE8TBR:1790687262.932899",
+            "slack:C05RNSE8TBR:1791202861.280829",
+            "slack:C05RNSE8TBR:1789434997.643049",
+            "slack:C05RNSE8TBR:1790834828.596929",
+            "slack:C05RNSE8TBR:1780310885.959879",
+            "slack:C05RNSE8TBR:1789643629.767579",
+            "slack:C05RNSE8TBR:1779171181.571149",
+            "slack:CUV9EAYGY:1791164406.252649"
+          ]
+        }
+      }
+    },
+    "case-10": {
+      "canonical_seeds": [
+        "slack:CUV9EAYGY:1791164406.252649"
+      ],
+      "variants": {
+        "resolve-asker": {
+          "status": 200,
+          "request_id": "ctx_2qjg5k7aeupaammfvpra",
+          "returned": [
+            "slack:CUV9EAYGY:1791164406.252649",
+            "slack:CUV9EAYGY:1791279440.282909",
+            "slack:CUV9EAYGY:1791279223.102099",
+            "slack:CUV9EAYGY:1791167595.081139",
+            "slack:CUV9EAYGY:1791167274.942859",
+            "slack:CUV9EAYGY:1791167214.341359",
+            "slack:CUV9EAYGY:1791166220.884149",
+            "slack:CUV9EAYGY:1791165751.685569",
+            "slack:CUV9EAYGY:1791165426.891959",
+            "slack:CUV9EAYGY:1791165354.318329",
+            "slack:CUV9EAYGY:1791165086.112719",
+            "slack:CUV9EAYGY:1791164843.184029",
+            "slack:CUV9EAYGY:1791164600.761769",
+            "slack:CUV9EAYGY:1791166136.040959",
+            "slack:CUV9EAYGY:1791426567.767149",
+            "slack:CUV9EAYGY:1791426499.645859",
+            "slack:CUV9EAYGY:1791426387.428649",
+            "slack:CUV9EAYGY:1791426103.895379",
+            "slack:CUV9EAYGY:1791426088.699509",
+            "slack:CUV9EAYGY:1791425699.299139",
+            "slack:CUV9EAYGY:1791425277.731299",
+            "slack:CUV9EAYGY:1791425214.638499",
+            "slack:CUV9EAYGY:1791341880.784069",
+            "slack:CUV9EAYGY:1791341597.230209",
+            "slack:CUV9EAYGY:1791341284.501989",
+            "slack:CUV9EAYGY:1790908867.057589",
+            "slack:CUV9EAYGY:1791279958.885299",
+            "slack:CUV9EAYGY:1791278130.550809",
+            "slack:CUV9EAYGY:1791278174.046589",
+            "slack:CUV9EAYGY:1791278092.635739",
+            "slack:CUV9EAYGY:1791276291.976169",
+            "slack:CUV9EAYGY:1791274510.461619",
+            "slack:CUV9EAYGY:1791274406.411389",
+            "slack:CUV9EAYGY:1791274194.647989",
+            "slack:CUV9EAYGY:1791273912.561999",
+            "slack:CUV9EAYGY:1791273358.598889",
+            "slack:CUV9EAYGY:1791272504.916379",
+            "slack:CUV9EAYGY:1791271675.012539",
+            "slack:CUV9EAYGY:1791261402.419369",
+            "slack:CUV9EAYGY:1791261225.901709",
+            "slack:CUV9EAYGY:1791259262.735419",
+            "slack:CUV9EAYGY:1791259150.950169",
+            "slack:CUV9EAYGY:1791258955.257859",
+            "slack:CUV9EAYGY:1791253861.577889",
+            "slack:CUV9EAYGY:1791253129.970809",
+            "slack:CUV9EAYGY:1791251016.446099",
+            "slack:CUV9EAYGY:1791248896.901859",
+            "slack:CUV9EAYGY:1791193121.470009",
+            "slack:CUV9EAYGY:1791190782.743299",
+            "slack:CUV9EAYGY:1791188482.407529",
+            "slack:CUV9EAYGY:1791188035.005769",
+            "slack:CUV9EAYGY:1791187623.465319",
+            "slack:CUV9EAYGY:1791181523.339749",
+            "slack:CUV9EAYGY:1791175123.806859",
+            "slack:CUV9EAYGY:1791168819.374529",
+            "slack:CUV9EAYGY:1791167936.653119",
+            "slack:CUV9EAYGY:1791167172.814729",
+            "slack:CUV9EAYGY:1791166876.899429",
+            "slack:CUV9EAYGY:1791279499.114849",
+            "slack:CUV9EAYGY:1791279382.885289",
+            "slack:CUV9EAYGY:1791279224.622569",
+            "slack:CUV9EAYGY:1791167652.856619",
+            "slack:CUV9EAYGY:1791167323.434599",
+            "slack:C0597404MS6:1791274670.702059",
+            "slack:CUV9EAYGY:1791166268.695279",
+            "slack:CUV9EAYGY:1791167411.060359"
+          ]
+        },
+        "resolve-asker0": {
+          "status": 200,
+          "request_id": "ctx_y4dcm66ie4zga7hk6hqi",
+          "returned": [
+            "slack:CUV9EAYGY:1791164406.252649",
+            "slack:CUV9EAYGY:1791279499.114849",
+            "slack:CUV9EAYGY:1791279382.885289",
+            "slack:CUV9EAYGY:1791279224.622569",
+            "slack:CUV9EAYGY:1791167652.856619",
+            "slack:CUV9EAYGY:1791167323.434599",
+            "slack:CUV9EAYGY:1791167277.585429",
+            "slack:CUV9EAYGY:1791166285.901389",
+            "slack:CUV9EAYGY:1791165847.237649",
+            "slack:CUV9EAYGY:1791165630.044919",
+            "slack:CUV9EAYGY:1791165374.127299",
+            "slack:CUV9EAYGY:1791164503.537889",
+            "slack:C0597404MS6:1791274670.702059",
+            "slack:CUV9EAYGY:1791167298.274039",
+            "slack:CUV9EAYGY:1791166268.695279",
+            "slack:CUV9EAYGY:1791165520.923309",
+            "slack:CUV9EAYGY:1791279440.282909",
+            "slack:CUV9EAYGY:1791426574.602799",
+            "slack:CUV9EAYGY:1791426501.414139"
+          ]
+        },
+        "search-hybrid": {
+          "status": 200,
+          "request_id": "ctx_b6zdojdhkugt5otzsblp",
+          "returned": [
+            "slack:CUV9EAYGY:1791164406.252649",
+            "slack:C05RNSE8TBR:1790834828.596929",
+            "slack:C0B78BH6810:1789599868.421479",
+            "slack:C0B78BH6810:1791154938.197259",
+            "slack:CUV9EAYGY:1786601034.288189",
+            "slack:CUV9EAYGY:1782954484.183329",
+            "slack:CUV9EAYGY:1780636506.222129",
+            "slack:CUV9EAYGY:1778132070.515109",
+            "slack:C0B78BH6810:1790204595.859309",
+            "slack:C09USC3U9A9:1789227442.590279"
+          ]
+        }
+      }
+    },
+    "case-11": {
+      "canonical_seeds": [
+        "slack:C0597404MS6:1790921650.721779"
+      ],
+      "variants": {
+        "resolve-asker": {
+          "status": 200,
+          "request_id": "ctx_uqmsdyfo6yhyirgdokyv",
+          "returned": [
+            "slack:C0597404MS6:1790921650.721779",
+            "slack:C0597404MS6:1790922080.906309",
+            "slack:C0597404MS6:1791302407.250579",
+            "slack:C0597404MS6:1791216007.710379",
+            "slack:C0597404MS6:1791129605.091919",
+            "slack:C0597404MS6:1790922386.533269",
+            "slack:C0597404MS6:1790922235.539049",
+            "slack:C0597404MS6:1790922067.574619",
+            "slack:C0597404MS6:1790921752.028109",
+            "slack:C0597404MS6:1790816359.829979",
+            "slack:C0597404MS6:1790902794.345659"
+          ]
+        },
+        "resolve-asker0": {
+          "status": 200,
+          "request_id": "ctx_4ahksghqoimavwtxbdy4",
+          "returned": [
+            "slack:C0597404MS6:1790921650.721779",
+            "slack:C0597404MS6:1791302407.250579",
+            "slack:C0597404MS6:1791216007.710379",
+            "slack:C0597404MS6:1791129605.091919",
+            "slack:C0597404MS6:1790922386.533269",
+            "slack:C0597404MS6:1790922235.539049",
+            "slack:C0597404MS6:1790922067.574619",
+            "slack:C0597404MS6:1790921752.028109",
+            "slack:C0597404MS6:1790816359.829979",
+            "slack:C0597404MS6:1790902794.345659",
+            "slack:C0597404MS6:1790922080.906309",
+            "jira:PAY-2210"
+          ]
+        },
+        "search-hybrid": {
+          "status": 200,
+          "request_id": "ctx_z3pfujgv4rtdxqgmurk5",
+          "returned": [
+            "slack:C08S954G2LX:1779709917.613979",
+            "slack:C0597404MS6:1790776998.846049",
+            "slack:C048WV1BZTK:1790153746.509909",
+            "slack:C09USC3U9A9:1790434099.376099",
+            "slack:C05RNSE8TBR:1789644261.366439",
+            "slack:C09H1QMK882:1786709371.372099",
+            "slack:CUV9EAYGY:1790322750.699769",
+            "slack:C0597404MS6:1788747603.917219",
+            "slack:CUV9EAYGY:1791193639.851299",
+            "slack:C09A46W6ZN1:1780910309.130929"
+          ]
+        }
+      }
+    },
+    "case-12": {
+      "canonical_seeds": [
+        "slack:C05RNSE8TBR:1790834828.596929"
+      ],
+      "variants": {
+        "resolve-asker": {
+          "status": 200,
+          "request_id": "ctx_2bbvznhhqf3y5c42rp37",
+          "returned": [
+            "slack:C05RNSE8TBR:1790834828.596929",
+            "slack:C05RNSE8TBR:1791208343.030929",
+            "slack:C05RNSE8TBR:1791199187.749279",
+            "slack:C05RNSE8TBR:1791275549.204199",
+            "slack:C05RNSE8TBR:1790836255.188369",
+            "slack:C05RNSE8TBR:1791272672.072949",
+            "slack:C05RNSE8TBR:1791208581.280589",
+            "slack:C05RNSE8TBR:1791208548.628709",
+            "slack:C05RNSE8TBR:1791204174.484819",
+            "slack:C05RNSE8TBR:1791203271.429169",
+            "slack:C0C6RMYH5U6:1791437304.597919",
+            "slack:C05RNSE8TBR:1790836272.972269",
+            "slack:C05RNSE8TBR:1791273919.254379",
+            "slack:C05RNSE8TBR:1791275102.815899",
+            "slack:C05RNSE8TBR:1791208802.105439",
+            "slack:C05RNSE8TBR:1791205585.835889",
+            "slack:C05RNSE8TBR:1790940763.733369",
+            "slack:C0C6RMYH5U6:1791437332.984619",
+            "slack:C0C6RMYH5U6:1791437156.280619",
+            "slack:C05RNSE8TBR:1791276310.718299",
+            "slack:C05RNSE8TBR:1791274533.628169",
+            "slack:C05RNSE8TBR:1791273983.197079",
+            "slack:C05RNSE8TBR:1791207943.700459",
+            "slack:C05RNSE8TBR:1791285247.315549",
+            "slack:C05RNSE8TBR:1791204714.706519",
+            "slack:C05RNSE8TBR:1791286327.219409",
+            "slack:C05RNSE8TBR:1791285553.438069",
+            "slack:C05RNSE8TBR:1791277313.359689",
+            "slack:C05RNSE8TBR:1791283392.773919",
+            "slack:C05RNSE8TBR:1791275930.373949",
+            "slack:C05RNSE8TBR:1791276890.218429",
+            "slack:C05RNSE8TBR:1791275771.798879",
+            "slack:C05RNSE8TBR:1791275987.293559",
+            "slack:C05RNSE8TBR:1791208344.629379",
+            "slack:C05RNSE8TBR:1791208421.846449"
+          ]
+        },
+        "resolve-asker0": {
+          "status": 200,
+          "request_id": "ctx_fucqx3iglwg3e4li6hol",
+          "returned": [
+            "slack:C05RNSE8TBR:1790834828.596929",
+            "slack:C05RNSE8TBR:1791285247.315549",
+            "slack:C05RNSE8TBR:1791204714.706519",
+            "slack:C05RNSE8TBR:1791286327.219409",
+            "slack:C05RNSE8TBR:1791285553.438069",
+            "slack:C05RNSE8TBR:1791277313.359689",
+            "slack:C05RNSE8TBR:1791283392.773919",
+            "slack:C05RNSE8TBR:1791277736.179019",
+            "slack:C05RNSE8TBR:1791275930.373949",
+            "slack:C05RNSE8TBR:1791208419.106389",
+            "slack:C05RNSE8TBR:1791282113.721769",
+            "slack:C05RNSE8TBR:1791276890.218429",
+            "slack:C05RNSE8TBR:1791283903.221179",
+            "slack:C05RNSE8TBR:1791281868.710209",
+            "slack:C05RNSE8TBR:1791283592.876399",
+            "slack:C05RNSE8TBR:1791281168.442419",
+            "slack:C05RNSE8TBR:1791275771.798879",
+            "slack:C05RNSE8TBR:1791284275.511999",
+            "slack:C05RNSE8TBR:1791208421.846449",
+            "slack:C05RNSE8TBR:1791280839.446099",
+            "slack:C05RNSE8TBR:1791199528.045029",
+            "slack:C05RNSE8TBR:1790835507.061979"
+          ]
+        },
+        "search-hybrid": {
+          "status": 200,
+          "request_id": "ctx_nkfugisvy72sfsmutxfc",
+          "returned": [
+            "slack:C0C6RMYH5U6:1791432306.826199",
+            "slack:C0C6RMYH5U6:1791342766.439079",
+            "slack:C05RNSE8TBR:1790834828.596929",
+            "slack:C0C6RMYH5U6:1791707896.766609",
+            "gh_pr:wego/payments#2380",
+            "slack:C0C6RMYH5U6:1791356438.494459",
+            "gh_pr:wego/olympias#4142",
+            "slack:C05RNSE8TBR:1791272672.072949",
+            "gh_pr:wego/wego-fares#4672",
+            "slack:C0C6RMYH5U6:1791601642.545109"
+          ]
+        }
+      }
+    },
+    "case-13": {
+      "canonical_seeds": [
+        "slack:C0597404MS6:1790776998.846049"
+      ],
+      "variants": {
+        "resolve-asker": {
+          "status": 200,
+          "request_id": "ctx_cbwi3agzoc7qy2qvcr6s",
+          "returned": [
+            "slack:C0597404MS6:1790811819.880269",
+            "slack:C0597404MS6:1790828178.482549",
+            "slack:C0597404MS6:1790828153.090419",
+            "slack:C0597404MS6:1790827627.664199",
+            "slack:C06Q3JHUAUV:1790828870.352649",
+            "slack:C0597404MS6:1790828851.896339",
+            "slack:C0597404MS6:1790817191.307049",
+            "slack:C0597404MS6:1790817132.813089",
+            "slack:C0597404MS6:1790816616.796599",
+            "slack:CUV9EAYGY:1790760806.607149",
+            "slack:C0597404MS6:1790827130.534759",
+            "slack:C0597404MS6:1790824200.675769",
+            "slack:CUV9EAYGY:1790774533.232809",
+            "slack:CUV9EAYGY:1790774448.660849",
+            "slack:C06Q3JHUAUV:1790760462.915219",
+            "slack:C06Q3JHUAUV:1790649324.836509",
+            "slack:C0597404MS6:1790776998.846049",
+            "slack:C0597404MS6:1790828183.134909",
+            "slack:C0597404MS6:1790828159.735169",
+            "slack:C0597404MS6:1790828049.216629",
+            "slack:C0597404MS6:1790827903.821969",
+            "slack:C0597404MS6:1790828865.383539",
+            "slack:C0597404MS6:1790828189.392399",
+            "slack:C0597404MS6:1790828163.653989",
+            "slack:C0597404MS6:1790827804.772449",
+            "slack:C0597404MS6:1790827645.509469",
+            "slack:C0597404MS6:1790827154.250499",
+            "slack:C0597404MS6:1790826981.147449",
+            "slack:C0597404MS6:1790825433.795519",
+            "slack:C0597404MS6:1790825275.391459",
+            "slack:C0597404MS6:1790824996.067429",
+            "slack:C0597404MS6:1790824330.457979",
+            "slack:C0597404MS6:1790824220.463779",
+            "slack:C0597404MS6:1790818909.377819",
+            "slack:C0597404MS6:1790818285.514249",
+            "slack:C0597404MS6:1790818406.290079",
+            "slack:C0597404MS6:1790818056.842579",
+            "slack:C0597404MS6:1790817570.843509",
+            "slack:C0597404MS6:1790817223.537209",
+            "slack:C0597404MS6:1790817205.106479",
+            "slack:C0597404MS6:1790817147.268399",
+            "slack:C0597404MS6:1790816629.851469",
+            "slack:C0597404MS6:1790816624.840609",
+            "slack:C0597404MS6:1790816359.829979",
+            "slack:C0597404MS6:1790811832.932599",
+            "slack:CUV9EAYGY:1790777014.561999",
+            "slack:CUV9EAYGY:1790760919.457989",
+            "slack:CUV9EAYGY:1790774725.131829",
+            "slack:CUV9EAYGY:1790774481.145709",
+            "slack:CUV9EAYGY:1790764288.348699",
+            "slack:CUV9EAYGY:1790761033.408859"
+          ]
+        },
+        "resolve-asker0": {
+          "status": 200,
+          "request_id": "ctx_2zji2wtxegtgfnygzbl5",
+          "returned": [
+            "slack:C0597404MS6:1790776998.846049",
+            "slack:C0597404MS6:1790828183.134909",
+            "slack:C0597404MS6:1790828159.735169",
+            "slack:C0597404MS6:1790828049.216629",
+            "slack:C0597404MS6:1790827903.821969",
+            "slack:C0597404MS6:1790811819.880269",
+            "slack:C0597404MS6:1790828178.482549",
+            "slack:C0597404MS6:1790828153.090419",
+            "slack:C0597404MS6:1790827627.664199",
+            "slack:C0597404MS6:1790828865.383539",
+            "slack:C0597404MS6:1790828189.392399",
+            "slack:C0597404MS6:1790828163.653989",
+            "slack:C0597404MS6:1790827804.772449",
+            "slack:C0597404MS6:1790827645.509469",
+            "slack:C0597404MS6:1790827154.250499",
+            "slack:C0597404MS6:1790826981.147449",
+            "slack:C0597404MS6:1790825433.795519",
+            "slack:C0597404MS6:1790825275.391459",
+            "slack:C0597404MS6:1790824996.067429",
+            "slack:C0597404MS6:1790824330.457979",
+            "slack:C0597404MS6:1790824220.463779",
+            "slack:C0597404MS6:1790818909.377819",
+            "slack:C0597404MS6:1790818285.514249",
+            "slack:C0597404MS6:1790818406.290079",
+            "slack:C0597404MS6:1790818056.842579",
+            "slack:C0597404MS6:1790817570.843509",
+            "slack:C0597404MS6:1790817223.537209",
+            "slack:C0597404MS6:1790817205.106479",
+            "slack:C0597404MS6:1790817147.268399",
+            "slack:C0597404MS6:1790816629.851469",
+            "slack:C0597404MS6:1790816624.840609",
+            "slack:C0597404MS6:1790816359.829979",
+            "slack:C0597404MS6:1790811832.932599",
+            "slack:CUV9EAYGY:1790777014.561999",
+            "slack:CUV9EAYGY:1790760919.457989",
+            "gh_pr:wego/payments-knowledge#45",
+            "jira:PAY-2409",
+            "slack:C06Q3JHUAUV:1790828870.352649",
+            "slack:C0597404MS6:1790828851.896339",
+            "slack:C0597404MS6:1790817191.307049",
+            "slack:C0597404MS6:1790817132.813089",
+            "slack:C0597404MS6:1790816616.796599",
+            "slack:CUV9EAYGY:1790760806.607149",
+            "slack:C0597404MS6:1790827130.534759",
+            "slack:C0597404MS6:1790824200.675769",
+            "slack:CUV9EAYGY:1790774533.232809",
+            "slack:CUV9EAYGY:1790774448.660849",
+            "slack:C06Q3JHUAUV:1790760462.915219",
+            "slack:C06Q3JHUAUV:1790649324.836509"
+          ]
+        },
+        "search-hybrid": {
+          "status": 200,
+          "request_id": "ctx_acrk2ufyt5l7ic7nr6r7",
+          "returned": [
+            "gh_pr:wego/payments#2386",
+            "slack:C0597404MS6:1790776998.846049",
+            "slack:C0597404MS6:1789973914.405409",
+            "slack:CUV9EAYGY:1791287810.409589",
+            "slack:C0597404MS6:1791191684.293089",
+            "slack:CUV9EAYGY:1781063692.447369",
+            "slack:C0597404MS6:1784711845.555369",
+            "slack:C0597404MS6:1790584722.815719",
+            "slack:C0597404MS6:1790846009.341309",
+            "slack:C0597404MS6:1784628239.171619"
+          ]
+        }
+      }
+    },
+    "case-14": {
+      "canonical_seeds": [
+        "slack:CUV9EAYGY:1790758198.678459"
+      ],
+      "variants": {
+        "resolve-asker": {
+          "status": 200,
+          "request_id": "ctx_pyh4qhoiu3kdufxiv4zi",
+          "returned": [
+            "slack:CUV9EAYGY:1790758198.678459",
+            "slack:CUV9EAYGY:1790759768.295479",
+            "slack:CUV9EAYGY:1790829787.518909",
+            "slack:C06Q3JHUAUV:1790760462.915219",
+            "slack:CUV9EAYGY:1790760613.349699",
+            "slack:C06Q3JHUAUV:1790649324.836509",
+            "slack:CUV9EAYGY:1790759362.584889",
+            "slack:CUV9EAYGY:1790760636.936189",
+            "slack:CUV9EAYGY:1790758465.625589",
+            "slack:CUV9EAYGY:1790759808.358759",
+            "slack:CUV9EAYGY:1790758330.547869"
+          ]
+        },
+        "resolve-asker0": {
+          "status": 200,
+          "request_id": "ctx_cjzk2c5rybt2uu6qgdpl",
+          "returned": [
+            "slack:CUV9EAYGY:1790758198.678459",
+            "slack:CUV9EAYGY:1790759808.358759",
+            "slack:CUV9EAYGY:1790758330.547869",
+            "slack:CUV9EAYGY:1790759768.295479",
+            "slack:CUV9EAYGY:1790829787.518909",
+            "slack:C06Q3JHUAUV:1790760462.915219",
+            "slack:CUV9EAYGY:1790760636.936189",
+            "slack:CUV9EAYGY:1790760613.349699",
+            "slack:C06Q3JHUAUV:1790649324.836509",
+            "slack:CUV9EAYGY:1790759362.584889",
+            "slack:CUV9EAYGY:1790758465.625589"
+          ]
+        },
+        "search-hybrid": {
+          "status": 200,
+          "request_id": "ctx_bgxwgrzxh2dfto3574vq",
+          "returned": [
+            "slack:CUV9EAYGY:1790758198.678459",
+            "slack:CUV9EAYGY:1790214709.406839",
+            "slack:C08S954G2LX:1779709917.613979",
+            "slack:CUV9EAYGY:1790322750.699769",
+            "slack:C0597404MS6:1790776998.846049",
+            "slack:C0BBJAHV4G1:1789701873.754609",
+            "slack:C02NA2MA5K5:1790050904.785109",
+            "gh_pr:wego/payments#1953",
+            "slack:C05RNSE8TBR:1789644261.366439",
+            "slack:C09A46W6ZN1:1780910309.130929"
+          ]
+        }
+      }
+    },
+    "probe-a": {
+      "canonical_seeds": [
+        "slack:CUV9EAYGY:1791450444.383399",
+        "jira:PAY-1731"
+      ],
+      "variants": {
+        "resolve-asker": {
+          "status": 200,
+          "request_id": "ctx_ufashim55xhyhguuiwdt",
+          "returned": [
+            "slack:CUV9EAYGY:1791450444.383399",
+            "slack:CUV9EAYGY:1791451477.204899",
+            "slack:CUV9EAYGY:1791451461.420359",
+            "slack:CUV9EAYGY:1791451239.302749",
+            "slack:CUV9EAYGY:1791451091.892969",
+            "slack:CUV9EAYGY:1791450962.102119",
+            "slack:CUV9EAYGY:1791450921.440449",
+            "slack:CUV9EAYGY:1791450747.940679",
+            "slack:CUV9EAYGY:1791450602.968549",
+            "slack:CUV9EAYGY:1791451481.417509",
+            "slack:CUV9EAYGY:1791451480.889839",
+            "slack:CUV9EAYGY:1791451466.513789",
+            "slack:CUV9EAYGY:1791451269.136569",
+            "slack:CUV9EAYGY:1791451191.069489",
+            "slack:CUV9EAYGY:1791451190.773359",
+            "slack:CUV9EAYGY:1791450997.689019",
+            "slack:CUV9EAYGY:1791450942.219509",
+            "slack:CUV9EAYGY:1791450940.864669",
+            "slack:CUV9EAYGY:1791450777.535479",
+            "slack:CUV9EAYGY:1791450775.579459",
+            "slack:CUV9EAYGY:1791450678.215969",
+            "slack:CUV9EAYGY:1791450496.411779",
+            "slack:C0597404MS6:1791513032.902789",
+            "slack:CUV9EAYGY:1791450988.936449",
+            "slack:CUV9EAYGY:1791450445.967909",
+            "slack:CUV9EAYGY:1777530804.959349"
+          ]
+        },
+        "resolve-asker0": {
+          "status": 200,
+          "request_id": "ctx_sefje6lylroo6zylfdp3",
+          "returned": [
+            "slack:CUV9EAYGY:1791450444.383399",
+            "slack:CUV9EAYGY:1791451481.417509",
+            "slack:CUV9EAYGY:1791451480.889839",
+            "slack:CUV9EAYGY:1791451466.513789",
+            "slack:CUV9EAYGY:1791451269.136569",
+            "slack:CUV9EAYGY:1791451191.069489",
+            "slack:CUV9EAYGY:1791451190.773359",
+            "slack:CUV9EAYGY:1791450997.689019",
+            "slack:CUV9EAYGY:1791450942.219509",
+            "slack:CUV9EAYGY:1791450940.864669",
+            "slack:CUV9EAYGY:1791450777.535479",
+            "slack:CUV9EAYGY:1791450775.579459",
+            "slack:CUV9EAYGY:1791450678.215969",
+            "slack:CUV9EAYGY:1791450496.411779",
+            "slack:C09USC3U9A9:1791696903.725299",
+            "slack:C0597404MS6:1791513032.902789",
+            "slack:CUV9EAYGY:1791450988.936449",
+            "slack:CUV9EAYGY:1791450445.967909",
+            "slack:CUV9EAYGY:1791451477.204899",
+            "slack:CUV9EAYGY:1791451461.420359",
+            "slack:CUV9EAYGY:1791451239.302749",
+            "slack:CUV9EAYGY:1791451091.892969",
+            "slack:CUV9EAYGY:1791450962.102119",
+            "slack:CUV9EAYGY:1791450921.440449",
+            "jira_attachment:98791",
+            "jira:PAY-1731"
+          ]
+        },
+        "search-hybrid": {
+          "status": 200,
+          "request_id": "ctx_zr7qj4wrd2v6rrtldq7d",
+          "returned": [
+            "jira:PAY-1731",
+            "slack:CUV9EAYGY:1791450444.383399",
+            "slack:CUV9EAYGY:1791450445.967909",
+            "jira:PAY-2436",
+            "slack:CUV9EAYGY:1791451800.631339",
+            "slack:C0B1BR522F5:1791509470.292799",
+            "slack:CUV9EAYGY:1791450988.936449",
+            "gh_pr:wego/payments#2417",
+            "slack:C09USC3U9A9:1791696783.677019",
+            "gh_pr:wego/payments#1436",
+            "gh_pr:wego/payments#1567",
+            "gh_pr:wego/payments#1482",
+            "slack:C0597404MS6:1791513032.902789"
+          ]
+        }
+      }
+    },
+    "probe-b": {
+      "canonical_seeds": [
+        "slack:CUV9EAYGY:1790675479.191359"
+      ],
+      "variants": {
+        "resolve-asker": {
+          "status": 200,
+          "request_id": "ctx_vbfeimamu4dlfiy5dj3h",
+          "returned": [
+            "slack:CUV9EAYGY:1790675479.191359",
+            "slack:CUV9EAYGY:1790761455.263339",
+            "slack:CUV9EAYGY:1790761594.422829",
+            "slack:CUV9EAYGY:1790761459.483409",
+            "slack:CUV9EAYGY:1790675573.127539"
+          ]
+        },
+        "resolve-asker0": {
+          "status": 200,
+          "request_id": "ctx_5lj5r2t4p2jp5rj6mipe",
+          "returned": [
+            "slack:CUV9EAYGY:1790675479.191359",
+            "slack:CUV9EAYGY:1790761594.422829",
+            "slack:CUV9EAYGY:1790761459.483409",
+            "slack:CUV9EAYGY:1790675573.127539",
+            "slack:CUV9EAYGY:1790761455.263339"
+          ]
+        },
+        "search-hybrid": {
+          "status": 200,
+          "request_id": "ctx_z5yvkx6xwa5v5jxe6dji",
+          "returned": [
+            "slack:CUV9EAYGY:1790675479.191359",
+            "slack:CUV9EAYGY:1767578784.158839",
+            "jira:PAY-473",
+            "jira:PAY-491",
+            "jira:PAY-482",
+            "slack:CD7D29QF3:1783938315.508969",
+            "jira:PAY-2424",
+            "slack:CUV9EAYGY:1791183123.527889",
+            "slack:CD7D29QF3:1784029245.198799",
+            "slack:CUV9EAYGY:1783588299.233519",
+            "slack:C0736FUE03W:1790238600.056429"
+          ]
+        }
+      }
+    },
+    "probe-c": {
+      "canonical_seeds": [
+        "slack:CUV9EAYGY:1791457916.047199"
+      ],
+      "variants": {
+        "resolve-asker": {
+          "status": 200,
+          "request_id": "ctx_wehhssxo2seb7f36q6kn",
+          "returned": [
+            "slack:CUV9EAYGY:1791457916.047199",
+            "slack:CUV9EAYGY:1791533811.944289",
+            "slack:CUV9EAYGY:1791458025.371499",
+            "slack:CUV9EAYGY:1791542196.005369",
+            "slack:CUV9EAYGY:1791541976.891199",
+            "slack:CUV9EAYGY:1791460328.625519",
+            "slack:CUV9EAYGY:1791533995.991159",
+            "slack:CUV9EAYGY:1791534307.004119",
+            "slack:CUV9EAYGY:1791534193.684319",
+            "slack:C0B1BR522F5:1791463631.837989",
+            "slack:CUV9EAYGY:1791459070.197569",
+            "slack:C0BFH54Q1UG:1791459052.551399",
+            "slack:CUV9EAYGY:1791458795.104789",
+            "slack:CUV9EAYGY:1791458520.589749",
+            "slack:CUV9EAYGY:1791458282.087379",
+            "slack:CUV9EAYGY:1791534041.001449",
+            "slack:CUV9EAYGY:1791458413.214069",
+            "slack:CUV9EAYGY:1791533813.572179",
+            "slack:CUV9EAYGY:1791533867.767679",
+            "slack:CUV9EAYGY:1791457981.996339",
+            "slack:CUV9EAYGY:1791542217.229509",
+            "slack:CUV9EAYGY:1791542009.345359",
+            "slack:CUV9EAYGY:1791534334.989269",
+            "slack:CUV9EAYGY:1791534331.006169",
+            "slack:CUV9EAYGY:1791534238.167139",
+            "slack:CUV9EAYGY:1791534231.097049",
+            "slack:C0597404MS6:1791463615.025999",
+            "slack:CUV9EAYGY:1791458667.701669",
+            "slack:CUV9EAYGY:1791458676.330479",
+            "slack:CUV9EAYGY:1791458620.365939",
+            "slack:CUV9EAYGY:1791458428.081349",
+            "slack:CUV9EAYGY:1791458119.490709"
+          ]
+        },
+        "resolve-asker0": {
+          "status": 200,
+          "request_id": "ctx_5zfuwixxifuk52ffunde",
+          "returned": [
+            "slack:CUV9EAYGY:1791457916.047199",
+            "slack:CUV9EAYGY:1791534041.001449",
+            "slack:CUV9EAYGY:1791458413.214069",
+            "slack:CUV9EAYGY:1791533813.572179",
+            "slack:CUV9EAYGY:1791533867.767679",
+            "slack:CUV9EAYGY:1791457981.996339",
+            "slack:CUV9EAYGY:1791542217.229509",
+            "slack:CUV9EAYGY:1791542009.345359",
+            "slack:CUV9EAYGY:1791534334.989269",
+            "slack:CUV9EAYGY:1791534331.006169",
+            "slack:CUV9EAYGY:1791534238.167139",
+            "slack:CUV9EAYGY:1791534231.097049",
+            "slack:C0597404MS6:1791463615.025999",
+            "slack:CUV9EAYGY:1791458667.701669",
+            "slack:CUV9EAYGY:1791458676.330479",
+            "slack:CUV9EAYGY:1791458620.365939",
+            "slack:CUV9EAYGY:1791458428.081349",
+            "slack:CUV9EAYGY:1791458119.490709",
+            "slack:CUV9EAYGY:1791533811.944289",
+            "slack:CUV9EAYGY:1791458025.371499",
+            "slack:CUV9EAYGY:1791533995.991159",
+            "slack:CUV9EAYGY:1791542196.005369",
+            "slack_file:F0C80V3EA2W",
+            "slack:CUV9EAYGY:1791541976.891199",
+            "slack:CUV9EAYGY:1791534307.004119",
+            "slack:CUV9EAYGY:1791534193.684319",
+            "slack:CUV9EAYGY:1791460328.625519",
+            "slack:CUV9EAYGY:1791459070.197569",
+            "slack:C0BFH54Q1UG:1791459052.551399",
+            "slack:CUV9EAYGY:1791458795.104789",
+            "slack:CUV9EAYGY:1791458520.589749",
+            "slack:CUV9EAYGY:1791458282.087379"
+          ]
+        },
+        "search-hybrid": {
+          "status": 200,
+          "request_id": "ctx_dkpeseg2tomkbphhn2ku",
+          "returned": [
+            "slack:CUV9EAYGY:1791457916.047199",
+            "jira:PAY-2438",
+            "slack:CUV9EAYGY:1791458667.701669",
+            "slack:C0597404MS6:1791507558.099699",
+            "slack:C0B1BR522F5:1791463631.837989",
+            "slack:C0597404MS6:1791463615.025999",
+            "jira:HIB-4007",
+            "slack:C0BFH54Q1UG:1791459052.551399",
+            "jira:PAY-1591",
+            "slack:C0C6RMYH5U6:1791515190.996339",
+            "slack:C05RNSE8TBR:1790687262.932899",
+            "gh_pr:wego/payments#2418",
+            "slack:C05RNSE8TBR:1711438647.937599"
+          ]
+        }
+      }
+    },
+    "probe-d": {
+      "canonical_seeds": [
+        "slack:C05RNSE8TBR:1790939932.438779"
+      ],
+      "variants": {
+        "resolve-asker": {
+          "status": 200,
+          "request_id": "ctx_jesubwcavhdbapclc6ey",
+          "returned": [
+            "slack:C05RNSE8TBR:1790939932.438779",
+            "slack:C05RNSE8TBR:1790942130.270409",
+            "slack:C05RNSE8TBR:1790941210.728679",
+            "slack:C05RNSE8TBR:1790943083.687859",
+            "slack:C05RNSE8TBR:1790942914.401419",
+            "slack:C05RNSE8TBR:1788444667.445439",
+            "slack:C05RNSE8TBR:1788259009.515069",
+            "slack:C05RNSE8TBR:1790942213.248299",
+            "slack:C05RNSE8TBR:1790942210.515429",
+            "slack:C05RNSE8TBR:1790941299.964119",
+            "slack:C05RNSE8TBR:1790940451.899889",
+            "slack:C05RNSE8TBR:1790940449.063589",
+            "slack:C05RNSE8TBR:1790940436.360089",
+            "slack:C05RNSE8TBR:1790940435.284529",
+            "slack:C05RNSE8TBR:1787558178.483839",
+            "slack:C05RNSE8TBR:1790940037.684539",
+            "slack_file:F0C6ATMC7MX"
+          ]
+        },
+        "resolve-asker0": {
+          "status": 200,
+          "request_id": "ctx_mrsoljhytinkfwpaati2",
+          "returned": [
+            "slack:C05RNSE8TBR:1790939932.438779",
+            "slack:C05RNSE8TBR:1790942213.248299",
+            "slack:C05RNSE8TBR:1790942210.515429",
+            "slack:C05RNSE8TBR:1790941299.964119",
+            "slack:C05RNSE8TBR:1790940451.899889",
+            "slack:C05RNSE8TBR:1790940449.063589",
+            "slack:C05RNSE8TBR:1790940448.775739",
+            "slack:C05RNSE8TBR:1790940448.483419",
+            "slack:C05RNSE8TBR:1790940436.360089",
+            "slack:C05RNSE8TBR:1790940435.284529",
+            "slack:C05RNSE8TBR:1790942130.270409",
+            "slack:C05RNSE8TBR:1790941210.728679",
+            "slack_file:F0C690FMW10",
+            "slack:C05RNSE8TBR:1790940037.684539",
+            "slack_file:F0C6ATMC7MX",
+            "slack:C05RNSE8TBR:1790943083.687859",
+            "slack:C05RNSE8TBR:1788259009.515069"
+          ]
+        },
+        "search-hybrid": {
+          "status": 200,
+          "request_id": "ctx_g5zys23zsw2cg3pkfdrp",
+          "returned": [
+            "slack:C0C6RMYH5U6:1791515190.996339",
+            "slack:C05RNSE8TBR:1790939932.438779",
+            "slack:C05RNSE8TBR:1788444667.445439",
+            "slack:C05RNSE8TBR:1788259009.515069",
+            "jira:PAY-2355",
+            "slack:CUV9EAYGY:1788241371.674529",
+            "slack:C05RNSE8TBR:1790687262.932899",
+            "slack:C05RNSE8TBR:1789652993.421099",
+            "slack:C05RNSE8TBR:1787558178.483839",
+            "slack:C05RNSE8TBR:1789434997.643049",
+            "slack:C05RNSE8TBR:1790574910.456809"
+          ]
+        }
+      }
+    },
+    "probe-e": {
+      "canonical_seeds": [
+        "slack:C0597404MS6:1791519992.938819",
+        "gh_pr:wego/payments#2424"
+      ],
+      "variants": {
+        "resolve-asker": {
+          "status": 200,
+          "request_id": "ctx_rymv5ltzqec3uemuzp7o",
+          "returned": [
+            "slack:C0597404MS6:1791521945.129509",
+            "slack:C0597404MS6:1791521871.234249",
+            "slack:C0597404MS6:1791532200.695099",
+            "slack:C0597404MS6:1791530571.115139",
+            "slack:C0597404MS6:1791530504.799019",
+            "slack:C0597404MS6:1791527616.264819",
+            "slack:C0597404MS6:1791527520.401569",
+            "slack:CUV9EAYGY:1791527283.656229",
+            "slack:C0597404MS6:1791526877.400059",
+            "slack:C0597404MS6:1791526453.869539",
+            "slack:C0597404MS6:1791526213.092039",
+            "slack:C0597404MS6:1791525734.125699",
+            "slack:C0597404MS6:1791525690.694219",
+            "slack:C0597404MS6:1791525541.435519",
+            "slack:C0597404MS6:1791525359.688019",
+            "slack:C0597404MS6:1791525323.961089",
+            "slack:C0597404MS6:1791521681.347119",
+            "slack:CUV9EAYGY:1791514277.704659",
+            "slack:CUV9EAYGY:1791514190.377759",
+            "slack:CUV9EAYGY:1791513543.274189",
+            "slack:CUV9EAYGY:1791513452.705739",
+            "slack:C0597404MS6:1791519992.938819",
+            "slack:C0BBJAHV4G1:1791442635.332559",
+            "slack:CUV9EAYGY:1791521524.536759",
+            "slack:CUV9EAYGY:1791521265.117199",
+            "slack:CUV9EAYGY:1791519972.698539",
+            "slack:CUV9EAYGY:1791519872.404649",
+            "slack:CUV9EAYGY:1791519732.014479",
+            "slack:CUV9EAYGY:1791519579.153329",
+            "slack:CUV9EAYGY:1791519476.168599",
+            "slack:CUV9EAYGY:1791519334.382119",
+            "slack:CUV9EAYGY:1791518789.290209",
+            "slack:CUV9EAYGY:1791518157.719489",
+            "slack:CUV9EAYGY:1791517973.334429",
+            "slack:CUV9EAYGY:1791517950.682439",
+            "slack:CUV9EAYGY:1791514234.245659",
+            "slack:CUV9EAYGY:1791514225.319479",
+            "slack:CUV9EAYGY:1791514213.317139",
+            "slack:CUV9EAYGY:1791514183.387159",
+            "slack:CUV9EAYGY:1791514142.490649",
+            "slack:CUV9EAYGY:1791514085.128349",
+            "slack:CUV9EAYGY:1791514074.027279",
+            "slack:CUV9EAYGY:1791513904.626059",
+            "slack:CUV9EAYGY:1791513527.816229",
+            "slack:CUV9EAYGY:1791513504.251189",
+            "slack:CUV9EAYGY:1791513490.577889",
+            "slack:CUV9EAYGY:1791513469.886739",
+            "slack:CUV9EAYGY:1791513112.870919",
+            "slack:CUV9EAYGY:1791512946.368889",
+            "slack:CUV9EAYGY:1791512425.555499",
+            "slack:CUV9EAYGY:1791440402.647959",
+            "slack:C0597404MS6:1791532279.236759",
+            "slack:C0597404MS6:1791530542.515719",
+            "slack:C0597404MS6:1791527584.544309",
+            "slack:CUV9EAYGY:1791527335.929419",
+            "slack:C0597404MS6:1791526239.310559",
+            "slack:C0597404MS6:1791522003.298389",
+            "slack:C0597404MS6:1791521903.214029",
+            "slack:C0597404MS6:1791521885.075679",
+            "slack:C0597404MS6:1791521691.027959",
+            "slack:C0597404MS6:1791521620.915809",
+            "slack:C0597404MS6:1791521549.119569",
+            "slack:CUV9EAYGY:1791514322.831789",
+            "slack:CUV9EAYGY:1791513834.380949",
+            "slack:CUV9EAYGY:1791513826.668569"
+          ]
+        },
+        "resolve-asker0": {
+          "status": 200,
+          "request_id": "ctx_mns6luh72cfnzcyr6zc6",
+          "returned": [
+            "slack:C0597404MS6:1791519992.938819",
+            "gh_pr:wego/payments#2424",
+            "slack:CUV9EAYGY:1791440402.647959",
+            "slack:C0597404MS6:1791532279.236759",
+            "slack:C0597404MS6:1791530542.515719",
+            "slack:C0597404MS6:1791527584.544309",
+            "slack:CUV9EAYGY:1791527335.929419",
+            "slack:C0597404MS6:1791526239.310559",
+            "slack:C0597404MS6:1791522003.298389",
+            "slack:C0597404MS6:1791521903.214029",
+            "slack:C0597404MS6:1791521885.075679",
+            "slack:C0597404MS6:1791521691.027959",
+            "slack:C0597404MS6:1791521549.119569",
+            "slack:CUV9EAYGY:1791513826.668569",
+            "slack:CUV9EAYGY:1791532132.466899",
+            "slack:C0597404MS6:1791525541.435519",
+            "slack:CUV9EAYGY:1791514190.377759"
+          ]
+        },
+        "search-hybrid": {
+          "status": 200,
+          "request_id": "ctx_6vconu4xm7l2sy476ll6",
+          "returned": [
+            "gh_pr:wego/payments#2424",
+            "slack:CUV9EAYGY:1791440402.647959",
+            "slack:C0597404MS6:1791519992.938819",
+            "jira:PAY-2434",
+            "gh_pr:wego/payments#1695",
+            "gh_pr:wego/payments#1632",
+            "jira:PAY-2373",
+            "slack:C06Q3JHUAUV:1790237700.543749",
+            "slack:C0597404MS6:1789364479.031479",
+            "slack:C0597404MS6:1789280266.455889",
+            "jira:PAY-1832",
+            "slack:CUV9EAYGY:1754032064.856499",
+            "slack:CUV9EAYGY:1789710390.292509",
+            "jira:PAY-2220",
+            "slack:CUV9EAYGY:1782893668.095069"
+          ]
+        }
+      }
+    },
+    "probe-f": {
+      "canonical_seeds": [
+        "slack:C048WV1BZTK:1790153746.509909"
+      ],
+      "variants": {
+        "resolve-asker": {
+          "status": 200,
+          "request_id": "ctx_gldo2atfnoh275l7qw6j",
+          "returned": [
+            "slack:C048WV1BZTK:1790153746.509909",
+            "slack:C048WV1BZTK:1791347305.501969",
+            "slack:C048WV1BZTK:1791345742.403589",
+            "slack:C048WV1BZTK:1791345537.279829",
+            "slack:C048WV1BZTK:1791344936.090439",
+            "slack:C048WV1BZTK:1791259055.726579",
+            "slack:C048WV1BZTK:1791257816.248839",
+            "slack:C048WV1BZTK:1791202622.254359",
+            "slack:C048WV1BZTK:1791200676.978539",
+            "slack:C048WV1BZTK:1791199168.649989",
+            "slack:C048WV1BZTK:1791198786.956159",
+            "slack:C048WV1BZTK:1791173052.560959",
+            "slack:C0BBJAHV4G1:1791544006.924189",
+            "slack:C048WV1BZTK:1790854753.992769",
+            "slack:C0BBJAHV4G1:1791352521.532759",
+            "slack:C0BBJAHV4G1:1791345891.943329",
+            "slack:C0BBJAHV4G1:1791345616.323299",
+            "slack:C048WV1BZTK:1790760528.861349",
+            "slack:C048WV1BZTK:1790759387.317919",
+            "slack:C048WV1BZTK:1790738411.984129",
+            "slack:C09A46W6ZN1:1780910309.130929",
+            "slack:C048WV1BZTK:1790300174.048749",
+            "slack:C048WV1BZTK:1790241975.889839",
+            "slack:C048WV1BZTK:1790214858.471089",
+            "slack:C048WV1BZTK:1790154409.822029",
+            "slack:C048WV1BZTK:1790154260.451289",
+            "slack:C048WV1BZTK:1790154485.125599",
+            "slack:C048WV1BZTK:1790153877.942759",
+            "slack:C048WV1BZTK:1791348317.264159",
+            "slack:C048WV1BZTK:1791348316.108889",
+            "slack:C048WV1BZTK:1791347994.098279",
+            "slack:C048WV1BZTK:1791287822.268139",
+            "slack:C048WV1BZTK:1791286716.896719",
+            "slack:C048WV1BZTK:1791287625.218079",
+            "slack:C048WV1BZTK:1791286026.062189",
+            "slack:C048WV1BZTK:1791286291.944479",
+            "slack:C048WV1BZTK:1791259115.973479",
+            "slack:C048WV1BZTK:1791257960.444179",
+            "slack:C048WV1BZTK:1791286664.367379",
+            "slack:C048WV1BZTK:1791287761.138989",
+            "slack:C048WV1BZTK:1790172827.196179",
+            "slack:C048WV1BZTK:1790172731.887589",
+            "slack:C048WV1BZTK:1791259058.573449",
+            "slack_file:F0C6U7D1B8V",
+            "slack_file:F0C6RS12Z9Q",
+            "slack_file:F0C7LBWKZ7S"
+          ]
+        },
+        "resolve-asker0": {
+          "status": 200,
+          "request_id": "ctx_c7kapsfmoewxvsqprd46",
+          "returned": [
+            "slack:C048WV1BZTK:1790153746.509909",
+            "slack:C048WV1BZTK:1791348317.264159",
+            "slack:C048WV1BZTK:1791348316.108889",
+            "slack:C048WV1BZTK:1791347994.098279",
+            "slack:C048WV1BZTK:1791287822.268139",
+            "slack:C048WV1BZTK:1791286716.896719",
+            "slack:C048WV1BZTK:1791287625.218079",
+            "slack:C048WV1BZTK:1791286026.062189",
+            "slack:C048WV1BZTK:1791286291.944479",
+            "slack:C048WV1BZTK:1791259115.973479",
+            "slack:C048WV1BZTK:1791259114.340249",
+            "slack:C048WV1BZTK:1791258200.764449",
+            "slack:C048WV1BZTK:1791257960.444179",
+            "slack:C048WV1BZTK:1790172766.810149",
+            "slack:C048WV1BZTK:1790172640.301779",
+            "slack:C048WV1BZTK:1791348098.394739",
+            "slack:C048WV1BZTK:1791286130.277719",
+            "slack:C048WV1BZTK:1791259058.573449",
+            "slack:C048WV1BZTK:1791258064.786589",
+            "slack:C02NA2MA5K5:1790843740.166339",
+            "slack:C02NA2MA5K5:1790825901.094749",
+            "slack:C048WV1BZTK:1790172827.196179",
+            "slack_file:F0C6U7D1B8V",
+            "slack_file:F0C6RS12Z9Q",
+            "slack_file:F0C7LBWKZ7S"
+          ]
+        },
+        "search-hybrid": {
+          "status": 200,
+          "request_id": "ctx_ybylodr76grei3zoza2x",
+          "returned": [
+            "slack:C048WV1BZTK:1790153746.509909",
+            "jira:PAY-2331",
+            "slack:C0B1BR522F5:1791463631.837989",
+            "slack:C06Q3JHUAUV:1791424419.523539",
+            "slack:CUV9EAYGY:1791276197.541269",
+            "jira:PAY-2398",
+            "slack:C06Q3JHUAUV:1790237700.543749",
+            "slack:C0597404MS6:1790185586.702809",
+            "slack:CUV9EAYGY:1790172757.058019",
+            "slack:CUV9EAYGY:1791440402.647959",
+            "jira:PAY-2325",
+            "slack:C06Q3JHUAUV:1788132628.151399",
+            "slack:C0597404MS6:1787899497.425479",
+            "slack:CUV9EAYGY:1787219898.908339",
+            "slack:CUV9EAYGY:1790676054.585849",
+            "slack:C02NA2MA5K5:1790050904.785109",
+            "jira:FBT-1535",
+            "slack:C06Q3JHUAUV:1789620565.964559",
+            "jira:PAY-2333",
+            "slack:C0597404MS6:1788767469.070699"
+          ]
+        }
+      }
+    }
+  }
+}

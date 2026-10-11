@@ -4,7 +4,7 @@ source_thread: https://wego.slack.com/archives/CUV9EAYGY/p1791450444383399
 asker_slack_id: U050BBA607M
 asker_eeid: 651
 needs_context: "yes"
-canonical_seeds: []
+canonical_seeds: ["slack:CUV9EAYGY:1791450444.383399","jira:PAY-1731"]
 requests:
     resolve-asker:
         body:
@@ -36,14 +36,83 @@ requests:
 labels:
     resolve:
         must: []
-        may: []
+        may:
+            - "slack:CUV9EAYGY:1791451477.204899"
+            - "slack:CUV9EAYGY:1791451461.420359"
+            - "slack:CUV9EAYGY:1791451239.302749"
+            - "slack:CUV9EAYGY:1791451091.892969"
+            - "slack:CUV9EAYGY:1791450962.102119"
+            - "slack:CUV9EAYGY:1791450921.440449"
+            - "slack:CUV9EAYGY:1791450747.940679"
+            - "slack:CUV9EAYGY:1791450602.968549"
+            - "slack:CUV9EAYGY:1791451481.417509"
+            - "slack:CUV9EAYGY:1791451480.889839"
+            - "slack:CUV9EAYGY:1791451466.513789"
+            - "slack:CUV9EAYGY:1791451269.136569"
+            - "slack:CUV9EAYGY:1791451191.069489"
+            - "slack:CUV9EAYGY:1791451190.773359"
+            - "slack:CUV9EAYGY:1791450997.689019"
+            - "slack:CUV9EAYGY:1791450942.219509"
+            - "slack:CUV9EAYGY:1791450940.864669"
+            - "slack:CUV9EAYGY:1791450777.535479"
+            - "slack:CUV9EAYGY:1791450775.579459"
+            - "slack:CUV9EAYGY:1791450678.215969"
+            - "slack:CUV9EAYGY:1791450496.411779"
+            - "slack:C0597404MS6:1791513032.902789"
+            - "slack:CUV9EAYGY:1791450988.936449"
+            - "slack:CUV9EAYGY:1791450445.967909"
+            - "slack:C09USC3U9A9:1791696903.725299"
         must_not: []
     search:
         must: []
-        may: []
+        may:
+            - "jira:PAY-2436"
+            - "gh_pr:wego/payments#2417"
+            - "slack:C0597404MS6:1791513032.902789"
+            - "slack:CUV9EAYGY:1791450988.936449"
+            - "slack:CUV9EAYGY:1791450445.967909"
+            - "slack:CUV9EAYGY:1791451800.631339"
+            - "slack:C0B1BR522F5:1791509470.292799"
+            - "slack:C09USC3U9A9:1791696783.677019"
+            - "gh_pr:wego/payments#1436"
+            - "gh_pr:wego/payments#1567"
+            - "gh_pr:wego/payments#1482"
         must_not: []
-label_reasons: {}
-labelled_by: none
+label_reasons:
+    "slack:CUV9EAYGY:1791451477.204899": "reply in the request thread; duplicates the thread body"
+    "slack:CUV9EAYGY:1791451461.420359": "reply in the request thread; duplicates the thread body"
+    "slack:CUV9EAYGY:1791451239.302749": "reply in the request thread; duplicates the thread body"
+    "slack:CUV9EAYGY:1791451091.892969": "reply in the request thread; duplicates the thread body"
+    "slack:CUV9EAYGY:1791450962.102119": "reply in the request thread; duplicates the thread body"
+    "slack:CUV9EAYGY:1791450921.440449": "reply in the request thread; duplicates the thread body"
+    "slack:CUV9EAYGY:1791450747.940679": "reply in the request thread; duplicates the thread body"
+    "slack:CUV9EAYGY:1791450602.968549": "reply in the request thread; duplicates the thread body"
+    "slack:CUV9EAYGY:1791451481.417509": "reply in the request thread; duplicates the thread body"
+    "slack:CUV9EAYGY:1791451480.889839": "reply in the request thread; duplicates the thread body"
+    "slack:CUV9EAYGY:1791451466.513789": "reply in the request thread; duplicates the thread body"
+    "slack:CUV9EAYGY:1791451269.136569": "reply in the request thread; duplicates the thread body"
+    "slack:CUV9EAYGY:1791451191.069489": "reply in the request thread; duplicates the thread body"
+    "slack:CUV9EAYGY:1791451190.773359": "reply in the request thread; duplicates the thread body"
+    "slack:CUV9EAYGY:1791450997.689019": "reply in the request thread; duplicates the thread body"
+    "slack:CUV9EAYGY:1791450942.219509": "reply in the request thread; duplicates the thread body"
+    "slack:CUV9EAYGY:1791450940.864669": "reply in the request thread; duplicates the thread body"
+    "slack:CUV9EAYGY:1791450777.535479": "reply in the request thread; duplicates the thread body"
+    "slack:CUV9EAYGY:1791450775.579459": "reply in the request thread; duplicates the thread body"
+    "slack:CUV9EAYGY:1791450678.215969": "reply in the request thread; duplicates the thread body"
+    "slack:CUV9EAYGY:1791450496.411779": "reply in the request thread; duplicates the thread body"
+    "slack:C0597404MS6:1791513032.902789": "PR thread implementing the later fix (created after the request; may, not must, by the as-of rule)"
+    "slack:CUV9EAYGY:1791450988.936449": "Jira creation notice for the follow-up bug; harmless"
+    "slack:CUV9EAYGY:1791450445.967909": "shared-link thread for the asked ticket with no discussion; harmless"
+    "slack:C09USC3U9A9:1791696903.725299": "reply in a related thread; harmless, not needed"
+    "jira:PAY-2436": "bug filed from this question (created after the request; may, not must, by the as-of rule)"
+    "gh_pr:wego/payments#2417": "PR fixing the asked translation gap (created after the request; may, not must, by the as-of rule)"
+    "slack:CUV9EAYGY:1791451800.631339": "sibling locale-resolution fix on the same message path; related"
+    "slack:C0B1BR522F5:1791509470.292799": "staging deploy of the fix PR; related"
+    "slack:C09USC3U9A9:1791696783.677019": "later probe thread listing PRs on the same availability code; harmless"
+    "gh_pr:wego/payments#1436": "PR that introduced communication-message translations; background"
+    "gh_pr:wego/payments#1567": "sibling phase PR (repository layer) of the same epic; background"
+    "gh_pr:wego/payments#1482": "translation update PR for another method; background"
+labelled_by: fable-draft
 checked_by: null
 notes: |-
     Jira question - trace PAY-1731 translated availability message; manifest variants: - note: include_bodies=true, asker_eeid 651 -> 6 artifacts, summary empty on all, seed body_len 14540 (16 replies, 12 EnzoBot references)

@@ -4,13 +4,49 @@ source_thread: https://wego.slack.com/archives/C0C6RMYH5U6/p1791284126466789
 asker_slack_id: U02FKR154T1
 asker_eeid: 334
 needs_context: yes
-canonical_seeds: []
+canonical_seeds: ["slack:C0C6RMYH5U6:1791284126.466789"]
 requests:
   resolve-asker0: {body: {seeds: ["https://wego.slack.com/archives/C0C6RMYH5U6/p1791284126466789"], query: &query "@EnzoBot. Give me a report about crypto payments in the last 3 months: acceptance, discovery clicks (if you can tell), cryptocurrency used, currency breakdown, POS breakdown. Trend.", depth: 2, include_bodies: false, asker_eeid: 0}, headers: {}}
   resolve-asker: {body: {seeds: ["https://wego.slack.com/archives/C0C6RMYH5U6/p1791284126466789"], query: *query, depth: 2, include_bodies: false, asker_eeid: 334}, headers: {}}
   search-hybrid: {params: {q: *query, match: hybrid, limit: 10, types: "slack,slack_thread,gh_pr,jira,cf,cf_page,gws,gws_doc,gdoc,wegohub,claude_artifact,pagerduty,sentry,datadog"}, headers: {}}
-labels: {resolve: {must: [], may: [], must_not: []}, search: {must: [], may: [], must_not: []}}
-label_reasons: {}
-labelled_by: none
+labels:
+    resolve:
+        must: []
+        may:
+            - "slack:C0C6RMYH5U6:1791355354.512909"
+            - "slack:C0C6RMYH5U6:1791292260.525959"
+            - "slack:C0C6RMYH5U6:1791361148.483229"
+            - "slack:C0C6RMYH5U6:1791361015.454359"
+            - "slack:C0C6RMYH5U6:1791301666.911449"
+            - "slack:C0C6RMYH5U6:1791293382.685849"
+            - "slack:C0C6RMYH5U6:1791293379.608379"
+            - "slack:C0C6RMYH5U6:1791293344.921329"
+            - "slack:C0C6RMYH5U6:1791284277.083159"
+            - "slack:C0C6RMYH5U6:1791284272.892279"
+            - "slack_file:F0C77G3SZHS"
+            - "slack_file:F0C74G9SJ01"
+        must_not: []
+    search:
+        must: []
+        may:
+            - "slack:C05RNSE8TBR:1787624960.795129"
+            - "slack:C0C6RMYH5U6:1791707896.766609"
+        must_not: []
+label_reasons:
+    "slack:C0C6RMYH5U6:1791355354.512909": "reply in the request thread; duplicates the thread body"
+    "slack:C0C6RMYH5U6:1791292260.525959": "reply in the request thread; duplicates the thread body"
+    "slack:C0C6RMYH5U6:1791361148.483229": "reply in the request thread; duplicates the thread body"
+    "slack:C0C6RMYH5U6:1791361015.454359": "reply in the request thread; duplicates the thread body"
+    "slack:C0C6RMYH5U6:1791301666.911449": "reply in the request thread; duplicates the thread body"
+    "slack:C0C6RMYH5U6:1791293382.685849": "reply in the request thread; duplicates the thread body"
+    "slack:C0C6RMYH5U6:1791293379.608379": "reply in the request thread; duplicates the thread body"
+    "slack:C0C6RMYH5U6:1791293344.921329": "reply in the request thread; duplicates the thread body"
+    "slack:C0C6RMYH5U6:1791284277.083159": "reply in the request thread; duplicates the thread body"
+    "slack:C0C6RMYH5U6:1791284272.892279": "reply in the request thread; duplicates the thread body"
+    "slack_file:F0C77G3SZHS": "file posted in the request thread; harmless, not needed"
+    "slack_file:F0C74G9SJ01": "file posted in the request thread; harmless, not needed"
+    "slack:C05RNSE8TBR:1787624960.795129": "earlier request for a crypto trend report; related"
+    "slack:C0C6RMYH5U6:1791707896.766609": "weekly payment performance report; related"
+labelled_by: fable-draft
 checked_by: null
 notes: "Draft from EnzoBot bot_mentions; labels await oracle preparation and owner review."

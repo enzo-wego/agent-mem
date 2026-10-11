@@ -4,13 +4,102 @@ source_thread: https://wego.slack.com/archives/C0C6RMYH5U6/p1791432306826199
 asker_slack_id: UUK3WPNNQ
 asker_eeid: 259
 needs_context: yes
-canonical_seeds: []
+canonical_seeds: ["slack:C0C6RMYH5U6:1791432306.826199"]
 requests:
   resolve-asker0: {body: {seeds: ["https://wego.slack.com/archives/C0C6RMYH5U6/p1791432306826199"], query: &query "@EnzoBot can you compare this with yours and review the details and see do we have any improvement or optimizations required.", depth: 2, include_bodies: false, asker_eeid: 0}, headers: {}}
   resolve-asker: {body: {seeds: ["https://wego.slack.com/archives/C0C6RMYH5U6/p1791432306826199"], query: *query, depth: 2, include_bodies: false, asker_eeid: 259}, headers: {}}
   search-hybrid: {params: {q: *query, match: hybrid, limit: 10, types: "slack,slack_thread,gh_pr,jira,cf,cf_page,gws,gws_doc,gdoc,wegohub,claude_artifact,pagerduty,sentry,datadog"}, headers: {}}
-labels: {resolve: {must: [], may: [], must_not: []}, search: {must: [], may: [], must_not: []}}
-label_reasons: {}
-labelled_by: none
+labels:
+    resolve:
+        must:
+            - "slack:C05RNSE8TBR:1790834828.596929"
+        may:
+            - "slack:C0C6RMYH5U6:1791437332.984619"
+            - "slack:C0C6RMYH5U6:1791437156.280619"
+            - "slack:C0C6RMYH5U6:1791437304.597919"
+            - "slack:C05RNSE8TBR:1791208343.030929"
+            - "slack:C05RNSE8TBR:1791199187.749279"
+            - "slack:C05RNSE8TBR:1791275549.204199"
+            - "slack:C05RNSE8TBR:1790836255.188369"
+            - "slack:C05RNSE8TBR:1791208802.105439"
+            - "slack:C05RNSE8TBR:1791273919.254379"
+            - "slack:C05RNSE8TBR:1791285847.167609"
+            - "slack:C05RNSE8TBR:1791280728.055209"
+            - "slack:C05RNSE8TBR:1791275862.630959"
+            - "slack:C05RNSE8TBR:1791204654.260619"
+            - "slack:C05RNSE8TBR:1791208581.280589"
+            - "slack:C05RNSE8TBR:1791208548.628709"
+            - "slack:C05RNSE8TBR:1791204174.484819"
+            - "slack:C05RNSE8TBR:1791203271.429169"
+            - "slack:C05RNSE8TBR:1790940763.733369"
+            - "slack:C05RNSE8TBR:1791205585.835889"
+            - "slack:C05RNSE8TBR:1790836272.972269"
+            - "slack:C05RNSE8TBR:1790940207.301819"
+            - "slack:C05RNSE8TBR:1790836298.828969"
+            - "slack:C05RNSE8TBR:1791285247.315549"
+            - "slack:C05RNSE8TBR:1791204714.706519"
+            - "slack:C05RNSE8TBR:1791286327.219409"
+            - "slack:C05RNSE8TBR:1791285553.438069"
+            - "slack:C05RNSE8TBR:1791277313.359689"
+            - "slack:C05RNSE8TBR:1791275930.373949"
+            - "slack:C05RNSE8TBR:1791276890.218429"
+            - "slack:C05RNSE8TBR:1791275771.798879"
+            - "slack:C05RNSE8TBR:1791275987.293559"
+            - "slack:C05RNSE8TBR:1791208421.846449"
+            - "slack:C05RNSE8TBR:1791199528.045029"
+            - "slack:C05RNSE8TBR:1790835507.061979"
+            - "slack:C05RNSE8TBR:1791284780.236479"
+            - "slack:C05RNSE8TBR:1791283392.773919"
+            - "slack:C0C6RMYH5U6:1791428761.127289"
+            - "slack:C0C6RMYH5U6:1791356438.494459"
+            - "slack:C05RNSE8TBR:1791272672.072949"
+        must_not: []
+    search:
+        must:
+            - "slack:C05RNSE8TBR:1790834828.596929"
+        may: []
+        must_not: []
+label_reasons:
+    "slack:C05RNSE8TBR:1790834828.596929": "thread holding the report spec and the requester's guidance the comparison is judged by"
+    "slack:C0C6RMYH5U6:1791437332.984619": "reply in the request thread; duplicates the thread body"
+    "slack:C0C6RMYH5U6:1791437156.280619": "reply in the request thread; duplicates the thread body"
+    "slack:C0C6RMYH5U6:1791437304.597919": "reply in the request thread; duplicates the thread body"
+    "slack:C05RNSE8TBR:1791208343.030929": "reply in the report spec or channel-move threads; duplicates those thread bodies"
+    "slack:C05RNSE8TBR:1791199187.749279": "reply in the report spec or channel-move threads; duplicates those thread bodies"
+    "slack:C05RNSE8TBR:1791275549.204199": "reply in the report spec or channel-move threads; duplicates those thread bodies"
+    "slack:C05RNSE8TBR:1790836255.188369": "reply in the report spec or channel-move threads; duplicates those thread bodies"
+    "slack:C05RNSE8TBR:1791208802.105439": "reply in the report spec or channel-move threads; duplicates those thread bodies"
+    "slack:C05RNSE8TBR:1791273919.254379": "reply in the report spec or channel-move threads; duplicates those thread bodies"
+    "slack:C05RNSE8TBR:1791285847.167609": "reply in the report spec or channel-move threads; duplicates those thread bodies"
+    "slack:C05RNSE8TBR:1791280728.055209": "reply in the report spec or channel-move threads; duplicates those thread bodies"
+    "slack:C05RNSE8TBR:1791275862.630959": "reply in the report spec or channel-move threads; duplicates those thread bodies"
+    "slack:C05RNSE8TBR:1791204654.260619": "reply in the report spec or channel-move threads; duplicates those thread bodies"
+    "slack:C05RNSE8TBR:1791208581.280589": "reply in the report spec or channel-move threads; duplicates those thread bodies"
+    "slack:C05RNSE8TBR:1791208548.628709": "reply in the report spec or channel-move threads; duplicates those thread bodies"
+    "slack:C05RNSE8TBR:1791204174.484819": "reply in the report spec or channel-move threads; duplicates those thread bodies"
+    "slack:C05RNSE8TBR:1791203271.429169": "reply in the report spec or channel-move threads; duplicates those thread bodies"
+    "slack:C05RNSE8TBR:1790940763.733369": "reply in the report spec or channel-move threads; duplicates those thread bodies"
+    "slack:C05RNSE8TBR:1791205585.835889": "reply in the report spec or channel-move threads; duplicates those thread bodies"
+    "slack:C05RNSE8TBR:1790836272.972269": "reply in the report spec or channel-move threads; duplicates those thread bodies"
+    "slack:C05RNSE8TBR:1790940207.301819": "reply in the report spec or channel-move threads; duplicates those thread bodies"
+    "slack:C05RNSE8TBR:1790836298.828969": "reply in the report spec or channel-move threads; duplicates those thread bodies"
+    "slack:C05RNSE8TBR:1791285247.315549": "reply in the report spec or channel-move threads; duplicates those thread bodies"
+    "slack:C05RNSE8TBR:1791204714.706519": "reply in the report spec or channel-move threads; duplicates those thread bodies"
+    "slack:C05RNSE8TBR:1791286327.219409": "reply in the report spec or channel-move threads; duplicates those thread bodies"
+    "slack:C05RNSE8TBR:1791285553.438069": "reply in the report spec or channel-move threads; duplicates those thread bodies"
+    "slack:C05RNSE8TBR:1791277313.359689": "reply in the report spec or channel-move threads; duplicates those thread bodies"
+    "slack:C05RNSE8TBR:1791275930.373949": "reply in the report spec or channel-move threads; duplicates those thread bodies"
+    "slack:C05RNSE8TBR:1791276890.218429": "reply in the report spec or channel-move threads; duplicates those thread bodies"
+    "slack:C05RNSE8TBR:1791275771.798879": "reply in the report spec or channel-move threads; duplicates those thread bodies"
+    "slack:C05RNSE8TBR:1791275987.293559": "reply in the report spec or channel-move threads; duplicates those thread bodies"
+    "slack:C05RNSE8TBR:1791208421.846449": "reply in the report spec or channel-move threads; duplicates those thread bodies"
+    "slack:C05RNSE8TBR:1791199528.045029": "reply in the report spec or channel-move threads; duplicates those thread bodies"
+    "slack:C05RNSE8TBR:1790835507.061979": "reply in the report spec or channel-move threads; duplicates those thread bodies"
+    "slack:C05RNSE8TBR:1791284780.236479": "reply in the report spec or channel-move threads; duplicates those thread bodies"
+    "slack:C05RNSE8TBR:1791283392.773919": "reply in the report spec or channel-move threads; duplicates those thread bodies"
+    "slack:C0C6RMYH5U6:1791428761.127289": "EnzoBot's own report for the same day; narrowed to may by owner decision"
+    "slack:C0C6RMYH5U6:1791356438.494459": "EnzoBot's report for the previous day; related"
+    "slack:C05RNSE8TBR:1791272672.072949": "thread moving the report to the new channel; related"
+labelled_by: fable-draft
 checked_by: null
 notes: "Draft from EnzoBot bot_mentions; no customer reference is stored in this file."

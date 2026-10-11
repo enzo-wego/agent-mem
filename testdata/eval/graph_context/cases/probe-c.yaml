@@ -4,7 +4,7 @@ source_thread: https://wego.slack.com/archives/CUV9EAYGY/p1791457916047199
 asker_slack_id: U061HHMF540
 asker_eeid: 708
 needs_context: "yes"
-canonical_seeds: []
+canonical_seeds: ["slack:CUV9EAYGY:1791457916.047199"]
 requests:
     resolve-asker:
         body:
@@ -34,13 +34,89 @@ requests:
 labels:
     resolve:
         must: []
-        may: []
+        may:
+            - "slack:CUV9EAYGY:1791533811.944289"
+            - "slack:CUV9EAYGY:1791458025.371499"
+            - "slack:CUV9EAYGY:1791542196.005369"
+            - "slack:CUV9EAYGY:1791541976.891199"
+            - "slack:CUV9EAYGY:1791460328.625519"
+            - "slack:CUV9EAYGY:1791533995.991159"
+            - "slack:CUV9EAYGY:1791534307.004119"
+            - "slack:CUV9EAYGY:1791534193.684319"
+            - "slack:CUV9EAYGY:1791459070.197569"
+            - "slack:CUV9EAYGY:1791458795.104789"
+            - "slack:CUV9EAYGY:1791458520.589749"
+            - "slack:CUV9EAYGY:1791458282.087379"
+            - "slack:CUV9EAYGY:1791534041.001449"
+            - "slack:CUV9EAYGY:1791458413.214069"
+            - "slack:CUV9EAYGY:1791533813.572179"
+            - "slack:CUV9EAYGY:1791533867.767679"
+            - "slack:CUV9EAYGY:1791457981.996339"
+            - "slack:CUV9EAYGY:1791542217.229509"
+            - "slack:CUV9EAYGY:1791542009.345359"
+            - "slack:CUV9EAYGY:1791534334.989269"
+            - "slack:CUV9EAYGY:1791534331.006169"
+            - "slack:CUV9EAYGY:1791534238.167139"
+            - "slack:CUV9EAYGY:1791534231.097049"
+            - "slack:CUV9EAYGY:1791458676.330479"
+            - "slack:CUV9EAYGY:1791458620.365939"
+            - "slack:CUV9EAYGY:1791458428.081349"
+            - "slack:CUV9EAYGY:1791458119.490709"
+            - "slack:CUV9EAYGY:1791458667.701669"
+            - "slack:C0597404MS6:1791463615.025999"
+            - "slack:C0B1BR522F5:1791463631.837989"
+            - "slack:C0BFH54Q1UG:1791459052.551399"
+            - "slack_file:F0C80V3EA2W"
         must_not: []
     search:
         must: []
-        may: []
-        must_not: []
-label_reasons: {}
-labelled_by: none
+        may:
+            - "slack:CUV9EAYGY:1791458667.701669"
+            - "slack:C0597404MS6:1791463615.025999"
+            - "slack:C0B1BR522F5:1791463631.837989"
+            - "jira:PAY-2438"
+            - "slack:C0BFH54Q1UG:1791459052.551399"
+            - "slack:C0597404MS6:1791507558.099699"
+            - "gh_pr:wego/payments#2418"
+        must_not:
+            - "slack:C05RNSE8TBR:1711438647.937599"
+label_reasons:
+    "slack:CUV9EAYGY:1791533811.944289": "reply in the request thread; duplicates the thread body"
+    "slack:CUV9EAYGY:1791458025.371499": "reply in the request thread; duplicates the thread body"
+    "slack:CUV9EAYGY:1791542196.005369": "reply in the request thread; duplicates the thread body"
+    "slack:CUV9EAYGY:1791541976.891199": "reply in the request thread; duplicates the thread body"
+    "slack:CUV9EAYGY:1791460328.625519": "reply in the request thread; duplicates the thread body"
+    "slack:CUV9EAYGY:1791533995.991159": "reply in the request thread; duplicates the thread body"
+    "slack:CUV9EAYGY:1791534307.004119": "reply in the request thread; duplicates the thread body"
+    "slack:CUV9EAYGY:1791534193.684319": "reply in the request thread; duplicates the thread body"
+    "slack:CUV9EAYGY:1791459070.197569": "reply in the request thread; duplicates the thread body"
+    "slack:CUV9EAYGY:1791458795.104789": "reply in the request thread; duplicates the thread body"
+    "slack:CUV9EAYGY:1791458520.589749": "reply in the request thread; duplicates the thread body"
+    "slack:CUV9EAYGY:1791458282.087379": "reply in the request thread; duplicates the thread body"
+    "slack:CUV9EAYGY:1791534041.001449": "reply in the request thread; duplicates the thread body"
+    "slack:CUV9EAYGY:1791458413.214069": "reply in the request thread; duplicates the thread body"
+    "slack:CUV9EAYGY:1791533813.572179": "reply in the request thread; duplicates the thread body"
+    "slack:CUV9EAYGY:1791533867.767679": "reply in the request thread; duplicates the thread body"
+    "slack:CUV9EAYGY:1791457981.996339": "reply in the request thread; duplicates the thread body"
+    "slack:CUV9EAYGY:1791542217.229509": "reply in the request thread; duplicates the thread body"
+    "slack:CUV9EAYGY:1791542009.345359": "reply in the request thread; duplicates the thread body"
+    "slack:CUV9EAYGY:1791534334.989269": "reply in the request thread; duplicates the thread body"
+    "slack:CUV9EAYGY:1791534331.006169": "reply in the request thread; duplicates the thread body"
+    "slack:CUV9EAYGY:1791534238.167139": "reply in the request thread; duplicates the thread body"
+    "slack:CUV9EAYGY:1791534231.097049": "reply in the request thread; duplicates the thread body"
+    "slack:CUV9EAYGY:1791458676.330479": "reply in the request thread; duplicates the thread body"
+    "slack:CUV9EAYGY:1791458620.365939": "reply in the request thread; duplicates the thread body"
+    "slack:CUV9EAYGY:1791458428.081349": "reply in the request thread; duplicates the thread body"
+    "slack:CUV9EAYGY:1791458119.490709": "reply in the request thread; duplicates the thread body"
+    "slack:CUV9EAYGY:1791458667.701669": "delivery thread of the follow-up ticket's PR; related"
+    "slack:C0597404MS6:1791463615.025999": "review thread of the follow-up ticket's PR; related"
+    "slack:C0B1BR522F5:1791463631.837989": "staging deploy of the follow-up PR; related"
+    "slack:C0BFH54Q1UG:1791459052.551399": "question sent to the partner about name and BIN, linked from the thread (created after the request; may, not must, by the as-of rule)"
+    "slack_file:F0C80V3EA2W": "partner's emailed answer on which card fields they return (created after the request; may, not must, by the as-of rule)"
+    "jira:PAY-2438": "ticket filed from this question (created after the request; may, not must, by the as-of rule)"
+    "slack:C0597404MS6:1791507558.099699": "review reminder for the follow-up PR; harmless"
+    "gh_pr:wego/payments#2418": "PR persisting the partner card fields; related"
+    "slack:C05RNSE8TBR:1711438647.937599": "card-field behaviour of a different partner (2024); could be mistaken for this partner's"
+labelled_by: fable-draft
 checked_by: null
 notes: 'Payment ref lookup - cardholder name, last 4 and BIN for payment [payment-ref]; manifest variants: - note: include_bodies=true, asker_eeid 708 -> 27 artifacts, summary empty on all'

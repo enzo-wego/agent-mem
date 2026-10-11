@@ -4,13 +4,23 @@ source_thread: https://wego.slack.com/archives/C08S954G2LX/p1791537007335589
 asker_slack_id: U050BBA607M
 asker_eeid: 651
 needs_context: no
-canonical_seeds: []
+canonical_seeds: ["slack:C08S954G2LX:1791537007.335589"]
 requests:
   resolve-asker0: {body: {seeds: ["https://wego.slack.com/archives/C08S954G2LX/p1791537007335589"], query: &query "@EnzoBot I see that it has recovered.", depth: 2, include_bodies: false, asker_eeid: 0}, headers: {}}
   resolve-asker: {body: {seeds: ["https://wego.slack.com/archives/C08S954G2LX/p1791537007335589"], query: *query, depth: 2, include_bodies: false, asker_eeid: 651}, headers: {}}
   search-hybrid: {params: {q: *query, match: hybrid, limit: 10, types: "slack,slack_thread,gh_pr,jira,cf,cf_page,gws,gws_doc,gdoc,wegohub,claude_artifact,pagerduty,sentry,datadog"}, headers: {}}
-labels: {resolve: {must: [], may: [], must_not: []}, search: {must: [], may: [], must_not: []}}
-label_reasons: {}
-labelled_by: none
+labels:
+    resolve:
+        must: []
+        may: []
+        must_not: []
+    search:
+        must: []
+        may: []
+        must_not:
+            - "slack:C08S954G2LX:1779709917.613979"
+label_reasons:
+    "slack:C08S954G2LX:1779709917.613979": "a different, older alert in the same channel; could be taken as the recovered incident"
+labelled_by: fable-draft
 checked_by: null
 notes: "Draft no-context control from EnzoBot bot_mentions."

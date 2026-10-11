@@ -4,7 +4,7 @@ source_thread: https://wego.slack.com/archives/C05RNSE8TBR/p1790939932438779
 asker_slack_id: U02FKR154T1
 asker_eeid: 334
 needs_context: "yes"
-canonical_seeds: []
+canonical_seeds: ["slack:C05RNSE8TBR:1790939932.438779"]
 requests:
     resolve-asker:
         body:
@@ -34,13 +34,56 @@ requests:
 labels:
     resolve:
         must: []
-        may: []
+        may:
+            - "slack:C05RNSE8TBR:1790942130.270409"
+            - "slack:C05RNSE8TBR:1790941210.728679"
+            - "slack:C05RNSE8TBR:1790943083.687859"
+            - "slack:C05RNSE8TBR:1790942914.401419"
+            - "slack:C05RNSE8TBR:1790942213.248299"
+            - "slack:C05RNSE8TBR:1790942210.515429"
+            - "slack:C05RNSE8TBR:1790941299.964119"
+            - "slack:C05RNSE8TBR:1790940451.899889"
+            - "slack:C05RNSE8TBR:1790940449.063589"
+            - "slack:C05RNSE8TBR:1790940436.360089"
+            - "slack:C05RNSE8TBR:1790940435.284529"
+            - "slack:C05RNSE8TBR:1790940037.684539"
+            - "slack:C05RNSE8TBR:1790940448.775739"
+            - "slack:C05RNSE8TBR:1790940448.483419"
+            - "slack:C05RNSE8TBR:1788259009.515069"
+            - "slack:C05RNSE8TBR:1787558178.483839"
+            - "slack:C05RNSE8TBR:1788444667.445439"
+            - "slack_file:F0C6ATMC7MX"
+            - "slack_file:F0C690FMW10"
         must_not: []
     search:
         must: []
-        may: []
-        must_not: []
-label_reasons: {}
-labelled_by: none
+        may:
+            - "slack:C05RNSE8TBR:1788259009.515069"
+            - "slack:C05RNSE8TBR:1787558178.483839"
+            - "slack:C05RNSE8TBR:1788444667.445439"
+        must_not:
+            - "slack:C0C6RMYH5U6:1791515190.996339"
+label_reasons:
+    "slack:C05RNSE8TBR:1790942130.270409": "reply in the request thread; duplicates the thread body"
+    "slack:C05RNSE8TBR:1790941210.728679": "reply in the request thread; duplicates the thread body"
+    "slack:C05RNSE8TBR:1790943083.687859": "reply in the request thread; duplicates the thread body"
+    "slack:C05RNSE8TBR:1790942914.401419": "reply in the request thread; duplicates the thread body"
+    "slack:C05RNSE8TBR:1790942213.248299": "reply in the request thread; duplicates the thread body"
+    "slack:C05RNSE8TBR:1790942210.515429": "reply in the request thread; duplicates the thread body"
+    "slack:C05RNSE8TBR:1790941299.964119": "reply in the request thread; duplicates the thread body"
+    "slack:C05RNSE8TBR:1790940451.899889": "reply in the request thread; duplicates the thread body"
+    "slack:C05RNSE8TBR:1790940449.063589": "reply in the request thread; duplicates the thread body"
+    "slack:C05RNSE8TBR:1790940436.360089": "reply in the request thread; duplicates the thread body"
+    "slack:C05RNSE8TBR:1790940435.284529": "reply in the request thread; duplicates the thread body"
+    "slack:C05RNSE8TBR:1790940037.684539": "reply in the request thread; duplicates the thread body"
+    "slack:C05RNSE8TBR:1790940448.775739": "reply in the request thread; duplicates the thread body"
+    "slack:C05RNSE8TBR:1790940448.483419": "reply in the request thread; duplicates the thread body"
+    "slack:C05RNSE8TBR:1788259009.515069": "fraud-review agenda that first asked about the threshold change; background"
+    "slack:C05RNSE8TBR:1787558178.483839": "thread where the threshold was raised; background"
+    "slack:C05RNSE8TBR:1788444667.445439": "earlier analysis of the same threshold change; helpful, narrowed to may by owner decision"
+    "slack_file:F0C6ATMC7MX": "file posted in the request thread; harmless, not needed"
+    "slack_file:F0C690FMW10": "file posted in the request thread; harmless, not needed"
+    "slack:C0C6RMYH5U6:1791515190.996339": "different Sift incident (issuer rule, October); could be conflated with the score band"
+labelled_by: fable-draft
 checked_by: null
 notes: 'Data question - Sift fraud-score band 90-92.99 after threshold raise to 93; manifest variants: - note: resolve with query "Sift fraud score threshold 90 to 93 unblocked band performance", asker_eeid 334, no include_bodies -> 6 artifacts, score_breakdown.sem = 0 on every artifact'
