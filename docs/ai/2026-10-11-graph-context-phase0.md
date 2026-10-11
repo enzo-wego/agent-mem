@@ -265,7 +265,9 @@ Resolve enqueues body fetches on a cache miss (`handlers/resolve.go:424-427`). N
 header `X-Graph-No-Side-Effects: 1` (and body field `no_side_effects: true` on
 resolve; header wins if both are sent) skips that enqueue and every other database
 write and job enqueue in the resolve and search request paths, except the trace row.
-`eval` always sends it. Default behaviour unchanged.
+`eval` always sends it. Default behaviour unchanged. Header values `1` and `true`
+(case-insensitive) turn it on; any other non-empty value turns it off and still wins
+over the body field; an absent or empty header defers to the body field.
 
 - Scope: database writes and job enqueues. **Process-local in-memory caches are
   excluded** (for example the ACL scope cache filled by `acl.Builder.For`,
