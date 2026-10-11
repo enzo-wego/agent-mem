@@ -6,7 +6,7 @@ asker_eeid: 259
 needs_context: no
 canonical_seeds: ["slack:CUV9EAYGY:1790758198.678459"]
 requests:
-  resolve-asker0: {body: {seeds: ["https://wego.slack.com/archives/CUV9EAYGY/p1790758198678459"], query: &query "@EnzoBot which site code here?", depth: 2, include_bodies: false, asker_eeid: 0}, headers: {}}
+  resolve-admin: {body: {seeds: ["https://wego.slack.com/archives/CUV9EAYGY/p1790758198678459"], query: &query "@EnzoBot which site code here?", depth: 2, include_bodies: false, asker_eeid: 0}, headers: {}}
   resolve-asker: {body: {seeds: ["https://wego.slack.com/archives/CUV9EAYGY/p1790758198678459"], query: *query, depth: 2, include_bodies: false, asker_eeid: 259}, headers: {}}
   search-hybrid: {params: {q: *query, match: hybrid, limit: 10, types: "slack,slack_thread,gh_pr,jira,cf,cf_page,gws,gws_doc,gdoc,wegohub,claude_artifact,pagerduty,sentry,datadog"}, headers: {}}
 labels:

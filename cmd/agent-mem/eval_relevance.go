@@ -166,11 +166,11 @@ func runRelevance(cmd *cobra.Command, o relevanceOpts) error {
 		fmt.Fprintln(out)
 		seeds := setOf(c.CanonicalSeeds)
 		for _, name := range evalVariants {
-			method, pathURL, body, err := buildEvalRequest(c.evalCase, name)
+			method, pathURL, body, headers, err := buildEvalRequest(c.evalCase, name)
 			if err != nil {
 				return err
 			}
-			fmt.Fprintf(out, "  %s: %s %s headers={X-Graph-Caller:eval,X-Graph-No-Side-Effects:1} body=%s\n", name, method, pathURL, string(body))
+			fmt.Fprintf(out, "  %s: %s %s headers=%s body=%s\n", name, method, pathURL, formatEvalHeaders(evalRequestHeaders(headers)), string(body))
 			if o.DryRun {
 				continue
 			}
@@ -178,7 +178,7 @@ func runRelevance(cmd *cobra.Command, o relevanceOpts) error {
 			agg.Cases++
 			res := perCaseResult{CaseID: c.ID, Variant: name, NeedsContext: c.NeedsContext, Unlabelled: unlabelled, NonSeed: []string{}, Runs: []evalRunResult{}}
 
-			warm := client.do(method, pathURL, body)
+			warm := client.do(method, pathURL, body, headers)
 			if warm.RequestID() != "" {
 				requestIDs = append(requestIDs, warm.RequestID())
 			}
@@ -192,7 +192,7 @@ func runRelevance(cmd *cobra.Command, o relevanceOpts) error {
 			distinct := map[string]bool{}
 			okRuns := 0
 			for i := 1; i <= evalMeasuredRuns; i++ {
-				call := client.do(method, pathURL, body)
+				call := client.do(method, pathURL, body, headers)
 				run := evalRunResult{Ms: float64(call.Dur.Microseconds()) / 1000}
 				var ret evalReturn
 				if call.Err == nil {

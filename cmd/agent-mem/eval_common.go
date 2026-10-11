@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -21,7 +22,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-var evalVariants = []string{"resolve-asker0", "resolve-asker", "search-hybrid"}
+var evalVariants = []string{"resolve-admin", "resolve-asker", "search-hybrid"}
 
 const evalRequestTimeout = 10 * time.Second
 
@@ -74,12 +75,51 @@ func casesSHA(raws [][]byte) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
+// evalVariantHeaders are the ACL headers a variant sends. resolve-admin is the
+// unfiltered comparison arm (admin header); resolve-asker names the asker in
+// its body; search-hybrid names the case's asker eeid in X-Asker-User. The
+// admin header is never sent with a real asker.
+func evalVariantHeaders(c evalCase, name string) map[string]string {
+	switch name {
+	case "resolve-admin":
+		return map[string]string{"X-Graph-Admin": "1"}
+	case "search-hybrid":
+		return map[string]string{"X-Asker-User": strconv.Itoa(c.AskerEEID)}
+	}
+	return map[string]string{}
+}
+
+// evalRequestHeaders merges the harness headers with a variant's ACL headers.
+// The HTTP path and the dry-run output both use this one value.
+func evalRequestHeaders(extra map[string]string) map[string]string {
+	out := map[string]string{"X-Graph-Caller": "eval", "X-Graph-No-Side-Effects": "1"}
+	for k, v := range extra {
+		out[k] = v
+	}
+	return out
+}
+
+// formatEvalHeaders renders headers as {K:V,...} in key order.
+func formatEvalHeaders(h map[string]string) string {
+	keys := make([]string, 0, len(h))
+	for k := range h {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	parts := make([]string, len(keys))
+	for i, k := range keys {
+		parts[i] = k + ":" + h[k]
+	}
+	return "{" + strings.Join(parts, ",") + "}"
+}
+
 // buildEvalRequest returns the HTTP request for one named variant of a case.
-func buildEvalRequest(c evalCase, name string) (method, pathURL string, body []byte, err error) {
+func buildEvalRequest(c evalCase, name string) (method, pathURL string, body []byte, headers map[string]string, err error) {
 	req, ok := c.Requests[name]
 	if !ok {
-		return "", "", nil, fmt.Errorf("%s: missing %s", c.ID, name)
+		return "", "", nil, nil, fmt.Errorf("%s: missing %s", c.ID, name)
 	}
+	headers = evalVariantHeaders(c, name)
 	if name == "search-hybrid" {
 		values := url.Values{}
 		keys := make([]string, 0, len(req.Params))
@@ -90,10 +130,10 @@ func buildEvalRequest(c evalCase, name string) (method, pathURL string, body []b
 		for _, k := range keys {
 			values.Set(k, fmt.Sprint(req.Params[k]))
 		}
-		return http.MethodGet, "/api/graph/search?" + values.Encode(), nil, nil
+		return http.MethodGet, "/api/graph/search?" + values.Encode(), nil, headers, nil
 	}
 	body, _ = json.Marshal(req.Body)
-	return http.MethodPost, "/api/graph/resolve", body, nil
+	return http.MethodPost, "/api/graph/resolve", body, headers, nil
 }
 
 // readDotEnv parses KEY=VALUE lines (optional `export`, quotes, # comments).
@@ -160,13 +200,14 @@ func newEvalClient(base, key string) *evalClient {
 
 // do sends one eval request (always no-side-effects, caller=eval). Err is set
 // for transport errors, timeouts and non-2xx statuses.
-func (e *evalClient) do(method, pathURL string, body []byte) evalCall {
+func (e *evalClient) do(method, pathURL string, body []byte, extra map[string]string) evalCall {
 	req, err := http.NewRequest(method, e.base+pathURL, bytes.NewReader(body))
 	if err != nil {
 		return evalCall{Err: err}
 	}
-	req.Header.Set("X-Graph-Caller", "eval")
-	req.Header.Set("X-Graph-No-Side-Effects", "1")
+	for k, v := range evalRequestHeaders(extra) {
+		req.Header.Set(k, v)
+	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}

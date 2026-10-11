@@ -15,7 +15,7 @@ requests:
             seeds:
                 - https://wego.slack.com/archives/CUV9EAYGY/p1791457916047199
         headers: {}
-    resolve-asker0:
+    resolve-admin:
         body:
             asker_eeid: 0
             depth: 2

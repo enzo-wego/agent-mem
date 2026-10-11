@@ -16,7 +16,7 @@ requests:
                 - https://wego.slack.com/archives/C0597404MS6/p1791519992938819
                 - https://github.com/wego/payments/pull/2424
         headers: {}
-    resolve-asker0:
+    resolve-admin:
         body:
             asker_eeid: 0
             depth: 2

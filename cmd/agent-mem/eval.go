@@ -125,7 +125,7 @@ func importProbes() error {
 		if p.UseCase == "UC9" {
 			needsContext = "no"
 		}
-		c := evalCase{ID: p.ID, UseCase: p.UseCase, SourceThread: p.SourceThread, AskerSlackID: p.AskerSlackUID, AskerEEID: p.AskerEEID, NeedsContext: needsContext, Requests: map[string]evalRequest{"resolve-asker0": {Body: zero, Headers: map[string]string{}}, "resolve-asker": {Body: real, Headers: map[string]string{}}, "search-hybrid": {Params: params, Headers: map[string]string{}}}, Labels: map[string]evalLabels{"resolve": {}, "search": {}}, LabelReasons: map[string]string{}, LabelledBy: "none", CheckedBy: nil, Notes: notes}
+		c := evalCase{ID: p.ID, UseCase: p.UseCase, SourceThread: p.SourceThread, AskerSlackID: p.AskerSlackUID, AskerEEID: p.AskerEEID, NeedsContext: needsContext, Requests: map[string]evalRequest{"resolve-admin": {Body: zero, Headers: map[string]string{}}, "resolve-asker": {Body: real, Headers: map[string]string{}}, "search-hybrid": {Params: params, Headers: map[string]string{}}}, Labels: map[string]evalLabels{"resolve": {}, "search": {}}, LabelReasons: map[string]string{}, LabelledBy: "none", CheckedBy: nil, Notes: notes}
 		out, err := yaml.Marshal(c)
 		if err != nil {
 			return err
