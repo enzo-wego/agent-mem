@@ -19,6 +19,7 @@ type observedRequest struct {
 	escapedPath string
 	query       string
 	auth        string
+	caller      string
 	contentType string
 	body        map[string]any
 }
@@ -34,6 +35,7 @@ func TestClient_ProxiesGraphEndpoints(t *testing.T) {
 			escapedPath: r.URL.EscapedPath(),
 			query:       r.URL.RawQuery,
 			auth:        r.Header.Get("Authorization"),
+			caller:      r.Header.Get("X-Graph-Caller"),
 			contentType: r.Header.Get("Content-Type"),
 		}
 		if r.Body != nil {
@@ -126,6 +128,9 @@ func TestClient_ProxiesGraphEndpoints(t *testing.T) {
 		}
 		if got.auth != "Bearer worker-secret" {
 			t.Errorf("request %d Authorization = %q", i, got.auth)
+		}
+		if got.caller != "mcp" {
+			t.Errorf("request %d X-Graph-Caller = %q", i, got.caller)
 		}
 		if want.contentType != "" && got.contentType != want.contentType {
 			t.Errorf("request %d Content-Type = %q, want %q", i, got.contentType, want.contentType)

@@ -38,6 +38,8 @@ type hybridResult struct {
 	PRs              []prRef            `json:"prs,omitempty"`
 	LinkedVia        string             `json:"linked_via,omitempty"`
 	LinkedViaTitle   string             `json:"linked_via_title,omitempty"`
+	titleSource      string
+	summarySource    string
 }
 
 // hybridResponse is the /search?match=hybrid envelope: the page's
@@ -126,6 +128,8 @@ WHERE (channel_id, thread_ts) IN (SELECT unnest($1::text[]), unnest($2::text[]))
 			Summary: r.Summary, Purpose: r.Purpose, Score: r.Score, ScoreBreakdown: r.ScoreBreakdown,
 			Author: r.Author, CreatedAt: r.CreatedAt, Match: []string{},
 		}
+		res.titleSource = "node_title"
+		res.summarySource = "artifact_index"
 		for _, arm := range []string{armKeyword, armSemantic} {
 			if _, ok := r.ScoreBreakdown.Ranks[arm]; ok {
 				res.Match = append(res.Match, arm)
@@ -137,6 +141,7 @@ WHERE (channel_id, thread_ts) IN (SELECT unnest($1::text[]), unnest($2::text[]))
 		}
 		if res.Title == "" {
 			res.Title = firstLine(bodies[r.NodeID], 120)
+			res.titleSource = "body_first_line"
 		}
 		if root := roots[r.NodeID]; root != "" {
 			res.ThreadRoot = root
@@ -168,9 +173,11 @@ WHERE (channel_id, thread_ts) IN (SELECT unnest($1::text[]), unnest($2::text[]))
 			if ts, ok := sums[ch+":"+t]; ok {
 				if ts.summary != "" {
 					out[i].Title = ts.summary
+					out[i].titleSource = "thread_summary"
 				}
 				if ts.overview != "" {
 					out[i].Summary = ts.overview
+					out[i].summarySource = "overview"
 				}
 				out[i].Decisions, out[i].OpenQuestions = decodeThreadDecisions(ch, t, ts.dec, ts.oq)
 			}

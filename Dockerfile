@@ -1,9 +1,10 @@
 FROM golang:1.25-alpine AS builder
+ARG BUILD_REV=unknown
 WORKDIR /build
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 go build -o agent-mem ./cmd/agent-mem/
+RUN CGO_ENABLED=0 go build -ldflags "-X main.buildRev=${BUILD_REV}" -o agent-mem ./cmd/agent-mem/
 
 # node:22-slim (Debian Bookworm) ships node + npm preinstalled. We use them
 # only to install the LiteParse CLI; the binary itself is a native artifact

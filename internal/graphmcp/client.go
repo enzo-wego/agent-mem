@@ -184,6 +184,7 @@ func (c *Client) doJSON(
 	if c.apiKey != "" {
 		request.Header.Set("Authorization", "Bearer "+c.apiKey)
 	}
+	request.Header.Set("X-Graph-Caller", "mcp")
 
 	response, err := c.httpClient.Do(request)
 	if err != nil {

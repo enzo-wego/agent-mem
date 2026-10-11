@@ -15,6 +15,7 @@ import (
 	"github.com/agent-mem/agent-mem/internal/graph/identity"
 	"github.com/agent-mem/agent-mem/internal/graph/jobs"
 	"github.com/agent-mem/agent-mem/internal/graph/normalizer"
+	graphtrace "github.com/agent-mem/agent-mem/internal/graph/trace"
 )
 
 // GeminiClient is the minimal interface handlers need. *gemini.Client satisfies
@@ -32,15 +33,17 @@ type GeminiClient interface {
 // Deps groups the shared dependencies needed by all handlers. Wired once at
 // worker boot.
 type Deps struct {
-	DB          *pgxpool.Pool
-	Logger      zerolog.Logger
-	MachineID   string
-	Fetchers    *fetchers.Registry
-	Normalizers *normalizer.Registry
-	Extractor   *extractor.Extractor
-	Identity    *identity.Service
-	Gemini      GeminiClient
-	LiteParse   LiteParseConfig
+	DB            *pgxpool.Pool
+	Logger        zerolog.Logger
+	MachineID     string
+	Fetchers      *fetchers.Registry
+	Normalizers   *normalizer.Registry
+	Extractor     *extractor.Extractor
+	Identity      *identity.Service
+	Gemini        GeminiClient
+	TraceRecorder *graphtrace.Recorder
+	BuildRev      string
+	LiteParse     LiteParseConfig
 
 	// Hot-topic alerts (Feature: topic subscriptions → enzobot DM).
 	SlackBotToken string // bot token used to DM via chat.postMessage

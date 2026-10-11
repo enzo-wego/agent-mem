@@ -19,6 +19,7 @@ import (
 )
 
 var version = "dev"
+var buildRev string
 
 func main() {
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr})
@@ -57,6 +58,7 @@ func main() {
 			console := zerolog.ConsoleWriter{Out: os.Stderr}
 			bufWriter := zerolog.ConsoleWriter{Out: logBuf, NoColor: true}
 			log.Logger = log.Output(io.MultiWriter(console, bufWriter))
+			worker.BuildRev = buildRev
 
 			srv, err := worker.NewServer(cfg, logBuf)
 			if err != nil {
@@ -377,6 +379,8 @@ func main() {
 		newReindexHeuristicCmd(func() *config.Config { return cfg }),
 		newEntitiesCmd(func() *config.Config { return cfg }),
 		newMCPCmd(func() *config.Config { return cfg }),
+		newEvalCmd(),
+		newTraceCmd(func() *config.Config { return cfg }),
 	)
 
 	if err := rootCmd.Execute(); err != nil {

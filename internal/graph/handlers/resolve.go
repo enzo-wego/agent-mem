@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"errors"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/zerolog/log"
 
@@ -28,6 +30,7 @@ type resolveRequest struct {
 	Depth         int      `json:"depth"`
 	BudgetTokens  int      `json:"budget_tokens"`
 	IncludeBodies bool     `json:"include_bodies"`
+	NoSideEffects bool     `json:"no_side_effects,omitempty"`
 	// Epic keys and/or business ("payments") to scope the result to; see
 	// epicScopeKeys. Seeds themselves are not filtered.
 	Epic     []string `json:"epic,omitempty"`
@@ -76,10 +79,11 @@ type resolveTrace struct {
 
 // Resolve handles POST /api/graph/resolve.
 type Resolve struct {
-	db      *pgxpool.Pool
-	aclBld  *acl.Builder
-	exp     *bfs.Expander
-	weights scoring.Weights
+	db                 *pgxpool.Pool
+	aclBld             *acl.Builder
+	exp                *bfs.Expander
+	weights            scoring.Weights
+	enqueueFetchBodyFn func(context.Context, string)
 }
 
 // NewResolve creates a Resolve handler.
@@ -88,12 +92,14 @@ func NewResolve(db *pgxpool.Pool) (*Resolve, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Resolve{
+	h := &Resolve{
 		db:      db,
 		aclBld:  acl.NewBuilder(db, 5*time.Minute),
 		exp:     bfs.NewExpander(db),
 		weights: w,
-	}, nil
+	}
+	h.enqueueFetchBodyFn = h.enqueueFetchBody
+	return h, nil
 }
 
 var resolveStructuralKinds = map[string]bool{
@@ -424,30 +430,79 @@ WHERE n.id = $1 AND n.deleted_at IS NULL`, s).Scan(
 		resp.Artifacts = append(resp.Artifacts, seed)
 	}
 	// Enqueue fetch_body jobs for misses (so subsequent calls are fast).
-	for _, m := range missed {
-		h.enqueueFetchBody(ctx, m)
+	// Eval calls explicitly suppress this graph mutation. An explicit header
+	// overrides the body field so transports can enforce one policy.
+	noSideEffects := req.NoSideEffects
+	if value := r.Header.Get("X-Graph-No-Side-Effects"); value != "" {
+		noSideEffects = value == "1"
+	}
+	if !noSideEffects {
+		for _, m := range missed {
+			h.enqueueFetchBodyFn(ctx, m)
+		}
+	}
+
+	if diag, _ := ctx.Value(requestTraceDiagKey{}).(*requestTraceDiag); diag != nil {
+		diag.itemMeta = make(map[string]map[string]any, len(resp.Artifacts))
+		seedSet := make(map[string]bool, len(canonSeeds))
+		for _, id := range canonSeeds {
+			seedSet[id] = true
+		}
+		ids := make([]string, 0, len(resp.Artifacts))
+		returnedBodyBytes := make(map[string]int, len(resp.Artifacts))
+		for _, artifact := range resp.Artifacts {
+			ids = append(ids, artifact.NodeID)
+			if artifact.Body != "" {
+				returnedBodyBytes[artifact.NodeID] = len([]byte(artifact.Body))
+			}
+		}
+		rows, err := h.db.Query(ctx, `
+SELECT n.id, NULLIF(n.title,'') IS NOT NULL, octet_length(b.body_full)
+FROM graph.nodes n
+LEFT JOIN graph.artifact_bodies b ON b.node_id=n.id
+WHERE n.id=ANY($1)`, ids)
+		if err == nil {
+			for rows.Next() {
+				var id string
+				var nodeTitle bool
+				var fullBytes *int
+				if rows.Scan(&id, &nodeTitle, &fullBytes) == nil {
+					titleSource := "thread_summary"
+					if nodeTitle {
+						titleSource = "node"
+					}
+					meta := map[string]any{"is_seed": seedSet[id], "title_source": titleSource, "body_truncated": false}
+					if returned, ok := returnedBodyBytes[id]; ok && fullBytes != nil {
+						meta["body_truncated"] = returned < *fullBytes
+					}
+					diag.itemMeta[id] = meta
+				}
+			}
+			rows.Close()
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
 }
 
-func (h *Resolve) canonicalizeSeeds(ctx context.Context, seeds []string) []string {
-	seeds = h.expandEpicSeeds(ctx, seeds)
+type seedQuerier interface {
+	Query(context.Context, string, ...any) (pgx.Rows, error)
+	QueryRow(context.Context, string, ...any) pgx.Row
+}
+
+// CanonicalizeSeeds resolves URLs, promotes Slack replies to roots, and expands
+// epic seeds through q. ErrNoRows is an expected no-match; diagnostics contain
+// only real database errors.
+func CanonicalizeSeeds(ctx context.Context, q seedQuerier, seeds []string) ([]string, []error) {
+	seeds, diagnostics := expandEpicSeeds(ctx, q, seeds)
 	resolved := make([]string, 0, len(seeds))
 	for _, seed := range seeds {
 		canonical := seed
 		if strings.Contains(seed, "://") {
-			// A pasted Slack permalink resolves to its canonical node id from the
-			// path alone, so ?thread_ts=…&cid=… and #fragments don't defeat the
-			// match; the reply→thread-root promotion below then puts the root's
-			// files at hop 1.
 			if sid := slackNodeIDFromURL(seed); sid != "" {
 				canonical = sid
 			} else {
-				// Jira links canonicalize by key even when the node has no stored
-				// URL. selectedIssue wins because it identifies the issue open in
-				// board and backlog panels.
 				if parsed, err := url.Parse(seed); err == nil && parsed.Hostname() == "wegomushi.atlassian.net" {
 					key := parsed.Query().Get("selectedIssue")
 					if key == "" {
@@ -458,9 +513,6 @@ func (h *Resolve) canonicalizeSeeds(ctx context.Context, seeds []string) []strin
 					}
 				}
 				if canonical == seed {
-					// GitHub PR links canonicalize by repo and number even when the node has
-					// no stored url (940 of 1706 gh_pr nodes on 2026-10-03). Only host+path is
-					// matched, so /files, ?query and #fragment don't matter.
 					if parsed, err := url.Parse(seed); err == nil && parsed.Hostname() == "github.com" {
 						if prID := nodeIDFromURL(parsed.Host+parsed.Path, "github"); prID != "" {
 							canonical = prID
@@ -468,50 +520,47 @@ func (h *Resolve) canonicalizeSeeds(ctx context.Context, seeds []string) []strin
 					}
 				}
 				if canonical == seed {
-					// Non-Slack: match the bare stored url too (tracking params
-					// like ?utm_source=… must not break the lookup); the raw url
-					// is compared as well, so a stored url with a legitimate
-					// query still matches.
-					_ = h.db.QueryRow(ctx, `
-SELECT id
-FROM graph.nodes
+					err := q.QueryRow(ctx, `
+SELECT id FROM graph.nodes
 WHERE url IN ($1, $2) AND deleted_at IS NULL
-ORDER BY updated_at DESC
-LIMIT 1
-`, seed, stripQueryFragment(seed)).Scan(&canonical)
+ORDER BY updated_at DESC LIMIT 1`, seed, stripQueryFragment(seed)).Scan(&canonical)
+					if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+						diagnostics = append(diagnostics, err)
+					}
 				}
 			}
 			if strings.Contains(canonical, "://") {
 				continue
 			}
 		}
-
 		if strings.HasPrefix(canonical, "slack:") {
 			var rootID string
-			if err := h.db.QueryRow(ctx, `
-SELECT root.id
-FROM graph.nodes reply
+			err := q.QueryRow(ctx, `
+SELECT root.id FROM graph.nodes reply
 JOIN graph.nodes root
   ON root.id = 'slack:' || split_part(reply.id, ':', 2) || ':' ||
                NULLIF(reply.metadata->>'thread_ts', '')
  AND root.deleted_at IS NULL
-WHERE reply.id = $1
-  AND reply.deleted_at IS NULL
-LIMIT 1
-`, canonical).Scan(&rootID); err == nil {
+WHERE reply.id = $1 AND reply.deleted_at IS NULL LIMIT 1`, canonical).Scan(&rootID)
+			if err == nil {
 				canonical = rootID
+			} else if !errors.Is(err, pgx.ErrNoRows) {
+				diagnostics = append(diagnostics, err)
 			}
 		}
 		resolved = append(resolved, canonical)
 	}
+	return resolved, diagnostics
+}
+
+func (h *Resolve) canonicalizeSeeds(ctx context.Context, seeds []string) []string {
+	resolved, _ := CanonicalizeSeeds(ctx, h.db, seeds)
 	return resolved
 }
 
-// expandEpicSeeds replaces an `epic:PAY-2307` seed with the epic node plus its
-// epic_self members (the issues under it), so the BFS starts from the whole
-// epic rather than one ticket. Unknown epics expand to nothing.
-func (h *Resolve) expandEpicSeeds(ctx context.Context, seeds []string) []string {
+func expandEpicSeeds(ctx context.Context, q seedQuerier, seeds []string) ([]string, []error) {
 	out := make([]string, 0, len(seeds))
+	var diagnostics []error
 	for _, seed := range seeds {
 		key, ok := strings.CutPrefix(seed, "epic:")
 		if !ok {
@@ -519,22 +568,28 @@ func (h *Resolve) expandEpicSeeds(ctx context.Context, seeds []string) []string 
 			continue
 		}
 		key = strings.ToUpper(strings.TrimSpace(key))
-		rows, err := h.db.Query(ctx, `
+		rows, err := q.Query(ctx, `
 SELECT node_id FROM graph.epic_membership
 WHERE epic_key = $1 AND via = $2
 ORDER BY (node_id = 'jira:' || $1) DESC, node_id`, key, viaEpicSelf)
 		if err != nil {
+			diagnostics = append(diagnostics, err)
 			continue
 		}
 		for rows.Next() {
 			var id string
-			if rows.Scan(&id) == nil {
-				out = append(out, id)
+			if err := rows.Scan(&id); err != nil {
+				diagnostics = append(diagnostics, err)
+				continue
 			}
+			out = append(out, id)
+		}
+		if err := rows.Err(); err != nil {
+			diagnostics = append(diagnostics, err)
 		}
 		rows.Close()
 	}
-	return out
+	return out, diagnostics
 }
 
 type scoredCand struct {

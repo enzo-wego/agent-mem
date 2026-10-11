@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/agent-mem/agent-mem/internal/gemini"
+	graphtrace "github.com/agent-mem/agent-mem/internal/graph/trace"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -55,6 +56,9 @@ func TestResolveSearchCompatibility(t *testing.T) {
 	if _, err := pool.Exec(context.Background(), string(fixture)); err != nil {
 		t.Fatalf("load compatibility fixture: %v", err)
 	}
+	if _, err := pool.Exec(context.Background(), `DELETE FROM public.settings WHERE key LIKE 'graph.weights.%' OR key LIKE 'graph.boost.alpha.%' OR key = 'graph.search.graph_arm_weight'`); err != nil {
+		t.Fatal(err)
+	}
 
 	fixed := time.Date(2026, 10, 11, 0, 0, 0, 0, time.UTC)
 	oldNow := nowFunc
@@ -68,6 +72,8 @@ func TestResolveSearchCompatibility(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	recorder := graphtrace.NewRecorder(discardTraceStore{}, graphtrace.Options{})
+	t.Cleanup(func() { recorder.Close(time.Second) })
 	cases := []compatibilityCase{
 		{"resolve-hit", http.MethodPost, "/api/graph/resolve", `{"seeds":["slack:CGC0:100.000001"],"query":"phase zero","depth":2,"include_bodies":true}`, "", resolve},
 		{"resolve-reply-seed", http.MethodPost, "/api/graph/resolve", `{"seeds":["slack:CGC0:101.000001"],"depth":2}`, "", resolve},
@@ -86,50 +92,80 @@ func TestResolveSearchCompatibility(t *testing.T) {
 				req.Header.Set("X-Asker-User", tc.asker)
 			}
 			rw := httptest.NewRecorder()
-			tc.handler.ServeHTTP(rw, req)
+			route := "search"
+			if tc.method == http.MethodPost {
+				route = "resolve"
+			}
+			withContextTrace(tc.handler, route, "compatibility", recorder).ServeHTTP(rw, req)
 			got := compatibilityEnvelope{Status: rw.Code, ContentType: rw.Header().Get("Content-Type"), Body: normalizeCompatibilityBody(t, rw.Body.Bytes())}
 			golden := filepath.Join("testdata", "compatibility", tc.name+".golden.json")
 			if os.Getenv("UPDATE_GOLDEN") == "1" {
 				data, _ := json.MarshalIndent(got, "", "  ")
-				if err := os.MkdirAll(filepath.Dir(golden), 0o755); err != nil { t.Fatal(err) }
-				if err := os.WriteFile(golden, append(data, '\n'), 0o644); err != nil { t.Fatal(err) }
+				if err := os.MkdirAll(filepath.Dir(golden), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(golden, append(data, '\n'), 0o644); err != nil {
+					t.Fatal(err)
+				}
 			}
 			wantBytes, err := os.ReadFile(golden)
-			if err != nil { t.Fatal(err) }
+			if err != nil {
+				t.Fatal(err)
+			}
 			var want compatibilityEnvelope
-			if err := json.Unmarshal(wantBytes, &want); err != nil { t.Fatal(err) }
-			if !reflect.DeepEqual(got, want) { t.Fatalf("response changed\ngot:  %s\nwant: %s", compatibilityJSON(got), compatibilityJSON(want)) }
+			if err := json.Unmarshal(wantBytes, &want); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("response changed\ngot:  %s\nwant: %s", compatibilityJSON(got), compatibilityJSON(want))
+			}
 			assertNoResolveScoreTies(t, got.Body)
 		})
 	}
 }
 
 type compatibilityEnvelope struct {
-	Status int `json:"status"`
+	Status      int    `json:"status"`
 	ContentType string `json:"content_type"`
-	Body any `json:"body"`
+	Body        any    `json:"body"`
 }
 
 func normalizeCompatibilityBody(t *testing.T, body []byte) any {
 	t.Helper()
 	var v any
-	if json.Unmarshal(body, &v) != nil { return string(body) }
+	if json.Unmarshal(body, &v) != nil {
+		return string(body)
+	}
 	if top, ok := v.(map[string]any); ok {
 		delete(top, "request_id")
-		if trace, ok := top["graph_trace"].(map[string]any); ok { trace["took_ms"] = float64(0) }
-		for k := range top { if len(k) >= 3 && k[len(k)-3:] == "_ms" { top[k] = float64(0) } }
+		if trace, ok := top["graph_trace"].(map[string]any); ok {
+			trace["took_ms"] = float64(0)
+		}
+		for k := range top {
+			if len(k) >= 3 && k[len(k)-3:] == "_ms" {
+				top[k] = float64(0)
+			}
+		}
 	}
 	return v
 }
 
 func assertNoResolveScoreTies(t *testing.T, body any) {
 	t.Helper()
-	top, ok := body.(map[string]any); if !ok { return }
-	items, ok := top["artifacts"].([]any); if !ok { return }
+	top, ok := body.(map[string]any)
+	if !ok {
+		return
+	}
+	items, ok := top["artifacts"].([]any)
+	if !ok {
+		return
+	}
 	seen := map[float64]bool{}
 	for _, raw := range items {
 		score, _ := raw.(map[string]any)["score"].(float64)
-		if seen[score] { t.Fatalf("fixture has tied resolve score %v", score) }
+		if seen[score] {
+			t.Fatalf("fixture has tied resolve score %v", score)
+		}
 		seen[score] = true
 	}
 }
@@ -137,8 +173,12 @@ func assertNoResolveScoreTies(t *testing.T, body any) {
 func compatibilityJSON(v any) string { b, _ := json.Marshal(v); return string(b) }
 
 func TestCompatibilityFixtureHashIsStable(t *testing.T) {
-	b, err := os.ReadFile(compatibilityFixture); if err != nil { t.Fatal(err) }
+	b, err := os.ReadFile(compatibilityFixture)
+	if err != nil {
+		t.Fatal(err)
+	}
 	got := fmt.Sprintf("%x", sha256.Sum256(b))
-	if len(got) != 64 { t.Fatal(got) }
+	if len(got) != 64 {
+		t.Fatal(got)
+	}
 }
-

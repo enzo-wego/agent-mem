@@ -17,22 +17,27 @@ import (
 // header is always filtered; unresolved identities and lookup/build errors see
 // only public and unscoped nodes. Identity remains advisory; see router.go.
 func askerScopeSet(ctx context.Context, db *pgxpool.Pool, bld *acl.Builder, askerRef string) (eeid int, scopeSet map[string]bool, noFilter bool) {
+	eeid, scopeSet, noFilter, _ = askerScopeSetDiag(ctx, db, bld, askerRef)
+	return
+}
+
+func askerScopeSetDiag(ctx context.Context, db *pgxpool.Pool, bld *acl.Builder, askerRef string) (eeid int, scopeSet map[string]bool, noFilter bool, membershipErr error) {
 	if strings.TrimSpace(askerRef) == "" {
-		return 0, nil, true
+		return 0, nil, true, nil
 	}
 	eeid, err := lookupAsker(ctx, db, askerRef)
 	if err != nil || eeid == 0 {
-		return 0, map[string]bool{"public": true}, false
+		return 0, map[string]bool{"public": true}, false, nil
 	}
 	scopeSet = map[string]bool{"public": true}
 	scopes, err := bld.For(ctx, eeid)
 	if err != nil {
-		return eeid, scopeSet, false // fail closed
+		return eeid, scopeSet, false, err
 	}
 	for _, s := range scopes {
 		scopeSet[s] = true
 	}
-	return eeid, scopeSet, false
+	return eeid, scopeSet, false, nil
 }
 
 // scopeVisible reports whether a node with the given scope is readable. It is
