@@ -121,10 +121,15 @@ WHERE em.issue_key = $1 AND em.epic_key <> '' AND b.brief <> ''`, issue).Scan(&e
 const hubFallbackTimeout = 1500 * time.Millisecond
 
 // epicBriefFromHub asks the hub for the issue's epic: GET
-// <SyncURL>/api/graph/epic/<issue> with the machine's API key and no
-// X-Asker-User (the machine owner's own session, same trust as the sync
-// engine). Any error, timeout, non-200 or empty brief yields "".
+// <SyncURL>/api/graph/epic/<issue> with the machine's API key and the asker
+// from AGENT_MEM_ASKER (trimmed) as X-Asker-User. With no asker set it makes
+// no request and returns no brief. It never sends X-Graph-Admin. Any error,
+// timeout, non-200 or empty brief yields "".
 func epicBriefFromHub(ctx context.Context, cfg *config.Config, issue string) (epicKey, title, brief string) {
+	asker := strings.TrimSpace(os.Getenv("AGENT_MEM_ASKER"))
+	if asker == "" {
+		return "", "", ""
+	}
 	ctx, cancel := context.WithTimeout(ctx, hubFallbackTimeout)
 	defer cancel()
 	u := strings.TrimRight(strings.TrimSpace(cfg.SyncURL), "/") + "/api/graph/epic/" + url.PathEscape(issue)
@@ -133,6 +138,7 @@ func epicBriefFromHub(ctx context.Context, cfg *config.Config, issue string) (ep
 		return "", "", ""
 	}
 	req.Header.Set("Authorization", "Bearer "+cfg.APIKey)
+	req.Header.Set("X-Asker-User", asker)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return "", "", ""

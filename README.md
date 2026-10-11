@@ -719,6 +719,7 @@ Because the server runs inside the worker container, pass the value into it:
 `docker exec -i -e AGENT_MEM_ASKER=U0123ABCD agent-mem-worker-1 agent-mem mcp`
 (over ssh, put the whole command in one quoted string so the variable is set on
 the remote side).
+The session-start epic brief (hub fallback) uses the same `AGENT_MEM_ASKER`; without it no brief is fetched.
 
 - `graph_search` discovers candidate Slack threads, Jira issues, pull requests,
   and documents.

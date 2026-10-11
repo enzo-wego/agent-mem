@@ -318,8 +318,10 @@ Worker: acl-worker, 2026-10-11, branch `feat/graph-context-phase1-acl` (base `48
 1. `internal/context/epic_brief.go` (session-start hub fallback on every laptop) calls
    `GET /api/graph/epic/<issue>` with the API key and no asker. After deploy it gets
    `403 asker_required`, so the epic brief silently disappears from session context.
-   NOT changed: it needs a decision (send an asker, or send the admin header from every
-   laptop). Its test still expects no `X-Asker-User`.
+   NOT changed at first; fixed in a follow-up: `epicBriefFromHub` now reads
+   `AGENT_MEM_ASKER` (trimmed). Empty: no HTTP call, no brief. Otherwise it sends it as
+   `X-Asker-User` and never the admin header. Test covers set (header present, no admin)
+   and unset (no request).
 2. `cmd/agent-mem/trace.go` (`agent-mem trace stats --base-url`) calls
    `/api/graph/traces/stats`, now admin-only. One line: it sends `X-Graph-Admin: 1`
    (without it the writer-counters line degrades to "unavailable (HTTP 403)").
