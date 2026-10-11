@@ -67,6 +67,27 @@ type slackAttachment struct {
 	Text       string      `json:"text"`
 	Fallback   string      `json:"fallback"`
 	Files      []slackFile `json:"files"`
+
+	IsShare     bool   `json:"is_share"`
+	IsMsgUnfurl bool   `json:"is_msg_unfurl"`
+	FromURL     string `json:"from_url"`
+	OriginalURL string `json:"original_url"`
+	ChannelID   string `json:"channel_id"`
+	Ts          string `json:"ts"`
+}
+
+// SlackShareURL returns the permalink of a shared/forwarded Slack message.
+func SlackShareURL(fromURL, originalURL, channelID, ts string) string {
+	if fromURL != "" {
+		return fromURL
+	}
+	if originalURL != "" {
+		return originalURL
+	}
+	if channelID != "" && ts != "" {
+		return "https://wego.slack.com/archives/" + channelID + "/p" + strings.Replace(ts, ".", "", 1)
+	}
+	return ""
 }
 
 type slackFile struct {
@@ -102,7 +123,11 @@ func (f *slackFetcher) Fetch(ctx context.Context, node string) (FetchedBody, err
 			if text == "" {
 				text = at.Fallback
 			}
-			if at.AuthorName == "" && at.Title == "" && text == "" {
+			shareURL := ""
+			if at.IsShare || at.IsMsgUnfurl {
+				shareURL = SlackShareURL(at.FromURL, at.OriginalURL, at.ChannelID, at.Ts)
+			}
+			if at.AuthorName == "" && at.Title == "" && text == "" && shareURL == "" {
 				continue
 			}
 			sb.WriteString("\n\n--- shared")
@@ -110,6 +135,9 @@ func (f *slackFetcher) Fetch(ctx context.Context, node string) (FetchedBody, err
 				sb.WriteString(" from " + at.AuthorName)
 			}
 			sb.WriteString(" ---\n")
+			if shareURL != "" {
+				sb.WriteString(shareURL + "\n")
+			}
 			if at.Title != "" {
 				sb.WriteString(at.Title + "\n")
 			}
