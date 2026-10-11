@@ -355,8 +355,10 @@ func matchAt(s string, i, limit int, force bool) (end int, mask string) {
 	p := i
 	plus := false
 	opens := 0
+	pct := false
 	if pw := plusStart(s, p, true); pw > 0 {
 		plus = true
+		pct = pw == 3
 		p += pw
 		if p < limit && s[p] == '(' {
 			opens++
@@ -400,6 +402,17 @@ func matchAt(s string, i, limit int, force bool) (end int, mask string) {
 			nr++
 		}
 		sep := normSep(s[q:r])
+		if pct && nr == 0 && q < limit {
+			// Form/URL-encoded phone: '+' and %20 are spaces, %2D is a hyphen.
+			switch {
+			case s[q:min(q+3, len(s))] == "%20":
+				r, sep = q+3, " "
+			case s[q:min(q+3, len(s))] == "%2D" || s[q:min(q+3, len(s))] == "%2d":
+				r, sep = q+3, "-"
+			case s[q] == '+':
+				r, sep = q+1, " "
+			}
+		}
 		if wr, _ := digitAt(s, min(r, len(s)-1)); r >= limit || wr == 0 || !phoneSeps[sep] {
 			break
 		}

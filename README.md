@@ -677,7 +677,7 @@ them. Phones: `+` and 8-15 digits, or 7-15 digits after a label (`phone`, `tel`,
 valid JSON document becomes `500 {"error":"mask_failed"}`. Traces of masked
 responses carry `acl_mode=filtered-masked:v1`; `agent-mem trace show` does not replay
 their digests. Accepted false negatives: unlabelled local phone numbers without `+`,
-digits inside a real URL path (e.g. `wa.me/6591234567`), PII inside URL syntax (`url?4111…`, `url?tel=9123…`, digits after `#` `/` `=` `&` `-` `~` `*`, glued `url006591…`), zero-width characters, soft hyphen, U+2011 or U+2007 inside a digit run, unlabelled non-Luhn digit runs, numbers glued to letters, emails written with spaces
+digits inside a real URL path (e.g. `wa.me/6591234567`), PII inside URL syntax (`url?4111…`, `url?tel=9123…`, digits after `#` `/` `=` `&` `-` `~` `*`, glued `url006591…`), zero-width characters, soft hyphen, U+2011 or U+2007 inside a digit run, double-encoded `%252B…` phones, `%2B` glued to a node id (`jira:PAY-1%2B65…`), a plus glued to a letter (`a%2B65…`, `x+(65)…`), out-of-range date-shaped `+` digit runs (`+2010-12-34-5678`), unlabelled non-Luhn digit runs, numbers glued to letters, emails written with spaces
 or "at", customer names. Accepted over-masking: an unlabelled Luhn-valid 13-19 digit
 run that is really an id but not in a protected shape; an email inside a node id or
 URL, so non-admin callers cannot follow such ids.

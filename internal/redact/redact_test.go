@@ -243,6 +243,13 @@ func TestMaskFixRound3(t *testing.T) {
 		{"date plus kept", "https://wiki.example/display/X/Incident+2026-10-12+Payments", "https://wiki.example/display/X/Incident+2026-10-12+Payments"},
 		{"date title kept", "Incident+2026-10-12+Payments", "Incident+2026-10-12+Payments"},
 		{"spaced plus phone masked", "+65 9123 4567", "[phone]"},
+		{"pct2B form plus seps", "phone=%2B65+9123+4567&x=1", "phone=[phone]&x=1"},
+		{"pct2B form plus seps sa", "phone=%2B966+50+123+4567", "phone=[phone]"},
+		{"pct2B form plus seps us", "phone=%2B1+202+555+0143", "phone=[phone]"},
+		{"pct2B form in url", "https://x/?phone=%2B65+9123+4567", "https://x/?phone=[phone]"},
+		{"pct2B pct20 seps", "curl -d 'phone=%2B65%209123%204567'", "curl -d 'phone=[phone]'"},
+		{"pct2B pct2D seps", "to=%2B65%2D9123%2D4567", "to=[phone]"},
+		{"double encoded residual", "x=%252B6591234567", "x=%252B6591234567"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

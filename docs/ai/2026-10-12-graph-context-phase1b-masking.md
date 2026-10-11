@@ -236,3 +236,10 @@ Review: `docs/reviews/2026-10-12-graph-context-phase1b-masking-code-r3.md`.
 - **Over-masking:** a `+` followed by `YYYY-MM-DD` is not a phone (`Incident+2026-10-12+Payments` unchanged); `+65 9123 4567` still masked.
 - **Tests:** `TestMaskFixRound3`.
 - Residual risks accepted (README): PII inside URL syntax, zero-width/soft-hyphen characters inside digit runs.
+
+## Fix round 4 (code review r4 F2 remainder)
+
+Review: `docs/reviews/2026-10-12-graph-context-phase1b-masking-code-r4.md`.
+
+- **F2 (HIGH):** when the plus came from `%2B`/`%2b`, `matchAt` also accepts `+` and `%20` as a space separator and `%2D`/`%2d` as a hyphen, only when no ordinary separator rune was read (form-encoded `phone=%2B65+9123+4567`). Must-mask rows added to `TestMaskFixRound3`; double-encoded `%252B…` stays an accepted residual.
+- **README accepted false negatives:** double-encoded `%252B`, `%2B` glued to a node id, plus glued to a letter, out-of-range date-shaped `+` digit runs.
