@@ -7,8 +7,10 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
+	"github.com/agent-mem/agent-mem/internal/graph/fetchers"
 	"github.com/agent-mem/agent-mem/internal/graph/identity"
 	"github.com/agent-mem/agent-mem/internal/graph/ids"
 	"github.com/agent-mem/agent-mem/internal/graph/jobs"
@@ -139,6 +141,52 @@ type slackMessage struct {
 	ReplyUsers []string    `json:"reply_users"`
 	Files      []slackFile `json:"files"`
 	Edited     *struct{}   `json:"edited"`
+
+	Attachments []slackAttachment `json:"attachments"`
+}
+
+// slackAttachment is the subset of a Slack message attachment needed to link
+// shared/forwarded messages to their source.
+type slackAttachment struct {
+	AuthorName  string `json:"author_name"`
+	Text        string `json:"text"`
+	Fallback    string `json:"fallback"`
+	IsShare     bool   `json:"is_share"`
+	IsMsgUnfurl bool   `json:"is_msg_unfurl"`
+	FromURL     string `json:"from_url"`
+	OriginalURL string `json:"original_url"`
+	ChannelID   string `json:"channel_id"`
+	Ts          string `json:"ts"`
+}
+
+// buildSlackBackfillBody returns the normalized message text plus one block per
+// share attachment, so the source permalink reaches the edge extractor.
+func buildSlackBackfillBody(normalizedText string, atts []slackAttachment, normalize func(string) string) string {
+	var sb strings.Builder
+	sb.WriteString(normalizedText)
+	for _, at := range atts {
+		if !at.IsShare && !at.IsMsgUnfurl {
+			continue
+		}
+		url := fetchers.SlackShareURL(at.FromURL, at.OriginalURL, at.ChannelID, at.Ts)
+		text := at.Text
+		if text == "" {
+			text = at.Fallback
+		}
+		if at.AuthorName == "" && text == "" && url == "" {
+			continue
+		}
+		sb.WriteString("\n\n--- shared")
+		if at.AuthorName != "" {
+			sb.WriteString(" from " + at.AuthorName)
+		}
+		sb.WriteString(" ---\n")
+		if url != "" {
+			sb.WriteString(url + "\n")
+		}
+		sb.WriteString(normalize(text))
+	}
+	return sb.String()
 }
 
 // slackFile is a file attachment in a Slack message.
@@ -286,6 +334,17 @@ func ingestSlackMessage(ctx context.Context, deps Deps, channelID string, msg sl
 			}
 		}
 	}
+
+	normalizeText := func(s string) string { return s }
+	if sn, ok := deps.Normalizers.For("slack"); ok {
+		normalizeText = func(s string) string {
+			if res, nErr := sn.Normalize(ctx, []byte(s), nil); nErr == nil {
+				return res.Text
+			}
+			return s
+		}
+	}
+	text = buildSlackBackfillBody(text, msg.Attachments, normalizeText)
 
 	metaJSON, _ := json.Marshal(meta)
 
