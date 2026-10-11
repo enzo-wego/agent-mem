@@ -1,6 +1,10 @@
 package ids
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"strings"
 	"testing"
 )
 
@@ -242,9 +246,9 @@ func TestWegoHub(t *testing.T) {
 		{"q4-report", "wegohub:q4-report", false},
 		{"my-app", "wegohub:my-app", false},
 		{"feature-branch-123", "wegohub:feature-branch-123", false},
-		{"-my-app", "", true},  // leading hyphen
-		{"My_App", "", true},   // uppercase + underscore
-		{"my-app-", "", true},  // trailing hyphen
+		{"-my-app", "", true}, // leading hyphen
+		{"My_App", "", true},  // uppercase + underscore
+		{"my-app-", "", true}, // trailing hyphen
 		{"", "", true},
 	}
 	for _, tt := range tests {
@@ -392,9 +396,9 @@ func TestParseType(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		nodeID  string
-		want    NodeType
-		wantOK  bool
+		nodeID string
+		want   NodeType
+		wantOK bool
 	}{
 		{"slack:C08S954G2LX:1779709917.613979", TypeSlackThread, true},
 		{"jira:PAY-2128", TypeJira, true},
@@ -438,9 +442,9 @@ func TestParseNaturalKey(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		nodeID  string
-		want    string
-		wantOK  bool
+		nodeID string
+		want   string
+		wantOK bool
 	}{
 		{"jira:PAY-2128", "PAY-2128", true},
 		{"datadog:monitor:133274814", "monitor:133274814", true},
@@ -462,5 +466,45 @@ func TestParseNaturalKey(t *testing.T) {
 				t.Fatalf("ParseNaturalKey(%q) = %q, want %q", tt.nodeID, got, tt.want)
 			}
 		})
+	}
+}
+
+// TestAllTypesComplete fails when a NodeType constant is declared in ids.go
+// without being added to AllTypes (the response masker relies on the list).
+func TestAllTypesComplete(t *testing.T) {
+	t.Parallel()
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "ids.go", nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	declared := map[string]bool{}
+	for _, d := range f.Decls {
+		gd, ok := d.(*ast.GenDecl)
+		if !ok || gd.Tok != token.CONST {
+			continue
+		}
+		for _, spec := range gd.Specs {
+			vs := spec.(*ast.ValueSpec)
+			if id, ok := vs.Type.(*ast.Ident); !ok || id.Name != "NodeType" {
+				continue
+			}
+			for _, v := range vs.Values {
+				lit := v.(*ast.BasicLit)
+				declared[strings.Trim(lit.Value, `"`)] = true
+			}
+		}
+	}
+	listed := map[string]bool{}
+	for _, nt := range AllTypes {
+		listed[string(nt)] = true
+	}
+	for name := range declared {
+		if !listed[name] {
+			t.Errorf("NodeType %q declared but missing from AllTypes", name)
+		}
+	}
+	if len(declared) != len(listed) {
+		t.Errorf("declared %d types, AllTypes lists %d", len(declared), len(listed))
 	}
 }
