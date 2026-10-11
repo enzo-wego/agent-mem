@@ -13,9 +13,7 @@ type GraphClient interface {
 	Search(context.Context, SearchRequest) (map[string]any, error)
 	Node(context.Context, string, string) (map[string]any, error)
 	Neighbors(context.Context, string, int, []string) (map[string]any, error)
-	ClusterSummary(context.Context, string, int) (map[string]any, error)
 	Resolve(context.Context, ResolveRequest) (map[string]any, error)
-	Person(context.Context, string, int) (map[string]any, error)
 	Epic(context.Context, string) (map[string]any, error)
 }
 
@@ -43,16 +41,6 @@ type NeighborsInput struct {
 	ID    string   `json:"id" jsonschema:"Canonical graph node ID to traverse from"`
 	Depth int      `json:"depth,omitempty" jsonschema:"Traversal depth from 1 to 3; defaults to 1"`
 	Kinds []string `json:"kinds,omitempty" jsonschema:"Optional edge kinds to follow"`
-}
-
-type ClusterSummaryInput struct {
-	Node  string `json:"node" jsonschema:"Canonical graph node ID at the center of the cluster"`
-	Depth int    `json:"depth,omitempty" jsonschema:"Summary depth from 1 to 3; defaults to 1"`
-}
-
-type PersonInput struct {
-	Q     string `json:"q" jsonschema:"Person name, email, employee id, or Slack user id to look up"`
-	Limit int    `json:"limit,omitempty" jsonschema:"Maximum candidates, from 1 to 20; defaults to 5"`
 }
 
 type ResolveInput struct {
@@ -124,23 +112,6 @@ func NewServer(client GraphClient, version string) *mcp.Server {
 	})
 
 	mcp.AddTool(server, &mcp.Tool{
-		Name: "graph_cluster_summary",
-		Description: "Generate a concise summary of the artifact cluster around a graph node. " +
-			"This invokes or reads LLM synthesis, can take roughly 15 seconds, and can return tens of kilobytes.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, input ClusterSummaryInput) (*mcp.CallToolResult, map[string]any, error) {
-		input.Node = strings.TrimSpace(input.Node)
-		if input.Node == "" {
-			return nil, nil, fmt.Errorf("node must not be empty")
-		}
-		depth, err := validatedDepth(input.Depth, 2)
-		if err != nil {
-			return nil, nil, err
-		}
-		output, err := client.ClusterSummary(ctx, input.Node, depth)
-		return nil, output, err
-	})
-
-	mcp.AddTool(server, &mcp.Tool{
 		Name:        "graph_resolve",
 		Description: "Resolve graph seeds into a bounded, question-focused context bundle with trace information.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, input ResolveInput) (*mcp.CallToolResult, map[string]any, error) {
@@ -180,25 +151,6 @@ func NewServer(client GraphClient, version string) *mcp.Server {
 			Epic:          input.Epic,
 			Business:      input.Business,
 		})
-		return nil, output, err
-	})
-
-	mcp.AddTool(server, &mcp.Tool{
-		Name: "graph_person",
-		Description: "Look up a person at the organization by name, email, employee id, or Slack user id. " +
-			"Returns their profile, manager chain, inferred role with evidence, and recent artifacts they authored.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, input PersonInput) (*mcp.CallToolResult, map[string]any, error) {
-		input.Q = strings.TrimSpace(input.Q)
-		if input.Q == "" {
-			return nil, nil, fmt.Errorf("q must not be empty")
-		}
-		if input.Limit == 0 {
-			input.Limit = 5
-		}
-		if input.Limit < 1 || input.Limit > 20 {
-			return nil, nil, fmt.Errorf("limit must be between 1 and 20")
-		}
-		output, err := client.Person(ctx, input.Q, input.Limit)
 		return nil, output, err
 	})
 

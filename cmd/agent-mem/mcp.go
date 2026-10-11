@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -64,6 +65,9 @@ func newMCPCmdWithRuntimeLoader(
 			if err != nil {
 				return err
 			}
+			// Filtered reads name this asker; unset makes each graph tool fail
+			// without an HTTP call. Never the admin header.
+			client.SetAsker(os.Getenv("AGENT_MEM_ASKER"))
 
 			probeContext, cancel := context.WithTimeout(cmd.Context(), 5*time.Second)
 			defer cancel()

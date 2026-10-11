@@ -4,7 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"sort"
+	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -19,7 +23,6 @@ type recordedCall struct {
 	rawURL  string
 	depth   int
 	kinds   []string
-	node    string
 	resolve ResolveRequest
 	search  SearchRequest
 }
@@ -53,16 +56,8 @@ func (c *recordingGraphClient) Neighbors(_ context.Context, id string, depth int
 	return c.record(recordedCall{name: "graph_neighbors", id: id, depth: depth, kinds: kinds})
 }
 
-func (c *recordingGraphClient) ClusterSummary(_ context.Context, node string, depth int) (map[string]any, error) {
-	return c.record(recordedCall{name: "graph_cluster_summary", node: node, depth: depth})
-}
-
 func (c *recordingGraphClient) Resolve(_ context.Context, request ResolveRequest) (map[string]any, error) {
 	return c.record(recordedCall{name: "graph_resolve", resolve: request})
-}
-
-func (c *recordingGraphClient) Person(_ context.Context, query string, limit int) (map[string]any, error) {
-	return c.record(recordedCall{name: "graph_person", query: query, limit: limit})
 }
 
 func connectTestClient(t *testing.T, graphClient GraphClient) *mcp.ClientSession {
@@ -84,7 +79,7 @@ func connectTestClient(t *testing.T, graphClient GraphClient) *mcp.ClientSession
 	return clientSession
 }
 
-func TestServer_ListsExactlySevenGraphToolsWithSchemas(t *testing.T) {
+func TestServer_ListsExactlyFiveGraphToolsWithSchemas(t *testing.T) {
 	session := connectTestClient(t, &recordingGraphClient{})
 	result, err := session.ListTools(context.Background(), nil)
 	if err != nil {
@@ -104,11 +99,9 @@ func TestServer_ListsExactlySevenGraphToolsWithSchemas(t *testing.T) {
 	}
 	sort.Strings(names)
 	want := []string{
-		"graph_cluster_summary",
 		"graph_epic",
 		"graph_neighbors",
 		"graph_node",
-		"graph_person",
 		"graph_resolve",
 		"graph_search",
 	}
@@ -126,14 +119,12 @@ func TestServer_AppliesDefaultsAndForwardsEveryTool(t *testing.T) {
 		{Name: "graph_search", Arguments: map[string]any{"q": "TRY currency"}},
 		{Name: "graph_node", Arguments: map[string]any{"id": "jira:PAY-2223"}},
 		{Name: "graph_neighbors", Arguments: map[string]any{"id": "jira:PAY-2223"}},
-		{Name: "graph_cluster_summary", Arguments: map[string]any{"node": "jira:PAY-2223"}},
 		{Name: "graph_resolve", Arguments: map[string]any{
 			"seeds":    []string{"https://github.com/wego/payments/pull/2198"},
 			"query":    "is WithRebateRepo safe to remove?",
 			"epic":     []string{"PAY-2307"},
 			"business": "payments",
 		}},
-		{Name: "graph_person", Arguments: map[string]any{"q": "Lei"}},
 		{Name: "graph_epic", Arguments: map[string]any{"key": "PAY-2307"}},
 		{Name: "graph_search", Arguments: map[string]any{"q": "GST", "epic": []string{"PAY-2307"}, "business": "payments"}},
 	}
@@ -150,8 +141,8 @@ func TestServer_AppliesDefaultsAndForwardsEveryTool(t *testing.T) {
 		}
 	}
 
-	if len(graphClient.calls) != 8 {
-		t.Fatalf("worker calls = %d, want 8", len(graphClient.calls))
+	if len(graphClient.calls) != 6 {
+		t.Fatalf("worker calls = %d, want 6", len(graphClient.calls))
 	}
 	if got := graphClient.calls[0].search.Limit; got != 10 {
 		t.Errorf("search limit = %d, want 10", got)
@@ -159,24 +150,17 @@ func TestServer_AppliesDefaultsAndForwardsEveryTool(t *testing.T) {
 	if got := graphClient.calls[2].depth; got != 1 {
 		t.Errorf("neighbors depth = %d, want 1", got)
 	}
-	if got := graphClient.calls[3].depth; got != 2 {
-		t.Errorf("cluster depth = %d, want 2", got)
-	}
-	resolve := graphClient.calls[4].resolve
+	resolve := graphClient.calls[3].resolve
 	if resolve.Depth != 2 || resolve.BudgetTokens != 4000 || !resolve.IncludeBodies {
 		t.Errorf("resolve defaults = %#v", resolve)
 	}
 	if stringSlice(resolve.Epic) != stringSlice([]string{"PAY-2307"}) || resolve.Business != "payments" {
 		t.Errorf("resolve scope not forwarded: %#v", resolve)
 	}
-	person := graphClient.calls[5]
-	if person.name != "graph_person" || person.query != "Lei" || person.limit != 5 {
-		t.Errorf("person defaults = %#v", person)
-	}
-	if epic := graphClient.calls[6]; epic.name != "graph_epic" || epic.id != "PAY-2307" {
+	if epic := graphClient.calls[4]; epic.name != "graph_epic" || epic.id != "PAY-2307" {
 		t.Errorf("epic call = %#v", epic)
 	}
-	if s := graphClient.calls[7].search; stringSlice(s.Epic) != stringSlice([]string{"PAY-2307"}) || s.Business != "payments" {
+	if s := graphClient.calls[5].search; stringSlice(s.Epic) != stringSlice([]string{"PAY-2307"}) || s.Business != "payments" {
 		t.Errorf("search scope not forwarded: %#v", s)
 	}
 }
@@ -192,10 +176,7 @@ func TestServer_ValidationAndWorkerErrorsBecomeToolErrors(t *testing.T) {
 		{"graph_search", map[string]any{"q": " ", "limit": 51}},
 		{"graph_node", map[string]any{"id": "jira:X", "url": "https://example.com"}},
 		{"graph_neighbors", map[string]any{"id": "jira:X", "depth": 4}},
-		{"graph_cluster_summary", map[string]any{"node": "jira:X", "depth": 4}},
 		{"graph_resolve", map[string]any{"seeds": []string{}, "query": "x"}},
-		{"graph_person", map[string]any{"q": " "}},
-		{"graph_person", map[string]any{"q": "Lei", "limit": 21}},
 		{"graph_epic", map[string]any{"key": " "}},
 	}
 	for _, test := range invalid {
@@ -259,4 +240,58 @@ func TestServer_CancellationReachesWorker(t *testing.T) {
 func stringSlice(values []string) string {
 	encoded, _ := json.Marshal(values)
 	return string(encoded)
+}
+
+func TestServer_RemovedToolsAreGone(t *testing.T) {
+	session := connectTestClient(t, &recordingGraphClient{})
+	for _, name := range []string{"graph_cluster_summary", "graph_person"} {
+		result, err := session.CallTool(context.Background(), &mcp.CallToolParams{Name: name, Arguments: map[string]any{"q": "x", "node": "y"}})
+		if err == nil && (result == nil || !result.IsError) {
+			t.Errorf("removed tool %s still callable", name)
+		}
+	}
+}
+
+// Without AGENT_MEM_ASKER every graph tool returns a tool error and no HTTP
+// request reaches the worker.
+func TestServer_MissingAskerIsToolErrorWithoutHTTP(t *testing.T) {
+	var hits atomic.Int32
+	worker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer worker.Close()
+	client, err := NewClient(worker.URL, "secret", worker.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Probe(context.Background()); err != nil {
+		t.Fatalf("Probe must work without an asker: %v", err)
+	}
+	hits.Store(0)
+	session := connectTestClient(t, client)
+	for _, call := range []*mcp.CallToolParams{
+		{Name: "graph_search", Arguments: map[string]any{"q": "x"}},
+		{Name: "graph_node", Arguments: map[string]any{"id": "jira:X-1"}},
+		{Name: "graph_neighbors", Arguments: map[string]any{"id": "jira:X-1"}},
+		{Name: "graph_resolve", Arguments: map[string]any{"seeds": []string{"jira:X-1"}, "query": "x"}},
+		{Name: "graph_epic", Arguments: map[string]any{"key": "PAY-1"}},
+	} {
+		result, err := session.CallTool(context.Background(), call)
+		if err != nil {
+			t.Fatalf("%s protocol error: %v", call.Name, err)
+		}
+		text := ""
+		if len(result.Content) > 0 {
+			if tc, ok := result.Content[0].(*mcp.TextContent); ok {
+				text = tc.Text
+			}
+		}
+		if !result.IsError || !strings.Contains(text, "AGENT_MEM_ASKER") {
+			t.Errorf("%s: want AGENT_MEM_ASKER tool error, got IsError=%v text=%q", call.Name, result.IsError, text)
+		}
+	}
+	if got := hits.Load(); got != 0 {
+		t.Fatalf("worker saw %d requests, want 0", got)
+	}
 }
