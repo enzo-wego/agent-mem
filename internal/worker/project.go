@@ -3,6 +3,8 @@ package worker
 import (
 	"path/filepath"
 	"strings"
+
+	"github.com/rs/zerolog/log"
 )
 
 // extractProject derives the project name from a working directory path.
@@ -22,15 +24,31 @@ func (s *Server) isProjectAllowed(project string) bool {
 
 	if s.config.AllowedProjects != "" {
 		allowed := splitList(s.config.AllowedProjects)
-		return contains(allowed, project)
+		if contains(allowed, project) {
+			return true
+		}
+		s.logFilteredOnce(project)
+		return false
 	}
 
 	if s.config.IgnoredProjects != "" {
 		ignored := splitList(s.config.IgnoredProjects)
-		return !contains(ignored, project)
+		if contains(ignored, project) {
+			s.logFilteredOnce(project)
+			return false
+		}
+		return true
 	}
 
 	return true
+}
+
+// logFilteredOnce logs a rejected project at info level, once per Server.
+func (s *Server) logFilteredOnce(project string) {
+	if _, seen := s.filteredProjects.LoadOrStore(project, struct{}{}); !seen {
+		log.Info().Str("project", project).
+			Msg("Project not recorded: not allowed by allowed_projects/ignored_projects")
+	}
 }
 
 // isToolSkipped checks whether a tool name is in the skip list.

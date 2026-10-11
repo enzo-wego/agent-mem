@@ -60,7 +60,6 @@ func (s *Server) handleSessionStart(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if !s.isProjectAllowed(project) {
-		log.Debug().Str("project", project).Msg("Project filtered, skipping session-start")
 		w.WriteHeader(http.StatusOK)
 		return
 	}

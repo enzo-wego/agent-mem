@@ -59,6 +59,12 @@ type Server struct {
 
 	logBuffer     *LogBuffer
 	traceRecorder *graphtrace.Recorder
+
+	// filteredProjects dedups the "project not recorded" info log.
+	// ponytail: lives for the worker's lifetime, so a project that is filtered,
+	// then allowed, then filtered again is not re-logged until restart; it grows
+	// with the number of distinct rejected cwd basenames.
+	filteredProjects sync.Map
 }
 
 // flatLLM is the flat-memory LLM surface: extract an observation and summarise
