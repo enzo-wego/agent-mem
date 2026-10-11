@@ -115,15 +115,15 @@ WHERE n.id = $1 AND n.deleted_at IS NULL
 	}
 	if used == 0 && first != nil {
 		// Nothing fit: better a truncated top hit than an empty bundle.
-		first.Body = truncateRunes(first.Body, budgetTokens*4)
+		first.Body = TruncateRunes(first.Body, budgetTokens*4)
 		first.Tokens = len(first.Body)/4 + 1
 		out = append(out, *first)
 	}
 	return out, missed, nil
 }
 
-// truncateRunes cuts s to at most n bytes without splitting a UTF-8 sequence.
-func truncateRunes(s string, n int) string {
+// TruncateRunes cuts s to at most n bytes without splitting a UTF-8 sequence.
+func TruncateRunes(s string, n int) string {
 	if n <= 0 {
 		return ""
 	}

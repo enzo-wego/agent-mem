@@ -3,7 +3,6 @@ package handlers
 import (
 	"context"
 	"errors"
-	"unicode/utf8"
 
 	"github.com/agent-mem/agent-mem/internal/graph/hydrate"
 	"github.com/jackc/pgx/v5"
@@ -34,7 +33,7 @@ func RenderTraceRepresentation(ctx context.Context, db *pgxpool.Pool, route, mod
 		}
 		body := rows[0].Body
 		if bodyBytes != nil {
-			body = truncateTraceBytes(body, *bodyBytes)
+			body = hydrate.TruncateRunes(body, *bodyBytes)
 		}
 		return TraceRepresentation{Title: rows[0].Title, Body: body, Found: true}, nil
 	}
@@ -63,17 +62,4 @@ WHERE n.id=$1 AND n.deleted_at IS NULL`, nodeID).Scan(
 		return TraceRepresentation{}, nil
 	}
 	return TraceRepresentation{Title: rows[0].Title, Summary: rows[0].Summary, Found: true}, nil
-}
-
-func truncateTraceBytes(s string, n int) string {
-	if n <= 0 {
-		return ""
-	}
-	if len(s) <= n {
-		return s
-	}
-	for n > 0 && !utf8.RuneStart(s[n]) {
-		n--
-	}
-	return s[:n]
 }

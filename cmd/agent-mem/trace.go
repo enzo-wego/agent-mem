@@ -105,7 +105,7 @@ func traceShow(cmd *cobra.Command, dsn, id, counters string) error {
 	for _, item := range rows {
 		node := fmt.Sprint(item["node_id"])
 		var bodyBytes *int
-		if item["body_sha256"] != nil {
+		if item["body_sha256"] != nil && item["body_truncated"] == true {
 			n := int(item["body_bytes"].(float64))
 			bodyBytes = &n
 		}

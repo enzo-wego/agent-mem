@@ -67,7 +67,7 @@ func seedResolveTrace(t *testing.T, pool *pgxpool.Pool, id string) (returnedBody
 	if _, err := pool.Exec(ctx, `INSERT INTO graph.thread_summaries(channel_id,thread_ts,signature,summary) VALUES ('CTRACE','300.000001','1:1','thread summary title')`); err != nil {
 		t.Fatal(err)
 	}
-	items := fmt.Sprintf(`[{"node_id":%q,"rank":0,"title_sha256":%q,"body_included":true,"body_bytes":%d,"body_sha256":%q}]`, node, sha("thread summary title"), len(returnedBody), sha(returnedBody))
+	items := fmt.Sprintf(`[{"node_id":%q,"rank":0,"title_sha256":%q,"body_included":true,"body_truncated":true,"body_bytes":%d,"body_sha256":%q}]`, node, sha("thread summary title"), len(returnedBody), sha(returnedBody))
 	if _, err := pool.Exec(ctx, `INSERT INTO graph.context_traces(id,created_at,route,build_rev,caller,status,asker_input,acl_mode,request,items,items_truncated,response_sha256,latency_ms)
 VALUES ($1,$2,'resolve','test','test',200,'{}','unfiltered','{}',$3,false,'x',1)`, id, time.Now(), items); err != nil {
 		t.Fatal(err)
@@ -99,6 +99,30 @@ func TestTraceShowResolveUsesHydrateRepresentation(t *testing.T) {
 	out = runTraceShow(t, dsn, "ctx_trace_show_same")
 	if !strings.Contains(out, "body: differs from returned") {
 		t.Fatalf("edited node not detected:\n%s", out)
+	}
+}
+
+func TestTraceShowDetectsAppendedTextOnUntruncatedItem(t *testing.T) {
+	pool, dsn := traceTestPool(t)
+	seedResolveTrace(t, pool, "ctx_trace_show_append")
+	ctx := context.Background()
+	var full string
+	if err := pool.QueryRow(ctx, `SELECT body_full FROM graph.artifact_bodies WHERE node_id='slack:CTRACE:300.000001'`).Scan(&full); err != nil {
+		t.Fatal(err)
+	}
+	// Rewrite the trace as an untruncated item whose recorded body is the full body.
+	items := fmt.Sprintf(`[{"node_id":"slack:CTRACE:300.000001","rank":0,"title_sha256":%q,"body_included":true,"body_truncated":false,"body_bytes":%d,"body_sha256":%q}]`, sha("thread summary title"), len(full), sha(full))
+	if _, err := pool.Exec(ctx, `UPDATE graph.context_traces SET items=$1 WHERE id='ctx_trace_show_append'`, items); err != nil {
+		t.Fatal(err)
+	}
+	if out := runTraceShow(t, dsn, "ctx_trace_show_append"); !strings.Contains(out, "body: same as returned") {
+		t.Fatalf("untouched untruncated item:\n%s", out)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE graph.artifact_bodies SET body_full=body_full||' appended tail' WHERE node_id='slack:CTRACE:300.000001'`); err != nil {
+		t.Fatal(err)
+	}
+	if out := runTraceShow(t, dsn, "ctx_trace_show_append"); !strings.Contains(out, "body: differs from returned") {
+		t.Fatalf("appended text not detected:\n%s", out)
 	}
 }
 
