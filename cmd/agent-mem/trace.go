@@ -58,6 +58,7 @@ func writerCountersLine(baseURL, apiKey string) string {
 	if apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+apiKey)
 	}
+	req.Header.Set("X-Graph-Admin", "1") // /traces/stats is admin-only
 	client := http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {

@@ -75,7 +75,7 @@ func TestResolve_SeedExpandsAndHydrates(t *testing.T) {
 		"budget_tokens": 4000,
 		"include_bodies": true
 	}`)
-	r := httptest.NewRequest("POST", "/api/graph/resolve", body)
+	r := adminRequest("POST", "/api/graph/resolve", body)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
 
@@ -133,7 +133,7 @@ func TestResolve_RawURLSeedCanonicalizesToNodeID(t *testing.T) {
 		"budget_tokens": 4000,
 		"include_bodies": true
 	}`)
-	r := httptest.NewRequest(http.MethodPost, "/api/graph/resolve", body)
+	r := adminRequest(http.MethodPost, "/api/graph/resolve", body)
 	w := httptest.NewRecorder()
 
 	h, err := handlers.NewResolve(pool)
@@ -218,7 +218,7 @@ WHERE id = ANY($4)`,
 		"budget_tokens": 4000,
 		"include_bodies": true
 	}`)
-	r := httptest.NewRequest(http.MethodPost, "/api/graph/resolve", body)
+	r := adminRequest(http.MethodPost, "/api/graph/resolve", body)
 	w := httptest.NewRecorder()
 
 	h, err := handlers.NewResolve(pool)
@@ -315,7 +315,7 @@ func TestResolve_SlackPermalinkSeedSurfacesThreadFiles(t *testing.T) {
 		"budget_tokens": 16000,
 		"include_bodies": true
 	}`)
-	r := httptest.NewRequest(http.MethodPost, "/api/graph/resolve", body)
+	r := adminRequest(http.MethodPost, "/api/graph/resolve", body)
 	w := httptest.NewRecorder()
 
 	h, err := handlers.NewResolve(pool)
@@ -390,7 +390,7 @@ func resolveSeeds(t *testing.T, pool *pgxpool.Pool, seeds ...string) resolveSeed
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := httptest.NewRequest(http.MethodPost, "/api/graph/resolve", bytes.NewReader(payload))
+	r := adminRequest(http.MethodPost, "/api/graph/resolve", bytes.NewReader(payload))
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
 	if w.Code != http.StatusOK {

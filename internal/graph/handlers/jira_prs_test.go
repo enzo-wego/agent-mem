@@ -31,7 +31,7 @@ func seedJiraPRs(t *testing.T, pool *pgxpool.Pool) {
 	spNode(t, pool, "cf:jp-hub", "cf", "hub", "", "", "", "{}", 0, false)
 	spNode(t, pool, "gh_pr:o/r#1", "gh_pr", "PR one", "", "", "https://example.com/pr/1", "{}", pat, false)
 	spNode(t, pool, "gh_pr:o/r#2", "gh_pr", "PR two", "", "", "", "{}", 0, false)
-	spNode(t, pool, "gh_pr:o/r#3", "gh_pr", "PR three", "", "github", "https://example.com/pr/3", "{}", 0, false)
+	spNode(t, pool, "gh_pr:o/r#3", "gh_pr", "PR three", "", "gws", "https://example.com/pr/3", "{}", 0, false)
 	spNode(t, pool, "gh_pr:o/r#4", "gh_pr", "PR four", "", "", "https://example.com/pr/4", "{}", 0, false)
 	spNode(t, pool, "gh_pr:o/r#5", "gh_pr", "PR five", "", "", "https://example.com/pr/5", "{}", 0, true)
 	jpSetCreated(t, pool, "gh_pr:o/r#1", "2026-09-01")
@@ -70,9 +70,9 @@ func jpNeighbors(t *testing.T, pool *pgxpool.Pool, id, query, asker string) ([]n
 	t.Helper()
 	r := chi.NewRouter()
 	r.Mount("/api/graph", handlers.NewNeighbors(pool))
-	req := httptest.NewRequest("GET", "/api/graph/node/"+url.PathEscape(id)+"/neighbors?"+query, nil)
+	req := adminRequest("GET", "/api/graph/node/"+url.PathEscape(id)+"/neighbors?"+query, nil)
 	if asker != "" {
-		req.Header.Set("X-Asker-User", asker)
+		setAsker(req, asker)
 	}
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)

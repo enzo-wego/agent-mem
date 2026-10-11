@@ -58,11 +58,12 @@ type epicResponse struct {
 // (graph.epic_briefs) when one exists. A key with no membership rows is a 404
 // (unknown epic or the rebuild has not run yet).
 //
-// Access control: a request carrying a non-empty X-Asker-User sees only what
-// that asker can read. An unresolvable header fails closed to public-only.
+// Access control: a named asker sees only what they can read; a request naming
+// no asker, or an unknown one, is rejected (see resolveAsker). X-Graph-Admin: 1
+// is the unfiltered view.
 type Epic struct {
 	db     *pgxpool.Pool
-	aclBld *acl.Builder
+	aclBld scopeBuilder
 }
 
 func NewEpic(db *pgxpool.Pool) *Epic {
@@ -132,6 +133,10 @@ func briefSourcesVisible(ctx context.Context, db *pgxpool.Pool, sources []string
 
 func (h *Epic) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	acl, _, ok := requireAsker(w, r, h.db, h.aclBld, askerIdentities{})
+	if !ok {
+		return
+	}
 	key := chi.URLParam(r, "key")
 	if dec, err := url.PathUnescape(key); err == nil {
 		key = dec
@@ -149,8 +154,7 @@ func (h *Epic) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		key = strings.ToUpper(key)
 	}
 
-	eeid, scopeSet, noFilter := askerScopeSet(ctx, h.db, h.aclBld, r.Header.Get("X-Asker-User"))
-	acl := askerACL{noFilter: noFilter, resolved: eeid != 0, scopes: scopeSet}
+	noFilter := acl.noFilter
 
 	// requested stays the key as asked (upper-cased): every 404 below names
 	// it, never an alias-resolved epic, so a denial cannot reveal the epic.

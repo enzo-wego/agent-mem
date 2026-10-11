@@ -410,7 +410,7 @@ func decisionIndexSearch(t *testing.T, s *Search, query string) []struct {
 } {
 	t.Helper()
 	w := httptest.NewRecorder()
-	s.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/graph/search?"+query, nil))
+	s.ServeHTTP(w, adminRequest(http.MethodGet, "/api/graph/search?"+query, nil))
 	if w.Code != http.StatusOK {
 		t.Fatalf("search status %d: %s", w.Code, w.Body.String())
 	}

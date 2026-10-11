@@ -16,7 +16,7 @@ import (
 // Node handles GET /api/graph/node?url=... or ?id=...
 type Node struct {
 	db     *pgxpool.Pool
-	aclBld *acl.Builder
+	aclBld scopeBuilder
 }
 
 // NewNode creates a new Node handler.
@@ -45,6 +45,10 @@ type edgeRef struct {
 
 func (h *Node) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	acl, _, ok := requireAsker(w, r, h.db, h.aclBld, askerIdentities{})
+	if !ok {
+		return
+	}
 	url := r.URL.Query().Get("url")
 	id := r.URL.Query().Get("id")
 	if url == "" && id == "" {
@@ -99,10 +103,7 @@ LIMIT 1
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	// An absent header is trusted/unfiltered; every present header is filtered.
 	// Hidden nodes return 404 so their existence/body is not disclosed.
-	eeid, scopeSet, noFilter := askerScopeSet(ctx, h.db, h.aclBld, r.Header.Get("X-Asker-User"))
-	acl := askerACL{noFilter: noFilter, resolved: eeid != 0, scopes: scopeSet}
 	if visible, err := nodeVisible(ctx, h.db, acl, resp.NodeID, resp.Type, scope); err != nil || !visible {
 		http.Error(w, "not found", http.StatusNotFound)
 		return

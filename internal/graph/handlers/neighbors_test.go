@@ -22,8 +22,8 @@ func TestNeighbors_Depth1(t *testing.T) {
 	r := chi.NewRouter()
 	r.Mount("/api/graph", handlers.NewNeighbors(pool))
 
-	req := httptest.NewRequest("GET", "/api/graph/node/a/neighbors?depth=1", nil)
-	req.Header.Set("X-Asker-User", "U07UAC0J7T3")
+	req := adminRequest("GET", "/api/graph/node/a/neighbors?depth=1", nil)
+	req.Header.Set("X-Graph-Admin", "1")
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
@@ -62,8 +62,8 @@ func TestNeighbors_DropsUnenrichedStubs(t *testing.T) {
 	r := chi.NewRouter()
 	r.Mount("/api/graph", handlers.NewNeighbors(pool))
 
-	req := httptest.NewRequest("GET", "/api/graph/node/root/neighbors?depth=1", nil)
-	req.Header.Set("X-Asker-User", "U07UAC0J7T3")
+	req := adminRequest("GET", "/api/graph/node/root/neighbors?depth=1", nil)
+	req.Header.Set("X-Graph-Admin", "1")
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
@@ -128,7 +128,7 @@ func TestNeighbors_FileLeafFromNeighborThread(t *testing.T) {
 
 	r := chi.NewRouter()
 	r.Mount("/api/graph", handlers.NewNeighbors(pool))
-	req := httptest.NewRequest("GET", "/api/graph/node/slack:C1:1.1/neighbors?depth=1", nil)
+	req := adminRequest("GET", "/api/graph/node/slack:C1:1.1/neighbors?depth=1", nil)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
@@ -170,8 +170,8 @@ func TestNeighbors_FileLeafSkippedWhenKindFiltered(t *testing.T) {
 
 	r := chi.NewRouter()
 	r.Mount("/api/graph", handlers.NewNeighbors(pool))
-	req := httptest.NewRequest("GET", "/api/graph/node/slack:C1:1.1/neighbors?depth=1&kind=REFERENCES", nil)
-	req.Header.Set("X-Asker-User", "U07UAC0J7T3")
+	req := adminRequest("GET", "/api/graph/node/slack:C1:1.1/neighbors?depth=1&kind=REFERENCES", nil)
+	req.Header.Set("X-Graph-Admin", "1")
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
@@ -209,7 +209,7 @@ func TestNeighbors_FileLeafCappedAt20(t *testing.T) {
 
 	r := chi.NewRouter()
 	r.Mount("/api/graph", handlers.NewNeighbors(pool))
-	req := httptest.NewRequest("GET", "/api/graph/node/slack:C1:1.1/neighbors?depth=1", nil)
+	req := adminRequest("GET", "/api/graph/node/slack:C1:1.1/neighbors?depth=1", nil)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
@@ -263,8 +263,8 @@ func testNeighborsResourceExpansion(t *testing.T, resource, typ string, incoming
 	}
 	r := chi.NewRouter()
 	r.Mount("/api/graph", handlers.NewNeighbors(pool))
-	req := httptest.NewRequest("GET", "/api/graph/node/"+root+"/neighbors?depth=2", nil)
-	req.Header.Set("X-Asker-User", "U07UAC0J7T3")
+	req := adminRequest("GET", "/api/graph/node/"+root+"/neighbors?depth=2", nil)
+	req.Header.Set("X-Graph-Admin", "1")
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	rows := decodeNeighbors(t, w)

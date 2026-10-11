@@ -119,18 +119,24 @@ func capString(s string, n int) string {
 	return s
 }
 func traceAsker(r *http.Request, route string) map[string]any {
-	out := map[string]any{"body_asker_eeid": nil, "header_asker_user": nil}
+	out := map[string]any{"body_asker_eeid": nil, "body_asker_slack_id": nil, "header_asker_user": nil}
 	if v := r.Header.Get("X-Asker-User"); v != "" {
 		out["header_asker_user"] = capString(v, 2000)
 	}
 	if route == "resolve" {
 		if diag, _ := r.Context().Value(requestTraceDiagKey{}).(*requestTraceDiag); diag != nil && diag.askerDecoded {
 			out["body_asker_eeid"] = diag.askerEEID
+			if diag.askerSlackID != "" {
+				out["body_asker_slack_id"] = capString(diag.askerSlackID, 2000)
+			}
 		} else {
 			var body map[string]any
 			_ = json.NewDecoder(bytes.NewReader(requestBody(r))).Decode(&body)
 			if v, ok := body["asker_eeid"]; ok {
 				out["body_asker_eeid"] = capTraceValue(v)
+			}
+			if v, ok := body["asker_slack_id"]; ok {
+				out["body_asker_slack_id"] = capTraceValue(v)
 			}
 		}
 	}
@@ -223,6 +229,7 @@ type requestTraceDiag struct {
 	armErrors      map[string]string
 	canonicalSeeds []string
 	askerEEID      int
+	askerSlackID   string
 	askerDecoded   bool
 }
 type requestTraceDiagKey struct{}

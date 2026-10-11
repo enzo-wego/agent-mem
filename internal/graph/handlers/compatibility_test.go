@@ -86,13 +86,12 @@ func TestResolveSearchCompatibility(t *testing.T) {
 		{"search-ordinary-hit", http.MethodGet, "/api/graph/search?q=phase+zero&limit=10", "", "", search},
 		{"search-hybrid-hit", http.MethodGet, "/api/graph/search?q=phase+zero&match=hybrid&limit=10", "", "", search},
 		{"search-empty", http.MethodGet, "/api/graph/search?q=unfindabletoken&limit=10", "", "", search},
-		{"search-unknown-asker", http.MethodGet, "/api/graph/search?q=phase+zero&match=hybrid&limit=10", "", "UUNKNOWN", search},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			req := httptest.NewRequest(tc.method, tc.target, bytes.NewBufferString(tc.body))
+			req := adminRequest(tc.method, tc.target, bytes.NewBufferString(tc.body))
 			if tc.asker != "" {
-				req.Header.Set("X-Asker-User", tc.asker)
+				setAsker(req, tc.asker)
 			}
 			rw := httptest.NewRecorder()
 			route := "search"

@@ -12,37 +12,6 @@ import (
 	"github.com/rs/zerolog"
 )
 
-func TestClusterSummary_FilteredAsker403(t *testing.T) {
-	pool := openTestDB(t)
-	truncateGraphHandlerTables(t, pool)
-	if _, err := pool.Exec(context.Background(), `INSERT INTO graph.nodes (id,type,natural_key,title,machine_id) VALUES ('jira:cluster-control','jira','cluster-control','Public control','test')`); err != nil {
-		t.Fatal(err)
-	}
-	h := NewClusterSummary(Deps{DB: pool})
-	for _, tc := range []struct {
-		name, header string
-		status       int
-	}{
-		{"absent", "", http.StatusOK},
-		{"unknown", "nobody@example.com", http.StatusForbidden},
-		{"trimmed_nonempty", "  nobody@example.com  ", http.StatusForbidden},
-		{"whitespace_only", " \t ", http.StatusOK},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodGet, "/api/graph/cluster/summary?node=jira:cluster-control", nil)
-			req.Header.Set("X-Asker-User", tc.header)
-			rr := httptest.NewRecorder()
-			h(rr, req)
-			if rr.Code != tc.status {
-				t.Fatalf("status = %d, want %d: %s", rr.Code, tc.status, rr.Body.String())
-			}
-			if tc.status == http.StatusForbidden && rr.Body.String() != "cluster summary is available to the unfiltered view only\n" {
-				t.Fatalf("denial = %q", rr.Body.String())
-			}
-		})
-	}
-}
-
 func TestSummarizeThread_SkipsJiraAttachment(t *testing.T) {
 	pool := openTestDB(t)
 	truncateGraphHandlerTables(t, pool)
@@ -114,7 +83,8 @@ func TestAttachmentACL_NoDerivedLeak(t *testing.T) {
 		t.Fatalf("attachment token leaked into actual summary prompt: %s", gem.generateUser)
 	}
 	// Summarization and indexing need the channel scope; the parent becomes
-	// public afterward so an unknown asker sees it but not its attachment.
+	// public afterward and the attachment is re-parented to a hidden thread, so
+	// a named non-member sees the public parent but neither attachment.
 	for _, id := range []string{root, "jira_attachment:noleak", "slack_file:noleak-orphan"} {
 		payload, err := json.Marshal(map[string]any{"node_id": id, "force": true})
 		if err != nil {
@@ -132,19 +102,29 @@ func TestAttachmentACL_NoDerivedLeak(t *testing.T) {
 	if _, err := pool.Exec(ctx, `UPDATE graph.nodes SET scope='public' WHERE id=$1`, root); err != nil {
 		t.Fatal(err)
 	}
+	for _, q := range []string{
+		`INSERT INTO graph.nodes (id,type,natural_key,title,body,scope,metadata,machine_id) VALUES ('slack:CHIDDEN:1','slack','slack:CHIDDEN:1','hidden parent','hidden','slack:CHIDDEN','{}','test')`,
+		`DELETE FROM graph.edges WHERE from_node_id='` + root + `' AND to_node_id='jira_attachment:noleak'`,
+		`INSERT INTO graph.edges (from_node_id,to_node_id,kind,machine_id) VALUES ('slack:CHIDDEN:1','jira_attachment:noleak','REFERENCES','test')`,
+	} {
+		if _, err := pool.Exec(ctx, q); err != nil {
+			t.Fatal(err)
+		}
+	}
 	search, err := NewSearch(pool)
 	if err != nil {
 		t.Fatal(err)
 	}
+	aclPerson(t, pool, 9301, "plain-derived@example.com")
 	for _, mode := range []string{"", "hybrid"} {
 		unfiltered := httptest.NewRecorder()
-		search.ServeHTTP(unfiltered, httptest.NewRequest(http.MethodGet, "/api/graph/search?q="+token+"&match="+mode, nil))
+		search.ServeHTTP(unfiltered, adminRequest(http.MethodGet, "/api/graph/search?q="+token+"&match="+mode, nil))
 		if unfiltered.Code != http.StatusOK || !strings.Contains(unfiltered.Body.String(), "slack_file:noleak-orphan") || !strings.Contains(unfiltered.Body.String(), "jira_attachment:noleak") {
 			t.Fatalf("mode=%q unfiltered attachment controls missing: %s", mode, unfiltered.Body.String())
 		}
 		for _, query := range []string{token, "Public thread control"} {
-			req := httptest.NewRequest(http.MethodGet, "/api/graph/search?q="+url.QueryEscape(query)+"&match="+mode, nil)
-			req.Header.Set("X-Asker-User", "nobody@example.com")
+			req := adminRequest(http.MethodGet, "/api/graph/search?q="+url.QueryEscape(query)+"&match="+mode, nil)
+			setAsker(req, "plain-derived@example.com")
 			rr := httptest.NewRecorder()
 			search.ServeHTTP(rr, req)
 			if rr.Code != http.StatusOK {

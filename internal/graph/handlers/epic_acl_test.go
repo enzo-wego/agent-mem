@@ -77,9 +77,9 @@ func aclGet(t *testing.T, key, asker string) (int, string, epicResponse, map[str
 	pool := openTestDB(t)
 	r := chi.NewRouter()
 	r.Method("GET", "/api/graph/epic/{key}", NewEpic(pool))
-	req := httptest.NewRequest("GET", "/api/graph/epic/"+key, nil)
+	req := adminRequest("GET", "/api/graph/epic/"+key, nil)
 	if asker != "" {
-		req.Header.Set("X-Asker-User", asker)
+		setAsker(req, asker)
 	}
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
@@ -145,13 +145,16 @@ func TestEpicACL_MembersFiltered(t *testing.T) {
 	assertKeys(t, m, true, "first_at", "last_at")
 }
 
-func TestEpicACL_UnresolvedAsker(t *testing.T) {
+func TestEpicACL_NoMembershipsAndUnknownAsker(t *testing.T) {
 	pool := openTestDB(t)
 	resetEpicACL(t, pool)
 	seedACLEpic(t, pool)
 	aclBrief(t, pool, "jira:PAY-201", aclPriv+":1.0")
 
-	code, _, resp, m := aclGet(t, aclEpicKey, "nobody@example.com")
+	if code, body, _, _ := aclGet(t, aclEpicKey, "nobody@example.com"); code != 403 || !strings.Contains(body, "asker_unknown") {
+		t.Fatalf("unknown asker: status %d body %s", code, body)
+	}
+	code, _, resp, m := aclGet(t, aclEpicKey, "plain@example.com")
 	if code != 200 {
 		t.Fatalf("status %d", code)
 	}
@@ -163,7 +166,7 @@ func TestEpicACL_UnresolvedAsker(t *testing.T) {
 
 	// All-public sources: the brief is served to the unresolved asker.
 	aclExec(t, pool, `UPDATE graph.epic_briefs SET sources = ARRAY['jira:PAY-201']`)
-	_, _, _, m = aclGet(t, aclEpicKey, "nobody@example.com")
+	_, _, _, m = aclGet(t, aclEpicKey, "plain@example.com")
 	assertKeys(t, m, true, briefKeys...)
 }
 

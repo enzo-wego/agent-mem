@@ -93,7 +93,7 @@ func TestNoSideEffectsRequestsUseReadOnlyPoolAndSkipEnqueue(t *testing.T) {
 		{"search", "GET", "/api/graph/search", "", map[string]string{"X-Graph-No-Side-Effects": "1"}, search, 400, "q required"},
 	}
 	for _, tc := range cases {
-		r := httptest.NewRequest(tc.method, tc.target, bytes.NewBufferString(tc.body))
+		r := adminRequest(tc.method, tc.target, bytes.NewBufferString(tc.body))
 		for key, value := range tc.headers {
 			r.Header.Set(key, value)
 		}
@@ -119,7 +119,7 @@ func TestNoSideEffectsRequestsUseReadOnlyPoolAndSkipEnqueue(t *testing.T) {
 		t.Fatalf("INSERT error=%v", err)
 	}
 	resolve.enqueueFetchBodyFn = func(context.Context, string) { enqueues++ }
-	r := httptest.NewRequest("POST", "/api/graph/resolve", bytes.NewBufferString(`{"seeds":["jira:GC0-MISS"]}`))
+	r := adminRequest("POST", "/api/graph/resolve", bytes.NewBufferString(`{"seeds":["jira:GC0-MISS"]}`))
 	w := httptest.NewRecorder()
 	resolve.ServeHTTP(w, r)
 	if enqueues == 0 {

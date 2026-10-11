@@ -355,7 +355,7 @@ VALUES ('jira:B-2','zebracrossing summary','heuristic','{}','test')`); err != ni
 	}
 	search := func() map[string]any {
 		w := httptest.NewRecorder()
-		h.ServeHTTP(w, httptest.NewRequest("GET", "/api/graph/search?q=zebracrossing&match=hybrid", nil))
+		h.ServeHTTP(w, adminRequest("GET", "/api/graph/search?q=zebracrossing&match=hybrid", nil))
 		if w.Code != 200 {
 			t.Fatalf("status %d: %s", w.Code, w.Body)
 		}
@@ -660,7 +660,7 @@ VALUES ($1,'zebracrossing summary','heuristic','{}','test')`, id); err != nil {
 	h.now = func() time.Time { return fixed } // recency must not drift between the two runs
 	get := func(q string) map[string]any {
 		w := httptest.NewRecorder()
-		h.ServeHTTP(w, httptest.NewRequest("GET", "/api/graph/search?"+q, nil))
+		h.ServeHTTP(w, adminRequest("GET", "/api/graph/search?"+q, nil))
 		if w.Code != 200 {
 			t.Fatalf("status %d: %s", w.Code, w.Body)
 		}

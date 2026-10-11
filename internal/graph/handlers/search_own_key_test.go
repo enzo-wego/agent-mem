@@ -45,9 +45,9 @@ func ownKeyRequest(t *testing.T, s *Search, q, mode, asker string, params url.Va
 	for k, values := range params {
 		v[k] = values
 	}
-	r := httptest.NewRequest(http.MethodGet, "/api/graph/search?"+v.Encode(), nil)
+	r := adminRequest(http.MethodGet, "/api/graph/search?"+v.Encode(), nil)
 	if asker != "" {
-		r.Header.Set("X-Asker-User", asker)
+		setAsker(r, asker)
 	}
 	w := httptest.NewRecorder()
 	s.ServeHTTP(w, r)
@@ -320,6 +320,7 @@ func TestSearch_JiraOwnKey(t *testing.T) {
 						// No jira_attachment nodes: do not trigger the known
 						// attachment duplicate-row baseline failure.
 						aclExec(t, pool, `UPDATE graph.nodes SET scope = 'slack:OWNKEYPRIVATE' WHERE id = 'jira:PAY-2333'`)
+						aclExec(t, pool, `INSERT INTO graph.people (eeid, display_name, email, machine_id) VALUES (9411,'Own Key Outsider','unknown-own-key@example.com','test') ON CONFLICT DO NOTHING`)
 						asker = "unknown-own-key@example.com"
 					case "types":
 						aclExec(t, pool, `UPDATE graph.nodes SET type = 'gh_pr' WHERE id LIKE 'jira:SEARCH-%'`)

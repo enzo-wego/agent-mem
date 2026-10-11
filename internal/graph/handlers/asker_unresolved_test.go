@@ -1,12 +1,11 @@
 package handlers
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -53,7 +52,9 @@ func seedAskerFixture(t *testing.T, pool *pgxpool.Pool) http.Handler {
 func askerRequest(t *testing.T, h http.Handler, path, header string) *httptest.ResponseRecorder {
 	t.Helper()
 	r := httptest.NewRequest(http.MethodGet, path, nil)
-	if header != "" {
+	if header == "" {
+		r.Header.Set(adminHeader, "1")
+	} else {
 		r.Header.Set("X-Asker-User", header)
 	}
 	w := httptest.NewRecorder()
@@ -67,16 +68,31 @@ func TestAskerUnresolved_FailsClosed(t *testing.T) {
 	for _, tc := range []struct {
 		name, header string
 		private      bool
+		deny         string // non-empty: every route is rejected with this code
 	}{
-		{"absent", "", true},
-		{"unknown", "nobody@example.com", false},
-		{"null_eeid", "null@example.com", false},
-		{"member", "member@example.com", true},
-		{"trimmed_member", " member@example.com ", true},
-		{"whitespace", " \t ", true},
-		{"no_memberships", "plain@example.com", false},
+		{"admin", "", true, ""},
+		{"unknown", "nobody@example.com", false, "asker_unknown"},
+		{"null_eeid", "null@example.com", false, "asker_unknown"},
+		{"member", "member@example.com", true, ""},
+		{"trimmed_member", " member@example.com ", true, ""},
+		{"whitespace", " \t ", false, "asker_required"},
+		{"no_memberships", "plain@example.com", false, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			if tc.deny != "" {
+				for _, path := range []string{
+					"/api/graph/node?id=" + url.QueryEscape(askerPublic),
+					"/api/graph/search?q=aclquokka",
+					"/api/graph/search?q=aclquokka&match=hybrid",
+					"/api/graph/node/" + url.QueryEscape(askerRoot) + "/neighbors",
+				} {
+					w := askerRequest(t, h, path, tc.header)
+					if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), `"`+tc.deny+`"`) {
+						t.Errorf("%s: status=%d body=%s, want 403 %s", path, w.Code, w.Body.String(), tc.deny)
+					}
+				}
+				return
+			}
 			t.Run("node", func(t *testing.T) {
 				for _, id := range []string{askerPublic, askerUnscoped, askerPrivate} {
 					w := askerRequest(t, h, "/api/graph/node?id="+url.QueryEscape(id), tc.header)
@@ -145,57 +161,6 @@ func TestAskerUnresolved_FailsClosed(t *testing.T) {
 	}
 }
 
-func TestAskerScopeSet_ErrorsFailClosed(t *testing.T) {
-	pool := openTestDB(t)
-	seedAskerFixture(t, pool)
-	closed, err := pgxpool.New(context.Background(), pool.Config().ConnString())
-	if err != nil {
-		t.Fatal(err)
-	}
-	closed.Close()
-	t.Run("lookup_error", func(t *testing.T) {
-		if _, err := lookupAsker(context.Background(), closed, "member@example.com"); err == nil {
-			t.Fatal("expected lookup error")
-		}
-		eeid, scopes, noFilter := askerScopeSet(context.Background(), closed, acl.NewBuilder(pool, time.Minute), "member@example.com")
-		assertAskerClosed(t, eeid, scopes, noFilter, 0)
-	})
-	t.Run("acl_build_error", func(t *testing.T) {
-		// Lookup uses the healthy pool; only the builder's database is closed.
-		eeid, scopes, noFilter := askerScopeSet(context.Background(), pool, acl.NewBuilder(closed, time.Minute), "member@example.com")
-		assertAskerClosed(t, eeid, scopes, noFilter, 71)
-	})
-	t.Run("lookup_results", func(t *testing.T) {
-		for _, tc := range []struct {
-			ref  string
-			eeid int
-		}{
-			{"", 0}, {" \t ", 0}, {"nobody@example.com", 0},
-			{"null@example.com", 0}, {" member@example.com ", 71},
-		} {
-			eeid, err := lookupAsker(context.Background(), pool, tc.ref)
-			if err != nil || eeid != tc.eeid {
-				t.Errorf("lookup %q: eeid=%d err=%v, want %d", tc.ref, eeid, err, tc.eeid)
-			}
-		}
-	})
-}
-
-func assertAskerClosed(t *testing.T, eeid int, scopes map[string]bool, noFilter bool, wantEEID int) {
-	t.Helper()
-	if eeid != wantEEID || noFilter || !reflect.DeepEqual(scopes, map[string]bool{"public": true}) {
-		t.Fatalf("eeid=%d scopes=%v noFilter=%v", eeid, scopes, noFilter)
-	}
-	for _, scope := range []*string{nil, stringPtr(""), stringPtr("public")} {
-		if !scopeVisible(scope, scopes, noFilter) {
-			t.Error("public/unscoped denied")
-		}
-	}
-	if scopeVisible(stringPtr(aclPriv), scopes, noFilter) {
-		t.Error("private visible")
-	}
-}
-
 func TestAskerUnresolved_NoMetadataLeak(t *testing.T) {
 	pool := openTestDB(t)
 	h := seedAskerFixture(t, pool)
@@ -203,7 +168,7 @@ func TestAskerUnresolved_NoMetadataLeak(t *testing.T) {
 		aclExec(t, pool, `INSERT INTO graph.edges (from_node_id,to_node_id,kind,metadata,machine_id) VALUES ($1,$2,'REFERENCES','{"why":"private-root explanation","topic":"private topic"}','test')`, edge[0], edge[1])
 	}
 	t.Run("node_edges", func(t *testing.T) {
-		for _, header := range []string{"nobody@example.com", ""} {
+		for _, header := range []string{"plain@example.com", ""} {
 			w := askerRequest(t, h, "/api/graph/node?id="+url.QueryEscape(askerPublic), header)
 			if w.Code != http.StatusOK {
 				t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
@@ -238,7 +203,7 @@ func TestAskerUnresolved_NoMetadataLeak(t *testing.T) {
 	})
 	t.Run("neighbors_private_root", func(t *testing.T) {
 		path := "/api/graph/node/" + url.QueryEscape(askerPrivate) + "/neighbors?kind=REFERENCES"
-		w := askerRequest(t, h, path, "nobody@example.com")
+		w := askerRequest(t, h, path, "plain@example.com")
 		if w.Code != http.StatusNotFound || w.Body.String() != "not found\n" {
 			t.Fatalf("hidden root: status=%d body=%s", w.Code, w.Body.String())
 		}
@@ -265,8 +230,8 @@ func TestAskerUnresolved_NoMetadataLeak(t *testing.T) {
 	t.Run("neighbors_root_query_error", func(t *testing.T) {
 		closedPool := openTestDB(t)
 		closedPool.Close()
-		// Keep expansion and ACL building healthy: ignoring the root-query
-		// error must reach a 200 response, not another database failure.
+		// The asker lookup shares the closed pool, so the request fails closed
+		// before the root query: 503, never a 200.
 		handler := &neighborsHandler{
 			db:     closedPool,
 			exp:    bfs.NewExpander(pool),
@@ -274,10 +239,8 @@ func TestAskerUnresolved_NoMetadataLeak(t *testing.T) {
 		}
 		r := chi.NewRouter()
 		r.Get("/api/graph/node/{id}/neighbors", handler.serve)
-		// A nonempty header keeps the root guard enabled even when the
-		// identity lookup fails on the closed pool.
 		w := askerRequest(t, r, "/api/graph/node/"+url.QueryEscape(askerRoot)+"/neighbors?kind=REFERENCES", "nobody@example.com")
-		if w.Code != http.StatusInternalServerError {
+		if w.Code != http.StatusServiceUnavailable {
 			t.Fatalf("root query error: status=%d body=%s", w.Code, w.Body.String())
 		}
 	})

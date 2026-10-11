@@ -47,6 +47,8 @@ func TestContextTraceResolveAndSearchResponses(t *testing.T) {
 	if _, err := pool.Exec(context.Background(), `DELETE FROM graph.context_traces WHERE build_rev='rev-test'`); err != nil {
 		t.Fatal(err)
 	}
+	aclExec(t, pool, `DELETE FROM graph.people WHERE eeid = 5`)
+	aclPerson(t, pool, 5, "trace-five@example.com")
 	recorder := graphtrace.NewRecorder(graphtrace.PostgresStore{DB: pool}, graphtrace.Options{})
 	resolve, _ := NewResolve(pool)
 	search, _ := NewSearchWithEmbedder(pool, compatibilityEmbedder{})
@@ -57,7 +59,10 @@ func TestContextTraceResolveAndSearchResponses(t *testing.T) {
 	}{{"resolve-ok", "resolve", "POST", "/api/graph/resolve", `{"seeds":["slack:CGC0:100.000001"]}`, resolve, 200}, {"resolve-decoded-asker", "resolve", "POST", "/api/graph/resolve", `{"seeds":["slack:CGC0:100.000001"],"Asker_EEID":5}`, resolve, 200}, {"resolve-error", "resolve", "POST", "/api/graph/resolve", `{}`, resolve, 400}, {"search-ordinary", "search", "GET", "/api/graph/search?q=phase+zero", "", search, 200}, {"search-hybrid", "search", "GET", "/api/graph/search?q=phase+zero&match=hybrid", "", search, 200}, {"search-error", "search", "GET", "/api/graph/search", "", search, 400}}
 	ids := map[string]string{}
 	for _, tc := range cases {
-		r := httptest.NewRequest(tc.method, tc.target, bytes.NewBufferString(tc.body))
+		r := adminRequest(tc.method, tc.target, bytes.NewBufferString(tc.body))
+		if tc.name == "resolve-decoded-asker" {
+			r.Header.Del(adminHeader) // a named asker, not admin
+		}
 		w := httptest.NewRecorder()
 		withContextTrace(tc.handler, tc.route, "rev-test", recorder).ServeHTTP(w, r)
 		if w.Code != tc.status {
@@ -96,7 +101,7 @@ func TestContextTraceResolveAndSearchResponses(t *testing.T) {
 	if !bytes.Contains(request, []byte(`"canonical_seeds"`)) {
 		t.Fatalf("resolve request missing canonical seeds: %s", request)
 	}
-	for name, want := range map[string]string{"resolve-ok": "unfiltered", "resolve-decoded-asker": "filtered", "resolve-error": "not-evaluated", "search-ordinary": "unfiltered", "search-hybrid": "unfiltered", "search-error": "not-evaluated"} {
+	for name, want := range map[string]string{"resolve-ok": "admin", "resolve-decoded-asker": "filtered", "resolve-error": "admin", "search-ordinary": "admin", "search-hybrid": "admin", "search-error": "admin"} {
 		if err := pool.QueryRow(context.Background(), `SELECT acl_mode FROM graph.context_traces WHERE id=$1`, ids[name]).Scan(&aclMode); err != nil {
 			t.Fatal(err)
 		}
@@ -130,7 +135,7 @@ func TestContextTraceStoresSearchArmErrors(t *testing.T) {
 	}
 	store := &captureTraceStore{}
 	recorder := graphtrace.NewRecorder(store, graphtrace.Options{})
-	withContextTrace(search, "search", "test", recorder).ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/api/graph/search?q=phase+zero&match=hybrid", nil))
+	withContextTrace(search, "search", "test", recorder).ServeHTTP(httptest.NewRecorder(), adminRequest(http.MethodGet, "/api/graph/search?q=phase+zero&match=hybrid", nil))
 	recorder.Close(time.Second)
 	request := store.one(t).Request.(map[string]any)
 	armErrors, ok := request["arm_errors"].(map[string]string)
@@ -156,11 +161,16 @@ func TestContextTraceRecordsMembershipFailureACLMode(t *testing.T) {
 	search.aclBld = fixedScopeBuilder{err: context.Canceled}
 	store := &captureTraceStore{}
 	recorder := graphtrace.NewRecorder(store, graphtrace.Options{})
-	r := httptest.NewRequest(http.MethodGet, "/api/graph/search?q=phase+zero", nil)
-	r.Header.Set("X-Asker-User", "trace-failure@example.com")
-	withContextTrace(search, "search", "test", recorder).ServeHTTP(httptest.NewRecorder(), r)
+	r := adminRequest(http.MethodGet, "/api/graph/search?q=phase+zero", nil)
+	setAsker(r, "trace-failure@example.com")
+	w := httptest.NewRecorder()
+	withContextTrace(search, "search", "test", recorder).ServeHTTP(w, r)
 	recorder.Close(time.Second)
-	if got := store.one(t).ACLMode; got != "filtered-membership-error" {
-		t.Fatalf("acl_mode=%q", got)
+	rec := store.one(t)
+	if w.Code != http.StatusServiceUnavailable || rec.ACLMode != "rejected" {
+		t.Fatalf("status=%d acl_mode=%q", w.Code, rec.ACLMode)
+	}
+	if items, _ := rec.Items.([]map[string]any); len(items) != 0 {
+		t.Fatalf("rejected trace has items: %v", rec.Items)
 	}
 }

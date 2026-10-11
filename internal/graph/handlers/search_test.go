@@ -25,7 +25,7 @@ func TestSearch_SemanticAndType(t *testing.T) {
 
 	r := httptest.NewRequest("GET",
 		"/api/graph/search?q=TripleA+refund&types=slack_thread&limit=5", nil)
-	r.Header.Set("X-Asker-User", "U07UAC0J7T3")
+	r.Header.Set("X-Graph-Admin", "1")
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
 
@@ -77,7 +77,7 @@ VALUES
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := httptest.NewRequest("GET", "/api/graph/search?q=payment&limit=10", nil)
+	r := adminRequest("GET", "/api/graph/search?q=payment&limit=10", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
 	if w.Code != http.StatusOK {

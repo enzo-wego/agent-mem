@@ -248,7 +248,7 @@ func TestEpicEndpoint_Fixture(t *testing.T) {
 	r.Method("GET", "/api/graph/epic/{key}", NewEpic(pool))
 	get := func(key string) (int, epicResponse) {
 		t.Helper()
-		req := httptest.NewRequest("GET", "/api/graph/epic/"+key, nil)
+		req := adminRequest("GET", "/api/graph/epic/"+key, nil)
 		w := httptest.NewRecorder()
 		r.ServeHTTP(w, req)
 		var resp epicResponse

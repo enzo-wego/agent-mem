@@ -58,7 +58,7 @@ type armHit struct {
 // type list, ACL scopes, epic/business membership.
 type searchFilter struct {
 	types    any // []string or nil
-	scope    any // []string or nil (nil = trusted unfiltered view)
+	scope    any // []string or nil (nil = admin, unfiltered view)
 	epic     any // []string or nil
 	resolved bool
 	win      *temporal.Window // optional arm-only window; sql and args ignore it
