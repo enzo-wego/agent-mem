@@ -4,13 +4,55 @@ source_thread: https://wego.slack.com/archives/CUV9EAYGY/p1790583455729009
 asker_slack_id: U061HHMF540
 asker_eeid: 708
 needs_context: yes
-canonical_seeds: []
+canonical_seeds: ["slack:CUV9EAYGY:1790583455.729009"]
 requests:
   resolve-asker0: {body: {seeds: ["https://wego.slack.com/archives/CUV9EAYGY/p1790583455729009"], query: &query "@EnzoBot Share logs for Razorpay payments with order ID - `[payment-ref]` `[payment-ref]`", depth: 2, include_bodies: false, asker_eeid: 0}, headers: {}}
   resolve-asker: {body: {seeds: ["https://wego.slack.com/archives/CUV9EAYGY/p1790583455729009"], query: *query, depth: 2, include_bodies: false, asker_eeid: 708}, headers: {}}
   search-hybrid: {params: {q: *query, match: hybrid, limit: 10, types: "slack,slack_thread,gh_pr,jira,cf,cf_page,gws,gws_doc,gdoc,wegohub,claude_artifact,pagerduty,sentry,datadog"}, headers: {}}
-labels: {resolve: {must: [], may: [], must_not: []}, search: {must: [], may: [], must_not: []}}
-label_reasons: {}
-labelled_by: none
+labels:
+    resolve:
+        must: []
+        may:
+            - "slack:CUV9EAYGY:1791275711.697059"
+            - "slack:CUV9EAYGY:1791275487.527819"
+            - "slack:CUV9EAYGY:1790596401.054029"
+            - "slack:CUV9EAYGY:1790595685.855469"
+            - "slack:CUV9EAYGY:1791275848.972429"
+            - "slack:CUV9EAYGY:1791275561.730099"
+            - "slack:CUV9EAYGY:1790596423.212039"
+            - "slack:CUV9EAYGY:1790595892.815329"
+            - "slack:CUV9EAYGY:1790583677.251599"
+            - "slack:CUV9EAYGY:1790583676.032269"
+            - "slack_file:F0C4S3TBZ9B"
+            - "jira:PAY-2427"
+            - "slack:CUV9EAYGY:1791275545.338249"
+            - "slack:C0597404MS6:1791463615.025999"
+        must_not: []
+    search:
+        must:
+            - "slack:CUV9EAYGY:1790579932.705169"
+        may:
+            - "slack:CUV9EAYGY:1791457916.047199"
+        must_not:
+            - "slack:CUV9EAYGY:1782304774.725899"
+label_reasons:
+    "slack:CUV9EAYGY:1791275711.697059": "reply in the request thread; duplicates the thread body"
+    "slack:CUV9EAYGY:1791275487.527819": "reply in the request thread; duplicates the thread body"
+    "slack:CUV9EAYGY:1790596401.054029": "reply in the request thread; duplicates the thread body"
+    "slack:CUV9EAYGY:1790595685.855469": "reply in the request thread; duplicates the thread body"
+    "slack:CUV9EAYGY:1791275848.972429": "reply in the request thread; duplicates the thread body"
+    "slack:CUV9EAYGY:1791275561.730099": "reply in the request thread; duplicates the thread body"
+    "slack:CUV9EAYGY:1790596423.212039": "reply in the request thread; duplicates the thread body"
+    "slack:CUV9EAYGY:1790595892.815329": "reply in the request thread; duplicates the thread body"
+    "slack:CUV9EAYGY:1790583677.251599": "reply in the request thread; duplicates the thread body"
+    "slack:CUV9EAYGY:1790583676.032269": "reply in the request thread; duplicates the thread body"
+    "slack_file:F0C4S3TBZ9B": "log extract posted in the request thread; harmless"
+    "jira:PAY-2427": "follow-up ticket filed from this thread (store RRN); related"
+    "slack:CUV9EAYGY:1791275545.338249": "Jira creation notice for that ticket; harmless"
+    "slack:C0597404MS6:1791463615.025999": "review thread of the PR covering that ticket; related"
+    "slack:CUV9EAYGY:1790579932.705169": "earlier thread on the same two partner payments, an hour before this request"
+    "slack:CUV9EAYGY:1791457916.047199": "later card-field check on another payment with the same partner; related"
+    "slack:CUV9EAYGY:1782304774.725899": "June failures of different payments with the same partner; different cause"
+labelled_by: fable-draft
 checked_by: null
 notes: "Draft from EnzoBot bot_mentions; labels await oracle preparation and owner review."

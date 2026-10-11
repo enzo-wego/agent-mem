@@ -4,7 +4,7 @@ source_thread: https://wego.slack.com/archives/CUV9EAYGY/p1790675479191359
 asker_slack_id: U061HHMF540
 asker_eeid: 708
 needs_context: "yes"
-canonical_seeds: []
+canonical_seeds: ["slack:CUV9EAYGY:1790675479.191359"]
 requests:
     resolve-asker:
         body:
@@ -34,13 +34,35 @@ requests:
 labels:
     resolve:
         must: []
-        may: []
+        may:
+            - "slack:CUV9EAYGY:1790761455.263339"
+            - "slack:CUV9EAYGY:1790761594.422829"
+            - "slack:CUV9EAYGY:1790761459.483409"
+            - "slack:CUV9EAYGY:1790675573.127539"
         must_not: []
     search:
         must: []
-        may: []
+        may:
+            - "jira:PAY-491"
+            - "jira:PAY-482"
+            - "jira:PAY-473"
+            - "jira:PAY-2424"
+            - "slack:CUV9EAYGY:1791183123.527889"
+            - "slack:C0736FUE03W:1790238600.056429"
+            - "slack:CD7D29QF3:1784029245.198799"
         must_not: []
-label_reasons: {}
-labelled_by: none
+label_reasons:
+    "slack:CUV9EAYGY:1790761455.263339": "reply in the request thread; duplicates the thread body"
+    "slack:CUV9EAYGY:1790761594.422829": "reply in the request thread; duplicates the thread body"
+    "slack:CUV9EAYGY:1790761459.483409": "reply in the request thread; duplicates the thread body"
+    "slack:CUV9EAYGY:1790675573.127539": "reply in the request thread; duplicates the thread body"
+    "jira:PAY-491": "Tabby create-session integration ticket; field mapping likely stale, background"
+    "jira:PAY-482": "ticket defining the two BNPL instalment method codes; background"
+    "jira:PAY-473": "Tabby evaluate endpoint ticket; background"
+    "jira:PAY-2424": "BNPL integration-mode assessment (Tamara); related"
+    "slack:CUV9EAYGY:1791183123.527889": "review request for the BNPL assessment story; related"
+    "slack:C0736FUE03W:1790238600.056429": "Tamara via Juspay integration thread; related"
+    "slack:CD7D29QF3:1784029245.198799": "Tabby eligibility (red in AED) thread; related"
+labelled_by: fable-draft
 checked_by: null
 notes: How does X work - Tabby UAE Pay in 3 vs Pay in 4 request parameter

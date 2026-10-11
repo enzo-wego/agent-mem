@@ -4,13 +4,71 @@ source_thread: https://wego.slack.com/archives/C0597404MS6/p1791515040101179
 asker_slack_id: UUK3WPNNQ
 asker_eeid: 259
 needs_context: yes
-canonical_seeds: []
+canonical_seeds: ["slack:C0597404MS6:1791515040.101179"]
 requests:
   resolve-asker0: {body: {seeds: ["https://wego.slack.com/archives/C0597404MS6/p1791515040101179"], query: &query "_Ready for review:_ test(e2e): Razorpay decline-mapping coverage (like CKO) + live verify-mapping\n\n• PR: github.com/wego/payments/pull/2421\n• Brings Razorpay to the CKO bar. Static: typed contract + fixture-driven unit cases + the documented `error_reason` slug list (`testdata/documented_error_reasons.txt`). Live: a new `razorpay-verify-mapping.spec.ts` on the IN domestic path — success → Authorized, decline → `10001` resolved through the seeded mapping (not 90000) — plus create-order request + masking via the verify API.\n• Staging decline mappings are seeded (`partner_id=29`); prod (`partner_id=9`) is still *0 rows* → flagged in the PR as an open item (seed before any IN/xpay re-enablement). Card-specific slugs aren't live-drivable on our sandbox (generic demo-bank sim), so they stay unit/seed-covered — noted in the spec header.\n• e2e + docs only. No backend/API/migration changes. Tests: tsc clean; `verify-mappings.unit` 10/10; `razorpay-verify-mapping` 2/2 on staging.\n@[colleague-agent] @EnzoBot please review :pray: *Sent using* @Claude", depth: 2, include_bodies: false, asker_eeid: 0}, headers: {}}
   resolve-asker: {body: {seeds: ["https://wego.slack.com/archives/C0597404MS6/p1791515040101179"], query: *query, depth: 2, include_bodies: false, asker_eeid: 259}, headers: {}}
   search-hybrid: {params: {q: *query, match: hybrid, limit: 10, types: "slack,slack_thread,gh_pr,jira,cf,cf_page,gws,gws_doc,gdoc,wegohub,claude_artifact,pagerduty,sentry,datadog"}, headers: {}}
-labels: {resolve: {must: [], may: [], must_not: []}, search: {must: [], may: [], must_not: []}}
-label_reasons: {}
-labelled_by: none
+labels:
+    resolve:
+        must:
+            - "jira:PAY-2439"
+        may:
+            - "slack:C0597404MS6:1791517965.355539"
+            - "slack:C0597404MS6:1791518389.120009"
+            - "slack:C0597404MS6:1791524738.005939"
+            - "slack:C0597404MS6:1791524025.391769"
+            - "slack:C0597404MS6:1791517392.118449"
+            - "slack:C0597404MS6:1791520100.391429"
+            - "slack:C0597404MS6:1791519969.489609"
+            - "slack:C0597404MS6:1791519969.600939"
+            - "slack:C0597404MS6:1791519968.835479"
+            - "slack:C0597404MS6:1791518423.965479"
+            - "slack:C0597404MS6:1791517980.756599"
+            - "slack:C0597404MS6:1791516257.080299"
+            - "slack:C0597404MS6:1791516048.419969"
+            - "slack:C0597404MS6:1791516047.969509"
+            - "slack:C0597404MS6:1791515242.788819"
+            - "slack:C0597404MS6:1791515223.055179"
+            - "jira:PAY-2189"
+        must_not: []
+    search:
+        must:
+            - "gh_pr:wego/payments#2421"
+            - "slack:CUV9EAYGY:1791464133.279469"
+        may:
+            - "slack:CUV9EAYGY:1791449691.061749"
+            - "slack:C0597404MS6:1790776998.846049"
+            - "slack:C0597404MS6:1791463615.025999"
+            - "slack:CUV9EAYGY:1791458667.701669"
+            - "slack:CUV9EAYGY:1790760806.607149"
+        must_not: []
+label_reasons:
+    "jira:PAY-2439": "decline-mapping config ticket the PR's open item (prod mappings not seeded) depends on"
+    "slack:C0597404MS6:1791517965.355539": "reply in the request thread; duplicates the thread body"
+    "slack:C0597404MS6:1791518389.120009": "reply in the request thread; duplicates the thread body"
+    "slack:C0597404MS6:1791524738.005939": "reply in the request thread; duplicates the thread body"
+    "slack:C0597404MS6:1791524025.391769": "reply in the request thread; duplicates the thread body"
+    "slack:C0597404MS6:1791517392.118449": "reply in the request thread; duplicates the thread body"
+    "slack:C0597404MS6:1791520100.391429": "reply in the request thread; duplicates the thread body"
+    "slack:C0597404MS6:1791519969.489609": "reply in the request thread; duplicates the thread body"
+    "slack:C0597404MS6:1791519969.600939": "reply in the request thread; duplicates the thread body"
+    "slack:C0597404MS6:1791519968.835479": "reply in the request thread; duplicates the thread body"
+    "slack:C0597404MS6:1791518423.965479": "reply in the request thread; duplicates the thread body"
+    "slack:C0597404MS6:1791517980.756599": "reply in the request thread; duplicates the thread body"
+    "slack:C0597404MS6:1791516257.080299": "reply in the request thread; duplicates the thread body"
+    "slack:C0597404MS6:1791516048.419969": "reply in the request thread; duplicates the thread body"
+    "slack:C0597404MS6:1791516047.969509": "reply in the request thread; duplicates the thread body"
+    "slack:C0597404MS6:1791515242.788819": "reply in the request thread; duplicates the thread body"
+    "slack:C0597404MS6:1791515223.055179": "reply in the request thread; duplicates the thread body"
+    "jira:PAY-2189": "earlier webhook PII masking bug; related to the PR's masking thread"
+    "gh_pr:wego/payments#2421": "the PR under review"
+    "slack:CUV9EAYGY:1791464133.279469": "thread on seeding the decline mappings the PR tests (staging done, production pending)"
+    "slack:CUV9EAYGY:1791449691.061749": "sibling fix for the Sentry warning raised by the same E2E decline flow; related"
+    "slack:C0597404MS6:1790776998.846049": "earlier review of another PR for the same partner; background"
+    "slack:C0597404MS6:1791463615.025999": "review of the partner card-data PR; background"
+    "slack:CUV9EAYGY:1791458667.701669": "delivery of the partner card-data PR; background"
+    "slack:CUV9EAYGY:1790760806.607149": "webhook secret work for the same partner; background"
+labelled_by: fable-draft
 checked_by: null
 notes: "Draft from EnzoBot bot_mentions; labels await oracle preparation and owner review."

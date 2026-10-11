@@ -1,0 +1,4088 @@
+{
+  "gh_pr:wego/olympias#4142": {
+    "type": "gh_pr",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "gh_pr:wego/payments#1436": {
+    "type": "gh_pr",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "gh_pr:wego/payments#1482": {
+    "type": "gh_pr",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "gh_pr:wego/payments#1567": {
+    "type": "gh_pr",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "gh_pr:wego/payments#1632": {
+    "type": "gh_pr",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "gh_pr:wego/payments#1695": {
+    "type": "gh_pr",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "gh_pr:wego/payments#1828": {
+    "type": "gh_pr",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "gh_pr:wego/payments#1953": {
+    "type": "gh_pr",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "gh_pr:wego/payments#2380": {
+    "type": "gh_pr",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "gh_pr:wego/payments#2386": {
+    "type": "gh_pr",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "gh_pr:wego/payments#2399": {
+    "type": "gh_pr",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "gh_pr:wego/payments#2417": {
+    "type": "gh_pr",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "gh_pr:wego/payments#2418": {
+    "type": "gh_pr",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "gh_pr:wego/payments#2421": {
+    "type": "gh_pr",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "gh_pr:wego/payments#2424": {
+    "type": "gh_pr",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "gh_pr:wego/payments-knowledge#45": {
+    "type": "gh_pr",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "gh_pr:wego/wego-fares#4672": {
+    "type": "gh_pr",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "jira:FBOWINT-1980": {
+    "type": "jira",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "jira:FBT-1535": {
+    "type": "jira",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "jira:FS-829": {
+    "type": "jira",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "jira:HIB-4007": {
+    "type": "jira",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "jira:PAY-1591": {
+    "type": "jira",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "jira:PAY-1731": {
+    "type": "jira",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "jira:PAY-1832": {
+    "type": "jira",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "jira:PAY-1983": {
+    "type": "jira",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "jira:PAY-2": {
+    "type": "jira",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "jira:PAY-2189": {
+    "type": "jira",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "jira:PAY-2210": {
+    "type": "jira",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "jira:PAY-2220": {
+    "type": "jira",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "jira:PAY-2307": {
+    "type": "jira",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "jira:PAY-2325": {
+    "type": "jira",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "jira:PAY-2331": {
+    "type": "jira",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "jira:PAY-2333": {
+    "type": "jira",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "jira:PAY-2355": {
+    "type": "jira",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "jira:PAY-2373": {
+    "type": "jira",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "jira:PAY-2398": {
+    "type": "jira",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "jira:PAY-2409": {
+    "type": "jira",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "jira:PAY-2424": {
+    "type": "jira",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "jira:PAY-2427": {
+    "type": "jira",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "jira:PAY-2434": {
+    "type": "jira",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "jira:PAY-2436": {
+    "type": "jira",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "jira:PAY-2438": {
+    "type": "jira",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "jira:PAY-2439": {
+    "type": "jira",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "jira:PAY-2443": {
+    "type": "jira",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "jira:PAY-473": {
+    "type": "jira",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "jira:PAY-482": {
+    "type": "jira",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "jira:PAY-491": {
+    "type": "jira",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "jira_attachment:98791": {
+    "type": "jira_attachment",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "slack:C012A121AQJ:1788233552.703659": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "slack:C019B36KGNR:1779443460.574969": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C019B36KGNR:1779440396.626379"
+  },
+  "slack:C019B36KGNR:1779443938.213489": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C019B36KGNR:1779440396.626379"
+  },
+  "slack:C019B36KGNR:1779444518.824219": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C019B36KGNR:1779440396.626379"
+  },
+  "slack:C019B36KGNR:1779444531.517859": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C019B36KGNR:1779440396.626379"
+  },
+  "slack:C019B36KGNR:1779444669.677019": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C019B36KGNR:1779440396.626379"
+  },
+  "slack:C019B36KGNR:1786686430.689919": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C019B36KGNR:1779440396.626379"
+  },
+  "slack:C019B36KGNR:1787296531.074889": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C019B36KGNR:1779440396.626379"
+  },
+  "slack:C019B36KGNR:1791526199.928429": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C019B36KGNR:1779440396.626379"
+  },
+  "slack:C019B36KGNR:1791548199.239769": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C019B36KGNR:1779440396.626379"
+  },
+  "slack:C019B36KGNR:1791705732.813769": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C019B36KGNR:1779440396.626379"
+  },
+  "slack:C019B36KGNR:1791706013.342769": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C019B36KGNR:1779440396.626379"
+  },
+  "slack:C02NA2MA5K5:1790050904.785109": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:C02NA2MA5K5:1790050904.785109"
+  },
+  "slack:C02NA2MA5K5:1790825901.094749": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C02NA2MA5K5:1790050904.785109"
+  },
+  "slack:C02NA2MA5K5:1790843740.166339": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C02NA2MA5K5:1790050904.785109"
+  },
+  "slack:C048WV1BZTK:1790153746.509909": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:C048WV1BZTK:1790153746.509909"
+  },
+  "slack:C048WV1BZTK:1790153877.942759": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C048WV1BZTK:1790153746.509909"
+  },
+  "slack:C048WV1BZTK:1790154260.451289": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C048WV1BZTK:1790153746.509909"
+  },
+  "slack:C048WV1BZTK:1790154409.822029": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C048WV1BZTK:1790153746.509909"
+  },
+  "slack:C048WV1BZTK:1790154485.125599": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C048WV1BZTK:1790153746.509909"
+  },
+  "slack:C048WV1BZTK:1790172640.301779": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C048WV1BZTK:1790153746.509909"
+  },
+  "slack:C048WV1BZTK:1790172731.887589": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C048WV1BZTK:1790153746.509909"
+  },
+  "slack:C048WV1BZTK:1790172766.810149": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C048WV1BZTK:1790153746.509909"
+  },
+  "slack:C048WV1BZTK:1790172827.196179": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C048WV1BZTK:1790153746.509909"
+  },
+  "slack:C048WV1BZTK:1790214858.471089": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C048WV1BZTK:1790153746.509909"
+  },
+  "slack:C048WV1BZTK:1790241975.889839": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C048WV1BZTK:1790153746.509909"
+  },
+  "slack:C048WV1BZTK:1790300174.048749": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C048WV1BZTK:1790153746.509909"
+  },
+  "slack:C048WV1BZTK:1790738411.984129": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "slack:C048WV1BZTK:1790759387.317919": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C048WV1BZTK:1790153746.509909"
+  },
+  "slack:C048WV1BZTK:1790760528.861349": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C048WV1BZTK:1790153746.509909"
+  },
+  "slack:C048WV1BZTK:1790854753.992769": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C048WV1BZTK:1790153746.509909"
+  },
+  "slack:C048WV1BZTK:1791173052.560959": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C048WV1BZTK:1790153746.509909"
+  },
+  "slack:C048WV1BZTK:1791198786.956159": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C048WV1BZTK:1790153746.509909"
+  },
+  "slack:C048WV1BZTK:1791199168.649989": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C048WV1BZTK:1790153746.509909"
+  },
+  "slack:C048WV1BZTK:1791200676.978539": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C048WV1BZTK:1790153746.509909"
+  },
+  "slack:C048WV1BZTK:1791202622.254359": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C048WV1BZTK:1790153746.509909"
+  },
+  "slack:C048WV1BZTK:1791257816.248839": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C048WV1BZTK:1790153746.509909"
+  },
+  "slack:C048WV1BZTK:1791257960.444179": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C048WV1BZTK:1790153746.509909"
+  },
+  "slack:C048WV1BZTK:1791258064.786589": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C048WV1BZTK:1790153746.509909"
+  },
+  "slack:C048WV1BZTK:1791258200.764449": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C048WV1BZTK:1790153746.509909"
+  },
+  "slack:C048WV1BZTK:1791259055.726579": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C048WV1BZTK:1790153746.509909"
+  },
+  "slack:C048WV1BZTK:1791259058.573449": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C048WV1BZTK:1790153746.509909"
+  },
+  "slack:C048WV1BZTK:1791259114.340249": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C048WV1BZTK:1790153746.509909"
+  },
+  "slack:C048WV1BZTK:1791259115.973479": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C048WV1BZTK:1790153746.509909"
+  },
+  "slack:C048WV1BZTK:1791286026.062189": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C048WV1BZTK:1790153746.509909"
+  },
+  "slack:C048WV1BZTK:1791286130.277719": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C048WV1BZTK:1790153746.509909"
+  },
+  "slack:C048WV1BZTK:1791286291.944479": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C048WV1BZTK:1790153746.509909"
+  },
+  "slack:C048WV1BZTK:1791286664.367379": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C048WV1BZTK:1790153746.509909"
+  },
+  "slack:C048WV1BZTK:1791286716.896719": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C048WV1BZTK:1790153746.509909"
+  },
+  "slack:C048WV1BZTK:1791287625.218079": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C048WV1BZTK:1790153746.509909"
+  },
+  "slack:C048WV1BZTK:1791287761.138989": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C048WV1BZTK:1790153746.509909"
+  },
+  "slack:C048WV1BZTK:1791287822.268139": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C048WV1BZTK:1790153746.509909"
+  },
+  "slack:C048WV1BZTK:1791344936.090439": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C048WV1BZTK:1790153746.509909"
+  },
+  "slack:C048WV1BZTK:1791345537.279829": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C048WV1BZTK:1790153746.509909"
+  },
+  "slack:C048WV1BZTK:1791345742.403589": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C048WV1BZTK:1790153746.509909"
+  },
+  "slack:C048WV1BZTK:1791347305.501969": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C048WV1BZTK:1790153746.509909"
+  },
+  "slack:C048WV1BZTK:1791347994.098279": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C048WV1BZTK:1790153746.509909"
+  },
+  "slack:C048WV1BZTK:1791348098.394739": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C048WV1BZTK:1790153746.509909"
+  },
+  "slack:C048WV1BZTK:1791348316.108889": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C048WV1BZTK:1790153746.509909"
+  },
+  "slack:C048WV1BZTK:1791348317.264159": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C048WV1BZTK:1790153746.509909"
+  },
+  "slack:C04M1R6NQNB:1788846163.521369": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:C04M1R6NQNB:1788846163.521369"
+  },
+  "slack:C04U4KATYUV:1776925780.510689": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:C04U4KATYUV:1776925780.510689"
+  },
+  "slack:C0597404MS6:1784628239.171619": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "slack:C0597404MS6:1784711845.555369": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:C0597404MS6:1784711845.555369"
+  },
+  "slack:C0597404MS6:1787899497.425479": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:C0597404MS6:1787899497.425479"
+  },
+  "slack:C0597404MS6:1788747603.917219": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:C0597404MS6:1788747603.917219"
+  },
+  "slack:C0597404MS6:1788767469.070699": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "slack:C0597404MS6:1789280266.455889": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:C0597404MS6:1789280266.455889"
+  },
+  "slack:C0597404MS6:1789364479.031479": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:C0597404MS6:1789364479.031479"
+  },
+  "slack:C0597404MS6:1789973914.405409": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:C0597404MS6:1789973914.405409"
+  },
+  "slack:C0597404MS6:1790185586.702809": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:C0597404MS6:1790185586.702809"
+  },
+  "slack:C0597404MS6:1790436394.043429": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "slack:C0597404MS6:1790584722.815719": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:C0597404MS6:1790584722.815719"
+  },
+  "slack:C0597404MS6:1790776998.846049": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:C0597404MS6:1790776998.846049"
+  },
+  "slack:C0597404MS6:1790811819.880269": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0597404MS6:1790776998.846049"
+  },
+  "slack:C0597404MS6:1790811832.932599": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0597404MS6:1790776998.846049"
+  },
+  "slack:C0597404MS6:1790816359.829979": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "slack:C0597404MS6:1790816616.796599": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0597404MS6:1790776998.846049"
+  },
+  "slack:C0597404MS6:1790816624.840609": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0597404MS6:1790776998.846049"
+  },
+  "slack:C0597404MS6:1790816629.851469": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0597404MS6:1790776998.846049"
+  },
+  "slack:C0597404MS6:1790817132.813089": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0597404MS6:1790776998.846049"
+  },
+  "slack:C0597404MS6:1790817147.268399": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0597404MS6:1790776998.846049"
+  },
+  "slack:C0597404MS6:1790817191.307049": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0597404MS6:1790776998.846049"
+  },
+  "slack:C0597404MS6:1790817205.106479": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0597404MS6:1790776998.846049"
+  },
+  "slack:C0597404MS6:1790817223.537209": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0597404MS6:1790776998.846049"
+  },
+  "slack:C0597404MS6:1790817570.843509": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0597404MS6:1790776998.846049"
+  },
+  "slack:C0597404MS6:1790818056.842579": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0597404MS6:1790776998.846049"
+  },
+  "slack:C0597404MS6:1790818285.514249": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0597404MS6:1790776998.846049"
+  },
+  "slack:C0597404MS6:1790818406.290079": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0597404MS6:1790776998.846049"
+  },
+  "slack:C0597404MS6:1790818909.377819": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0597404MS6:1790776998.846049"
+  },
+  "slack:C0597404MS6:1790824200.675769": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0597404MS6:1790776998.846049"
+  },
+  "slack:C0597404MS6:1790824220.463779": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0597404MS6:1790776998.846049"
+  },
+  "slack:C0597404MS6:1790824330.457979": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0597404MS6:1790776998.846049"
+  },
+  "slack:C0597404MS6:1790824996.067429": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0597404MS6:1790776998.846049"
+  },
+  "slack:C0597404MS6:1790825275.391459": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0597404MS6:1790776998.846049"
+  },
+  "slack:C0597404MS6:1790825433.795519": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0597404MS6:1790776998.846049"
+  },
+  "slack:C0597404MS6:1790826981.147449": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0597404MS6:1790776998.846049"
+  },
+  "slack:C0597404MS6:1790827130.534759": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0597404MS6:1790776998.846049"
+  },
+  "slack:C0597404MS6:1790827154.250499": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0597404MS6:1790776998.846049"
+  },
+  "slack:C0597404MS6:1790827627.664199": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0597404MS6:1790776998.846049"
+  },
+  "slack:C0597404MS6:1790827645.509469": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0597404MS6:1790776998.846049"
+  },
+  "slack:C0597404MS6:1790827804.772449": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0597404MS6:1790776998.846049"
+  },
+  "slack:C0597404MS6:1790827903.821969": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0597404MS6:1790776998.846049"
+  },
+  "slack:C0597404MS6:1790828049.216629": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0597404MS6:1790776998.846049"
+  },
+  "slack:C0597404MS6:1790828153.090419": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0597404MS6:1790776998.846049"
+  },
+  "slack:C0597404MS6:1790828159.735169": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0597404MS6:1790776998.846049"
+  },
+  "slack:C0597404MS6:1790828163.653989": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0597404MS6:1790776998.846049"
+  },
+  "slack:C0597404MS6:1790828178.482549": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0597404MS6:1790776998.846049"
+  },
+  "slack:C0597404MS6:1790828183.134909": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0597404MS6:1790776998.846049"
+  },
+  "slack:C0597404MS6:1790828189.392399": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0597404MS6:1790776998.846049"
+  },
+  "slack:C0597404MS6:1790828851.896339": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0597404MS6:1790776998.846049"
+  },
+  "slack:C0597404MS6:1790828865.383539": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0597404MS6:1790776998.846049"
+  },
+  "slack:C0597404MS6:1790846009.341309": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:C0597404MS6:1790846009.341309"
+  },
+  "slack:C0597404MS6:1790902794.345659": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "slack:C0597404MS6:1790921650.721779": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "slack:C0597404MS6:1790921752.028109": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0597404MS6:1790921650.721779"
+  },
+  "slack:C0597404MS6:1790922067.574619": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0597404MS6:1790921650.721779"
+  },
+  "slack:C0597404MS6:1790922080.906309": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0597404MS6:1790921650.721779"
+  },
+  "slack:C0597404MS6:1790922235.539049": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0597404MS6:1790921650.721779"
+  },
+  "slack:C0597404MS6:1790922386.533269": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0597404MS6:1790921650.721779"
+  },
+  "slack:C0597404MS6:1791129605.091919": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0597404MS6:1790921650.721779"
+  },
+  "slack:C0597404MS6:1791191684.293089": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "slack:C0597404MS6:1791216007.710379": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0597404MS6:1790921650.721779"
+  },
+  "slack:C0597404MS6:1791274670.702059": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:C0597404MS6:1791274670.702059"
+  },
+  "slack:C0597404MS6:1791302407.250579": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0597404MS6:1790921650.721779"
+  },
+  "slack:C0597404MS6:1791463615.025999": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:C0597404MS6:1791463615.025999"
+  },
+  "slack:C0597404MS6:1791507558.099699": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "slack:C0597404MS6:1791513032.902789": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:C0597404MS6:1791513032.902789"
+  },
+  "slack:C0597404MS6:1791515040.101179": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:C0597404MS6:1791515040.101179"
+  },
+  "slack:C0597404MS6:1791515223.055179": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0597404MS6:1791515040.101179"
+  },
+  "slack:C0597404MS6:1791515242.788819": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0597404MS6:1791515040.101179"
+  },
+  "slack:C0597404MS6:1791516047.969509": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0597404MS6:1791515040.101179"
+  },
+  "slack:C0597404MS6:1791516048.419969": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0597404MS6:1791515040.101179"
+  },
+  "slack:C0597404MS6:1791516257.080299": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0597404MS6:1791515040.101179"
+  },
+  "slack:C0597404MS6:1791517392.118449": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0597404MS6:1791515040.101179"
+  },
+  "slack:C0597404MS6:1791517965.355539": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0597404MS6:1791515040.101179"
+  },
+  "slack:C0597404MS6:1791517980.756599": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0597404MS6:1791515040.101179"
+  },
+  "slack:C0597404MS6:1791518389.120009": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0597404MS6:1791515040.101179"
+  },
+  "slack:C0597404MS6:1791518423.965479": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0597404MS6:1791515040.101179"
+  },
+  "slack:C0597404MS6:1791519968.835479": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0597404MS6:1791515040.101179"
+  },
+  "slack:C0597404MS6:1791519969.489609": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0597404MS6:1791515040.101179"
+  },
+  "slack:C0597404MS6:1791519969.600939": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0597404MS6:1791515040.101179"
+  },
+  "slack:C0597404MS6:1791519992.938819": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:C0597404MS6:1791519992.938819"
+  },
+  "slack:C0597404MS6:1791520100.391429": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0597404MS6:1791515040.101179"
+  },
+  "slack:C0597404MS6:1791521549.119569": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0597404MS6:1791519992.938819"
+  },
+  "slack:C0597404MS6:1791521620.915809": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0597404MS6:1791519992.938819"
+  },
+  "slack:C0597404MS6:1791521681.347119": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0597404MS6:1791519992.938819"
+  },
+  "slack:C0597404MS6:1791521691.027959": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0597404MS6:1791519992.938819"
+  },
+  "slack:C0597404MS6:1791521871.234249": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0597404MS6:1791519992.938819"
+  },
+  "slack:C0597404MS6:1791521885.075679": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0597404MS6:1791519992.938819"
+  },
+  "slack:C0597404MS6:1791521903.214029": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0597404MS6:1791519992.938819"
+  },
+  "slack:C0597404MS6:1791521945.129509": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0597404MS6:1791519992.938819"
+  },
+  "slack:C0597404MS6:1791522003.298389": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0597404MS6:1791519992.938819"
+  },
+  "slack:C0597404MS6:1791524025.391769": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0597404MS6:1791515040.101179"
+  },
+  "slack:C0597404MS6:1791524738.005939": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0597404MS6:1791515040.101179"
+  },
+  "slack:C0597404MS6:1791525323.961089": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0597404MS6:1791519992.938819"
+  },
+  "slack:C0597404MS6:1791525359.688019": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0597404MS6:1791519992.938819"
+  },
+  "slack:C0597404MS6:1791525541.435519": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0597404MS6:1791519992.938819"
+  },
+  "slack:C0597404MS6:1791525690.694219": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0597404MS6:1791519992.938819"
+  },
+  "slack:C0597404MS6:1791525734.125699": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0597404MS6:1791519992.938819"
+  },
+  "slack:C0597404MS6:1791526213.092039": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0597404MS6:1791519992.938819"
+  },
+  "slack:C0597404MS6:1791526239.310559": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0597404MS6:1791519992.938819"
+  },
+  "slack:C0597404MS6:1791526453.869539": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0597404MS6:1791519992.938819"
+  },
+  "slack:C0597404MS6:1791526877.400059": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0597404MS6:1791519992.938819"
+  },
+  "slack:C0597404MS6:1791527520.401569": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0597404MS6:1791519992.938819"
+  },
+  "slack:C0597404MS6:1791527584.544309": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0597404MS6:1791519992.938819"
+  },
+  "slack:C0597404MS6:1791527616.264819": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0597404MS6:1791519992.938819"
+  },
+  "slack:C0597404MS6:1791530504.799019": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0597404MS6:1791519992.938819"
+  },
+  "slack:C0597404MS6:1791530542.515719": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0597404MS6:1791519992.938819"
+  },
+  "slack:C0597404MS6:1791530571.115139": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0597404MS6:1791519992.938819"
+  },
+  "slack:C0597404MS6:1791532200.695099": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0597404MS6:1791519992.938819"
+  },
+  "slack:C0597404MS6:1791532279.236759": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0597404MS6:1791519992.938819"
+  },
+  "slack:C0597404MS6:1791564134.946149": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:C0597404MS6:1791564134.946149"
+  },
+  "slack:C0597404MS6:1791587998.712849": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0597404MS6:1791564134.946149"
+  },
+  "slack:C0597404MS6:1791598453.694649": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0597404MS6:1791564134.946149"
+  },
+  "slack:C05RNSE8TBR:1711438647.937599": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:C05RNSE8TBR:1711438647.937599"
+  },
+  "slack:C05RNSE8TBR:1779171181.571149": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:C05RNSE8TBR:1779171181.571149"
+  },
+  "slack:C05RNSE8TBR:1780310885.959879": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:C05RNSE8TBR:1780310885.959879"
+  },
+  "slack:C05RNSE8TBR:1782981959.887309": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:C05RNSE8TBR:1782981959.887309"
+  },
+  "slack:C05RNSE8TBR:1783430781.007079": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:C05RNSE8TBR:1783430781.007079"
+  },
+  "slack:C05RNSE8TBR:1787558178.483839": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "slack:C05RNSE8TBR:1787624960.795129": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:C05RNSE8TBR:1787624960.795129"
+  },
+  "slack:C05RNSE8TBR:1788259009.515069": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:C05RNSE8TBR:1788259009.515069"
+  },
+  "slack:C05RNSE8TBR:1788444667.445439": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "slack:C05RNSE8TBR:1789024318.585359": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:C05RNSE8TBR:1789024318.585359"
+  },
+  "slack:C05RNSE8TBR:1789434997.643049": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:C05RNSE8TBR:1789434997.643049"
+  },
+  "slack:C05RNSE8TBR:1789643629.767579": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "slack:C05RNSE8TBR:1789644261.366439": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:C05RNSE8TBR:1789644261.366439"
+  },
+  "slack:C05RNSE8TBR:1789652993.421099": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:C05RNSE8TBR:1789652993.421099"
+  },
+  "slack:C05RNSE8TBR:1790574910.456809": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:C05RNSE8TBR:1790574910.456809"
+  },
+  "slack:C05RNSE8TBR:1790687262.932899": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:C05RNSE8TBR:1790687262.932899"
+  },
+  "slack:C05RNSE8TBR:1790834828.596929": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:C05RNSE8TBR:1790834828.596929"
+  },
+  "slack:C05RNSE8TBR:1790835507.061979": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C05RNSE8TBR:1790834828.596929"
+  },
+  "slack:C05RNSE8TBR:1790836255.188369": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C05RNSE8TBR:1790834828.596929"
+  },
+  "slack:C05RNSE8TBR:1790836272.972269": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C05RNSE8TBR:1790834828.596929"
+  },
+  "slack:C05RNSE8TBR:1790836298.828969": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C05RNSE8TBR:1790834828.596929"
+  },
+  "slack:C05RNSE8TBR:1790939932.438779": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:C05RNSE8TBR:1790939932.438779"
+  },
+  "slack:C05RNSE8TBR:1790940037.684539": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C05RNSE8TBR:1790939932.438779"
+  },
+  "slack:C05RNSE8TBR:1790940207.301819": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C05RNSE8TBR:1790834828.596929"
+  },
+  "slack:C05RNSE8TBR:1790940435.284529": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C05RNSE8TBR:1790939932.438779"
+  },
+  "slack:C05RNSE8TBR:1790940436.360089": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C05RNSE8TBR:1790939932.438779"
+  },
+  "slack:C05RNSE8TBR:1790940448.483419": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C05RNSE8TBR:1790939932.438779"
+  },
+  "slack:C05RNSE8TBR:1790940448.775739": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C05RNSE8TBR:1790939932.438779"
+  },
+  "slack:C05RNSE8TBR:1790940449.063589": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C05RNSE8TBR:1790939932.438779"
+  },
+  "slack:C05RNSE8TBR:1790940451.899889": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C05RNSE8TBR:1790939932.438779"
+  },
+  "slack:C05RNSE8TBR:1790940763.733369": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C05RNSE8TBR:1790834828.596929"
+  },
+  "slack:C05RNSE8TBR:1790941210.728679": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C05RNSE8TBR:1790939932.438779"
+  },
+  "slack:C05RNSE8TBR:1790941299.964119": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C05RNSE8TBR:1790939932.438779"
+  },
+  "slack:C05RNSE8TBR:1790942130.270409": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C05RNSE8TBR:1790939932.438779"
+  },
+  "slack:C05RNSE8TBR:1790942210.515429": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C05RNSE8TBR:1790939932.438779"
+  },
+  "slack:C05RNSE8TBR:1790942213.248299": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C05RNSE8TBR:1790939932.438779"
+  },
+  "slack:C05RNSE8TBR:1790942914.401419": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C05RNSE8TBR:1790939932.438779"
+  },
+  "slack:C05RNSE8TBR:1790943083.687859": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C05RNSE8TBR:1790939932.438779"
+  },
+  "slack:C05RNSE8TBR:1791199187.749279": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C05RNSE8TBR:1790834828.596929"
+  },
+  "slack:C05RNSE8TBR:1791199528.045029": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C05RNSE8TBR:1790834828.596929"
+  },
+  "slack:C05RNSE8TBR:1791202861.280829": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "slack:C05RNSE8TBR:1791203122.696099": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C05RNSE8TBR:1791202861.280829"
+  },
+  "slack:C05RNSE8TBR:1791203271.429169": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C05RNSE8TBR:1790834828.596929"
+  },
+  "slack:C05RNSE8TBR:1791204174.484819": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C05RNSE8TBR:1790834828.596929"
+  },
+  "slack:C05RNSE8TBR:1791204654.260619": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C05RNSE8TBR:1790834828.596929"
+  },
+  "slack:C05RNSE8TBR:1791204714.706519": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C05RNSE8TBR:1790834828.596929"
+  },
+  "slack:C05RNSE8TBR:1791205050.038929": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C05RNSE8TBR:1791202861.280829"
+  },
+  "slack:C05RNSE8TBR:1791205551.719379": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C05RNSE8TBR:1791202861.280829"
+  },
+  "slack:C05RNSE8TBR:1791205585.835889": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C05RNSE8TBR:1790834828.596929"
+  },
+  "slack:C05RNSE8TBR:1791205657.313659": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C05RNSE8TBR:1791202861.280829"
+  },
+  "slack:C05RNSE8TBR:1791206002.352359": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C05RNSE8TBR:1791202861.280829"
+  },
+  "slack:C05RNSE8TBR:1791206120.047869": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C05RNSE8TBR:1791202861.280829"
+  },
+  "slack:C05RNSE8TBR:1791207943.700459": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:C05RNSE8TBR:1791207943.700459"
+  },
+  "slack:C05RNSE8TBR:1791208343.030929": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C05RNSE8TBR:1790834828.596929"
+  },
+  "slack:C05RNSE8TBR:1791208344.629379": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C05RNSE8TBR:1790834828.596929"
+  },
+  "slack:C05RNSE8TBR:1791208419.106389": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C05RNSE8TBR:1790834828.596929"
+  },
+  "slack:C05RNSE8TBR:1791208421.846449": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C05RNSE8TBR:1790834828.596929"
+  },
+  "slack:C05RNSE8TBR:1791208548.628709": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C05RNSE8TBR:1790834828.596929"
+  },
+  "slack:C05RNSE8TBR:1791208581.280589": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C05RNSE8TBR:1790834828.596929"
+  },
+  "slack:C05RNSE8TBR:1791208802.105439": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C05RNSE8TBR:1790834828.596929"
+  },
+  "slack:C05RNSE8TBR:1791208918.334959": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:C05RNSE8TBR:1791208918.334959"
+  },
+  "slack:C05RNSE8TBR:1791209023.812489": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C05RNSE8TBR:1791208918.334959"
+  },
+  "slack:C05RNSE8TBR:1791209215.016989": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C05RNSE8TBR:1791208918.334959"
+  },
+  "slack:C05RNSE8TBR:1791209395.305489": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C05RNSE8TBR:1791208918.334959"
+  },
+  "slack:C05RNSE8TBR:1791210656.291659": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C05RNSE8TBR:1791208918.334959"
+  },
+  "slack:C05RNSE8TBR:1791212242.966279": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C05RNSE8TBR:1791208918.334959"
+  },
+  "slack:C05RNSE8TBR:1791212312.066289": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C05RNSE8TBR:1791208918.334959"
+  },
+  "slack:C05RNSE8TBR:1791221241.406569": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C05RNSE8TBR:1791208918.334959"
+  },
+  "slack:C05RNSE8TBR:1791221430.807879": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C05RNSE8TBR:1791208918.334959"
+  },
+  "slack:C05RNSE8TBR:1791221520.183349": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C05RNSE8TBR:1791208918.334959"
+  },
+  "slack:C05RNSE8TBR:1791268420.610969": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C05RNSE8TBR:1791208918.334959"
+  },
+  "slack:C05RNSE8TBR:1791268428.140569": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C05RNSE8TBR:1791208918.334959"
+  },
+  "slack:C05RNSE8TBR:1791268543.061059": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C05RNSE8TBR:1791208918.334959"
+  },
+  "slack:C05RNSE8TBR:1791268804.790359": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C05RNSE8TBR:1791208918.334959"
+  },
+  "slack:C05RNSE8TBR:1791271713.969649": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C05RNSE8TBR:1791208918.334959"
+  },
+  "slack:C05RNSE8TBR:1791272672.072949": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "slack:C05RNSE8TBR:1791273919.254379": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C05RNSE8TBR:1790834828.596929"
+  },
+  "slack:C05RNSE8TBR:1791273983.197079": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C05RNSE8TBR:1791272672.072949"
+  },
+  "slack:C05RNSE8TBR:1791274533.628169": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C05RNSE8TBR:1791272672.072949"
+  },
+  "slack:C05RNSE8TBR:1791275102.815899": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C05RNSE8TBR:1791272672.072949"
+  },
+  "slack:C05RNSE8TBR:1791275549.204199": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C05RNSE8TBR:1790834828.596929"
+  },
+  "slack:C05RNSE8TBR:1791275771.798879": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C05RNSE8TBR:1790834828.596929"
+  },
+  "slack:C05RNSE8TBR:1791275862.630959": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C05RNSE8TBR:1790834828.596929"
+  },
+  "slack:C05RNSE8TBR:1791275930.373949": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C05RNSE8TBR:1790834828.596929"
+  },
+  "slack:C05RNSE8TBR:1791275987.293559": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C05RNSE8TBR:1790834828.596929"
+  },
+  "slack:C05RNSE8TBR:1791276310.718299": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C05RNSE8TBR:1791272672.072949"
+  },
+  "slack:C05RNSE8TBR:1791276890.218429": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C05RNSE8TBR:1790834828.596929"
+  },
+  "slack:C05RNSE8TBR:1791277222.032309": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C05RNSE8TBR:1791208918.334959"
+  },
+  "slack:C05RNSE8TBR:1791277313.359689": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C05RNSE8TBR:1790834828.596929"
+  },
+  "slack:C05RNSE8TBR:1791277736.179019": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C05RNSE8TBR:1790834828.596929"
+  },
+  "slack:C05RNSE8TBR:1791278228.088509": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C05RNSE8TBR:1791208918.334959"
+  },
+  "slack:C05RNSE8TBR:1791280728.055209": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C05RNSE8TBR:1790834828.596929"
+  },
+  "slack:C05RNSE8TBR:1791280839.446099": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C05RNSE8TBR:1790834828.596929"
+  },
+  "slack:C05RNSE8TBR:1791281168.442419": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C05RNSE8TBR:1790834828.596929"
+  },
+  "slack:C05RNSE8TBR:1791281868.710209": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C05RNSE8TBR:1790834828.596929"
+  },
+  "slack:C05RNSE8TBR:1791282113.721769": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C05RNSE8TBR:1790834828.596929"
+  },
+  "slack:C05RNSE8TBR:1791283392.773919": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C05RNSE8TBR:1790834828.596929"
+  },
+  "slack:C05RNSE8TBR:1791283592.876399": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C05RNSE8TBR:1790834828.596929"
+  },
+  "slack:C05RNSE8TBR:1791283903.221179": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C05RNSE8TBR:1790834828.596929"
+  },
+  "slack:C05RNSE8TBR:1791284275.511999": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C05RNSE8TBR:1790834828.596929"
+  },
+  "slack:C05RNSE8TBR:1791284780.236479": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C05RNSE8TBR:1790834828.596929"
+  },
+  "slack:C05RNSE8TBR:1791285247.315549": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C05RNSE8TBR:1790834828.596929"
+  },
+  "slack:C05RNSE8TBR:1791285553.438069": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C05RNSE8TBR:1790834828.596929"
+  },
+  "slack:C05RNSE8TBR:1791285847.167609": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C05RNSE8TBR:1790834828.596929"
+  },
+  "slack:C05RNSE8TBR:1791286327.219409": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C05RNSE8TBR:1790834828.596929"
+  },
+  "slack:C05RNSE8TBR:1791522005.870059": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C05RNSE8TBR:1791208918.334959"
+  },
+  "slack:C05RNSE8TBR:1791540260.592949": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C05RNSE8TBR:1791208918.334959"
+  },
+  "slack:C05RNSE8TBR:1791542549.391509": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C05RNSE8TBR:1791208918.334959"
+  },
+  "slack:C05RNSE8TBR:1791542714.011239": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C05RNSE8TBR:1791208918.334959"
+  },
+  "slack:C05RNSE8TBR:1791587834.751759": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:C05RNSE8TBR:1791587834.751759"
+  },
+  "slack:C05RNSE8TBR:1791587856.737589": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C05RNSE8TBR:1791587834.751759"
+  },
+  "slack:C05RNSE8TBR:1791587889.453639": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C05RNSE8TBR:1791587834.751759"
+  },
+  "slack:C05RNSE8TBR:1791587983.678559": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C05RNSE8TBR:1791587834.751759"
+  },
+  "slack:C05RNSE8TBR:1791588186.458969": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C05RNSE8TBR:1791587834.751759"
+  },
+  "slack:C05RNSE8TBR:1791588186.762269": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C05RNSE8TBR:1791587834.751759"
+  },
+  "slack:C05RNSE8TBR:1791706457.936859": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C05RNSE8TBR:1791587834.751759"
+  },
+  "slack:C05RNSE8TBR:1791706487.822609": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C05RNSE8TBR:1791587834.751759"
+  },
+  "slack:C06Q3JHUAUV:1788132628.151399": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:C06Q3JHUAUV:1788132628.151399"
+  },
+  "slack:C06Q3JHUAUV:1789620565.964559": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:C06Q3JHUAUV:1789620565.964559"
+  },
+  "slack:C06Q3JHUAUV:1790237700.543749": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:C06Q3JHUAUV:1790237700.543749"
+  },
+  "slack:C06Q3JHUAUV:1790649324.836509": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:C06Q3JHUAUV:1790649324.836509"
+  },
+  "slack:C06Q3JHUAUV:1790760462.915219": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:C06Q3JHUAUV:1790760462.915219"
+  },
+  "slack:C06Q3JHUAUV:1790828870.352649": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:C06Q3JHUAUV:1790828870.352649"
+  },
+  "slack:C06Q3JHUAUV:1791424419.523539": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:C06Q3JHUAUV:1791424419.523539"
+  },
+  "slack:C0736FUE03W:1790238600.056429": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "slack:C08S954G2LX:1779709917.613979": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:C08S954G2LX:1779709917.613979"
+  },
+  "slack:C08S954G2LX:1789938274.391289": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:C08S954G2LX:1789938274.391289"
+  },
+  "slack:C08S954G2LX:1791537007.335589": {
+    "type": "slack",
+    "exists": false,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "slack:C08SVNFA30R:1789370248.499599": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:C08SVNFA30R:1789370248.499599"
+  },
+  "slack:C09A46W6ZN1:1780910309.130929": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:C09A46W6ZN1:1780910309.130929"
+  },
+  "slack:C09H1QMK882:1780380612.840289": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:C09H1QMK882:1780380612.840289"
+  },
+  "slack:C09H1QMK882:1786709371.372099": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:C09H1QMK882:1786709371.372099"
+  },
+  "slack:C09USC3U9A9:1789227442.590279": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:C09USC3U9A9:1789227442.590279"
+  },
+  "slack:C09USC3U9A9:1790434099.376099": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:C09USC3U9A9:1790434099.376099"
+  },
+  "slack:C09USC3U9A9:1791696783.677019": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "slack:C09USC3U9A9:1791696903.725299": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C09USC3U9A9:1791696783.677019"
+  },
+  "slack:C0B1BR522F5:1791463631.837989": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:C0B1BR522F5:1791463631.837989"
+  },
+  "slack:C0B1BR522F5:1791509470.292799": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:C0B1BR522F5:1791509470.292799"
+  },
+  "slack:C0B78BH6810:1789599868.421479": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "slack:C0B78BH6810:1790204595.859309": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "slack:C0B78BH6810:1791154938.197259": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "slack:C0BBJAHV4G1:1788350714.195559": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:C0BBJAHV4G1:1788350714.195559"
+  },
+  "slack:C0BBJAHV4G1:1789094920.230489": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:C0BBJAHV4G1:1789094920.230489"
+  },
+  "slack:C0BBJAHV4G1:1789701873.754609": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "slack:C0BBJAHV4G1:1791345616.323299": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0BBJAHV4G1:1791191807.822279"
+  },
+  "slack:C0BBJAHV4G1:1791345891.943329": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0BBJAHV4G1:1791191807.822279"
+  },
+  "slack:C0BBJAHV4G1:1791352521.532759": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0BBJAHV4G1:1789701873.754609"
+  },
+  "slack:C0BBJAHV4G1:1791442635.332559": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "slack:C0BBJAHV4G1:1791544006.924189": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:C0BBJAHV4G1:1791544006.924189"
+  },
+  "slack:C0BFH54Q1UG:1791459052.551399": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "slack:C0C6RMYH5U6:1791284126.466789": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:C0C6RMYH5U6:1791284126.466789"
+  },
+  "slack:C0C6RMYH5U6:1791284272.892279": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0C6RMYH5U6:1791284126.466789"
+  },
+  "slack:C0C6RMYH5U6:1791284277.083159": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0C6RMYH5U6:1791284126.466789"
+  },
+  "slack:C0C6RMYH5U6:1791292260.525959": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0C6RMYH5U6:1791284126.466789"
+  },
+  "slack:C0C6RMYH5U6:1791293344.921329": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0C6RMYH5U6:1791284126.466789"
+  },
+  "slack:C0C6RMYH5U6:1791293379.608379": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0C6RMYH5U6:1791284126.466789"
+  },
+  "slack:C0C6RMYH5U6:1791293382.685849": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0C6RMYH5U6:1791284126.466789"
+  },
+  "slack:C0C6RMYH5U6:1791301666.911449": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0C6RMYH5U6:1791284126.466789"
+  },
+  "slack:C0C6RMYH5U6:1791342766.439079": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "slack:C0C6RMYH5U6:1791355354.512909": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0C6RMYH5U6:1791284126.466789"
+  },
+  "slack:C0C6RMYH5U6:1791356438.494459": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:C0C6RMYH5U6:1791356438.494459"
+  },
+  "slack:C0C6RMYH5U6:1791361015.454359": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0C6RMYH5U6:1791284126.466789"
+  },
+  "slack:C0C6RMYH5U6:1791361148.483229": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0C6RMYH5U6:1791284126.466789"
+  },
+  "slack:C0C6RMYH5U6:1791428761.127289": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "slack:C0C6RMYH5U6:1791432306.826199": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "slack:C0C6RMYH5U6:1791437156.280619": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0C6RMYH5U6:1791432306.826199"
+  },
+  "slack:C0C6RMYH5U6:1791437304.597919": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0C6RMYH5U6:1791432306.826199"
+  },
+  "slack:C0C6RMYH5U6:1791437332.984619": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0C6RMYH5U6:1791432306.826199"
+  },
+  "slack:C0C6RMYH5U6:1791515190.996339": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:C0C6RMYH5U6:1791515190.996339"
+  },
+  "slack:C0C6RMYH5U6:1791515195.011879": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0C6RMYH5U6:1791515190.996339"
+  },
+  "slack:C0C6RMYH5U6:1791518090.494719": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0C6RMYH5U6:1791515190.996339"
+  },
+  "slack:C0C6RMYH5U6:1791518141.160509": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0C6RMYH5U6:1791515190.996339"
+  },
+  "slack:C0C6RMYH5U6:1791518932.123249": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0C6RMYH5U6:1791515190.996339"
+  },
+  "slack:C0C6RMYH5U6:1791518979.648459": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0C6RMYH5U6:1791515190.996339"
+  },
+  "slack:C0C6RMYH5U6:1791519046.916619": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0C6RMYH5U6:1791515190.996339"
+  },
+  "slack:C0C6RMYH5U6:1791519138.170219": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0C6RMYH5U6:1791515190.996339"
+  },
+  "slack:C0C6RMYH5U6:1791519257.468329": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0C6RMYH5U6:1791515190.996339"
+  },
+  "slack:C0C6RMYH5U6:1791519340.715519": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0C6RMYH5U6:1791515190.996339"
+  },
+  "slack:C0C6RMYH5U6:1791519545.738949": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0C6RMYH5U6:1791515190.996339"
+  },
+  "slack:C0C6RMYH5U6:1791519592.842909": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0C6RMYH5U6:1791515190.996339"
+  },
+  "slack:C0C6RMYH5U6:1791519732.196019": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0C6RMYH5U6:1791515190.996339"
+  },
+  "slack:C0C6RMYH5U6:1791519917.200569": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0C6RMYH5U6:1791515190.996339"
+  },
+  "slack:C0C6RMYH5U6:1791525449.928719": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0C6RMYH5U6:1791515190.996339"
+  },
+  "slack:C0C6RMYH5U6:1791538228.717109": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0C6RMYH5U6:1791515190.996339"
+  },
+  "slack:C0C6RMYH5U6:1791538416.092029": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0C6RMYH5U6:1791515190.996339"
+  },
+  "slack:C0C6RMYH5U6:1791538509.999749": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:C0C6RMYH5U6:1791515190.996339"
+  },
+  "slack:C0C6RMYH5U6:1791601642.545109": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "slack:C0C6RMYH5U6:1791707896.766609": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:C0C6RMYH5U6:1791707896.766609"
+  },
+  "slack:CD7D29QF3:1783938315.508969": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "slack:CD7D29QF3:1784029245.198799": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "slack:CUV9EAYGY:1754032064.856499": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:CUV9EAYGY:1754032064.856499"
+  },
+  "slack:CUV9EAYGY:1767578784.158839": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:CUV9EAYGY:1767578784.158839"
+  },
+  "slack:CUV9EAYGY:1775790876.159429": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:CUV9EAYGY:1775790876.159429"
+  },
+  "slack:CUV9EAYGY:1777530804.959349": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1777519539.041909"
+  },
+  "slack:CUV9EAYGY:1778132070.515109": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:CUV9EAYGY:1778132070.515109"
+  },
+  "slack:CUV9EAYGY:1779685135.038209": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:CUV9EAYGY:1779685135.038209"
+  },
+  "slack:CUV9EAYGY:1780636506.222129": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:CUV9EAYGY:1780636506.222129"
+  },
+  "slack:CUV9EAYGY:1781062889.467509": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:CUV9EAYGY:1781062889.467509"
+  },
+  "slack:CUV9EAYGY:1781063692.447369": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:CUV9EAYGY:1781063692.447369"
+  },
+  "slack:CUV9EAYGY:1782304774.725899": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:CUV9EAYGY:1782304774.725899"
+  },
+  "slack:CUV9EAYGY:1782893668.095069": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:CUV9EAYGY:1782893668.095069"
+  },
+  "slack:CUV9EAYGY:1782954484.183329": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:CUV9EAYGY:1782954484.183329"
+  },
+  "slack:CUV9EAYGY:1783588299.233519": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "slack:CUV9EAYGY:1783944865.018889": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:CUV9EAYGY:1783944865.018889"
+  },
+  "slack:CUV9EAYGY:1784702183.924389": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:CUV9EAYGY:1784702183.924389"
+  },
+  "slack:CUV9EAYGY:1786601034.288189": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "slack:CUV9EAYGY:1786958802.872889": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:CUV9EAYGY:1786958802.872889"
+  },
+  "slack:CUV9EAYGY:1787219898.908339": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "slack:CUV9EAYGY:1788241371.674529": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "slack:CUV9EAYGY:1788524333.214009": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:CUV9EAYGY:1788524333.214009"
+  },
+  "slack:CUV9EAYGY:1789090120.679309": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:CUV9EAYGY:1789090120.679309"
+  },
+  "slack:CUV9EAYGY:1789710390.292509": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "slack:CUV9EAYGY:1790058352.770889": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:CUV9EAYGY:1790058352.770889"
+  },
+  "slack:CUV9EAYGY:1790172757.058019": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "slack:CUV9EAYGY:1790214705.915929": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:CUV9EAYGY:1790214705.915929"
+  },
+  "slack:CUV9EAYGY:1790214709.406839": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:CUV9EAYGY:1790214709.406839"
+  },
+  "slack:CUV9EAYGY:1790218829.228679": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:CUV9EAYGY:1790218829.228679"
+  },
+  "slack:CUV9EAYGY:1790322750.699769": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:CUV9EAYGY:1790322750.699769"
+  },
+  "slack:CUV9EAYGY:1790579932.705169": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:CUV9EAYGY:1790579932.705169"
+  },
+  "slack:CUV9EAYGY:1790583455.729009": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:CUV9EAYGY:1790583455.729009"
+  },
+  "slack:CUV9EAYGY:1790583676.032269": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1790583455.729009"
+  },
+  "slack:CUV9EAYGY:1790583677.251599": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1790583455.729009"
+  },
+  "slack:CUV9EAYGY:1790586724.385709": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:CUV9EAYGY:1790586724.385709"
+  },
+  "slack:CUV9EAYGY:1790595685.855469": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1790583455.729009"
+  },
+  "slack:CUV9EAYGY:1790595892.815329": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1790583455.729009"
+  },
+  "slack:CUV9EAYGY:1790596401.054029": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1790583455.729009"
+  },
+  "slack:CUV9EAYGY:1790596423.212039": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1790583455.729009"
+  },
+  "slack:CUV9EAYGY:1790675479.191359": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:CUV9EAYGY:1790675479.191359"
+  },
+  "slack:CUV9EAYGY:1790675573.127539": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1790675479.191359"
+  },
+  "slack:CUV9EAYGY:1790676054.585849": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:CUV9EAYGY:1790676054.585849"
+  },
+  "slack:CUV9EAYGY:1790758198.678459": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:CUV9EAYGY:1790758198.678459"
+  },
+  "slack:CUV9EAYGY:1790758330.547869": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1790758198.678459"
+  },
+  "slack:CUV9EAYGY:1790758465.625589": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1790758198.678459"
+  },
+  "slack:CUV9EAYGY:1790759362.584889": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1790758198.678459"
+  },
+  "slack:CUV9EAYGY:1790759768.295479": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1790758198.678459"
+  },
+  "slack:CUV9EAYGY:1790759808.358759": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1790758198.678459"
+  },
+  "slack:CUV9EAYGY:1790760613.349699": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1790758198.678459"
+  },
+  "slack:CUV9EAYGY:1790760636.936189": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1790758198.678459"
+  },
+  "slack:CUV9EAYGY:1790760806.607149": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:CUV9EAYGY:1790760806.607149"
+  },
+  "slack:CUV9EAYGY:1790760919.457989": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "slack:CUV9EAYGY:1790761033.408859": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1790760806.607149"
+  },
+  "slack:CUV9EAYGY:1790761455.263339": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1790675479.191359"
+  },
+  "slack:CUV9EAYGY:1790761459.483409": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1790675479.191359"
+  },
+  "slack:CUV9EAYGY:1790761594.422829": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1790675479.191359"
+  },
+  "slack:CUV9EAYGY:1790764288.348699": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1790760806.607149"
+  },
+  "slack:CUV9EAYGY:1790774448.660849": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1790760806.607149"
+  },
+  "slack:CUV9EAYGY:1790774481.145709": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1790760806.607149"
+  },
+  "slack:CUV9EAYGY:1790774533.232809": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1790760806.607149"
+  },
+  "slack:CUV9EAYGY:1790774725.131829": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1790760806.607149"
+  },
+  "slack:CUV9EAYGY:1790777014.561999": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1790760806.607149"
+  },
+  "slack:CUV9EAYGY:1790829787.518909": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1790758198.678459"
+  },
+  "slack:CUV9EAYGY:1790908867.057589": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "slack:CUV9EAYGY:1791164406.252649": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:CUV9EAYGY:1791164406.252649"
+  },
+  "slack:CUV9EAYGY:1791164503.537889": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791164406.252649"
+  },
+  "slack:CUV9EAYGY:1791164600.761769": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791164406.252649"
+  },
+  "slack:CUV9EAYGY:1791164843.184029": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791164406.252649"
+  },
+  "slack:CUV9EAYGY:1791165086.112719": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791164406.252649"
+  },
+  "slack:CUV9EAYGY:1791165354.318329": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791164406.252649"
+  },
+  "slack:CUV9EAYGY:1791165374.127299": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791164406.252649"
+  },
+  "slack:CUV9EAYGY:1791165426.891959": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791164406.252649"
+  },
+  "slack:CUV9EAYGY:1791165520.923309": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791164406.252649"
+  },
+  "slack:CUV9EAYGY:1791165630.044919": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791164406.252649"
+  },
+  "slack:CUV9EAYGY:1791165751.685569": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791164406.252649"
+  },
+  "slack:CUV9EAYGY:1791165847.237649": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791164406.252649"
+  },
+  "slack:CUV9EAYGY:1791166136.040959": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "slack:CUV9EAYGY:1791166220.884149": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791164406.252649"
+  },
+  "slack:CUV9EAYGY:1791166268.695279": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "slack:CUV9EAYGY:1791166285.901389": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791164406.252649"
+  },
+  "slack:CUV9EAYGY:1791166876.899429": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791166136.040959"
+  },
+  "slack:CUV9EAYGY:1791167172.814729": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791166136.040959"
+  },
+  "slack:CUV9EAYGY:1791167214.341359": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791164406.252649"
+  },
+  "slack:CUV9EAYGY:1791167274.942859": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791164406.252649"
+  },
+  "slack:CUV9EAYGY:1791167277.585429": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791164406.252649"
+  },
+  "slack:CUV9EAYGY:1791167298.274039": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791164406.252649"
+  },
+  "slack:CUV9EAYGY:1791167323.434599": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791164406.252649"
+  },
+  "slack:CUV9EAYGY:1791167411.060359": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791166136.040959"
+  },
+  "slack:CUV9EAYGY:1791167595.081139": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791164406.252649"
+  },
+  "slack:CUV9EAYGY:1791167652.856619": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791164406.252649"
+  },
+  "slack:CUV9EAYGY:1791167936.653119": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791166136.040959"
+  },
+  "slack:CUV9EAYGY:1791168819.374529": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791166136.040959"
+  },
+  "slack:CUV9EAYGY:1791175123.806859": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791166136.040959"
+  },
+  "slack:CUV9EAYGY:1791181523.339749": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791166136.040959"
+  },
+  "slack:CUV9EAYGY:1791183123.527889": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "slack:CUV9EAYGY:1791187623.465319": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791166136.040959"
+  },
+  "slack:CUV9EAYGY:1791188035.005769": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791166136.040959"
+  },
+  "slack:CUV9EAYGY:1791188482.407529": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791166136.040959"
+  },
+  "slack:CUV9EAYGY:1791190782.743299": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791166136.040959"
+  },
+  "slack:CUV9EAYGY:1791193121.470009": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791166136.040959"
+  },
+  "slack:CUV9EAYGY:1791193639.851299": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:CUV9EAYGY:1791193639.851299"
+  },
+  "slack:CUV9EAYGY:1791248896.901859": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791166136.040959"
+  },
+  "slack:CUV9EAYGY:1791251016.446099": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791166136.040959"
+  },
+  "slack:CUV9EAYGY:1791253129.970809": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791166136.040959"
+  },
+  "slack:CUV9EAYGY:1791253861.577889": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791166136.040959"
+  },
+  "slack:CUV9EAYGY:1791258955.257859": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791166136.040959"
+  },
+  "slack:CUV9EAYGY:1791259150.950169": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791166136.040959"
+  },
+  "slack:CUV9EAYGY:1791259262.735419": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791166136.040959"
+  },
+  "slack:CUV9EAYGY:1791261225.901709": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791166136.040959"
+  },
+  "slack:CUV9EAYGY:1791261402.419369": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791166136.040959"
+  },
+  "slack:CUV9EAYGY:1791271675.012539": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791166136.040959"
+  },
+  "slack:CUV9EAYGY:1791272504.916379": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791166136.040959"
+  },
+  "slack:CUV9EAYGY:1791273358.598889": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791166136.040959"
+  },
+  "slack:CUV9EAYGY:1791273912.561999": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791166136.040959"
+  },
+  "slack:CUV9EAYGY:1791274194.647989": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791166136.040959"
+  },
+  "slack:CUV9EAYGY:1791274406.411389": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791166136.040959"
+  },
+  "slack:CUV9EAYGY:1791274510.461619": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791166136.040959"
+  },
+  "slack:CUV9EAYGY:1791275487.527819": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1790583455.729009"
+  },
+  "slack:CUV9EAYGY:1791275545.338249": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "slack:CUV9EAYGY:1791275561.730099": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1790583455.729009"
+  },
+  "slack:CUV9EAYGY:1791275711.697059": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1790583455.729009"
+  },
+  "slack:CUV9EAYGY:1791275848.972429": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1790583455.729009"
+  },
+  "slack:CUV9EAYGY:1791276197.541269": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:CUV9EAYGY:1791276197.541269"
+  },
+  "slack:CUV9EAYGY:1791276291.976169": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791166136.040959"
+  },
+  "slack:CUV9EAYGY:1791278092.635739": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791166136.040959"
+  },
+  "slack:CUV9EAYGY:1791278130.550809": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791166136.040959"
+  },
+  "slack:CUV9EAYGY:1791278174.046589": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791166136.040959"
+  },
+  "slack:CUV9EAYGY:1791279223.102099": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791164406.252649"
+  },
+  "slack:CUV9EAYGY:1791279224.622569": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791164406.252649"
+  },
+  "slack:CUV9EAYGY:1791279382.885289": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791164406.252649"
+  },
+  "slack:CUV9EAYGY:1791279440.282909": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791164406.252649"
+  },
+  "slack:CUV9EAYGY:1791279499.114849": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791164406.252649"
+  },
+  "slack:CUV9EAYGY:1791279958.885299": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791166136.040959"
+  },
+  "slack:CUV9EAYGY:1791287810.409589": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:CUV9EAYGY:1791287810.409589"
+  },
+  "slack:CUV9EAYGY:1791341284.501989": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791166136.040959"
+  },
+  "slack:CUV9EAYGY:1791341597.230209": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791166136.040959"
+  },
+  "slack:CUV9EAYGY:1791341880.784069": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791166136.040959"
+  },
+  "slack:CUV9EAYGY:1791425214.638499": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791166136.040959"
+  },
+  "slack:CUV9EAYGY:1791425277.731299": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1790908867.057589"
+  },
+  "slack:CUV9EAYGY:1791425699.299139": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791166136.040959"
+  },
+  "slack:CUV9EAYGY:1791426088.699509": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791166136.040959"
+  },
+  "slack:CUV9EAYGY:1791426103.895379": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791166136.040959"
+  },
+  "slack:CUV9EAYGY:1791426387.428649": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791166136.040959"
+  },
+  "slack:CUV9EAYGY:1791426499.645859": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791166136.040959"
+  },
+  "slack:CUV9EAYGY:1791426501.414139": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791166136.040959"
+  },
+  "slack:CUV9EAYGY:1791426567.767149": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791166136.040959"
+  },
+  "slack:CUV9EAYGY:1791426574.602799": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791166136.040959"
+  },
+  "slack:CUV9EAYGY:1791440402.647959": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:CUV9EAYGY:1791440402.647959"
+  },
+  "slack:CUV9EAYGY:1791449691.061749": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:CUV9EAYGY:1791449691.061749"
+  },
+  "slack:CUV9EAYGY:1791450444.383399": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:CUV9EAYGY:1791450444.383399"
+  },
+  "slack:CUV9EAYGY:1791450445.967909": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "slack:CUV9EAYGY:1791450496.411779": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791450444.383399"
+  },
+  "slack:CUV9EAYGY:1791450602.968549": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791450444.383399"
+  },
+  "slack:CUV9EAYGY:1791450678.215969": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791450444.383399"
+  },
+  "slack:CUV9EAYGY:1791450747.940679": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791450444.383399"
+  },
+  "slack:CUV9EAYGY:1791450775.579459": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791450444.383399"
+  },
+  "slack:CUV9EAYGY:1791450777.535479": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791450444.383399"
+  },
+  "slack:CUV9EAYGY:1791450921.440449": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791450444.383399"
+  },
+  "slack:CUV9EAYGY:1791450940.864669": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791450444.383399"
+  },
+  "slack:CUV9EAYGY:1791450942.219509": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791450444.383399"
+  },
+  "slack:CUV9EAYGY:1791450962.102119": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791450444.383399"
+  },
+  "slack:CUV9EAYGY:1791450988.936449": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "slack:CUV9EAYGY:1791450997.689019": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791450444.383399"
+  },
+  "slack:CUV9EAYGY:1791451091.892969": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791450444.383399"
+  },
+  "slack:CUV9EAYGY:1791451190.773359": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791450444.383399"
+  },
+  "slack:CUV9EAYGY:1791451191.069489": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791450444.383399"
+  },
+  "slack:CUV9EAYGY:1791451239.302749": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791450444.383399"
+  },
+  "slack:CUV9EAYGY:1791451269.136569": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791450444.383399"
+  },
+  "slack:CUV9EAYGY:1791451461.420359": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791450444.383399"
+  },
+  "slack:CUV9EAYGY:1791451466.513789": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791450444.383399"
+  },
+  "slack:CUV9EAYGY:1791451477.204899": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791450444.383399"
+  },
+  "slack:CUV9EAYGY:1791451480.889839": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791450444.383399"
+  },
+  "slack:CUV9EAYGY:1791451481.417509": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791450444.383399"
+  },
+  "slack:CUV9EAYGY:1791451800.631339": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:CUV9EAYGY:1791451800.631339"
+  },
+  "slack:CUV9EAYGY:1791457916.047199": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:CUV9EAYGY:1791457916.047199"
+  },
+  "slack:CUV9EAYGY:1791457981.996339": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791457916.047199"
+  },
+  "slack:CUV9EAYGY:1791458025.371499": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791457916.047199"
+  },
+  "slack:CUV9EAYGY:1791458119.490709": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791457916.047199"
+  },
+  "slack:CUV9EAYGY:1791458282.087379": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791457916.047199"
+  },
+  "slack:CUV9EAYGY:1791458413.214069": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791457916.047199"
+  },
+  "slack:CUV9EAYGY:1791458428.081349": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791457916.047199"
+  },
+  "slack:CUV9EAYGY:1791458520.589749": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791457916.047199"
+  },
+  "slack:CUV9EAYGY:1791458620.365939": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791457916.047199"
+  },
+  "slack:CUV9EAYGY:1791458667.701669": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:CUV9EAYGY:1791458667.701669"
+  },
+  "slack:CUV9EAYGY:1791458676.330479": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791457916.047199"
+  },
+  "slack:CUV9EAYGY:1791458795.104789": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791457916.047199"
+  },
+  "slack:CUV9EAYGY:1791459070.197569": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791457916.047199"
+  },
+  "slack:CUV9EAYGY:1791460328.625519": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791457916.047199"
+  },
+  "slack:CUV9EAYGY:1791464133.279469": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:CUV9EAYGY:1791464133.279469"
+  },
+  "slack:CUV9EAYGY:1791512425.555499": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791440402.647959"
+  },
+  "slack:CUV9EAYGY:1791512946.368889": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791440402.647959"
+  },
+  "slack:CUV9EAYGY:1791513112.870919": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791440402.647959"
+  },
+  "slack:CUV9EAYGY:1791513452.705739": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791440402.647959"
+  },
+  "slack:CUV9EAYGY:1791513469.886739": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791440402.647959"
+  },
+  "slack:CUV9EAYGY:1791513490.577889": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791440402.647959"
+  },
+  "slack:CUV9EAYGY:1791513504.251189": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791440402.647959"
+  },
+  "slack:CUV9EAYGY:1791513527.816229": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791440402.647959"
+  },
+  "slack:CUV9EAYGY:1791513543.274189": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791440402.647959"
+  },
+  "slack:CUV9EAYGY:1791513581.715739": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": "slack:CUV9EAYGY:1791513581.715739"
+  },
+  "slack:CUV9EAYGY:1791513826.668569": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791440402.647959"
+  },
+  "slack:CUV9EAYGY:1791513834.380949": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791440402.647959"
+  },
+  "slack:CUV9EAYGY:1791513904.626059": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791440402.647959"
+  },
+  "slack:CUV9EAYGY:1791514074.027279": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791440402.647959"
+  },
+  "slack:CUV9EAYGY:1791514085.128349": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791440402.647959"
+  },
+  "slack:CUV9EAYGY:1791514142.490649": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791440402.647959"
+  },
+  "slack:CUV9EAYGY:1791514183.387159": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791440402.647959"
+  },
+  "slack:CUV9EAYGY:1791514190.377759": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791440402.647959"
+  },
+  "slack:CUV9EAYGY:1791514213.317139": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791440402.647959"
+  },
+  "slack:CUV9EAYGY:1791514225.319479": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791440402.647959"
+  },
+  "slack:CUV9EAYGY:1791514234.245659": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791440402.647959"
+  },
+  "slack:CUV9EAYGY:1791514277.704659": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791440402.647959"
+  },
+  "slack:CUV9EAYGY:1791514322.831789": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791440402.647959"
+  },
+  "slack:CUV9EAYGY:1791517950.682439": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791440402.647959"
+  },
+  "slack:CUV9EAYGY:1791517973.334429": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791440402.647959"
+  },
+  "slack:CUV9EAYGY:1791518157.719489": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791440402.647959"
+  },
+  "slack:CUV9EAYGY:1791518789.290209": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791440402.647959"
+  },
+  "slack:CUV9EAYGY:1791519334.382119": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791440402.647959"
+  },
+  "slack:CUV9EAYGY:1791519476.168599": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791440402.647959"
+  },
+  "slack:CUV9EAYGY:1791519579.153329": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791440402.647959"
+  },
+  "slack:CUV9EAYGY:1791519732.014479": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791440402.647959"
+  },
+  "slack:CUV9EAYGY:1791519872.404649": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791440402.647959"
+  },
+  "slack:CUV9EAYGY:1791519972.698539": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791440402.647959"
+  },
+  "slack:CUV9EAYGY:1791521265.117199": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791440402.647959"
+  },
+  "slack:CUV9EAYGY:1791521524.536759": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791440402.647959"
+  },
+  "slack:CUV9EAYGY:1791527283.656229": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791440402.647959"
+  },
+  "slack:CUV9EAYGY:1791527335.929419": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791440402.647959"
+  },
+  "slack:CUV9EAYGY:1791532132.466899": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791440402.647959"
+  },
+  "slack:CUV9EAYGY:1791533811.944289": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791457916.047199"
+  },
+  "slack:CUV9EAYGY:1791533813.572179": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791457916.047199"
+  },
+  "slack:CUV9EAYGY:1791533867.767679": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791457916.047199"
+  },
+  "slack:CUV9EAYGY:1791533995.991159": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791457916.047199"
+  },
+  "slack:CUV9EAYGY:1791534041.001449": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791457916.047199"
+  },
+  "slack:CUV9EAYGY:1791534193.684319": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791457916.047199"
+  },
+  "slack:CUV9EAYGY:1791534231.097049": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791457916.047199"
+  },
+  "slack:CUV9EAYGY:1791534238.167139": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791457916.047199"
+  },
+  "slack:CUV9EAYGY:1791534307.004119": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791457916.047199"
+  },
+  "slack:CUV9EAYGY:1791534331.006169": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791457916.047199"
+  },
+  "slack:CUV9EAYGY:1791534334.989269": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791457916.047199"
+  },
+  "slack:CUV9EAYGY:1791541976.891199": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791457916.047199"
+  },
+  "slack:CUV9EAYGY:1791542009.345359": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791457916.047199"
+  },
+  "slack:CUV9EAYGY:1791542196.005369": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791457916.047199"
+  },
+  "slack:CUV9EAYGY:1791542217.229509": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791457916.047199"
+  },
+  "slack:CUV9EAYGY:1791545149.856259": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "slack:CUV9EAYGY:1791545398.006239": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791545149.856259"
+  },
+  "slack:CUV9EAYGY:1791545466.736779": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791545149.856259"
+  },
+  "slack:CUV9EAYGY:1791545511.974189": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791545149.856259"
+  },
+  "slack:CUV9EAYGY:1791545524.384889": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": true,
+    "thread_root": "slack:CUV9EAYGY:1791545149.856259"
+  },
+  "slack:CUV9EAYGY:1791545675.670659": {
+    "type": "slack",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "slack_file:F0B5D2UCCP5": {
+    "type": "slack_file",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "slack_file:F0B5JSWBCD8": {
+    "type": "slack_file",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "slack_file:F0B87535P8W": {
+    "type": "slack_file",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "slack_file:F0BQ8MNPHU1": {
+    "type": "slack_file",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "slack_file:F0C4S3TBZ9B": {
+    "type": "slack_file",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "slack_file:F0C690FMW10": {
+    "type": "slack_file",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "slack_file:F0C6ATMC7MX": {
+    "type": "slack_file",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "slack_file:F0C6L87LSUT": {
+    "type": "slack_file",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "slack_file:F0C6L8EFLKD": {
+    "type": "slack_file",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "slack_file:F0C6RS12Z9Q": {
+    "type": "slack_file",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "slack_file:F0C6SSF4SDU": {
+    "type": "slack_file",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "slack_file:F0C6U7D1B8V": {
+    "type": "slack_file",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "slack_file:F0C74G9SJ01": {
+    "type": "slack_file",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "slack_file:F0C74GXT49J": {
+    "type": "slack_file",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "slack_file:F0C77G3SZHS": {
+    "type": "slack_file",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "slack_file:F0C7LBWKZ7S": {
+    "type": "slack_file",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "slack_file:F0C7YHFGXB8": {
+    "type": "slack_file",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "slack_file:F0C7ZFG0EFQ": {
+    "type": "slack_file",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "slack_file:F0C7ZFG60AJ": {
+    "type": "slack_file",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "slack_file:F0C80V3EA2W": {
+    "type": "slack_file",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "slack_file:F0C823E4A2G": {
+    "type": "slack_file",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  },
+  "slack_file:F0C82JES88Z": {
+    "type": "slack_file",
+    "exists": true,
+    "is_reply": false,
+    "thread_root": ""
+  }
+}

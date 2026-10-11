@@ -4,7 +4,7 @@ source_thread: https://wego.slack.com/archives/C05RNSE8TBR/p1790834828596929
 asker_slack_id: U02FKR154T1
 asker_eeid: 334
 needs_context: yes
-canonical_seeds: []
+canonical_seeds: ["slack:C05RNSE8TBR:1790834828.596929"]
 requests:
   resolve-asker0:
     body:
@@ -60,8 +60,119 @@ requests:
     headers: {}
   resolve-asker: {body: {seeds: ["https://wego.slack.com/archives/C05RNSE8TBR/p1790834828596929"], query: *query, depth: 2, include_bodies: false, asker_eeid: 334}, headers: {}}
   search-hybrid: {params: {q: *query, match: hybrid, limit: 10, types: "slack,slack_thread,gh_pr,jira,cf,cf_page,gws,gws_doc,gdoc,wegohub,claude_artifact,pagerduty,sentry,datadog"}, headers: {}}
-labels: {resolve: {must: [], may: [], must_not: []}, search: {must: [], may: [], must_not: []}}
-label_reasons: {}
-labelled_by: none
+labels:
+    resolve:
+        must: []
+        may:
+            - "slack:C05RNSE8TBR:1791207943.700459"
+            - "slack:C05RNSE8TBR:1791208343.030929"
+            - "slack:C05RNSE8TBR:1791199187.749279"
+            - "slack:C05RNSE8TBR:1791275549.204199"
+            - "slack:C05RNSE8TBR:1790836255.188369"
+            - "slack:C05RNSE8TBR:1791208581.280589"
+            - "slack:C05RNSE8TBR:1791208548.628709"
+            - "slack:C05RNSE8TBR:1791204174.484819"
+            - "slack:C05RNSE8TBR:1791203271.429169"
+            - "slack:C05RNSE8TBR:1790836272.972269"
+            - "slack:C05RNSE8TBR:1791273919.254379"
+            - "slack:C05RNSE8TBR:1791275102.815899"
+            - "slack:C05RNSE8TBR:1791208802.105439"
+            - "slack:C05RNSE8TBR:1791205585.835889"
+            - "slack:C05RNSE8TBR:1790940763.733369"
+            - "slack:C05RNSE8TBR:1791276310.718299"
+            - "slack:C05RNSE8TBR:1791274533.628169"
+            - "slack:C05RNSE8TBR:1791273983.197079"
+            - "slack:C05RNSE8TBR:1791285247.315549"
+            - "slack:C05RNSE8TBR:1791204714.706519"
+            - "slack:C05RNSE8TBR:1791286327.219409"
+            - "slack:C05RNSE8TBR:1791285553.438069"
+            - "slack:C05RNSE8TBR:1791277313.359689"
+            - "slack:C05RNSE8TBR:1791283392.773919"
+            - "slack:C05RNSE8TBR:1791275930.373949"
+            - "slack:C05RNSE8TBR:1791276890.218429"
+            - "slack:C05RNSE8TBR:1791275771.798879"
+            - "slack:C05RNSE8TBR:1791275987.293559"
+            - "slack:C05RNSE8TBR:1791208344.629379"
+            - "slack:C05RNSE8TBR:1791208421.846449"
+            - "slack:C05RNSE8TBR:1791277736.179019"
+            - "slack:C05RNSE8TBR:1791208419.106389"
+            - "slack:C05RNSE8TBR:1791282113.721769"
+            - "slack:C05RNSE8TBR:1791283903.221179"
+            - "slack:C05RNSE8TBR:1791281868.710209"
+            - "slack:C05RNSE8TBR:1791283592.876399"
+            - "slack:C05RNSE8TBR:1791281168.442419"
+            - "slack:C05RNSE8TBR:1791284275.511999"
+            - "slack:C05RNSE8TBR:1791280839.446099"
+            - "slack:C05RNSE8TBR:1791199528.045029"
+            - "slack:C05RNSE8TBR:1790835507.061979"
+            - "slack:C0C6RMYH5U6:1791437304.597919"
+            - "slack:C0C6RMYH5U6:1791437332.984619"
+            - "slack:C0C6RMYH5U6:1791437156.280619"
+            - "slack:C05RNSE8TBR:1791272672.072949"
+        must_not: []
+    search:
+        must: []
+        may:
+            - "slack:C0C6RMYH5U6:1791432306.826199"
+            - "slack:C0C6RMYH5U6:1791342766.439079"
+            - "slack:C0C6RMYH5U6:1791356438.494459"
+            - "slack:C0C6RMYH5U6:1791601642.545109"
+            - "slack:C0C6RMYH5U6:1791707896.766609"
+            - "gh_pr:wego/payments#2380"
+            - "slack:C05RNSE8TBR:1791272672.072949"
+        must_not: []
+label_reasons:
+    "slack:C05RNSE8TBR:1791207943.700459": "partner-account to entity mapping for the report's per-entity split (created after the request; may, not must, by the as-of rule)"
+    "slack:C05RNSE8TBR:1791208343.030929": "reply in the request thread; duplicates the thread body"
+    "slack:C05RNSE8TBR:1791199187.749279": "reply in the request thread; duplicates the thread body"
+    "slack:C05RNSE8TBR:1791275549.204199": "reply in the request thread; duplicates the thread body"
+    "slack:C05RNSE8TBR:1790836255.188369": "reply in the request thread; duplicates the thread body"
+    "slack:C05RNSE8TBR:1791208581.280589": "reply in the request thread; duplicates the thread body"
+    "slack:C05RNSE8TBR:1791208548.628709": "reply in the request thread; duplicates the thread body"
+    "slack:C05RNSE8TBR:1791204174.484819": "reply in the request thread; duplicates the thread body"
+    "slack:C05RNSE8TBR:1791203271.429169": "reply in the request thread; duplicates the thread body"
+    "slack:C05RNSE8TBR:1790836272.972269": "reply in the request thread; duplicates the thread body"
+    "slack:C05RNSE8TBR:1791273919.254379": "reply in the request thread; duplicates the thread body"
+    "slack:C05RNSE8TBR:1791275102.815899": "reply in the request thread; duplicates the thread body"
+    "slack:C05RNSE8TBR:1791208802.105439": "reply in the request thread; duplicates the thread body"
+    "slack:C05RNSE8TBR:1791205585.835889": "reply in the request thread; duplicates the thread body"
+    "slack:C05RNSE8TBR:1790940763.733369": "reply in the request thread; duplicates the thread body"
+    "slack:C05RNSE8TBR:1791276310.718299": "reply in the request thread; duplicates the thread body"
+    "slack:C05RNSE8TBR:1791274533.628169": "reply in the request thread; duplicates the thread body"
+    "slack:C05RNSE8TBR:1791273983.197079": "reply in the request thread; duplicates the thread body"
+    "slack:C05RNSE8TBR:1791285247.315549": "reply in the request thread; duplicates the thread body"
+    "slack:C05RNSE8TBR:1791204714.706519": "reply in the request thread; duplicates the thread body"
+    "slack:C05RNSE8TBR:1791286327.219409": "reply in the request thread; duplicates the thread body"
+    "slack:C05RNSE8TBR:1791285553.438069": "reply in the request thread; duplicates the thread body"
+    "slack:C05RNSE8TBR:1791277313.359689": "reply in the request thread; duplicates the thread body"
+    "slack:C05RNSE8TBR:1791283392.773919": "reply in the request thread; duplicates the thread body"
+    "slack:C05RNSE8TBR:1791275930.373949": "reply in the request thread; duplicates the thread body"
+    "slack:C05RNSE8TBR:1791276890.218429": "reply in the request thread; duplicates the thread body"
+    "slack:C05RNSE8TBR:1791275771.798879": "reply in the request thread; duplicates the thread body"
+    "slack:C05RNSE8TBR:1791275987.293559": "reply in the request thread; duplicates the thread body"
+    "slack:C05RNSE8TBR:1791208344.629379": "reply in the request thread; duplicates the thread body"
+    "slack:C05RNSE8TBR:1791208421.846449": "reply in the request thread; duplicates the thread body"
+    "slack:C05RNSE8TBR:1791277736.179019": "reply in the request thread; duplicates the thread body"
+    "slack:C05RNSE8TBR:1791208419.106389": "reply in the request thread; duplicates the thread body"
+    "slack:C05RNSE8TBR:1791282113.721769": "reply in the request thread; duplicates the thread body"
+    "slack:C05RNSE8TBR:1791283903.221179": "reply in the request thread; duplicates the thread body"
+    "slack:C05RNSE8TBR:1791281868.710209": "reply in the request thread; duplicates the thread body"
+    "slack:C05RNSE8TBR:1791283592.876399": "reply in the request thread; duplicates the thread body"
+    "slack:C05RNSE8TBR:1791281168.442419": "reply in the request thread; duplicates the thread body"
+    "slack:C05RNSE8TBR:1791284275.511999": "reply in the request thread; duplicates the thread body"
+    "slack:C05RNSE8TBR:1791280839.446099": "reply in the request thread; duplicates the thread body"
+    "slack:C05RNSE8TBR:1791199528.045029": "reply in the request thread; duplicates the thread body"
+    "slack:C05RNSE8TBR:1790835507.061979": "reply in the request thread; duplicates the thread body"
+    "slack:C0C6RMYH5U6:1791437304.597919": "reply in a related thread; harmless, not needed"
+    "slack:C0C6RMYH5U6:1791437332.984619": "reply in a related thread; harmless, not needed"
+    "slack:C0C6RMYH5U6:1791437156.280619": "reply in a related thread; harmless, not needed"
+    "slack:C05RNSE8TBR:1791272672.072949": "thread moving the report to the new channel; related"
+    "slack:C0C6RMYH5U6:1791432306.826199": "a day's report output and bot choice; related"
+    "slack:C0C6RMYH5U6:1791342766.439079": "a day's report output; related"
+    "slack:C0C6RMYH5U6:1791356438.494459": "a day's report output; related"
+    "slack:C0C6RMYH5U6:1791601642.545109": "a day's report output; related"
+    "slack:C0C6RMYH5U6:1791707896.766609": "weekly report in a fixed format; related"
+    "gh_pr:wego/payments#2380": "agreed acceptance-rate query template; useful background"
+labelled_by: fable-draft
 checked_by: null
 notes: "Draft from EnzoBot bot_mentions; labels await oracle preparation and owner review."
