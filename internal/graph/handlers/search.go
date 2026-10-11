@@ -36,7 +36,7 @@ type Embedder interface {
 type Search struct {
 	db     *pgxpool.Pool
 	embed  Embedder
-	aclBld *acl.Builder
+	aclBld scopeBuilder
 	exp    *bfs.Expander
 	// now is injectable so the temporal window parser is testable.
 	now func() time.Time
@@ -50,7 +50,7 @@ func NewSearch(db *pgxpool.Pool) (*Search, error) {
 		embed:  nil, // wired at server level via NewSearchWithEmbedder
 		aclBld: acl.NewBuilder(db, 5*time.Minute),
 		exp:    bfs.NewExpander(db),
-		now:    time.Now,
+		now:    nowFunc,
 	}, nil
 }
 
@@ -158,7 +158,19 @@ func (s *Search) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// An absent header is the trusted unfiltered view; a present header is
 	// always filtered, with unresolved askers limited to public/unscoped nodes.
 	// The API key remains the privilege boundary; identity is advisory.
-	askerEEID, scopeSet, noFilter := askerScopeSet(ctx, s.db, s.aclBld, r.Header.Get("X-Asker-User"))
+	askerEEID, scopeSet, noFilter, membershipErr := askerScopeSetDiag(ctx, s.db, s.aclBld, r.Header.Get("X-Asker-User"))
+	if diag, _ := ctx.Value(requestTraceDiagKey{}).(*requestTraceDiag); diag != nil {
+		switch {
+		case noFilter:
+			diag.aclMode = "unfiltered"
+		case membershipErr != nil:
+			diag.aclMode = "filtered-membership-error"
+		case askerEEID == 0:
+			diag.aclMode = "public-only"
+		default:
+			diag.aclMode = "filtered"
+		}
+	}
 	acl := askerACL{noFilter: noFilter, resolved: askerEEID != 0, scopes: scopeSet}
 	scopeArg := acl.scopeArg()
 	var typesArg any
@@ -366,6 +378,10 @@ func (s *Search) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if diag, _ := ctx.Value(requestTraceDiagKey{}).(*requestTraceDiag); diag != nil {
+		diag.armErrors = nilIfEmpty(armErrs)
+	}
+
 	if hybrid {
 		rows, err := hybridDisplay(ctx, s.db, results, acl)
 		if err != nil {
@@ -381,6 +397,12 @@ func (s *Search) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		if hasWindow {
 			resp.Window = &searchWindow{Start: win.Start, End: win.End, Hard: hardWindow}
+		}
+		if diag, _ := ctx.Value(requestTraceDiagKey{}).(*requestTraceDiag); diag != nil {
+			diag.itemMeta = make(map[string]map[string]any, len(rows))
+			for _, row := range rows {
+				diag.itemMeta[row.NodeID] = map[string]any{"title_source": row.titleSource, "summary_source": row.summarySource}
+			}
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(resp)

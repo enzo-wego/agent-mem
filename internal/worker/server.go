@@ -26,6 +26,7 @@ import (
 	"github.com/agent-mem/agent-mem/internal/graph/identity"
 	"github.com/agent-mem/agent-mem/internal/graph/jobs"
 	"github.com/agent-mem/agent-mem/internal/graph/normalizer"
+	graphtrace "github.com/agent-mem/agent-mem/internal/graph/trace"
 	"github.com/agent-mem/agent-mem/internal/llmgateway"
 	"github.com/agent-mem/agent-mem/internal/search"
 	memsync "github.com/agent-mem/agent-mem/internal/sync"
@@ -56,7 +57,8 @@ type Server struct {
 	// to enable graph LLM calls in that case).
 	graphAdapter *graphhandlers.GeminiAdapter
 
-	logBuffer *LogBuffer
+	logBuffer     *LogBuffer
+	traceRecorder *graphtrace.Recorder
 }
 
 // flatLLM is the flat-memory LLM surface: extract an observation and summarise
@@ -90,6 +92,8 @@ func (s *Server) getSearcher() *search.Searcher {
 }
 
 // NewServer creates a new worker server. logBuf may be nil.
+var BuildRev string
+
 func NewServer(cfg *config.Config, logBuf *LogBuffer) (*Server, error) {
 	ctx := context.Background()
 
@@ -153,18 +157,21 @@ func NewServer(cfg *config.Config, logBuf *LogBuffer) (*Server, error) {
 		log.Info().Str("url", cfg.SyncURL).Msg("Sync engine configured")
 	}
 
+	traceRecorder := graphtrace.NewRecorder(graphtrace.PostgresStore{DB: pool}, graphtrace.Options{})
 	// Build graph deps and dispatcher
 	graphLog := log.Logger
 	graphDeps := graphhandlers.Deps{
-		DB:          pool,
-		Logger:      graphLog,
-		MachineID:   cfg.MachineID,
-		Fetchers:    fetchers.NewRegistry(fetchersConfigFromAppConfig(cfg), graphLog),
-		Normalizers: normalizer.NewDefault(newDBNameCache(pool)),
-		Extractor:   extractor.New(pool, graphLog),
-		Identity:    identity.NewService(pool, graphLog),
-		Gemini:      graphGemini,
-		LiteParse:   liteparseConfigFromEnv(),
+		DB:            pool,
+		Logger:        graphLog,
+		MachineID:     cfg.MachineID,
+		Fetchers:      fetchers.NewRegistry(fetchersConfigFromAppConfig(cfg), graphLog),
+		Normalizers:   normalizer.NewDefault(newDBNameCache(pool)),
+		Extractor:     extractor.New(pool, graphLog),
+		Identity:      identity.NewService(pool, graphLog),
+		Gemini:        graphGemini,
+		LiteParse:     liteparseConfigFromEnv(),
+		TraceRecorder: traceRecorder,
+		BuildRev:      BuildRev,
 
 		SlackBotToken: cfg.Graph.SlackBotToken,
 		SlackUserCreds: func() (string, string) {
@@ -348,6 +355,7 @@ func NewServer(cfg *config.Config, logBuf *LogBuffer) (*Server, error) {
 	// Dashboard (served at root, after API routes)
 	r.Handle("/*", serveDashboard())
 
+	s.traceRecorder = traceRecorder
 	s.router = r
 	return s, nil
 }
@@ -356,6 +364,7 @@ func NewServer(cfg *config.Config, logBuf *LogBuffer) (*Server, error) {
 func (s *Server) Run() error {
 	ctx, cancel := context.WithCancel(context.Background())
 	s.cancel = cancel
+	defer s.traceRecorder.Close(5 * time.Second)
 
 	// Start background message processor
 	go s.processLoop(ctx)
@@ -376,6 +385,20 @@ func (s *Server) Run() error {
 			go graphhandlers.RunSlackMembersTicker(ctx, s.db.Pool, s.config.MachineID, s.config.Graph.Runner, s.config.Graph.SlackBotToken, log.Logger)
 		}
 	}
+	go func() {
+		ticker := time.NewTicker(24 * time.Hour)
+		defer ticker.Stop()
+		for {
+			if _, err := graphtrace.Prune(ctx, graphtrace.PostgresStore{DB: s.db.Pool}, time.Now()); err != nil {
+				log.Error().Err(err).Msg("prune context traces")
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+		}
+	}()
 
 	s.http = &http.Server{
 		Addr:              fmt.Sprintf(":%d", s.config.WorkerPort),

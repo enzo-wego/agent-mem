@@ -39,9 +39,29 @@ build-cli: ## Build the agent-mem CLI into ./bin/agent-mem. Override GO=/path/to
 	mkdir -p bin
 	$(GO) build -o ./bin/agent-mem ./cmd/agent-mem
 
-test-db: ## Run graph DB tests serially. Usage: make test-db TEST_DATABASE_URL=<scratch agentmem_test DSN>
-	@test -n "$(TEST_DATABASE_URL)" || { echo "TEST_DATABASE_URL is required"; exit 1; }
-	DATABASE_URL="$(TEST_DATABASE_URL)" AGENT_MEM_TEST_DATABASE_URL="$(TEST_DATABASE_URL)" AGENT_MEM_EVAL= $(GO) test -p=1 -count=1 -json ./internal/graph/...
+test-db: ## Run graph DB tests serially; starts isolated pgvector when TEST_DATABASE_URL is unset.
+	@bash -o pipefail -c '\
+	set -eu; \
+	container=""; \
+	dsn="$(TEST_DATABASE_URL)"; \
+	if [ -z "$$dsn" ]; then \
+	  container="agentmem-test-$$$$-$$RANDOM"; \
+	  trap '"'"'test -z "$$container" || docker rm -f "$$container" >/dev/null 2>&1 || true'"'"' EXIT; \
+	  docker run -d --name "$$container" -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=agentmem_test -p 127.0.0.1::5432 pgvector/pgvector:pg16 >/dev/null; \
+	  ready=""; \
+	  for i in $$(seq 1 60); do \
+	    if docker exec "$$container" pg_isready -h 127.0.0.1 -d agentmem_test >/dev/null 2>&1; then ready=1; break; fi; \
+	    sleep 1; \
+	  done; \
+	  test -n "$$ready" || { echo "test database did not become ready" >&2; exit 1; }; \
+	  port=$$(docker port "$$container" 5432/tcp | cut -d: -f2); \
+	  dsn="postgres://postgres:postgres@127.0.0.1:$$port/agentmem_test?sslmode=disable"; \
+	  DATABASE_URL="$$dsn" $(GO) run ./cmd/agent-mem migrate; \
+	fi; \
+	drop="$(AGENT_MEM_TEST_DROP_VAR)"; \
+	if [ -n "$$drop" ]; then child_env=(env -u "$$drop"); else child_env=(env); fi; \
+	DATABASE_URL="$$dsn" AGENT_MEM_TEST_DATABASE_URL="$$dsn" AGENT_MEM_EVAL= \
+	  "$${child_env[@]}" $(GO) test -p=1 -count=1 -json ./internal/graph/... ./cmd/agent-mem/... | $(GO) run ./scripts/check-db-skips.go'
 
 install-cli: ## Install the agent-mem CLI. Override with GO=/path/to/go and GOBIN=/path, e.g. /usr/local/bin.
 ifdef GOBIN
@@ -84,7 +104,7 @@ migrate-fix: up ## Force-delete a failed migration record. Usage: make migrate-f
 	$(compose) exec worker agent-mem migrate-fix -v $(version)
 
 restart: ## Rebuild and restart worker.
-	$(compose) up -d --build worker
+	BUILD_REV=$$(git rev-parse HEAD) $(compose) up -d --build worker
 
 deploy: ## Build amd64 image here, push to GHCR, and pull-only deploy on the VPS (no build on the box).
 	@echo "${YELLOW}>> building + pushing $(IMAGE) (linux/amd64)${RESET}"
@@ -103,7 +123,10 @@ ifndef DUMP
 endif
 	DOCKER="$(DOCKER)" ./scripts/db-restore.sh $(if $(FORCE),--force,) $(DUMP)
 
+deploy-payments: BUILD_REV := $(shell git rev-parse HEAD 2>/dev/null)
 deploy-payments: ## Sync source to payments and build+restart there natively (arm64, no registry).
+	@test -n "$(BUILD_REV)" || { echo "refusing to deploy: git rev-parse HEAD returned empty revision" >&2; exit 1; }
+	@test -z "$$(git status --porcelain)" || { echo "refusing to deploy: working tree is dirty (commit or stash first); BUILD_REV would not match deployed source" >&2; exit 1; }
 	@echo "${YELLOW}>> syncing source to $(PAYMENTS)${RESET}"
 	rsync -az --delete \
 		--exclude '.git/' --exclude '.omc/' --exclude '.code-review-graph/' \
@@ -112,7 +135,7 @@ deploy-payments: ## Sync source to payments and build+restart there natively (ar
 		--exclude 'docker-compose.override.yml' \
 		./ $(PAYMENTS):$(PAYMENTS_DIR)/
 	@echo "${YELLOW}>> building + restarting worker on $(PAYMENTS)${RESET}"
-	ssh $(PAYMENTS) 'export PATH=/opt/homebrew/bin:$$PATH && cd $(PAYMENTS_DIR) && docker compose up -d --build worker'
+	ssh $(PAYMENTS) 'export PATH=/opt/homebrew/bin:$$PATH && cd $(PAYMENTS_DIR) && BUILD_REV=$(BUILD_REV) docker compose up -d --build worker'
 	@echo "${GREEN}>> deployed to $(PAYMENTS)${RESET}"
 
 db-reset: ## Clear the database and re-run migrations.

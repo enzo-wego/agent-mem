@@ -74,7 +74,9 @@ runs on the **payments Mac mini**: `ssh enzo@payments` (Tailscale
 
   ```bash
   ssh enzo@payments 'cd ~/go/src/github.com/agent-mem && git pull --ff-only \
-    && PATH=/opt/homebrew/bin:$PATH docker compose up -d --build worker'
+    && PATH=/opt/homebrew/bin:$PATH BUILD_REV=$(git rev-parse HEAD) \
+       docker compose build --build-arg BUILD_REV=$(git rev-parse HEAD) worker \
+    && PATH=/opt/homebrew/bin:$PATH docker compose up -d worker'
   ```
 
 - **Verify the running binary carries the change** (never trust the build log):

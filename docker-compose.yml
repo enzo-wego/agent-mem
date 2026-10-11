@@ -23,7 +23,10 @@ services:
       retries: 5
 
   worker:
-    build: .
+    build:
+      context: .
+      args:
+        BUILD_REV: ${BUILD_REV:-unknown}
     depends_on:
       postgres:
         condition: service_healthy

@@ -1,0 +1,5 @@
+{
+  "status": 200,
+  "content_type": "application/json",
+  "body": "{\"context_tokens\":12,\"artifacts\":[{\"node_id\":\"slack:CGC0:100.000001\",\"url\":\"\",\"type\":\"slack\",\"title\":\"Phase zero root\",\"thread_ts\":\"100.000001\",\"score\":0.3600824150723009,\"score_breakdown\":{\"sem\":0,\"rec\":0.9672161004820059,\"edge\":1,\"team\":0.1,\"auth\":1},\"body\":\"phase zero root body\",\"hop\":0},{\"node_id\":\"jira:GC0-1\",\"url\":\"\",\"type\":\"jira\",\"title\":\"Phase zero issue\",\"score\":0.2757256127053939,\"score_breakdown\":{\"sem\":0,\"rec\":0.9048374180359595,\"edge\":0.5,\"team\":0.1,\"auth\":1},\"body\":\"phase zero issue body\",\"hop\":1,\"links\":[{\"kind\":\"REFERENCES\",\"confidence\":0.91}]}],\"graph_trace\":{\"seeds\":[\"slack:CGC0:100.000001\"],\"expanded_nodes\":3,\"after_acl\":3,\"after_score_threshold\":3,\"took_ms\":0},\"cache_misses\":[\"jira:GC0-MISS\"]}\n"
+}

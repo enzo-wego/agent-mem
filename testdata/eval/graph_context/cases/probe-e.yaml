@@ -1,0 +1,48 @@
+id: probe-e
+use_case: UC3
+source_thread: https://wego.slack.com/archives/C0597404MS6/p1791519992938819
+asker_slack_id: UUK3WPNNQ
+asker_eeid: 259
+needs_context: "yes"
+canonical_seeds: []
+requests:
+    resolve-asker:
+        body:
+            asker_eeid: 259
+            depth: 2
+            include_bodies: false
+            query: Add disable_pdf_generation_countries switch for invoice PDF and email - payments#2424
+            seeds:
+                - https://wego.slack.com/archives/C0597404MS6/p1791519992938819
+                - https://github.com/wego/payments/pull/2424
+        headers: {}
+    resolve-asker0:
+        body:
+            asker_eeid: 0
+            depth: 2
+            include_bodies: false
+            query: Add disable_pdf_generation_countries switch for invoice PDF and email - payments#2424
+            seeds:
+                - https://wego.slack.com/archives/C0597404MS6/p1791519992938819
+                - https://github.com/wego/payments/pull/2424
+        headers: {}
+    search-hybrid:
+        params:
+            limit: 10
+            match: hybrid
+            q: Add disable_pdf_generation_countries switch for invoice PDF and email - payments#2424
+            types: slack,slack_thread,gh_pr,jira,cf,cf_page,gws,gws_doc,gdoc,wegohub,claude_artifact,pagerduty,sentry,datadog
+        headers: {}
+labels:
+    resolve:
+        must: []
+        may: []
+        must_not: []
+    search:
+        must: []
+        may: []
+        must_not: []
+label_reasons: {}
+labelled_by: none
+checked_by: null
+notes: PR review request - payments#2424 disable_pdf_generation_countries switch

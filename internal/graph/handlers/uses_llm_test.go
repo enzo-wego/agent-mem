@@ -19,6 +19,7 @@ func TestRegisterAllMarksLLMJobHandlers(t *testing.T) {
 		"detect_hot_topics":     true,
 		"refresh_topic_scope":   true,
 		"refresh_epic_brief":    true,
+		"summarize_purpose":     true,
 	}
 
 	for _, jobType := range reg.Types() {

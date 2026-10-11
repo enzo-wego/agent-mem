@@ -6,9 +6,11 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-
-	"github.com/agent-mem/agent-mem/internal/graph/acl"
 )
+
+type scopeBuilder interface {
+	For(context.Context, int) ([]string, error)
+}
 
 // askerScopeSet resolves the X-Asker-User header to an eeid and builds the set
 // of scopes that asker may read (their real memberships plus "public").
@@ -16,23 +18,28 @@ import (
 // An absent (trimmed empty) header is the trusted unfiltered view. A present
 // header is always filtered; unresolved identities and lookup/build errors see
 // only public and unscoped nodes. Identity remains advisory; see router.go.
-func askerScopeSet(ctx context.Context, db *pgxpool.Pool, bld *acl.Builder, askerRef string) (eeid int, scopeSet map[string]bool, noFilter bool) {
+func askerScopeSet(ctx context.Context, db *pgxpool.Pool, bld scopeBuilder, askerRef string) (eeid int, scopeSet map[string]bool, noFilter bool) {
+	eeid, scopeSet, noFilter, _ = askerScopeSetDiag(ctx, db, bld, askerRef)
+	return
+}
+
+func askerScopeSetDiag(ctx context.Context, db *pgxpool.Pool, bld scopeBuilder, askerRef string) (eeid int, scopeSet map[string]bool, noFilter bool, membershipErr error) {
 	if strings.TrimSpace(askerRef) == "" {
-		return 0, nil, true
+		return 0, nil, true, nil
 	}
 	eeid, err := lookupAsker(ctx, db, askerRef)
 	if err != nil || eeid == 0 {
-		return 0, map[string]bool{"public": true}, false
+		return 0, map[string]bool{"public": true}, false, nil
 	}
 	scopeSet = map[string]bool{"public": true}
 	scopes, err := bld.For(ctx, eeid)
 	if err != nil {
-		return eeid, scopeSet, false // fail closed
+		return eeid, scopeSet, false, err
 	}
 	for _, s := range scopes {
 		scopeSet[s] = true
 	}
-	return eeid, scopeSet, false
+	return eeid, scopeSet, false, nil
 }
 
 // scopeVisible reports whether a node with the given scope is readable. It is

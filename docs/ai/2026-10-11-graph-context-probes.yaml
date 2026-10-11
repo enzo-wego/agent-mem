@@ -1,0 +1,192 @@
+# Replay manifest for the six graph-context probes run during the 2026-10-11 audit
+# (docs/ai/2026-10-11-graph-context-quality.md). Read-only replays against the hub:
+#   base_url: http://localhost:34567   (AGENT_MEM_GRAPH_URL in p-agent/.env)
+#   auth:     Authorization: Bearer $AGENT_MEM_API_KEY   (never written here)
+# Every probe was run twice through POST /api/graph/resolve (asker_eeid 0, then the
+# real eeid) and once through GET /api/graph/search. The eeid came from
+# GET /api/graph/person?q=<slack uid> at audit time (people[0].eeid).
+# Seeds are passed verbatim; the server canonicalises Slack permalinks to thread roots.
+# No customer PII: Slack user ids, node ids and permalinks only.
+
+audit_date: 2026-10-11
+base_url: http://localhost:34567
+hybrid_types: &hybrid_types slack,slack_thread,gh_pr,jira,cf,cf_page,gws,gws_doc,gdoc,wegohub,claude_artifact,pagerduty,sentry,datadog
+resolve_defaults: &resolve_defaults
+  depth: 2
+  budget_tokens: null        # field omitted; server default 4000 applied (context_tokens reported 3955-4000)
+  include_bodies: false
+
+probes:
+  - id: probe-a
+    use_case: UC2
+    label: Jira question - trace PAY-1731 translated availability message
+    source_thread: https://wego.slack.com/archives/CUV9EAYGY/p1791450444383399
+    asker_slack_uid: U050BBA607M
+    asker_eeid: 651
+    resolve_request:
+      <<: *resolve_defaults
+      seeds:
+        - https://wego.slack.com/archives/CUV9EAYGY/p1791450444383399
+        - jira:PAY-1731
+      query: "Help me to trace PAY-1731 whether the code today returns translated communication message in the code today. For payment method availability."
+      asker_eeid: [0, 651]   # run once per value
+    hybrid_request:
+      q: "Help me to trace PAY-1731 whether the code today returns translated communication message in the code today. For payment method availability."
+      match: hybrid
+      limit: 10
+      types: *hybrid_types
+      X-Asker-User: null     # header not sent
+    observed:
+      resolve_asker0: {artifacts: 16, expanded_nodes: 101, after_acl: 101, context_tokens: 4000}
+      resolve_real: {artifacts: 6, expanded_nodes: 101, after_acl: 32, context_tokens: 3957}
+      dropped_for_real_asker: [jira:PAY-1731, gh_pr:wego/wego-docs#682, jira:PAY-1079, "7 jira_attachment nodes"]
+      distinct_relevant_real: 4
+      duplicate_reply_nodes_real: 2
+      hybrid_results: 10
+      hybrid_top3: [jira:PAY-1731, slack:CUV9EAYGY:1791450444.383399, slack:CUV9EAYGY:1791450445.967909]
+      hybrid_relevant_at_10: 9
+    variants:
+      - note: include_bodies=true, asker_eeid 651 -> 6 artifacts, summary empty on all, seed body_len 14540 (16 replies, 12 EnzoBot references)
+      - note: hybrid with X-Asker-User U050BBA607M and no types param -> 10 results, slack only (13 without header); X-Asker-User 651 -> 0 results
+
+  - id: probe-b
+    use_case: UC5
+    label: How does X work - Tabby UAE Pay in 3 vs Pay in 4 request parameter
+    source_thread: https://wego.slack.com/archives/CUV9EAYGY/p1790675479191359
+    asker_slack_uid: U061HHMF540
+    asker_eeid: 708
+    resolve_request:
+      <<: *resolve_defaults
+      seeds:
+        - https://wego.slack.com/archives/CUV9EAYGY/p1790675479191359
+      query: "For Tabby UAE, Pay in 3 and Pay in 4 - check what parameter in the payment request differentiates the two tenures? Are we sending a parameter that denotes tenure or are the processed via different merchant IDs?"
+      asker_eeid: [0, 708]
+    hybrid_request:
+      q: "For Tabby UAE, Pay in 3 and Pay in 4 - check what parameter in the payment request differentiates the two tenures? Are we sending a parameter that denotes tenure or are the processed via different merchant IDs?"
+      match: hybrid
+      limit: 10
+      types: *hybrid_types
+      X-Asker-User: null
+    observed:
+      resolve_asker0: {artifacts: 1, expanded_nodes: 3, after_acl: 3, context_tokens: 1011}
+      resolve_real: {artifacts: 1, expanded_nodes: 3, after_acl: 3, context_tokens: 1011}
+      distinct_relevant_real: 0   # seed only, recall 0
+      hybrid_results: 10
+      hybrid_top3: [slack:CUV9EAYGY:1790675479.191359, slack:CUV9EAYGY:1767578784.158839, jira:PAY-473]
+      hybrid_relevant_at_10: 4
+
+  - id: probe-c
+    use_case: UC4
+    label: Payment ref lookup - cardholder name, last 4 and BIN for payment [payment-ref]
+    source_thread: https://wego.slack.com/archives/CUV9EAYGY/p1791457916047199
+    asker_slack_uid: U061HHMF540
+    asker_eeid: 708
+    resolve_request:
+      <<: *resolve_defaults
+      seeds:
+        - https://wego.slack.com/archives/CUV9EAYGY/p1791457916047199
+      query: "Check if we received the Cardholder name, last 4, and BIN for this payment - [payment-ref]"
+      asker_eeid: [0, 708]
+    hybrid_request:
+      q: "Check if we received the Cardholder name, last 4, and BIN for this payment - [payment-ref]"
+      match: hybrid
+      limit: 10
+      types: *hybrid_types
+      X-Asker-User: null
+    observed:
+      resolve_asker0: {artifacts: 22, expanded_nodes: 30, after_acl: 30, context_tokens: 3996}
+      resolve_real: {artifacts: 27, expanded_nodes: 30, after_acl: 28, context_tokens: 3981}
+      dropped_for_real_asker: [jira:PAY-2438]
+      distinct_relevant_real: 5
+      duplicate_reply_nodes_real: 22
+      hybrid_results: 10
+      hybrid_top3: [slack:CUV9EAYGY:1791457916.047199, slack:C0597404MS6:1791463615.025999, jira:PAY-2438]
+      hybrid_relevant_at_10: 8
+    variants:
+      - note: include_bodies=true, asker_eeid 708 -> 27 artifacts, summary empty on all
+
+  - id: probe-d
+    use_case: UC7
+    label: Data question - Sift fraud-score band 90-92.99 after threshold raise to 93
+    source_thread: https://wego.slack.com/archives/C05RNSE8TBR/p1790939932438779
+    asker_slack_uid: U02FKR154T1
+    asker_eeid: 334
+    resolve_request:
+      <<: *resolve_defaults
+      seeds:
+        - https://wego.slack.com/archives/C05RNSE8TBR/p1790939932438779
+      query: "On 24 Aug 2026 we raised the fraud-score block threshold in Sift from 90 to 93. Since then, payment attempts scoring 90-92.99 are no longer blocked. I want to understand how this newly unblocked band performs."
+      asker_eeid: [0, 334]
+    hybrid_request:
+      q: "On 24 Aug 2026 we raised the fraud-score block threshold in Sift from 90 to 93. Since then, payment attempts scoring 90-92.99 are no longer blocked. I want to understand how this newly unblocked band performs."
+      match: hybrid
+      limit: 10
+      types: *hybrid_types
+      X-Asker-User: null
+    observed:
+      resolve_asker0: {artifacts: 5, expanded_nodes: 10, after_acl: 10, context_tokens: 3955}
+      resolve_real: {artifacts: 6, expanded_nodes: 10, after_acl: 10, context_tokens: 3998}
+      dropped_for_real_asker: [slack_file:F0C67173AH4, slack_file:F0C6ATMC7MX]
+      distinct_relevant_real: 2   # SAME_TOPIC threads slack:C05RNSE8TBR:1788444667.445439 and :1788259009.515069, confidence 0.92
+      duplicate_reply_nodes_real: 3
+      hybrid_results: 10
+      hybrid_top3: [slack:C05RNSE8TBR:1790939932.438779, jira:PAY-2355, slack:CUV9EAYGY:1788241371.674529]
+      hybrid_relevant_at_10: 4
+    variants:
+      - note: resolve with query "Sift fraud score threshold 90 to 93 unblocked band performance", asker_eeid 334, no include_bodies -> 6 artifacts, score_breakdown.sem = 0 on every artifact
+
+  - id: probe-e
+    use_case: UC3
+    label: PR review request - payments#2424 disable_pdf_generation_countries switch
+    source_thread: https://wego.slack.com/archives/C0597404MS6/p1791519992938819
+    asker_slack_uid: UUK3WPNNQ
+    asker_eeid: 259
+    resolve_request:
+      <<: *resolve_defaults
+      seeds:
+        - https://wego.slack.com/archives/C0597404MS6/p1791519992938819
+        - https://github.com/wego/payments/pull/2424
+      query: "Add disable_pdf_generation_countries switch for invoice PDF and email - payments#2424"
+      asker_eeid: [0, 259]
+    hybrid_request:
+      q: "Add disable_pdf_generation_countries switch for invoice PDF and email - payments#2424"
+      match: hybrid
+      limit: 10
+      types: *hybrid_types
+      X-Asker-User: null
+    observed:
+      resolve_asker0: {artifacts: 17, expanded_nodes: 99, after_acl: 99, context_tokens: 3999}
+      resolve_real: {artifacts: 65, expanded_nodes: 99, after_acl: 93, context_tokens: 3963}
+      dropped_for_real_asker: [gh_pr:wego/payments#2424, slack:CUV9EAYGY:1791532132.466899]
+      distinct_relevant_real: 3
+      duplicate_reply_nodes_real: 62
+      hybrid_results: 10
+      hybrid_top3: [gh_pr:wego/payments#2424, slack:CUV9EAYGY:1791440402.647959, slack:C0597404MS6:1791519992.938819]
+      hybrid_relevant_at_10: 7
+
+  - id: probe-f
+    use_case: UC8   # closest match: environment / go-live readiness question (IN tax on staging)
+    label: Config question - is IN tax enabled on staging
+    source_thread: https://wego.slack.com/archives/C048WV1BZTK/p1790153746509909
+    asker_slack_uid: U07A93PCLJG
+    asker_eeid: 867   # taken from graph.nodes.author_person_id -> people.eeid for the root author, not from /api/graph/person
+    resolve_request:
+      <<: *resolve_defaults
+      seeds:
+        - https://wego.slack.com/archives/C048WV1BZTK/p1790153746509909
+      query: "is the IN tax enabled on staging? I have run the test with SA contractingCountry taxCountry ELIGIBLE"
+      asker_eeid: [0, 867]
+    hybrid_request:
+      q: "is the IN tax enabled on staging? I have run the test with SA contractingCountry taxCountry ELIGIBLE"
+      match: hybrid
+      limit: 10
+      types: *hybrid_types
+      X-Asker-User: null
+    observed:
+      resolve_asker0: {artifacts: 26, expanded_nodes: 358, after_acl: 358, context_tokens: 4000}
+      resolve_real: {artifacts: 62, expanded_nodes: 358, after_acl: 328, context_tokens: 4000}
+      distinct_relevant_real: 5   # approximate; sibling threads in C0BBJAHV4G1
+      duplicate_reply_nodes_real: 55   # approximate
+      hybrid_results: 10
+      hybrid_top3: [slack:C048WV1BZTK:1790153746.509909, jira:PAY-2331, slack:C0B1BR522F5:1791463631.837989]
+      hybrid_relevant_at_10: null   # not judged in the audit

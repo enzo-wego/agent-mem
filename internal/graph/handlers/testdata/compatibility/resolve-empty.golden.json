@@ -1,0 +1,5 @@
+{
+  "status": 200,
+  "content_type": "application/json",
+  "body": "{\"context_tokens\":0,\"artifacts\":[],\"graph_trace\":{\"seeds\":[\"jira:UNKNOWN\"],\"expanded_nodes\":1,\"after_acl\":0,\"after_score_threshold\":0,\"took_ms\":0}}\n"
+}

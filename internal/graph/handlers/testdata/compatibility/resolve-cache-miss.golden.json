@@ -1,0 +1,5 @@
+{
+  "status": 200,
+  "content_type": "application/json",
+  "body": "{\"context_tokens\":12,\"artifacts\":[{\"node_id\":\"jira:GC0-1\",\"url\":\"\",\"type\":\"jira\",\"title\":\"Phase zero issue\",\"score\":0.2757256127053939,\"score_breakdown\":{\"sem\":0,\"rec\":0.9048374180359595,\"edge\":0.5,\"team\":0.1,\"auth\":1},\"hop\":1,\"links\":[{\"kind\":\"REFERENCES\",\"confidence\":0.83}]},{\"node_id\":\"slack:CGC0:100.000001\",\"url\":\"\",\"type\":\"slack\",\"title\":\"Phase zero root\",\"thread_ts\":\"100.000001\",\"score\":0.2600824150723009,\"score_breakdown\":{\"sem\":0,\"rec\":0.9672161004820059,\"edge\":0.3333333333333333,\"team\":0.1,\"auth\":1},\"hop\":2},{\"node_id\":\"jira:GC0-MISS\",\"url\":\"\",\"type\":\"jira\",\"title\":\"Phase zero missing body\",\"score\":1,\"score_breakdown\":{\"sem\":0,\"rec\":0,\"edge\":0,\"team\":0,\"auth\":0},\"hop\":0}],\"graph_trace\":{\"seeds\":[\"jira:GC0-MISS\"],\"expanded_nodes\":3,\"after_acl\":3,\"after_score_threshold\":3,\"took_ms\":0},\"cache_misses\":[\"jira:GC0-MISS\"]}\n"
+}

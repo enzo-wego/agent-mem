@@ -1,0 +1,67 @@
+id: case-12
+use_case: UC7
+source_thread: https://wego.slack.com/archives/C05RNSE8TBR/p1790834828596929
+asker_slack_id: U02FKR154T1
+asker_eeid: 334
+needs_context: yes
+canonical_seeds: []
+requests:
+  resolve-asker0:
+    body:
+      seeds: ["https://wego.slack.com/archives/C05RNSE8TBR/p1790834828596929"]
+      query: &query |-
+        @EnzoBot
+
+        *Daily Payment Performance Report*
+        You are the payments analyst for Wego's ops team. Produce the daily payment performance report for yesterday (00:00–23:59 GST). Compare it with the same weekday last week (D-7) and with the trailing 28-day average. Cover all entities (UAE, Singapore, KSA) and all PSPs/acquirers.
+        *1. Headline (max 5 lines)*
+        • Attempts, successful transactions, approval rate (%), and approved volume in USD
+        • Change vs D-7 and vs the 28-day average, in percentage points (pp) and %
+        • One line: "Overall status: Green / Amber / Red", with the reason
+        *2. Performance breakdown* (a table for each, sorted by attempts, top 10 plus "Other")
+        • By PSP/acquirer
+        • By payment method (cards, Apple Pay, BNPL, local methods, wallets)
+        • By scheme (Visa, Mastercard, Amex, Mada, Knet, Meeza, etc.)
+        • By issuing country
+        • By product (flights, hotels) and platform (web, iOS, Android), if available
+        Each table shows: attempts, approval rate, Δ vs D-7 (pp), Δ vs 28-day average (pp), and share of volume.
+        *3. Declines*
+        • Top 10 decline reasons with count, % of declines and change vs D-7
+        • Split into soft declines (retryable: insufficient funds, do not honour, issuer unavailable) and hard declines
+        • 3DS: challenge rate, authentication success rate, and failures split by frictionless vs challenge
+        • Fraud/risk: rule-based blocks, fraud-screen rejections, and any new chargeback or fraud alerts
+        *4. New issues to deep dive (most important section)*
+         Flag every segment that meets ANY of these conditions and has at least 50 attempts:
+        • Approval rate down ≥ [5 pp] vs the 28-day average, or ≥ [10 pp] vs D-7
+        • A BIN or issuer with approval below [60%] and at least [50] attempts, or a BIN that is new in the top 20 by attempts
+        • A decline reason whose share of declines rose by ≥ [30%]
+        • A PSP or payment method showing a technical error spike (timeouts, 5xx, "issuer unavailable", "acquirer error") of ≥ [2×] its baseline
+        • Volume drop or spike ≥ [25%] on a PSP, method or country (possible routing or outage issue)
+        • A 3DS authentication success drop ≥ [7 pp] for any scheme or issuing country
+        For each flagged issue, give:
+        • *What:* segment and metric
+        • *Since when:* first hour or day the drop appeared, and whether it is still ongoing
+        • *Impact:* failed attempts and estimated lost volume in USD
+        • *Likely cause:* your hypothesis, based on the decline codes, BINs and PSP behind it
+        • *Suggested next step:* check the PSP status page, review routing, contact the issuer via the acquirer, or review a fraud rule
+        • *Priority:* P1 (act today), P2 (this week) or P3 (monitor)
+        Sort by priority, then by estimated lost volume. Label each issue as *NEW* (not present in the last 7 days) or *RECURRING* (flagged before), and include the number of days it has persisted.
+        *5. Positive movements*
+         List up to 3 segments that improved meaningfully, so the team can see which changes are working.
+        *Rules*
+        • Exclude segments under [50] attempts from conclusions, except where a BIN check calls for them.
+        • Report amounts in USD
+        • If any data source is missing or delayed, say so at the top. Do not estimate missing data.
+        • Keep the whole report scannable in under 2 minutes. If nothing meets the thresholds in section 4, write "No new issues."
+        Run everyday for at 7am GST looking at the data of the day before 00:00–23:59 GST. Tag @payments-ops and post on #payments-team channel.
+      depth: 2
+      include_bodies: false
+      asker_eeid: 0
+    headers: {}
+  resolve-asker: {body: {seeds: ["https://wego.slack.com/archives/C05RNSE8TBR/p1790834828596929"], query: *query, depth: 2, include_bodies: false, asker_eeid: 334}, headers: {}}
+  search-hybrid: {params: {q: *query, match: hybrid, limit: 10, types: "slack,slack_thread,gh_pr,jira,cf,cf_page,gws,gws_doc,gdoc,wegohub,claude_artifact,pagerduty,sentry,datadog"}, headers: {}}
+labels: {resolve: {must: [], may: [], must_not: []}, search: {must: [], may: [], must_not: []}}
+label_reasons: {}
+labelled_by: none
+checked_by: null
+notes: "Draft from EnzoBot bot_mentions; labels await oracle preparation and owner review."

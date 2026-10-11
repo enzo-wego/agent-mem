@@ -1,0 +1,3 @@
+baseline_commit aeab2bf0cf0097dc57418204706a5aecc8032c34
+fixture_sha256 69fcc93fb2829413325eb397f745eeadc310c882be61f77990475f565161cc1f
+goldens_rerecorded 2026-10-11 raw response bytes (no re-marshal), recorded from baseline_commit code with time.Local=UTC; identical across TZ=UTC and TZ=Asia/Singapore and across two runs 3 s apart; body field is the exact handler output with only took_ms set to 0
