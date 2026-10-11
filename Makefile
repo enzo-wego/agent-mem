@@ -39,9 +39,24 @@ build-cli: ## Build the agent-mem CLI into ./bin/agent-mem. Override GO=/path/to
 	mkdir -p bin
 	$(GO) build -o ./bin/agent-mem ./cmd/agent-mem
 
-test-db: ## Run graph DB tests serially. Usage: make test-db TEST_DATABASE_URL=<scratch agentmem_test DSN>
-	@test -n "$(TEST_DATABASE_URL)" || { echo "TEST_DATABASE_URL is required"; exit 1; }
-	DATABASE_URL="$(TEST_DATABASE_URL)" AGENT_MEM_TEST_DATABASE_URL="$(TEST_DATABASE_URL)" AGENT_MEM_EVAL= $(GO) test -p=1 -count=1 -json ./internal/graph/...
+test-db: ## Run graph DB tests serially; starts isolated pgvector when TEST_DATABASE_URL is unset.
+	@bash -o pipefail -c '\
+	set -eu; \
+	container=""; \
+	dsn="$(TEST_DATABASE_URL)"; \
+	if [ -z "$$dsn" ]; then \
+	  container="agentmem-test-$$$$-$$RANDOM"; \
+	  trap '"'"'test -z "$$container" || docker rm -f "$$container" >/dev/null 2>&1 || true'"'"' EXIT; \
+	  docker run -d --name "$$container" -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=agentmem_test -p 127.0.0.1::5432 pgvector/pgvector:pg16 >/dev/null; \
+	  for i in $$(seq 1 60); do docker exec "$$container" pg_isready -U postgres >/dev/null 2>&1 && break; sleep 1; done; \
+	  port=$$(docker port "$$container" 5432/tcp | cut -d: -f2); \
+	  dsn="postgres://postgres:postgres@127.0.0.1:$$port/agentmem_test?sslmode=disable"; \
+	  DATABASE_URL="$$dsn" $(GO) run ./cmd/agent-mem migrate; \
+	fi; \
+	drop="$(AGENT_MEM_TEST_DROP_VAR)"; \
+	if [ -n "$$drop" ]; then child_env=(env -u "$$drop"); else child_env=(env); fi; \
+	DATABASE_URL="$$dsn" AGENT_MEM_TEST_DATABASE_URL="$$dsn" AGENT_MEM_EVAL= \
+	  "$${child_env[@]}" $(GO) test -p=1 -count=1 -json ./internal/graph/... | $(GO) run ./scripts/check-db-skips.go'
 
 install-cli: ## Install the agent-mem CLI. Override with GO=/path/to/go and GOBIN=/path, e.g. /usr/local/bin.
 ifdef GOBIN
