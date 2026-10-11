@@ -308,4 +308,48 @@ Gate: 0 unindexed roots older than 1 h; hybrid-search recall of `must` does not 
 
 ## Results
 
-(filled per round)
+### Phase 0 baseline (2026-10-11 21:44-21:49 SGT, hub, main `ddf7a92`)
+
+Draft labels (`fable-draft`, not human-checked), so every relevance number is
+provisional. Command: `go run ./cmd/agent-mem eval relevance --base-url http://localhost:34567`,
+one warm-up plus 10 measured runs per case and variant; ranking from the first
+measured run. All 600 measured calls succeeded; no case was unstable or degraded.
+
+| | resolve, asker 0 | resolve, real asker | hybrid search |
+|---|---|---|---|
+| precision@10 (n / n/a) | 0.500 (2 / 18) | 0.667 (3 / 17) | 0.087 (19 / 1) |
+| recall (n / n/a) | 0.500 (6 / 14) | 0.583 (6 / 14) | 0.857 (7 / 13) |
+| unlabelled@10, mean | 0.10 | 0.05 | 5.80 |
+| harmful (must_not returned), mean | 0.05 | 0.20 | 0.45 |
+| duplicate replies, mean | 14.55 | 22.40 | 0 |
+| unknown_meta (nodes) | 1 | 2 | 4 |
+| rows (primary / linked) | 372 / 0 | 525 / 0 | 200 / 24 |
+| latency p50 / p95 (200 samples) | 24 / 94 ms | 23 / 98 ms | 1,024 / 2,244 ms |
+
+What the numbers say:
+
+- Resolve is mostly reply copies: a mean of 14.6 (asker 0) to 22.4 (real asker)
+  returned items are replies of a thread already returned. Phase 2 targets this.
+- Search is mostly noise: about 5.8 of its top 10 non-seed items are unlabelled
+  (judged irrelevant) and precision@10 is 0.087. Where a needed item exists it
+  usually finds it (recall 0.857), but only 7 cases score recall.
+- Harmful items appear: search returns a same-symptom, different-incident item
+  0.45 times per case on average, resolve with a real asker 0.20. This is the
+  wrong-link risk behind this plan.
+- Known misses: case-06 (search does not return the spec thread) and case-10
+  (resolve does not return the linked Sentry report) score recall 0.
+- `unknown_meta` counts nodes returned now but absent from `node_meta.json`
+  (ingested after `eval prepare`). Run `eval prepare --refresh` before the next
+  comparison.
+
+Coverage caveats (pi, `docs/reviews/2026-10-11-graph-context-labels-r2.md`):
+
+- Labels are judged as of the original request. 13 of 20 cases have no `must` on
+  either endpoint, so recall is n/a there and resolve precision rests on 2-3 cases.
+  Those 13 cases measure over-retrieval and confusion only.
+- Labels come from what the endpoints returned (plus two cross-endpoint `must`),
+  so recall is recall of that pool, not of the whole corpus.
+- Next eval work: Enzo's human check, then cases with real pre-request evidence.
+  Open label questions for that check: case-03/case-14
+  `slack:C08S954G2LX:1779709917.613979`, probe-d
+  `slack:C0C6RMYH5U6:1791515190.996339`, the identity match in case-08.
