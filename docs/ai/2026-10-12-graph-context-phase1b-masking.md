@@ -211,3 +211,9 @@ Implemented as planned (redact package, `maskGraphResponse` on the five routes, 
 **Deviation (approved by Enzo, 2026-10-12):** the plan said every non-JSON response becomes `500 mask_failed`. The handlers answer 400/404/500 with plain-text `http.Error`, and about a dozen existing ACL tests expect 404 from node/neighbors. Final rule: JSON bodies at any status are walked and masked; status >= 400 with a non-JSON body gets the text masked by the full masker with the status kept; any 2xx non-JSON or invalid JSON body, invalid JSON with a JSON content type, and any panic stay `500 mask_failed`. Test: `TestMaskGraphResponsePlainTextErrorMaskedStatusKept` (400 and 404 with email, + phone and Luhn PAN).
 
 Notes: the real refs in `case_ref_sql_test.go`, `link_topics.go` and `identifiers_test.go` were left untouched (plan scoped the cleanup to `identifiers.go`). The route test covers the fields in one fixture (title, summary, body, edge why, link why, overview, decisions, questions, participants, epic brief/highlights/open items, echoed seed, query echo); linked-thread rows share the same JSON walk and have no dedicated fixture.
+
+## Fix round 1 (code review F1)
+
+- **F1 (HIGH):** URL protected span was `https?://\S+`, swallowing text after a URL (`<url|+65…>`, `<url|4111…>`, `url,+65…`, space-less JSON). Now `https?://[^\s"'`<>\[\]{}|,;]+` with a trailing `.` `)` `:` trimmed. Five review inputs are must-mask tests. Digits inside a real URL path stay readable; listed in README accepted false negatives.
+- **Non-ASCII digits (PDPL):** phone/card matching uses any Unicode Nd digit (`digitAt`, value from block offset) for plus/label rules and Luhn (`digitsOf`). Tests: Arabic-Indic, Extended Arabic-Indic, full-width.
+- **Percent-encoded emails:** `user%40example.com` (`%40` has no case) masked as `[email]`.

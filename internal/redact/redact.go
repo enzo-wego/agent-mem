@@ -34,8 +34,8 @@ const (
 )
 
 var (
-	reEmail = regexp.MustCompile(`[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}`)
-	reURL   = regexp.MustCompile(`https?://\S+`)
+	reEmail = regexp.MustCompile(`[A-Za-z0-9._%+-]+(?:@|%40)[A-Za-z0-9.-]+\.[A-Za-z]{2,}`)
+	reURL   = regexp.MustCompile("https?://[^\\s\"'`<>\\[\\]{}|,;]+")
 	reTS    = regexp.MustCompile(`\d{10}\.\d{6}`)
 	reUUID  = regexp.MustCompile(`(?i)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`)
 	reFRef  = regexp.MustCompile(`F\.[a-z0-9]+`)
@@ -66,7 +66,7 @@ func Mask(s string) string {
 	if s == "" {
 		return s
 	}
-	if strings.IndexByte(s, '@') >= 0 {
+	if strings.IndexByte(s, '@') >= 0 || strings.Contains(s, "%40") {
 		s = reEmail.ReplaceAllString(s, emailMask)
 	}
 	if !hasDigit(s) {
@@ -89,7 +89,7 @@ func Mask(s string) string {
 			limit = prot[pi][0]
 		}
 		c := s[i]
-		if isDigit(c) || (c == '+' && i+1 < limit && (isDigit(s[i+1]) || s[i+1] == '(')) {
+		if w, _ := digitAt(s, i); w > 0 || (c == '+' && i+1 < limit && (isDigit(s[i+1]) || s[i+1] == '(' || func() bool { w, _ := digitAt(s, i+1); return w > 0 }())) {
 			if end, mask := matchAt(s, i, limit); mask != "" {
 				out.WriteString(s[flushed:i])
 				out.WriteString(mask)
@@ -112,8 +112,12 @@ func protectedSpans(s string) [][2]int {
 	var spans [][2]int
 	add := func(a, b int) { spans = append(spans, [2]int{a, b}) }
 	for _, m := range reURL.FindAllStringIndex(s, -1) {
+		e := m[1]
+		for e > m[0] && strings.IndexByte(".):", s[e-1]) >= 0 {
+			e--
+		}
 		if leftOK(s, m[0]) {
-			add(m[0], m[1])
+			add(m[0], e)
 		}
 	}
 	for _, m := range reNodeID.FindAllStringIndex(s, -1) {
@@ -166,9 +170,30 @@ func protectedSpans(s string) [][2]int {
 
 func isDigit(c byte) bool { return c >= '0' && c <= '9' }
 
+// digitAt reports the byte width and numeric value of the Unicode decimal
+// digit (category Nd) at s[p]; width 0 when none.
+func digitAt(s string, p int) (width, val int) {
+	c := s[p]
+	if c < utf8.RuneSelf {
+		if isDigit(c) {
+			return 1, int(c - '0')
+		}
+		return 0, 0
+	}
+	r, w := utf8.DecodeRuneInString(s[p:])
+	if !unicode.IsDigit(r) {
+		return 0, 0
+	}
+	k := 0
+	for unicode.IsDigit(r - rune(k) - 1) {
+		k++
+	}
+	return w, k % 10
+}
+
 func hasDigit(s string) bool {
-	for i := range len(s) {
-		if isDigit(s[i]) {
+	for _, r := range s {
+		if unicode.IsDigit(r) {
 			return true
 		}
 	}
@@ -246,16 +271,25 @@ func matchAt(s string, i, limit int) (end int, mask string) {
 	}
 	var groups []group
 	cardOK := true // separators so far are single space/hyphen only
-	for p < limit && isDigit(s[p]) {
-		q := p
-		for q < limit && isDigit(s[q]) {
-			q++
+	for p < limit {
+		w0, _ := digitAt(s, p)
+		if w0 == 0 {
+			break
+		}
+		q, cnt := p, 0
+		for q < limit {
+			w, _ := digitAt(s, q)
+			if w == 0 {
+				break
+			}
+			q += w
+			cnt++
 		}
 		prev := 0
 		if n := len(groups); n > 0 {
 			prev = groups[n-1].digits
 		}
-		digits := prev + (q - p)
+		digits := prev + cnt
 		if digits > maxDigits {
 			break
 		}
@@ -263,10 +297,10 @@ func matchAt(s string, i, limit int) (end int, mask string) {
 		groups = append(groups, g)
 		// Look for a separator then another digit group.
 		r := q
-		for r < limit && r-q < 2 && !isDigit(s[r]) && strings.IndexByte(" -.()", s[r]) >= 0 {
+		for r < limit && r-q < 2 && s[r] < utf8.RuneSelf && !isDigit(s[r]) && strings.IndexByte(" -.()", s[r]) >= 0 {
 			r++
 		}
-		if r >= limit || !isDigit(s[r]) || !phoneSeps[s[q:r]] {
+		if wr, _ := digitAt(s, min(r, len(s)-1)); r >= limit || wr == 0 || !phoneSeps[s[q:r]] {
 			break
 		}
 		sep := s[q:r]
@@ -323,10 +357,14 @@ func classify(s string, start, end int, plus bool, n int, cardShape bool) string
 
 func digitsOf(s string) string {
 	b := make([]byte, 0, len(s))
-	for i := range len(s) {
-		if isDigit(s[i]) {
-			b = append(b, s[i])
+	for i := 0; i < len(s); {
+		w, v := digitAt(s, i)
+		if w == 0 {
+			i++
+			continue
 		}
+		b = append(b, byte('0'+v))
+		i += w
 	}
 	return string(b)
 }
@@ -343,8 +381,13 @@ func nearestLabel(s string, start int) string {
 		from-- // do not cut a word in half
 	}
 	win := s[from:start]
-	if d := strings.LastIndexAny(win, "0123456789"); d >= 0 {
-		win = win[d+1:]
+	for k := len(win); k > 0; {
+		r, w := utf8.DecodeLastRuneInString(win[:k])
+		if unicode.IsDigit(r) {
+			win = win[k:]
+			break
+		}
+		k -= w
 	}
 	label := ""
 	for _, w := range reWord.FindAllString(win, -1) {

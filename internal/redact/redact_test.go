@@ -144,3 +144,44 @@ func TestMaskIdempotent(t *testing.T) {
 		}
 	}
 }
+
+// shift maps ASCII digits to another Unicode decimal-digit block starting at zero.
+func shift(s string, zero rune) string {
+	out := []rune(s)
+	for i, r := range out {
+		if r >= '0' && r <= '9' {
+			out[i] = zero + (r - '0')
+		}
+	}
+	return string(out)
+}
+
+func TestMaskURLBoundariesAndUnicodeDigits(t *testing.T) {
+	t.Parallel()
+	const u = "https://x.example/a"
+	tests := []struct{ name, in, want string }{
+		{"slack link phone label", "<" + u + "|+6591234567>", "<" + u + "|[phone]>"},
+		{"slack link card label", "<" + u + "|" + pan + ">", "<" + u + "|[card]>"},
+		{"jira link card", "[" + u + "|" + panSpaced + "]", "[" + u + "|[card]]"},
+		{"json no spaces", `{"u":"` + u + `","p":"+6591234567","c":"` + pan + `"}`, `{"u":"` + u + `","p":"[phone]","c":"[card]"}`},
+		{"comma phone", u + ",+6591234567", u + ",[phone]"},
+		{"url digits readable", "https://wa.me/6591234567", "https://wa.me/6591234567"},
+		{"arabic-indic plus", "+٩٦٦٥٠١٢٣٤٥٦٧", "[phone]"},
+		{"arabic-indic label", "phone: ٠٥٠١٢٣٤٥٦٧", "phone: [phone]"},
+		{"ext arabic-indic plus", "+" + shift("966501234567", '۰'), "[phone]"},
+		{"fullwidth card", shift(pan, '０'), "[card]"},
+		{"fullwidth card spaced", shift(panSpaced, '０'), "[card]"},
+		{"fullwidth non-luhn unlabelled", shift(nonLuhn16, '０'), shift(nonLuhn16, '０')},
+		{"percent email", "user%40example.com", "[email]"},
+		{"percent email upper hex", "x user%40Example.COM y", "x [email] y"},
+		{"percent email in url", "https://e.example/?e=user%40example.com", "https://e.example/?e=[email]"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := Mask(tt.in); got != tt.want {
+				t.Fatalf("Mask(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}

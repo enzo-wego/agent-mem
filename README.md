@@ -677,7 +677,7 @@ them. Phones: `+` and 8-15 digits, or 7-15 digits after a label (`phone`, `tel`,
 valid JSON document becomes `500 {"error":"mask_failed"}`. Traces of masked
 responses carry `acl_mode=filtered-masked:v1`; `agent-mem trace show` does not replay
 their digests. Accepted false negatives: unlabelled local phone numbers without `+`,
-unlabelled non-Luhn digit runs, numbers glued to letters, emails written with spaces
+digits inside a real URL path (e.g. `wa.me/6591234567`), unlabelled non-Luhn digit runs, numbers glued to letters, emails written with spaces
 or "at", customer names. Accepted over-masking: an unlabelled Luhn-valid 13-19 digit
 run that is really an id but not in a protected shape; an email inside a node id or
 URL, so non-admin callers cannot follow such ids.
