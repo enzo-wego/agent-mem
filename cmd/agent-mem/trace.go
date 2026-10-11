@@ -6,9 +6,13 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/agent-mem/agent-mem/internal/config"
+	"github.com/agent-mem/agent-mem/internal/graph/handlers"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/spf13/cobra"
@@ -16,7 +20,12 @@ import (
 
 func newTraceCmd(getConfig func() *config.Config) *cobra.Command {
 	cmd := &cobra.Command{Use: "trace", Short: "Inspect graph context traces"}
-	show := &cobra.Command{Use: "show <id>", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error { return traceShow(cmd, getConfig().DatabaseURL, args[0]) }}
+	var showBaseURL, statsBaseURL string
+	show := &cobra.Command{Use: "show <id>", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		cfg := getConfig()
+		return traceShow(cmd, cfg.DatabaseURL, args[0], writerCountersLine(showBaseURL, cfg.APIKey))
+	}}
+	show.Flags().StringVar(&showBaseURL, "base-url", "", "Serving worker URL, used to read the writer counters")
 	var since string
 	var route, caller string
 	list := &cobra.Command{Use: "list", RunE: func(cmd *cobra.Command, _ []string) error {
@@ -27,14 +36,41 @@ func newTraceCmd(getConfig func() *config.Config) *cobra.Command {
 	list.Flags().StringVar(&caller, "caller", "", "Caller filter")
 	var statsSince string
 	stats := &cobra.Command{Use: "stats", RunE: func(cmd *cobra.Command, _ []string) error {
-		return traceStats(cmd, getConfig().DatabaseURL, statsSince)
+		cfg := getConfig()
+		return traceStats(cmd, cfg.DatabaseURL, statsSince, writerCountersLine(statsBaseURL, cfg.APIKey))
 	}}
-	stats.Flags().StringVar(&statsSince, "since", "168h", "Lookback duration")
+	stats.Flags().StringVar(&statsSince, "since", "7d", "Lookback duration (Go duration or Nd days)")
+	stats.Flags().StringVar(&statsBaseURL, "base-url", "", "Serving worker URL, used to read the writer counters")
 	cmd.AddCommand(show, list, stats)
 	return cmd
 }
 func tracePool(dsn string) (*pgxpool.Pool, error) { return pgxpool.New(context.Background(), dsn) }
-func traceShow(cmd *cobra.Command, dsn, id string) error {
+
+// writerCountersLine reads the serving worker's process-local writer counters.
+func writerCountersLine(baseURL, apiKey string) string {
+	if strings.TrimSpace(baseURL) == "" {
+		return "writer counters: unavailable (pass --base-url of the serving worker)"
+	}
+	req, err := http.NewRequest(http.MethodGet, strings.TrimRight(baseURL, "/")+"/api/graph/traces/stats", nil)
+	if err != nil {
+		return "writer counters: unavailable (" + err.Error() + ")"
+	}
+	if apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+	}
+	client := http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "writer counters: unavailable (" + err.Error() + ")"
+	}
+	defer resp.Body.Close()
+	var stats struct{ Attempted, Written, Dropped, Failed uint64 }
+	if resp.StatusCode != http.StatusOK || json.NewDecoder(resp.Body).Decode(&stats) != nil {
+		return "writer counters: unavailable (HTTP " + resp.Status + ")"
+	}
+	return fmt.Sprintf("writer counters (process-local since worker start): attempted=%d written=%d dropped=%d failed=%d", stats.Attempted, stats.Written, stats.Dropped, stats.Failed)
+}
+func traceShow(cmd *cobra.Command, dsn, id, counters string) error {
 	p, err := tracePool(dsn)
 	if err != nil {
 		return err
@@ -51,6 +87,7 @@ func traceShow(cmd *cobra.Command, dsn, id string) error {
 	err = p.QueryRow(context.Background(), `SELECT created_at,route,build_rev,caller,status,error,acl_mode,request,items,items_truncated,response_sha256,latency_ms FROM graph.context_traces WHERE id=$1`, id).Scan(&created, &route, &rev, &caller, &status, &errText, &acl, &request, &items, &truncated, &hash, &latency)
 	if err == pgx.ErrNoRows {
 		fmt.Fprintln(cmd.OutOrStdout(), "not found (never written, dropped, or older than 30 days)")
+		fmt.Fprintln(cmd.OutOrStdout(), counters)
 		return nil
 	}
 	if err != nil {
@@ -59,26 +96,36 @@ func traceShow(cmd *cobra.Command, dsn, id string) error {
 	fmt.Fprintf(cmd.OutOrStdout(), "%s %s status=%d caller=%s acl=%s build=%s latency_ms=%d truncated=%t response_sha256=%s\nrequest: %s\n", id, route, status, caller, acl, rev, latency, truncated, hash, request)
 	var rows []map[string]any
 	_ = json.Unmarshal(items, &rows)
+	var requestFields map[string]any
+	_ = json.Unmarshal(request, &requestFields)
+	mode := "ordinary"
+	if fmt.Sprint(requestFields["match"]) == "hybrid" {
+		mode = "hybrid"
+	}
 	for _, item := range rows {
 		node := fmt.Sprint(item["node_id"])
-		var title, body, summary string
-		e := p.QueryRow(context.Background(), `SELECT COALESCE(n.title,''),COALESCE(n.body,''),COALESCE(ai.summary,'') FROM graph.nodes n LEFT JOIN graph.artifact_index ai ON ai.node_id=n.id WHERE n.id=$1 AND n.deleted_at IS NULL`, node).Scan(&title, &body, &summary)
-		if e == pgx.ErrNoRows {
-			fmt.Fprintf(cmd.OutOrStdout(), "%v. %s — node no longer exists\n", item["rank"], node)
-			continue
+		var bodyBytes *int
+		if item["body_sha256"] != nil {
+			n := int(item["body_bytes"].(float64))
+			bodyBytes = &n
 		}
+		current, e := handlers.RenderTraceRepresentation(context.Background(), p, route, mode, node, bodyBytes)
 		if e != nil {
 			return e
 		}
+		if !current.Found {
+			fmt.Fprintf(cmd.OutOrStdout(), "%v. %s — node no longer exists\n", item["rank"], node)
+			continue
+		}
 		fmt.Fprintf(cmd.OutOrStdout(), "%v. %s — current, may differ from what was returned\n", item["rank"], node)
-		fmt.Fprintf(cmd.OutOrStdout(), "   title: %s\n", digestLabel(item["title_sha256"], title))
+		fmt.Fprintf(cmd.OutOrStdout(), "   title: %s\n", digestLabel(item["title_sha256"], current.Title))
 		if item["summary_sha256"] != nil {
-			fmt.Fprintf(cmd.OutOrStdout(), "   summary: %s\n", digestLabel(item["summary_sha256"], summary))
+			fmt.Fprintf(cmd.OutOrStdout(), "   summary: %s\n", digestLabel(item["summary_sha256"], current.Summary))
 		}
 		if item["body_sha256"] == nil {
 			fmt.Fprintln(cmd.OutOrStdout(), "   body: not comparable (body not returned)")
 		} else {
-			fmt.Fprintf(cmd.OutOrStdout(), "   body: %s\n", digestLabel(item["body_sha256"], body))
+			fmt.Fprintf(cmd.OutOrStdout(), "   body: %s\n", digestLabel(item["body_sha256"], current.Body))
 		}
 	}
 	return nil
@@ -91,8 +138,19 @@ func digestLabel(stored any, current string) string {
 	}
 	return "differs from returned"
 }
+func parseTraceSince(since string) (time.Duration, error) {
+	if strings.HasSuffix(since, "d") {
+		days, err := strconv.ParseFloat(strings.TrimSuffix(since, "d"), 64)
+		if err != nil {
+			return 0, err
+		}
+		return time.Duration(days * float64(24*time.Hour)), nil
+	}
+	return time.ParseDuration(since)
+}
+
 func traceList(cmd *cobra.Command, dsn, since, route, caller string) error {
-	d, err := time.ParseDuration(since)
+	d, err := parseTraceSince(since)
 	if err != nil {
 		return err
 	}
@@ -117,8 +175,8 @@ func traceList(cmd *cobra.Command, dsn, since, route, caller string) error {
 	}
 	return rows.Err()
 }
-func traceStats(cmd *cobra.Command, dsn, since string) error {
-	d, err := time.ParseDuration(since)
+func traceStats(cmd *cobra.Command, dsn, since, counters string) error {
+	d, err := parseTraceSince(since)
 	if err != nil {
 		return err
 	}
@@ -141,6 +199,6 @@ func traceStats(cmd *cobra.Command, dsn, since string) error {
 		}
 		fmt.Fprintf(cmd.OutOrStdout(), "route=%s caller=%s acl=%s status=%d calls=%d latency_p50=%d latency_p95=%d items_avg=%.2f\n", route, caller, acl, status, count, p50, p95, avg)
 	}
-	fmt.Fprintln(cmd.OutOrStdout(), "writer counters are process-local; GET /api/graph/traces/stats on the serving worker")
+	fmt.Fprintln(cmd.OutOrStdout(), counters)
 	return rows.Err()
 }
