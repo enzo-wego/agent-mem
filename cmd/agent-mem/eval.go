@@ -1,25 +1,19 @@
 package main
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
-	"time"
 
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 )
 
-const evalCaseDir = "testdata/eval/graph_context/cases"
+const evalDataDir = "testdata/eval/graph_context"
+const evalCaseDir = evalDataDir + "/cases"
 const probeManifestPath = "docs/ai/2026-10-11-graph-context-probes.yaml"
 
 type evalRequest struct {
@@ -54,11 +48,31 @@ func newEvalCmd() *cobra.Command {
 	var baseURL string
 	var dryRun bool
 	var jsonPath string
-	relevance := &cobra.Command{Use: "relevance", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error { return runRelevance(cmd, baseURL, dryRun, jsonPath) }}
+	relevance := &cobra.Command{Use: "relevance", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+		return runRelevance(cmd, relevanceOpts{BaseURL: baseURL, DryRun: dryRun, JSONPath: jsonPath, DataDir: evalDataDir, EnvPath: ".env"})
+	}}
 	relevance.Flags().StringVar(&baseURL, "base-url", "", "Graph API base URL")
 	relevance.Flags().BoolVar(&dryRun, "dry-run", false, "Print requests without sending them")
 	relevance.Flags().StringVar(&jsonPath, "json", "", "Write machine-readable results")
 	cmd.AddCommand(relevance)
+
+	var prepBase string
+	var refresh bool
+	prepare := &cobra.Command{Use: "prepare", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+		return runEvalPrepareCLI(cmd, prepBase, refresh)
+	}}
+	prepare.Flags().StringVar(&prepBase, "base-url", "", "Graph API base URL used for the replays")
+	prepare.Flags().BoolVar(&refresh, "refresh", false, "Add node ids missing from an existing node_meta.json")
+	cmd.AddCommand(prepare)
+
+	var sheetOut string
+	var sheetAll bool
+	sheet := &cobra.Command{Use: "label-sheet [case-id]", Args: cobra.MaximumNArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		return runLabelSheetCLI(cmd, args, sheetAll, sheetOut)
+	}}
+	sheet.Flags().StringVar(&sheetOut, "out", "", "Output directory (required, outside the repo)")
+	sheet.Flags().BoolVar(&sheetAll, "all", false, "Write a sheet for every case")
+	cmd.AddCommand(sheet)
 	return cmd
 }
 
@@ -145,133 +159,6 @@ func numberInt(v any) int {
 	default:
 		return 0
 	}
-}
-
-func runRelevance(cmd *cobra.Command, baseURL string, dryRun bool, jsonPath string) error {
-	paths, err := filepath.Glob(filepath.Join(evalCaseDir, "*.yaml"))
-	if err != nil {
-		return err
-	}
-	sort.Strings(paths)
-	if len(paths) == 0 {
-		return fmt.Errorf("no case files")
-	}
-	started := time.Now().UTC()
-	casesHash := sha256.New()
-	result := map[string]any{
-		"build_rev":        unknownBuildRev(buildRev),
-		"started_at":       started.Format(time.RFC3339Nano),
-		"per_case":         []map[string]any{},
-		"aggregate":        map[string]any{"scored": 0, "unlabelled": 0, "failed": 0},
-		"request_ids":      []string{},
-		"node_meta_sha256": fileSHA256(filepath.Join(filepath.Dir(evalCaseDir), "node_meta.json")),
-	}
-	client := http.DefaultClient
-	for _, casePath := range paths {
-		data, err := os.ReadFile(casePath)
-		if err != nil {
-			return err
-		}
-		_, _ = casesHash.Write(data)
-		var c evalCase
-		if err := yaml.Unmarshal(data, &c); err != nil {
-			return fmt.Errorf("%s: %w", casePath, err)
-		}
-		fmt.Fprintf(cmd.OutOrStdout(), "case %s needs_context=%s", c.ID, c.NeedsContext)
-		if c.LabelledBy == "none" {
-			fmt.Fprint(cmd.OutOrStdout(), " unlabelled")
-			result["aggregate"].(map[string]any)["unlabelled"] = result["aggregate"].(map[string]any)["unlabelled"].(int) + 1
-		}
-		fmt.Fprintln(cmd.OutOrStdout())
-		for _, name := range []string{"resolve-asker0", "resolve-asker", "search-hybrid"} {
-			req, ok := c.Requests[name]
-			if !ok {
-				return fmt.Errorf("%s: missing %s", c.ID, name)
-			}
-			method, pathURL := http.MethodPost, "/api/graph/resolve"
-			var body []byte
-			if name == "search-hybrid" {
-				method = http.MethodGet
-				values := url.Values{}
-				keys := make([]string, 0, len(req.Params))
-				for k := range req.Params {
-					keys = append(keys, k)
-				}
-				sort.Strings(keys)
-				for _, k := range keys {
-					values.Set(k, fmt.Sprint(req.Params[k]))
-				}
-				pathURL = "/api/graph/search?" + values.Encode()
-			} else {
-				body, _ = json.Marshal(req.Body)
-			}
-			fmt.Fprintf(cmd.OutOrStdout(), "  %s: %s %s headers={X-Graph-Caller:eval,X-Graph-No-Side-Effects:1} body=%s\n", name, method, pathURL, string(body))
-			if dryRun {
-				continue
-			}
-			if baseURL == "" {
-				return fmt.Errorf("--base-url is required")
-			}
-			httpReq, _ := http.NewRequest(method, strings.TrimRight(baseURL, "/")+pathURL, bytes.NewReader(body))
-			httpReq.Header.Set("X-Graph-Caller", "eval")
-			httpReq.Header.Set("X-Graph-No-Side-Effects", "1")
-			if key := os.Getenv("AGENT_MEM_API_KEY"); key != "" {
-				httpReq.Header.Set("Authorization", "Bearer "+key)
-			}
-			resp, err := client.Do(httpReq)
-			if err != nil {
-				return err
-			}
-			responseBody, readErr := io.ReadAll(resp.Body)
-			resp.Body.Close()
-			if readErr != nil {
-				return readErr
-			}
-			if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-				return fmt.Errorf("%s %s: %s", c.ID, name, resp.Status)
-			}
-			var decoded struct {
-				RequestID string            `json:"request_id"`
-				Artifacts []json.RawMessage `json:"artifacts"`
-				Results   []json.RawMessage `json:"results"`
-				ArmErrors map[string]string `json:"arm_errors"`
-			}
-			if err := json.Unmarshal(responseBody, &decoded); err != nil {
-				return fmt.Errorf("%s %s: decode response: %w", c.ID, name, err)
-			}
-			requestID := resp.Header.Get("X-Graph-Request-Id")
-			if requestID == "" {
-				requestID = decoded.RequestID
-			}
-			if requestID != "" {
-				result["request_ids"] = append(result["request_ids"].([]string), requestID)
-			}
-			if rev := resp.Header.Get("X-Graph-Build-Rev"); rev != "" {
-				result["build_rev"] = rev
-			}
-			count := len(decoded.Artifacts)
-			if name == "search-hybrid" {
-				count = len(decoded.Results)
-			}
-			entry := map[string]any{"case_id": c.ID, "variant": name, "request_id": requestID, "returned": count, "unlabelled": c.LabelledBy == "none"}
-			if len(decoded.ArmErrors) > 0 {
-				entry["arm_errors"] = decoded.ArmErrors
-				entry["degraded"] = true
-			}
-			result["per_case"] = append(result["per_case"].([]map[string]any), entry)
-		}
-	}
-	result["cases_sha256"] = hex.EncodeToString(casesHash.Sum(nil))
-	if jsonPath != "" {
-		encoded, err := json.MarshalIndent(result, "", "  ")
-		if err != nil {
-			return err
-		}
-		if err := os.WriteFile(jsonPath, append(encoded, '\n'), 0644); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func unknownBuildRev(rev string) string {

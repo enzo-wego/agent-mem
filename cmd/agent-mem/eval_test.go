@@ -2,15 +2,11 @@ package main
 
 import (
 	"bytes"
-	"encoding/json"
 	"fmt"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
 
-	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 )
 
@@ -36,16 +32,8 @@ func TestGraphContextCasesCoverManifestAndUseCases(t *testing.T) {
 		}
 		cases[c.ID] = c
 		covered[c.UseCase] = true
-		if c.CheckedBy != nil {
-			t.Errorf("%s checked_by must be null", c.ID)
-		}
-		if c.LabelledBy != "none" {
-			t.Errorf("%s labelled_by=%q", c.ID, c.LabelledBy)
-		}
-		for route, labels := range c.Labels {
-			if len(labels.Must)+len(labels.May)+len(labels.MustNot) != 0 {
-				t.Errorf("%s %s labels must be empty", c.ID, route)
-			}
+		if err := validateEvalCaseState(c); err != nil {
+			t.Error(err)
 		}
 		for _, name := range []string{"resolve-asker0", "resolve-asker", "search-hybrid"} {
 			if _, ok := c.Requests[name]; !ok {
@@ -88,49 +76,6 @@ func TestGraphContextCasesCoverManifestAndUseCases(t *testing.T) {
 		if _, ok := c.Requests["resolve-asker0"].Body["budget_tokens"]; ok {
 			t.Errorf("%s null budget_tokens was not omitted", p.ID)
 		}
-	}
-}
-
-func TestRelevanceJSONContainsDocumentedResult(t *testing.T) {
-	oldWD, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chdir("../.."); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.Chdir(oldWD) })
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("X-Graph-Request-Id", "ctx_test")
-		w.Header().Set("X-Graph-Build-Rev", "rev-test")
-		w.Header().Set("Content-Type", "application/json")
-		if r.URL.Path == "/api/graph/resolve" {
-			_, _ = fmt.Fprint(w, `{"artifacts":[]}`)
-		} else {
-			_, _ = fmt.Fprint(w, `{"results":[],"arm_errors":{"semantic":"test"}}`)
-		}
-	}))
-	defer server.Close()
-	out := filepath.Join(t.TempDir(), "result.json")
-	cmd := &cobra.Command{}
-	if err := runRelevance(cmd, server.URL, false, out); err != nil {
-		t.Fatal(err)
-	}
-	data, err := os.ReadFile(out)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var result map[string]any
-	if err := json.Unmarshal(data, &result); err != nil {
-		t.Fatal(err)
-	}
-	for _, key := range []string{"build_rev", "cases_sha256", "node_meta_sha256", "started_at", "per_case", "aggregate", "request_ids"} {
-		if _, ok := result[key]; !ok {
-			t.Errorf("missing %s in %s", key, data)
-		}
-	}
-	if len(result["per_case"].([]any)) != 60 {
-		t.Fatalf("per_case entries=%d want=60", len(result["per_case"].([]any)))
 	}
 }
 
