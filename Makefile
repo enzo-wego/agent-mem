@@ -123,7 +123,10 @@ ifndef DUMP
 endif
 	DOCKER="$(DOCKER)" ./scripts/db-restore.sh $(if $(FORCE),--force,) $(DUMP)
 
+deploy-payments: BUILD_REV := $(shell git rev-parse HEAD 2>/dev/null)
 deploy-payments: ## Sync source to payments and build+restart there natively (arm64, no registry).
+	@test -n "$(BUILD_REV)" || { echo "refusing to deploy: git rev-parse HEAD returned empty revision" >&2; exit 1; }
+	@test -z "$$(git status --porcelain)" || { echo "refusing to deploy: working tree is dirty (commit or stash first); BUILD_REV would not match deployed source" >&2; exit 1; }
 	@echo "${YELLOW}>> syncing source to $(PAYMENTS)${RESET}"
 	rsync -az --delete \
 		--exclude '.git/' --exclude '.omc/' --exclude '.code-review-graph/' \
@@ -132,7 +135,7 @@ deploy-payments: ## Sync source to payments and build+restart there natively (ar
 		--exclude 'docker-compose.override.yml' \
 		./ $(PAYMENTS):$(PAYMENTS_DIR)/
 	@echo "${YELLOW}>> building + restarting worker on $(PAYMENTS)${RESET}"
-	ssh $(PAYMENTS) 'export PATH=/opt/homebrew/bin:$$PATH && cd $(PAYMENTS_DIR) && BUILD_REV=$$(git rev-parse HEAD) docker compose up -d --build worker'
+	ssh $(PAYMENTS) 'export PATH=/opt/homebrew/bin:$$PATH && cd $(PAYMENTS_DIR) && BUILD_REV=$(BUILD_REV) docker compose up -d --build worker'
 	@echo "${GREEN}>> deployed to $(PAYMENTS)${RESET}"
 
 db-reset: ## Clear the database and re-run migrations.
