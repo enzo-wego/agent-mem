@@ -1,0 +1,130 @@
+package redact
+
+import (
+	"strings"
+	"testing"
+	"unicode/utf8"
+)
+
+// capRunes copies the exact behavior of handlers.capRunes (lead.go): cut to n
+// runes including a trailing "…".
+func capRunes(s string, n int) string {
+	if utf8.RuneCountInString(s) <= n {
+		return s
+	}
+	r := []rune(s)
+	return string(r[:n-1]) + "…"
+}
+
+func TestPseudonymizerUnchangedText(t *testing.T) {
+	for _, in := range []string{
+		"payment failed with timeout",
+		"payment PAY-2420",
+		"ref 2026-10-12",
+		"see payments#2424 at 18:30",
+	} {
+		if got := NewPseudonymizer().Apply(in); got != in {
+			t.Errorf("Apply(%q) = %q, want unchanged", in, got)
+		}
+	}
+}
+
+func TestPseudonymizerRefs(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"booking reference AB1234", "booking reference ref-1"},
+		{"https://x/y?id=AB12CD34EF56", "https://x/y?id=ref-1"},
+		{"code AB12-CD34EF56GH end", "code ref-1 end"},
+		{"AB1234 and AB1234 again: payment ref AB1234", "AB1234 and AB1234 again: payment ref ref-1"},
+	}
+	for _, c := range cases {
+		if got := NewPseudonymizer().Apply(c.in); got != c.want {
+			t.Errorf("Apply(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+	p := NewPseudonymizer()
+	if got := p.Apply("booking AB1234 then order CD5678 then booking ab1234"); got != "booking ref-1 then order ref-2 then booking ref-1" {
+		t.Errorf("same ref twice / two refs: %q", got)
+	}
+	// A label followed by a no-digit word must not hide a later labelled ref.
+	if got := NewPseudonymizer().Apply("ref payment AB1234"); got != "ref payment ref-1" {
+		t.Errorf("label resume: %q", got)
+	}
+}
+
+func TestPseudonymizerPeople(t *testing.T) {
+	p := NewPseudonymizer()
+	p.AddPerson("U1", "Ann Lee")
+	got := p.Apply("<@U1> asked, @Ann Lee agreed, ann lee left")
+	if got != "person-1 asked, person-1 agreed, person-1 left" {
+		t.Errorf("registered person: %q", got)
+	}
+	if got := p.Apply("<@W9ZZ|bo> and <@U1>"); got != "person-2 and person-1" {
+		t.Errorf("unregistered mention: %q", got)
+	}
+	// @Name that is not registered gets its own alias, stable across calls.
+	if a, b := p.Apply("cc @Bob Tan"), p.Apply("@Bob Tan?"); !strings.Contains(a, "person-3") || !strings.Contains(b, "person-3") {
+		t.Errorf("@name alias: %q / %q", a, b)
+	}
+	// Without AddPerson the mention and the name are not linked.
+	q := NewPseudonymizer()
+	if got := q.Apply("<@U1> and @Ann Lee"); got != "person-1 and person-2" {
+		t.Errorf("unlinked: %q", got)
+	}
+	if strings.Contains(q.Apply("mail bob@Example.com"), "person") {
+		t.Errorf("email must not be read as an @name")
+	}
+}
+
+func TestPseudonymizerNamespaces(t *testing.T) {
+	p := NewPseudonymizer()
+	got := p.Apply("mail a.b@example.com and A.B@example.com, call +65 9123 4567, card 4111 1111 1111 1111")
+	for _, want := range []string{"email-1 and email-1", "phone-1", "card-1"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in %q", want, got)
+		}
+	}
+	if strings.Contains(got, "example.com") || strings.Contains(got, "9123") || strings.Contains(got, "4111") {
+		t.Errorf("value leaked: %q", got)
+	}
+	// Same normalised value in two namespaces yields independent counters.
+	q := NewPseudonymizer()
+	if got := q.Apply("x@y.io booking AB1234"); got != "email-1 booking ref-1" {
+		t.Errorf("separate namespaces: %q", got)
+	}
+}
+
+func TestPseudonymizerUpstreamCutTail(t *testing.T) {
+	full := strings.Repeat("word ", 118) + "AB12CD34EF56GH tail"
+	cut := capRunes(full, 600)
+	if !strings.HasSuffix(cut, "…") {
+		t.Fatalf("fixture not cut: %q", cut[len(cut)-30:])
+	}
+	if utf8.RuneCountInString(cut) != 600 {
+		t.Fatalf("fixture length %d", utf8.RuneCountInString(cut))
+	}
+	// pick a cut that leaves a 5-char fragment of the 14-char ref.
+	frag := strings.Repeat("word ", 118) + "AB12C…"
+	if got := NewPseudonymizer().Apply(frag); !strings.HasSuffix(got, "ref-1…") || strings.Contains(got, "AB12C") {
+		t.Errorf("tail fragment not aliased: %q", got[len(got)-20:])
+	}
+	// the real cut: build so the 600-rune boundary falls inside the ref.
+	prefix := strings.Repeat("w", 600-1-5-1) + " " // 594 runes, then 5 ref chars, then the cap's "…"
+	real := capRunes(prefix+"AB12CD34EF56GH", 600)
+	if got := NewPseudonymizer().Apply(real); strings.Contains(got, "AB12C") || !strings.Contains(got, "ref-") {
+		t.Errorf("real capRunes cut: %q", got[len(got)-20:])
+	}
+	// no digit in the tail token: left alone.
+	if got := NewPseudonymizer().Apply("some prose cut…"); got != "some prose cut…" {
+		t.Errorf("digitless tail changed: %q", got)
+	}
+}
+
+func TestPseudonymizerNoValueLeaksAndEmpty(t *testing.T) {
+	p := NewPseudonymizer()
+	if p.Apply("") != "" {
+		t.Fatal("empty")
+	}
+	if got := p.Apply("odd \uE000a\uE001 input"); strings.ContainsAny(got, "\uE000\uE001") {
+		t.Errorf("shield chars survive: %q", got)
+	}
+}

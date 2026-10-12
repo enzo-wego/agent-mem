@@ -65,11 +65,17 @@ var (
 // Mask returns s with emails, phone numbers and card-like numbers replaced by
 // [email], [phone] and [card].
 func Mask(s string) string {
+	return maskFunc(s, func(kind, _ string) string { return kind })
+}
+
+// maskFunc is Mask with the replacement chosen by repl(kind, matchedText);
+// kind is one of emailMask, phoneMask, cardMask.
+func maskFunc(s string, repl func(kind, text string) string) string {
 	if s == "" {
 		return s
 	}
 	if strings.IndexByte(s, '@') >= 0 || strings.Contains(s, "%40") {
-		s = reEmail.ReplaceAllString(s, emailMask)
+		s = reEmail.ReplaceAllStringFunc(s, func(m string) string { return repl(emailMask, m) })
 	}
 	if !hasDigit(s) {
 		return s
@@ -94,7 +100,7 @@ func Mask(s string) string {
 		if w, _ := digitAt(s, i); w > 0 || pw > 0 {
 			if end, mask := matchAt(s, i, limit, pw > 0 && forcePlus[i]); mask != "" {
 				out.WriteString(s[flushed:i])
-				out.WriteString(mask)
+				out.WriteString(repl(mask, s[i:end]))
 				i, flushed = end, end
 				continue
 			}
