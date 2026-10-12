@@ -157,8 +157,9 @@ func leadCategory(outcome string) string {
 	return "lead_" + strings.TrimPrefix(outcome, "lead_")
 }
 
-// leadSeedsPresent reports whether every canonical seed (or its thread root,
-// per meta) is a hop-0 lead item.
+// leadSeedsPresent reports whether every canonical seed that exists in the
+// graph (node_meta exists=true), or its thread root, is a hop-0 lead item.
+// Seeds with exists=false or no meta entry are skipped: never ingested.
 func leadSeedsPresent(seeds []string, items []leadItem, meta map[string]nodeMeta) bool {
 	hop0 := map[string]bool{}
 	for _, it := range items {
@@ -167,7 +168,11 @@ func leadSeedsPresent(seeds []string, items []leadItem, meta map[string]nodeMeta
 		}
 	}
 	for _, s := range seeds {
-		if !hop0[s] && !hop0[meta[s].ThreadRoot] {
+		m, ok := meta[s]
+		if !ok || !m.Exists {
+			continue
+		}
+		if !hop0[s] && !hop0[m.ThreadRoot] {
 			return false
 		}
 	}

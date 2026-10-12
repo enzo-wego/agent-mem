@@ -925,15 +925,25 @@ func TestRelationCheckSeedMismatch(t *testing.T) {
 	f.mutateReplay(func(m map[string]any) {
 		m["cases"].(map[string]any)["qa"].(map[string]any)["canonical_seeds"] = []any{"slack:CA:9.000000"}
 	})
+	metaPath := filepath.Join(f.dataDir, "node_meta.json")
+	writeMeta := func(m map[string]nodeMeta) {
+		mj, _ := json.Marshal(m)
+		if err := os.WriteFile(metaPath, mj, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeMeta(map[string]nodeMeta{"slack:CA:9.000000": {Type: "slack", Exists: true}})
 	_, err := f.check(labels)
 	wantCategory(t, "seed not a hop-0 item", err, "seed_mismatch")
 
-	// the seed's thread_root (per node_meta.json) being a hop-0 item is enough.
-	metaPath := filepath.Join(f.dataDir, "node_meta.json")
-	mj, _ := json.Marshal(map[string]nodeMeta{"slack:CA:9.000000": {Type: "slack", Exists: true, IsReply: true, ThreadRoot: "slack:CA:1.000000"}, "slack:CB:1.000000": {Type: "slack", Exists: true}})
-	if err := os.WriteFile(metaPath, mj, 0o644); err != nil {
-		t.Fatal(err)
+	// a seed that was never ingested (exists=false) is skipped.
+	writeMeta(map[string]nodeMeta{"slack:CA:9.000000": {Type: "slack", Exists: false}})
+	if _, err := f.check(labels); err != nil {
+		t.Fatalf("exists=false seed must pass: %v", err)
 	}
+
+	// the seed's thread_root (per node_meta.json) being a hop-0 item is enough.
+	writeMeta(map[string]nodeMeta{"slack:CA:9.000000": {Type: "slack", Exists: true, IsReply: true, ThreadRoot: "slack:CA:1.000000"}, "slack:CB:1.000000": {Type: "slack", Exists: true}})
 	if _, err := f.check(labels); err != nil {
 		t.Fatalf("thread_root hop-0 must satisfy the seed check: %v", err)
 	}
@@ -1306,4 +1316,27 @@ func mustRead(t *testing.T, p string) []byte {
 		t.Fatal(err)
 	}
 	return b
+}
+
+// A seed that was never ingested (exists=false, or no node_meta entry) cannot be
+// a hop-0 item and is skipped; shared by prepare and the relation commands.
+func TestSeedCheckSkipsMissingNodes(t *testing.T) {
+	items := []leadItem{{ID: "slack:CA:1.000000", Hop: 0}}
+	meta := map[string]nodeMeta{
+		"jira:GONE-1":       {Exists: false},
+		"slack:CA:9.000000": {Type: "slack", Exists: true, IsReply: true, ThreadRoot: "slack:CA:1.000000"},
+		"slack:CA:7.000000": {Type: "slack", Exists: true},
+	}
+	if !leadSeedsPresent([]string{"jira:GONE-1"}, nil, meta) {
+		t.Error("exists=false seed must be skipped")
+	}
+	if !leadSeedsPresent([]string{"jira:NOMETA-1"}, nil, meta) {
+		t.Error("seed without meta must be skipped")
+	}
+	if !leadSeedsPresent([]string{"slack:CA:9.000000"}, items, meta) {
+		t.Error("existing reply seed with hop-0 thread_root must pass")
+	}
+	if leadSeedsPresent([]string{"slack:CA:7.000000"}, items, meta) {
+		t.Error("existing non-hop-0 seed must fail")
+	}
 }

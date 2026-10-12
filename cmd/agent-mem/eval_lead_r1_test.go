@@ -100,12 +100,19 @@ func TestRelationCheckValuesNotJustPresence(t *testing.T) {
 
 func TestLeadSeedsPresent(t *testing.T) {
 	items := []leadItem{{ID: "root", Hop: 0}, {ID: "x", Hop: 1}}
-	meta := map[string]nodeMeta{"reply": {ThreadRoot: "root"}}
+	meta := map[string]nodeMeta{
+		"root": {Exists: true}, "x": {Exists: true},
+		"reply": {Exists: true, ThreadRoot: "root"},
+		"gone":  {Exists: false},
+	}
 	if !leadSeedsPresent([]string{"root", "reply"}, items, meta) {
 		t.Error("seed and reply-to-root seed must be present")
 	}
-	if leadSeedsPresent([]string{"x"}, items, meta) || leadSeedsPresent([]string{"gone"}, items, meta) {
-		t.Error("non-hop-0 or missing seed must fail")
+	if leadSeedsPresent([]string{"x"}, items, meta) {
+		t.Error("existing non-hop-0 seed must fail")
+	}
+	if !leadSeedsPresent([]string{"gone", "unknown"}, items, meta) {
+		t.Error("exists=false or unmapped seed must be skipped")
 	}
 }
 
