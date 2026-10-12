@@ -1,0 +1,990 @@
+{
+  "version": 1,
+  "adjudication": "r1b-v1",
+  "cases_sha256": "b2ec94c3181bfff8220f409ad824b9d544d3834989de7850add2af1273c30f4b",
+  "eligibility_sha256": "99c816104b0356215836edea9f062d743e3d7f1730304e849b2b9cc4a6235e34",
+  "snapshot_sha256": "3aeeeff2d820829da75d053c4307ac6baebdd5afa389932013a95f73e1b9b275",
+  "build_rev": "unknown",
+  "input_mode": "lead:title+lead_summary",
+  "cases": {
+    "case-01": {
+      "feature:valu": {
+        "relation": "insufficient",
+        "reason": "empty_evidence",
+        "check": "agree"
+      },
+      "slack:C019B36KGNR:1779440396.626379": {
+        "relation": "same_case",
+        "reason": "same_ref",
+        "check": "agree"
+      },
+      "slack:C05RNSE8TBR:1791550341.323579": {
+        "relation": "same_case",
+        "reason": "work_on_case",
+        "check": "agree"
+      },
+      "slack:C0BRJGC92KA:1791645471.841979": {
+        "relation": "different_case",
+        "reason": "different_ref",
+        "check": "agree"
+      },
+      "slack_file:F0B5D2UCCP5": {
+        "relation": "insufficient",
+        "reason": "reviewers_disagree",
+        "check": "disputed"
+      },
+      "slack_file:F0B5FL0J2CD": {
+        "relation": "insufficient",
+        "reason": "ambiguous",
+        "check": "agree"
+      },
+      "slack_file:F0B5JSWBCD8": {
+        "relation": "insufficient",
+        "reason": "empty_evidence",
+        "check": "agree"
+      },
+      "slack_file:F0B87535P8W": {
+        "relation": "insufficient",
+        "reason": "empty_evidence",
+        "check": "agree"
+      },
+      "slack_file:F0BQ8MNPHU1": {
+        "relation": "insufficient",
+        "reason": "reviewers_disagree",
+        "check": "disputed"
+      }
+    },
+    "case-02": {
+      "gh_pr:wego/payments#2429": {
+        "relation": "same_case",
+        "reason": "same_ticket_or_pr",
+        "check": "agree"
+      },
+      "jira:PAY-2307": {
+        "relation": "related_context",
+        "reason": "same_component",
+        "check": "agree"
+      },
+      "jira:PAY-2443": {
+        "relation": "same_case",
+        "reason": "same_ticket_or_pr",
+        "check": "agree"
+      },
+      "slack:C012A121AQJ:1788233552.703659": {
+        "relation": "insufficient",
+        "reason": "reviewers_disagree",
+        "check": "disputed"
+      },
+      "slack:C0597404MS6:1791564134.946149": {
+        "relation": "same_case",
+        "reason": "same_ticket_or_pr",
+        "check": "agree"
+      },
+      "slack:C06Q3JHUAUV:1791764691.955149": {
+        "relation": "related_context",
+        "reason": "same_component",
+        "check": "agree"
+      },
+      "slack:CUV9EAYGY:1791545675.670659": {
+        "relation": "same_case",
+        "reason": "same_ticket_or_pr",
+        "check": "agree"
+      },
+      "slack_file:F0C7ZFG0EFQ": {
+        "relation": "same_case",
+        "reason": "work_on_case",
+        "check": "agree"
+      },
+      "slack_file:F0C7ZFG60AJ": {
+        "relation": "same_case",
+        "reason": "work_on_case",
+        "check": "agree"
+      }
+    },
+    "case-03": {},
+    "case-04": {
+      "slack_file:F0C7YHFGXB8": {
+        "relation": "insufficient",
+        "reason": "reviewers_disagree",
+        "check": "disputed"
+      },
+      "slack_file:F0C823E4A2G": {
+        "relation": "insufficient",
+        "reason": "reviewers_disagree",
+        "check": "disputed"
+      },
+      "slack_file:F0C82JES88Z": {
+        "relation": "related_context",
+        "reason": "same_component",
+        "check": "agree"
+      }
+    },
+    "case-05": {
+      "gh_pr:wego/payments#2421": {
+        "relation": "same_case",
+        "reason": "same_ticket_or_pr",
+        "check": "agree"
+      },
+      "jira:PAY-2189": {
+        "relation": "insufficient",
+        "reason": "reviewers_disagree",
+        "check": "disputed"
+      },
+      "jira:PAY-2439": {
+        "relation": "related_context",
+        "reason": "same_component",
+        "check": "agree"
+      },
+      "slack:CUV9EAYGY:1791464133.279469": {
+        "relation": "related_context",
+        "reason": "same_component",
+        "check": "agree"
+      },
+      "slack_file:F0C7SGWTG03": {
+        "relation": "same_case",
+        "reason": "work_on_case",
+        "check": "agree"
+      }
+    },
+    "case-06": {
+      "feature:tabby_payment": {
+        "relation": "insufficient",
+        "reason": "empty_evidence",
+        "check": "agree"
+      },
+      "feature:unified_apple_pay": {
+        "relation": "insufficient",
+        "reason": "empty_evidence",
+        "check": "agree"
+      },
+      "feature:valu": {
+        "relation": "insufficient",
+        "reason": "empty_evidence",
+        "check": "agree"
+      },
+      "slack:C05RNSE8TBR:1790834828.596929": {
+        "relation": "insufficient",
+        "reason": "reviewers_disagree",
+        "check": "disputed"
+      },
+      "slack:C05RNSE8TBR:1791272672.072949": {
+        "relation": "insufficient",
+        "reason": "reviewers_disagree",
+        "check": "disputed"
+      },
+      "slack:C0C6RMYH5U6:1791342766.439079": {
+        "relation": "related_context",
+        "reason": "same_component",
+        "check": "agree"
+      },
+      "slack:C0C6RMYH5U6:1791356438.494459": {
+        "relation": "related_context",
+        "reason": "same_component",
+        "check": "agree"
+      },
+      "slack:C0C6RMYH5U6:1791428761.127289": {
+        "relation": "insufficient",
+        "reason": "reviewers_disagree",
+        "check": "disputed"
+      }
+    },
+    "case-07": {
+      "feature:crypto_payments": {
+        "relation": "insufficient",
+        "reason": "empty_evidence",
+        "check": "agree"
+      },
+      "slack_file:F0C74G9SJ01": {
+        "relation": "same_case",
+        "reason": "work_on_case",
+        "check": "agree"
+      },
+      "slack_file:F0C77G3SZHS": {
+        "relation": "same_case",
+        "reason": "work_on_case",
+        "check": "agree"
+      }
+    },
+    "case-08": {
+      "feature:unified_apple_pay": {
+        "relation": "insufficient",
+        "reason": "empty_evidence",
+        "check": "agree"
+      },
+      "feature:unified_applepay": {
+        "relation": "insufficient",
+        "reason": "empty_evidence",
+        "check": "agree"
+      },
+      "gh_pr:wego/payments#2418": {
+        "relation": "same_case",
+        "reason": "same_ticket_or_pr",
+        "check": "agree"
+      },
+      "jira:PAY-1983": {
+        "relation": "related_context",
+        "reason": "same_component",
+        "check": "agree"
+      },
+      "jira:PAY-2427": {
+        "relation": "same_case",
+        "reason": "same_ticket_or_pr",
+        "check": "agree"
+      },
+      "slack:C0597404MS6:1791463615.025999": {
+        "relation": "same_case",
+        "reason": "same_ticket_or_pr",
+        "check": "agree"
+      },
+      "slack:CUV9EAYGY:1791275545.338249": {
+        "relation": "same_case",
+        "reason": "same_ticket_or_pr",
+        "check": "agree"
+      },
+      "slack_file:F0C4S3TBZ9B": {
+        "relation": "insufficient",
+        "reason": "reviewers_disagree",
+        "check": "disputed"
+      }
+    },
+    "case-09": {
+      "slack:C05RNSE8TBR:1791202861.280829": {
+        "relation": "same_case",
+        "reason": "same_ref",
+        "check": "agree"
+      },
+      "slack_file:F0C6L85M15Z": {
+        "relation": "insufficient",
+        "reason": "reviewers_disagree",
+        "check": "disputed"
+      },
+      "slack_file:F0C6L87LSUT": {
+        "relation": "insufficient",
+        "reason": "ambiguous",
+        "check": "agree"
+      },
+      "slack_file:F0C6L8EFLKD": {
+        "relation": "insufficient",
+        "reason": "ambiguous",
+        "check": "agree"
+      },
+      "slack_file:F0C6P9RTV43": {
+        "relation": "same_case",
+        "reason": "work_on_case",
+        "check": "agree"
+      },
+      "slack_file:F0C6SSF4SDU": {
+        "relation": "insufficient",
+        "reason": "reviewers_disagree",
+        "check": "disputed"
+      },
+      "slack_file:F0C6XTX8HRA": {
+        "relation": "insufficient",
+        "reason": "reviewers_disagree",
+        "check": "disputed"
+      },
+      "slack_file:F0C74GXT49J": {
+        "relation": "same_case",
+        "reason": "work_on_case",
+        "check": "agree"
+      },
+      "slack_file:F0C7P7GPFC0": {
+        "relation": "insufficient",
+        "reason": "reviewers_disagree",
+        "check": "disputed"
+      },
+      "slack_file:F0C7UTF8KJL": {
+        "relation": "insufficient",
+        "reason": "reviewers_disagree",
+        "check": "disputed"
+      }
+    },
+    "case-10": {
+      "feature:card_availability_messaging": {
+        "relation": "insufficient",
+        "reason": "empty_evidence",
+        "check": "agree"
+      },
+      "feature:payfast_payment_method": {
+        "relation": "insufficient",
+        "reason": "empty_evidence",
+        "check": "agree"
+      },
+      "feature:unified_apple_pay": {
+        "relation": "insufficient",
+        "reason": "empty_evidence",
+        "check": "agree"
+      },
+      "gh_pr:wego/payments#2403": {
+        "relation": "same_case",
+        "reason": "same_ticket_or_pr",
+        "check": "agree"
+      },
+      "jira:PAY-2420": {
+        "relation": "same_case",
+        "reason": "same_ticket_or_pr",
+        "check": "agree"
+      },
+      "jira:PAY-2421": {
+        "relation": "same_case",
+        "reason": "same_ticket_or_pr",
+        "check": "agree"
+      },
+      "jira:PAY-2422": {
+        "relation": "same_case",
+        "reason": "same_ticket_or_pr",
+        "check": "agree"
+      },
+      "slack:C0597404MS6:1791274670.702059": {
+        "relation": "same_case",
+        "reason": "same_ticket_or_pr",
+        "check": "agree"
+      },
+      "slack:CUV9EAYGY:1790908867.057589": {
+        "relation": "insufficient",
+        "reason": "reviewers_disagree",
+        "check": "disputed"
+      },
+      "slack:CUV9EAYGY:1791166136.040959": {
+        "relation": "same_case",
+        "reason": "same_ticket_or_pr",
+        "check": "agree"
+      },
+      "slack:CUV9EAYGY:1791166268.695279": {
+        "relation": "same_case",
+        "reason": "same_ticket_or_pr",
+        "check": "agree"
+      },
+      "slack_file:F0C6HHQH9FF": {
+        "relation": "same_case",
+        "reason": "same_ticket_or_pr",
+        "check": "agree"
+      }
+    },
+    "case-11": {
+      "gh_pr:wego/payments#2385": {
+        "relation": "same_case",
+        "reason": "same_ticket_or_pr",
+        "check": "agree"
+      },
+      "jira:PAY-2210": {
+        "relation": "related_context",
+        "reason": "same_component",
+        "check": "agree"
+      },
+      "slack:C0597404MS6:1790816359.829979": {
+        "relation": "same_case",
+        "reason": "same_ticket_or_pr",
+        "check": "agree"
+      },
+      "slack:C0597404MS6:1790902794.345659": {
+        "relation": "same_case",
+        "reason": "same_ticket_or_pr",
+        "check": "agree"
+      }
+    },
+    "case-12": {
+      "feature:pay_at_property": {
+        "relation": "insufficient",
+        "reason": "empty_evidence",
+        "check": "agree"
+      },
+      "feature:tabby_payment": {
+        "relation": "insufficient",
+        "reason": "empty_evidence",
+        "check": "agree"
+      },
+      "feature:unified_apple_pay": {
+        "relation": "insufficient",
+        "reason": "empty_evidence",
+        "check": "agree"
+      },
+      "feature:valu": {
+        "relation": "insufficient",
+        "reason": "empty_evidence",
+        "check": "agree"
+      },
+      "slack:C05RNSE8TBR:1791207943.700459": {
+        "relation": "same_case",
+        "reason": "work_on_case",
+        "check": "agree"
+      },
+      "slack:C05RNSE8TBR:1791272672.072949": {
+        "relation": "same_case",
+        "reason": "work_on_case",
+        "check": "agree"
+      },
+      "slack:C0736FUE03W:1790596452.230219": {
+        "relation": "insufficient",
+        "reason": "reviewers_disagree",
+        "check": "disputed"
+      },
+      "slack:C0C6RMYH5U6:1791342766.439079": {
+        "relation": "related_context",
+        "reason": "same_component",
+        "check": "agree"
+      },
+      "slack:C0C6RMYH5U6:1791356438.494459": {
+        "relation": "same_case",
+        "reason": "work_on_case",
+        "check": "agree"
+      },
+      "slack:C0C6RMYH5U6:1791428761.127289": {
+        "relation": "related_context",
+        "reason": "same_component",
+        "check": "agree"
+      },
+      "slack:C0C6RMYH5U6:1791432306.826199": {
+        "relation": "insufficient",
+        "reason": "reviewers_disagree",
+        "check": "disputed"
+      },
+      "slack:C0C6RMYH5U6:1791718572.844689": {
+        "relation": "related_context",
+        "reason": "same_component",
+        "check": "agree"
+      },
+      "slack_file:F0C601624TE": {
+        "relation": "same_case",
+        "reason": "work_on_case",
+        "check": "agree"
+      },
+      "slack_file:F0C6T61JGJE": {
+        "relation": "related_context",
+        "reason": "same_component",
+        "check": "agree"
+      },
+      "slack_file:F0C71AW67KL": {
+        "relation": "same_case",
+        "reason": "work_on_case",
+        "check": "agree"
+      },
+      "slack_file:F0C74P5RRPB": {
+        "relation": "same_case",
+        "reason": "work_on_case",
+        "check": "agree"
+      },
+      "slack_file:F0C7LED07C0": {
+        "relation": "insufficient",
+        "reason": "reviewers_disagree",
+        "check": "disputed"
+      }
+    },
+    "case-13": {
+      "gh_pr:wego/payments#2386": {
+        "relation": "same_case",
+        "reason": "same_ticket_or_pr",
+        "check": "agree"
+      },
+      "gh_pr:wego/payments-knowledge#45": {
+        "relation": "different_case",
+        "reason": "shared_words_only",
+        "check": "agree"
+      },
+      "jira:PAY-2407": {
+        "relation": "different_case",
+        "reason": "shared_words_only",
+        "check": "agree"
+      },
+      "jira:PAY-2409": {
+        "relation": "same_case",
+        "reason": "same_ticket_or_pr",
+        "check": "agree"
+      },
+      "jira:PAY-2410": {
+        "relation": "related_context",
+        "reason": "same_component",
+        "check": "agree"
+      },
+      "slack:C0597404MS6:1790816359.829979": {
+        "relation": "same_case",
+        "reason": "same_ticket_or_pr",
+        "check": "agree"
+      },
+      "slack:C06Q3JHUAUV:1790649324.836509": {
+        "relation": "related_context",
+        "reason": "precedent",
+        "check": "agree"
+      },
+      "slack:C06Q3JHUAUV:1790760462.915219": {
+        "relation": "related_context",
+        "reason": "precedent",
+        "check": "agree"
+      },
+      "slack:C06Q3JHUAUV:1790828870.352649": {
+        "relation": "same_case",
+        "reason": "work_on_case",
+        "check": "agree"
+      },
+      "slack:CUV9EAYGY:1790760806.607149": {
+        "relation": "same_case",
+        "reason": "same_ticket_or_pr",
+        "check": "agree"
+      },
+      "slack:CUV9EAYGY:1790760919.457989": {
+        "relation": "same_case",
+        "reason": "same_ticket_or_pr",
+        "check": "agree"
+      }
+    },
+    "case-14": {
+      "slack:C06Q3JHUAUV:1790649324.836509": {
+        "relation": "same_case",
+        "reason": "work_on_case",
+        "check": "agree"
+      },
+      "slack:C06Q3JHUAUV:1790760462.915219": {
+        "relation": "same_case",
+        "reason": "work_on_case",
+        "check": "agree"
+      }
+    },
+    "probe-a": {
+      "cf:2520842279": {
+        "relation": "different_case",
+        "reason": "shared_words_only",
+        "check": "agree"
+      },
+      "cf:2621374468": {
+        "relation": "related_context",
+        "reason": "same_component",
+        "check": "agree"
+      },
+      "cf:2908258355": {
+        "relation": "related_context",
+        "reason": "same_component",
+        "check": "agree"
+      },
+      "gh_pr:wego/payments#1566": {
+        "relation": "related_context",
+        "reason": "same_component",
+        "check": "agree"
+      },
+      "gh_pr:wego/payments#1567": {
+        "relation": "related_context",
+        "reason": "same_component",
+        "check": "agree"
+      },
+      "gh_pr:wego/payments#1577": {
+        "relation": "same_case",
+        "reason": "same_ticket_or_pr",
+        "check": "agree"
+      },
+      "gh_pr:wego/payments#1593": {
+        "relation": "related_context",
+        "reason": "same_component",
+        "check": "agree"
+      },
+      "gh_pr:wego/payments#2417": {
+        "relation": "same_case",
+        "reason": "same_ticket_or_pr",
+        "check": "agree"
+      },
+      "gh_pr:wego/wego-docs#682": {
+        "relation": "related_context",
+        "reason": "same_component",
+        "check": "agree"
+      },
+      "jira:MOBILE-8262": {
+        "relation": "related_context",
+        "reason": "same_component",
+        "check": "agree"
+      },
+      "jira:PAY-1470": {
+        "relation": "related_context",
+        "reason": "same_component",
+        "check": "agree"
+      },
+      "jira:PAY-1471": {
+        "relation": "related_context",
+        "reason": "same_component",
+        "check": "agree"
+      },
+      "jira:PAY-1532": {
+        "relation": "related_context",
+        "reason": "same_component",
+        "check": "agree"
+      },
+      "jira:PAY-1533": {
+        "relation": "related_context",
+        "reason": "same_component",
+        "check": "agree"
+      },
+      "jira:PAY-1640": {
+        "relation": "related_context",
+        "reason": "same_component",
+        "check": "agree"
+      },
+      "jira:PAY-1690": {
+        "relation": "insufficient",
+        "reason": "reviewers_disagree",
+        "check": "disputed"
+      },
+      "jira:PAY-1734": {
+        "relation": "related_context",
+        "reason": "same_component",
+        "check": "agree"
+      },
+      "jira:PAY-1983": {
+        "relation": "related_context",
+        "reason": "same_component",
+        "check": "agree"
+      },
+      "jira:PAY-2149": {
+        "relation": "related_context",
+        "reason": "same_component",
+        "check": "agree"
+      },
+      "jira:PAY-2175": {
+        "relation": "related_context",
+        "reason": "same_component",
+        "check": "agree"
+      },
+      "jira:PAY-2436": {
+        "relation": "same_case",
+        "reason": "same_ticket_or_pr",
+        "check": "agree"
+      },
+      "slack:C0597404MS6:1791513032.902789": {
+        "relation": "same_case",
+        "reason": "same_ticket_or_pr",
+        "check": "agree"
+      },
+      "slack:C0B1BR522F5:1791509470.292799": {
+        "relation": "same_case",
+        "reason": "same_ticket_or_pr",
+        "check": "agree"
+      },
+      "slack:CUV9EAYGY:1777519539.041909": {
+        "relation": "different_case",
+        "reason": "shared_words_only",
+        "check": "agree"
+      },
+      "slack:CUV9EAYGY:1791450445.967909": {
+        "relation": "same_case",
+        "reason": "same_ticket_or_pr",
+        "check": "agree"
+      },
+      "slack:CUV9EAYGY:1791450988.936449": {
+        "relation": "same_case",
+        "reason": "same_ticket_or_pr",
+        "check": "agree"
+      },
+      "slack_file:F0C7PUDQB3L": {
+        "relation": "same_case",
+        "reason": "work_on_case",
+        "check": "agree"
+      },
+      "slack_file:F0C7TP46152": {
+        "relation": "same_case",
+        "reason": "work_on_case",
+        "check": "agree"
+      }
+    },
+    "probe-b": {
+      "feature:pay_later_with_tabby": {
+        "relation": "insufficient",
+        "reason": "empty_evidence",
+        "check": "agree"
+      },
+      "feature:tabby_payment": {
+        "relation": "insufficient",
+        "reason": "empty_evidence",
+        "check": "agree"
+      }
+    },
+    "probe-c": {
+      "gh_pr:wego/payments#2418": {
+        "relation": "same_case",
+        "reason": "same_ticket_or_pr",
+        "check": "agree"
+      },
+      "jira:PAY-2438": {
+        "relation": "same_case",
+        "reason": "same_ticket_or_pr",
+        "check": "agree"
+      },
+      "slack:C0597404MS6:1791463615.025999": {
+        "relation": "same_case",
+        "reason": "same_ticket_or_pr",
+        "check": "agree"
+      },
+      "slack:C0B1BR522F5:1791463631.837989": {
+        "relation": "same_case",
+        "reason": "same_ticket_or_pr",
+        "check": "agree"
+      },
+      "slack:C0BFH54Q1UG:1791459052.551399": {
+        "relation": "same_case",
+        "reason": "work_on_case",
+        "check": "agree"
+      },
+      "slack:CUV9EAYGY:1791458667.701669": {
+        "relation": "same_case",
+        "reason": "same_ticket_or_pr",
+        "check": "agree"
+      },
+      "slack_file:F0C7JR297JB": {
+        "relation": "same_case",
+        "reason": "same_ref",
+        "check": "agree"
+      },
+      "slack_file:F0C80V3EA2W": {
+        "relation": "same_case",
+        "reason": "work_on_case",
+        "check": "agree"
+      },
+      "slack_file:F0C8UJ9L3R6": {
+        "relation": "same_case",
+        "reason": "same_ref",
+        "check": "agree"
+      }
+    },
+    "probe-d": {
+      "feature:unified_apple_pay": {
+        "relation": "insufficient",
+        "reason": "empty_evidence",
+        "check": "agree"
+      },
+      "slack:C05RNSE8TBR:1787558178.483839": {
+        "relation": "insufficient",
+        "reason": "reviewers_disagree",
+        "check": "disputed"
+      },
+      "slack:C05RNSE8TBR:1788259009.515069": {
+        "relation": "insufficient",
+        "reason": "reviewers_disagree",
+        "check": "disputed"
+      },
+      "slack:C05RNSE8TBR:1788444667.445439": {
+        "relation": "same_case",
+        "reason": "work_on_case",
+        "check": "agree"
+      },
+      "slack_file:F0C67173AH4": {
+        "relation": "same_case",
+        "reason": "work_on_case",
+        "check": "agree"
+      },
+      "slack_file:F0C690FMW10": {
+        "relation": "same_case",
+        "reason": "work_on_case",
+        "check": "agree"
+      },
+      "slack_file:F0C6ATMC7MX": {
+        "relation": "same_case",
+        "reason": "work_on_case",
+        "check": "agree"
+      },
+      "slack_file:F0C73ARJTHN": {
+        "relation": "same_case",
+        "reason": "work_on_case",
+        "check": "agree"
+      }
+    },
+    "probe-e": {
+      "feature:pk_e-invoice_pdf": {
+        "relation": "insufficient",
+        "reason": "empty_evidence",
+        "check": "agree"
+      },
+      "feature:pk_tax_calculation-only": {
+        "relation": "insufficient",
+        "reason": "empty_evidence",
+        "check": "agree"
+      },
+      "gh_pr:wego/payments#1695": {
+        "relation": "related_context",
+        "reason": "precedent",
+        "check": "agree"
+      },
+      "gh_pr:wego/payments#2417": {
+        "relation": "different_case",
+        "reason": "shared_words_only",
+        "check": "agree"
+      },
+      "jira:PAY-1904": {
+        "relation": "related_context",
+        "reason": "precedent",
+        "check": "agree"
+      },
+      "jira:PAY-2022": {
+        "relation": "related_context",
+        "reason": "same_component",
+        "check": "agree"
+      },
+      "jira:PAY-2434": {
+        "relation": "same_case",
+        "reason": "same_ticket_or_pr",
+        "check": "agree"
+      },
+      "slack:C06Q3JHUAUV:1791764691.955149": {
+        "relation": "same_case",
+        "reason": "work_on_case",
+        "check": "agree"
+      },
+      "slack:C0BBJAHV4G1:1791442635.332559": {
+        "relation": "insufficient",
+        "reason": "reviewers_disagree",
+        "check": "disputed"
+      },
+      "slack:CUV9EAYGY:1791440402.647959": {
+        "relation": "same_case",
+        "reason": "same_ticket_or_pr",
+        "check": "agree"
+      },
+      "slack_file:F0C7HS8CT1V": {
+        "relation": "insufficient",
+        "reason": "ambiguous",
+        "check": "agree"
+      }
+    },
+    "probe-f": {
+      "gh_pr:wego/payments#2359": {
+        "relation": "same_case",
+        "reason": "same_ticket_or_pr",
+        "check": "agree"
+      },
+      "gh_pr:wego/payments#2368": {
+        "relation": "insufficient",
+        "reason": "reviewers_disagree",
+        "check": "disputed"
+      },
+      "gws_doc:1HZXtEMkLeKsd6rCnXRUDTb4zdHpuXaDy": {
+        "relation": "insufficient",
+        "reason": "empty_evidence",
+        "check": "agree"
+      },
+      "gws_doc:1VMB21bJCZBEfSAmXGqjsJkgds2q33O0g": {
+        "relation": "insufficient",
+        "reason": "empty_evidence",
+        "check": "agree"
+      },
+      "gws_doc:1ZqYJHiXyJrDaVbrt5znXIpZmIzRYamaD": {
+        "relation": "insufficient",
+        "reason": "empty_evidence",
+        "check": "agree"
+      },
+      "gws_doc:1qW0OdmW2uc338ey4R8iYYR5OfOiao_8R": {
+        "relation": "insufficient",
+        "reason": "empty_evidence",
+        "check": "agree"
+      },
+      "jira:FBT-1543": {
+        "relation": "same_case",
+        "reason": "same_ticket_or_pr",
+        "check": "agree"
+      },
+      "jira:FBT-1547": {
+        "relation": "insufficient",
+        "reason": "reviewers_disagree",
+        "check": "disputed"
+      },
+      "jira:FBT-1550": {
+        "relation": "insufficient",
+        "reason": "reviewers_disagree",
+        "check": "disputed"
+      },
+      "jira:FBT-1649": {
+        "relation": "insufficient",
+        "reason": "reviewers_disagree",
+        "check": "disputed"
+      },
+      "jira:FBT-1677": {
+        "relation": "related_context",
+        "reason": "same_component",
+        "check": "agree"
+      },
+      "jira:FBT-1732": {
+        "relation": "related_context",
+        "reason": "same_component",
+        "check": "agree"
+      },
+      "jira:PAY-2331": {
+        "relation": "related_context",
+        "reason": "same_component",
+        "check": "agree"
+      },
+      "jira:PAY-2400": {
+        "relation": "related_context",
+        "reason": "same_component",
+        "check": "agree"
+      },
+      "jira:PAY-2429": {
+        "relation": "related_context",
+        "reason": "same_component",
+        "check": "agree"
+      },
+      "slack:C02NA2MA5K5:1790050904.785109": {
+        "relation": "related_context",
+        "reason": "same_component",
+        "check": "agree"
+      },
+      "slack:C048WV1BZTK:1790738411.984129": {
+        "relation": "same_case",
+        "reason": "work_on_case",
+        "check": "agree"
+      },
+      "slack:C04U4KATYUV:1791442313.613619": {
+        "relation": "insufficient",
+        "reason": "reviewers_disagree",
+        "check": "disputed"
+      },
+      "slack:C09A46W6ZN1:1780910309.130929": {
+        "relation": "different_case",
+        "reason": "different_incident",
+        "check": "agree"
+      },
+      "slack:C0BBJAHV4G1:1789701873.754609": {
+        "relation": "related_context",
+        "reason": "same_component",
+        "check": "agree"
+      },
+      "slack:C0BBJAHV4G1:1791191807.822279": {
+        "relation": "related_context",
+        "reason": "same_component",
+        "check": "agree"
+      },
+      "slack:C0BBJAHV4G1:1791442635.332559": {
+        "relation": "related_context",
+        "reason": "same_component",
+        "check": "agree"
+      },
+      "slack:C0BBJAHV4G1:1791544006.924189": {
+        "relation": "insufficient",
+        "reason": "reviewers_disagree",
+        "check": "disputed"
+      },
+      "slack:C0BBJAHV4G1:1791791257.754559": {
+        "relation": "related_context",
+        "reason": "same_component",
+        "check": "agree"
+      },
+      "slack:CUV9EAYGY:1790214709.406839": {
+        "relation": "related_context",
+        "reason": "same_component",
+        "check": "agree"
+      },
+      "slack:CUV9EAYGY:1791287810.409589": {
+        "relation": "related_context",
+        "reason": "same_component",
+        "check": "agree"
+      },
+      "slack_file:F0C6ZER678S": {
+        "relation": "related_context",
+        "reason": "same_component",
+        "check": "agree"
+      },
+      "slack_file:F0C75GELQTF": {
+        "relation": "insufficient",
+        "reason": "reviewers_disagree",
+        "check": "disputed"
+      },
+      "slack_file:F0C78KASC4E": {
+        "relation": "insufficient",
+        "reason": "ambiguous",
+        "check": "agree"
+      }
+    }
+  }
+}
