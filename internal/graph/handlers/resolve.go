@@ -1,8 +1,10 @@
 package handlers
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/url"
 	"sort"
@@ -59,6 +61,9 @@ type resolveArtifact struct {
 	Hop            int                `json:"hop"`
 	Via            []string           `json:"via,omitempty"`
 	Links          []resolveLink      `json:"links,omitempty"`
+	// Lead mode only.
+	*leadFields
+	FocusTS *string `json:"focus_ts,omitempty"`
 }
 
 // resolveLink says how a non-seed artifact is joined directly to a seed.
@@ -68,6 +73,9 @@ type resolveLink struct {
 	Topic      string  `json:"topic,omitempty"`
 	Why        string  `json:"why,omitempty"`
 	Confidence float64 `json:"confidence,omitempty"`
+	// From and To are set in lead mode only: the thread-root ids the edge joins.
+	From string `json:"from,omitempty"`
+	To   string `json:"to,omitempty"`
 }
 
 type resolveTrace struct {
@@ -85,6 +93,7 @@ type Resolve struct {
 	exp                *bfs.Expander
 	weights            scoring.Weights
 	enqueueFetchBodyFn func(context.Context, string)
+	leadEnabled        bool
 }
 
 // NewResolve creates a Resolve handler.
@@ -101,6 +110,17 @@ func NewResolve(db *pgxpool.Pool) (*Resolve, error) {
 	}
 	h.enqueueFetchBodyFn = h.enqueueFetchBody
 	return h, nil
+}
+
+// WithLeadMode sets whether lead mode may run (worker flag GRAPH_LEAD_MODE_ENABLED).
+func (h *Resolve) WithLeadMode(enabled bool) *Resolve {
+	h.leadEnabled = enabled
+	return h
+}
+
+// leadResolveRequest is decoded from the same body, only on the lead path.
+type leadResolveRequest struct {
+	MaxItems *int `json:"max_items"`
 }
 
 var resolveStructuralKinds = map[string]bool{
@@ -181,10 +201,36 @@ func displayHops(seeds []string, nbrs map[string][]bfs.Neighbor, depth int) map[
 func (h *Resolve) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	t0 := nowFunc()
 	ctx := r.Context()
+	lead := leadGate(w, r, h.leadEnabled)
 	var req resolveRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	var src io.Reader = r.Body
+	var raw []byte
+	if lead {
+		var rerr error
+		if raw, rerr = io.ReadAll(r.Body); rerr != nil {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		src = bytes.NewReader(raw)
+	}
+	if err := json.NewDecoder(src).Decode(&req); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
+	}
+	maxItems := leadDefaultMaxItems
+	if lead {
+		var lr leadResolveRequest
+		if err := json.NewDecoder(bytes.NewReader(raw)).Decode(&lr); err != nil {
+			http.Error(w, "bad_max_items", http.StatusBadRequest)
+			return
+		}
+		if lr.MaxItems != nil {
+			if *lr.MaxItems < 1 || *lr.MaxItems > leadMaxItemsLimit {
+				http.Error(w, "bad_max_items", http.StatusBadRequest)
+				return
+			}
+			maxItems = *lr.MaxItems
+		}
 	}
 	if diag, _ := ctx.Value(requestTraceDiagKey{}).(*requestTraceDiag); diag != nil {
 		diag.askerEEID = req.AskerEEID
@@ -213,7 +259,19 @@ func (h *Resolve) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// As in neighbors.go, topical edges and hub nodes are leaves, not corridors.
 	// Corridor distance decides expansion; display distance is computed separately.
-	canonSeeds := h.canonicalizeSeeds(ctx, req.Seeds)
+	var canonSeeds []string
+	var focus map[string]string
+	if lead {
+		// A reply seed's own ts becomes the focus_ts of its root.
+		focus = map[string]string{}
+		canonSeeds, _ = canonicalizeSeedsNotify(ctx, h.db, req.Seeds, func(reply, root string) {
+			if _, ok := focus[root]; !ok {
+				focus[root] = threadTSOfRoot(reply)
+			}
+		})
+	} else {
+		canonSeeds = h.canonicalizeSeeds(ctx, req.Seeds)
+	}
 	if diag, _ := ctx.Value(requestTraceDiagKey{}).(*requestTraceDiag); diag != nil {
 		diag.canonicalSeeds = append([]string(nil), canonSeeds...)
 	}
@@ -300,6 +358,14 @@ func (h *Resolve) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Score each surviving candidate.
 	scored := h.scoreAll(ctx, req, filtered)
+	if lead {
+		h.serveLead(w, r, leadResolveParams{
+			req: req, maxItems: maxItems, acl: acl, epicKeys: epicKeys,
+			canonSeeds: canonSeeds, focus: focus, filtered: filtered, visited: len(visited),
+			scored: scored, t0: t0,
+		})
+		return
+	}
 
 	// Sort descending by score.
 	for i := 1; i < len(scored); i++ {
@@ -433,10 +499,7 @@ WHERE n.id = $1 AND n.deleted_at IS NULL`, s).Scan(
 	// overrides the body field so transports can enforce one policy. Header
 	// values "1" and "true" (case-insensitive) enable it; any other non-empty
 	// value disables it.
-	noSideEffects := req.NoSideEffects
-	if value := r.Header.Get("X-Graph-No-Side-Effects"); value != "" {
-		noSideEffects = value == "1" || strings.EqualFold(value, "true")
-	}
+	noSideEffects := noSideEffects(r, req.NoSideEffects)
 	if !noSideEffects {
 		for _, m := range missed {
 			h.enqueueFetchBodyFn(ctx, m)
@@ -501,6 +564,12 @@ type seedQuerier interface {
 // epic seeds through q. ErrNoRows is an expected no-match; diagnostics contain
 // only real database errors.
 func CanonicalizeSeeds(ctx context.Context, q seedQuerier, seeds []string) ([]string, []error) {
+	return canonicalizeSeedsNotify(ctx, q, seeds, nil)
+}
+
+// canonicalizeSeedsNotify is CanonicalizeSeeds that reports each reply promoted
+// to its root through onPromote(reply, root).
+func canonicalizeSeedsNotify(ctx context.Context, q seedQuerier, seeds []string, onPromote func(reply, root string)) ([]string, []error) {
 	seeds, diagnostics := expandEpicSeeds(ctx, q, seeds)
 	resolved := make([]string, 0, len(seeds))
 	for _, seed := range seeds {
@@ -549,6 +618,9 @@ JOIN graph.nodes root
  AND root.deleted_at IS NULL
 WHERE reply.id = $1 AND reply.deleted_at IS NULL LIMIT 1`, canonical).Scan(&rootID)
 			if err == nil {
+				if onPromote != nil && rootID != canonical {
+					onPromote(canonical, rootID)
+				}
 				canonical = rootID
 			} else if !errors.Is(err, pgx.ErrNoRows) {
 				diagnostics = append(diagnostics, err)
@@ -779,24 +851,30 @@ WHERE (from_node_id = ANY($1) AND to_node_id = ANY($2))
 
 	out := make(map[string][]resolveLink, len(best))
 	for id, byKind := range best {
-		links := make([]resolveLink, 0, len(byKind))
-		for _, p := range byKind {
-			links = append(links, p.link)
-		}
-		rank := func(k string) int {
-			if r, ok := resolveLinkOrder[k]; ok {
-				return r
-			}
-			return len(resolveLinkOrder)
-		}
-		sort.Slice(links, func(i, j int) bool {
-			ri, rj := rank(links[i].Kind), rank(links[j].Kind)
-			if ri != rj {
-				return ri < rj
-			}
-			return links[i].Kind < links[j].Kind
-		})
-		out[id] = links
+		out[id] = sortedLinks(byKind)
 	}
 	return out
+}
+
+// sortedLinks orders the per-kind winners REFERENCES, REFERS_TO, THREAD,
+// SAME_TOPIC, PART_OF, then any other kind alphabetically.
+func sortedLinks(byKind map[string]linkPick) []resolveLink {
+	links := make([]resolveLink, 0, len(byKind))
+	for _, p := range byKind {
+		links = append(links, p.link)
+	}
+	rank := func(k string) int {
+		if r, ok := resolveLinkOrder[k]; ok {
+			return r
+		}
+		return len(resolveLinkOrder)
+	}
+	sort.Slice(links, func(i, j int) bool {
+		ri, rj := rank(links[i].Kind), rank(links[j].Kind)
+		if ri != rj {
+			return ri < rj
+		}
+		return links[i].Kind < links[j].Kind
+	})
+	return links
 }

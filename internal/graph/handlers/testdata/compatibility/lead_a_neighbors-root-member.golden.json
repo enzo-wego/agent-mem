@@ -1,0 +1,5 @@
+{
+  "status": 200,
+  "content_type": "application/json",
+  "body": "{\"neighbors\":[{\"edge\":{\"confidence\":0.91,\"kind\":\"REFERENCES\"},\"hop\":1,\"node\":{\"channel\":\"\",\"node_id\":\"jira:GC0-1\",\"thread_ts\":\"\",\"title\":\"Phase zero issue\",\"ts_ms\":1791417600000,\"type\":\"jira\",\"url\":\"\"}}]}\n"
+}

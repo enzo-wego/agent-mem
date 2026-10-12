@@ -36,6 +36,8 @@ type Search struct {
 	embed  Embedder
 	aclBld scopeBuilder
 	exp    *bfs.Expander
+	// leadEnabled gates lead mode (GRAPH_LEAD_MODE_ENABLED).
+	leadEnabled bool
 	// now is injectable so the temporal window parser is testable.
 	now func() time.Time
 }
@@ -79,6 +81,8 @@ type searchResult struct {
 	// hybridDisplay surfaces them. Never serialised in default mode.
 	LinkedVia      string `json:"-"`
 	LinkedViaTitle string `json:"-"`
+	// Lead mode only.
+	*leadFields
 }
 
 type searchWindow struct {
@@ -112,6 +116,7 @@ const (
 
 func (s *Search) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	lead := leadGate(w, r, s.leadEnabled)
 	acl, askerEEID, ok := requireAsker(w, r, s.db, s.aclBld, askerIdentities{})
 	if !ok {
 		return
@@ -362,7 +367,14 @@ func (s *Search) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-
+	var leadByID map[string]*leadFields
+	if lead {
+		results, leadByID, err = s.leadPage(ctx, r, acl, results)
+		if err != nil {
+			writeLeadLookupFailed(w)
+			return
+		}
+	}
 	if diag, _ := ctx.Value(requestTraceDiagKey{}).(*requestTraceDiag); diag != nil {
 		diag.armErrors = nilIfEmpty(armErrs)
 	}
@@ -372,6 +384,13 @@ func (s *Search) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
+		}
+		if lead {
+			admin := isAdminRequest(r)
+			for i := range rows {
+				rows[i].Summary = leadText(admin, rows[i].Summary)
+				rows[i].leadFields = leadByID[rows[i].NodeID]
+			}
 		}
 		resp := hybridResponse{Results: rows, Total: len(rows), Arms: []string{}, Query: rest,
 			ArmErrors: nilIfEmpty(armErrs), SemanticError: armErrs[armSemantic]}
@@ -394,6 +413,12 @@ func (s *Search) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if lead {
+		for i := range results {
+			results[i].Summary = leadText(isAdminRequest(r), results[i].Summary)
+			results[i].leadFields = leadByID[results[i].NodeID]
+		}
+	}
 	resp := searchResponse{Results: results, Total: len(results), Arms: []string{}, Query: rest}
 	for _, arm := range allArms {
 		if _, ok := lists[arm]; ok {

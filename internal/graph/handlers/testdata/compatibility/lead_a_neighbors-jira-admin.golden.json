@@ -1,0 +1,5 @@
+{
+  "status": 200,
+  "content_type": "application/json",
+  "body": "{\"neighbors\":[{\"node\":{\"node_id\":\"jira:GC0-MISS\",\"type\":\"jira\",\"url\":\"\",\"title\":\"Phase zero missing body\",\"channel\":\"\",\"thread_ts\":\"\",\"ts_ms\":1791331200000},\"edge\":{\"kind\":\"REFERENCES\",\"confidence\":0.83},\"hop\":1},{\"node\":{\"node_id\":\"slack:CGC0:100.000001\",\"type\":\"slack\",\"url\":\"\",\"title\":\"Phase zero root\",\"channel\":\"\",\"thread_ts\":\"100.000001\",\"ts_ms\":1791590400000,\"first_ts_ms\":1791504000000,\"last_ts_ms\":1791590400000},\"edge\":{\"kind\":\"REFERENCES\",\"confidence\":0.91},\"hop\":1}]}\n"
+}

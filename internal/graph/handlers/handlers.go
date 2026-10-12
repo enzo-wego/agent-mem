@@ -43,7 +43,10 @@ type Deps struct {
 	Gemini        GeminiClient
 	TraceRecorder *graphtrace.Recorder
 	BuildRev      string
-	LiteParse     LiteParseConfig
+	// LeadModeEnabled turns on lead-mode graph reads for requests that send
+	// `X-Graph-Lead: 1` (env GRAPH_LEAD_MODE_ENABLED, default false).
+	LeadModeEnabled bool
+	LiteParse       LiteParseConfig
 
 	// Hot-topic alerts (Feature: topic subscriptions → enzobot DM).
 	SlackBotToken string // bot token used to DM via chat.postMessage

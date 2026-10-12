@@ -1,0 +1,5 @@
+{
+  "status": 200,
+  "content_type": "application/json",
+  "body": "{\"neighbors\":[{\"edge\":{\"kind\":\"THREAD\"},\"hop\":1,\"node\":{\"channel\":\"\",\"first_ts_ms\":1782864000000,\"last_ts_ms\":1782950400000,\"node_id\":\"slack:CLEADA:1.5\",\"pending_summary\":true,\"thread_ts\":\"1.0\",\"title\":\"slack:CLEADA:1.5\",\"ts_ms\":1782950400000,\"type\":\"slack\",\"url\":\"https://wego.slack.com/archives/CLEADA/p10\"}}]}\n"
+}

@@ -1,0 +1,5 @@
+{
+  "status": 200,
+  "content_type": "application/json",
+  "body": "{\"edges_in\":null,\"edges_out\":null,\"node_id\":\"slack:CLEADA:1.5\",\"title\":\"slack:CLEADA:1.5\",\"type\":\"slack\",\"updated_at\":\"2026-07-02T00:00:00Z\",\"url\":\"\"}\n"
+}

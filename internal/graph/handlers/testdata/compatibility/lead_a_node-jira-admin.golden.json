@@ -1,0 +1,5 @@
+{
+  "status": 200,
+  "content_type": "application/json",
+  "body": "{\"node_id\":\"jira:GC0-1\",\"type\":\"jira\",\"url\":\"\",\"title\":\"Phase zero issue\",\"summary\":\"issue summary\",\"body\":\"phase zero issue body\",\"updated_at\":\"2026-10-08T00:00:00Z\",\"edges_in\":[{\"from\":\"slack:CGC0:100.000001\",\"kind\":\"REFERENCES\"},{\"from\":\"jira:GC0-MISS\",\"kind\":\"REFERENCES\"}],\"edges_out\":null}\n"
+}

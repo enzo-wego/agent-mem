@@ -48,9 +48,11 @@ func newEvalCmd() *cobra.Command {
 	var baseURL string
 	var dryRun bool
 	var jsonPath string
+	var quiet bool
 	relevance := &cobra.Command{Use: "relevance", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
-		return runRelevance(cmd, relevanceOpts{BaseURL: baseURL, DryRun: dryRun, JSONPath: jsonPath, DataDir: evalDataDir, EnvPath: ".env"})
+		return runRelevance(cmd, relevanceOpts{BaseURL: baseURL, DryRun: dryRun, JSONPath: jsonPath, DataDir: evalDataDir, EnvPath: ".env", Quiet: quiet})
 	}}
+	relevance.Flags().BoolVar(&quiet, "quiet", false, "Do not print request URLs/bodies or raw error text; failures are reported as a category")
 	relevance.Flags().StringVar(&baseURL, "base-url", "", "Graph API base URL")
 	relevance.Flags().BoolVar(&dryRun, "dry-run", false, "Print requests without sending them")
 	relevance.Flags().StringVar(&jsonPath, "json", "", "Write machine-readable results")

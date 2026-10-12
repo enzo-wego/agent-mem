@@ -178,6 +178,8 @@ func NewServer(cfg *config.Config, logBuf *LogBuffer) (*Server, error) {
 		LiteParse:     liteparseConfigFromEnv(),
 		TraceRecorder: traceRecorder,
 		BuildRev:      BuildRev,
+		// Read once at startup; lead mode also needs the X-Graph-Lead: 1 header.
+		LeadModeEnabled: strings.EqualFold(strings.TrimSpace(os.Getenv("GRAPH_LEAD_MODE_ENABLED")), "true"),
 
 		SlackBotToken: cfg.Graph.SlackBotToken,
 		SlackUserCreds: func() (string, string) {

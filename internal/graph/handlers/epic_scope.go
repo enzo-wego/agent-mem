@@ -53,6 +53,12 @@ func epicScopeArg(keys []string) any {
 // epicMembers returns the subset of ids that belong to any of keys. With no
 // keys every id passes (unscoped).
 func epicMembers(ctx context.Context, db *pgxpool.Pool, keys, ids []string) (map[string]bool, error) {
+	return epicMembersTagged(ctx, db, "", keys, ids)
+}
+
+// epicMembersTagged is epicMembers with a leading SQL comment tag (lead mode
+// uses "/* lead:epic */" so tests can tell its queries apart).
+func epicMembersTagged(ctx context.Context, db *pgxpool.Pool, tag string, keys, ids []string) (map[string]bool, error) {
 	out := make(map[string]bool, len(ids))
 	if len(keys) == 0 {
 		for _, id := range ids {
@@ -60,7 +66,7 @@ func epicMembers(ctx context.Context, db *pgxpool.Pool, keys, ids []string) (map
 		}
 		return out, nil
 	}
-	rows, err := db.Query(ctx, `
+	rows, err := db.Query(ctx, tag+`
 SELECT DISTINCT node_id FROM graph.epic_membership
 WHERE epic_key = ANY($1) AND node_id = ANY($2)`, keys, ids)
 	if err != nil {

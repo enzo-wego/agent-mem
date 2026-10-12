@@ -15,8 +15,9 @@ import (
 
 // Node handles GET /api/graph/node?url=... or ?id=...
 type Node struct {
-	db     *pgxpool.Pool
-	aclBld scopeBuilder
+	db          *pgxpool.Pool
+	aclBld      scopeBuilder
+	leadEnabled bool
 }
 
 // NewNode creates a new Node handler.
@@ -43,8 +44,61 @@ type edgeRef struct {
 	Kind string `json:"kind"`
 }
 
+// WithLeadMode sets whether lead mode may run (worker flag GRAPH_LEAD_MODE_ENABLED).
+func (h *Node) WithLeadMode(enabled bool) *Node {
+	h.leadEnabled = enabled
+	return h
+}
+
+// leadNodeResponse is the lead-mode node shape: no body, no edges.
+type leadNodeResponse struct {
+	NodeID     string `json:"node_id"`
+	Type       string `json:"type"`
+	URL        string `json:"url"`
+	Title      string `json:"title"`
+	Summary    string `json:"summary,omitempty"`
+	AuthorName string `json:"author_name,omitempty"`
+	UpdatedAt  string `json:"updated_at"`
+	*leadFields
+}
+
+// serveLead answers a lead-mode request once the node is known visible. A
+// Slack reply stays a reply id; its thread-derived values come from an eligible
+// root, otherwise the node is hidden (404).
+func (h *Node) serveLead(w http.ResponseWriter, r *http.Request, acl askerACL, n nodeResponse, updatedAt time.Time) {
+	ctx := r.Context()
+	admin := isAdminRequest(r)
+	item := leadItem{ID: n.NodeID}
+	if n.Type == "slack" {
+		roots, err := leadRoots(ctx, h.db, acl, []string{n.NodeID}, nil, nil)
+		if err != nil {
+			writeLeadLookupFailed(w)
+			return
+		}
+		lr, ok := roots[n.NodeID]
+		if !ok || !lr.Eligible {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		item.Root = lr.Root
+	}
+	fields, err := leadEnrich(ctx, h.db, acl, admin, []leadItem{item})
+	if err != nil {
+		writeLeadLookupFailed(w)
+		return
+	}
+	out := leadNodeResponse{
+		NodeID: n.NodeID, Type: n.Type, URL: n.URL, Title: n.Title,
+		Summary: leadText(admin, n.Summary), AuthorName: n.AuthorName,
+		UpdatedAt: updatedAt.Format(time.RFC3339), leadFields: fields[n.NodeID],
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(out)
+}
+
 func (h *Node) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	lead := leadGate(w, r, h.leadEnabled)
 	acl, _, ok := requireAsker(w, r, h.db, h.aclBld, askerIdentities{})
 	if !ok {
 		return
@@ -106,6 +160,10 @@ LIMIT 1
 	// Hidden nodes return 404 so their existence/body is not disclosed.
 	if visible, err := nodeVisible(ctx, h.db, acl, resp.NodeID, resp.Type, scope); err != nil || !visible {
 		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	if lead {
+		h.serveLead(w, r, acl, resp, updatedAt)
 		return
 	}
 	resp.UpdatedAt = updatedAt.Format(time.RFC3339)

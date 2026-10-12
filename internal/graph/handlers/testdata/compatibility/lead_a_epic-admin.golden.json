@@ -1,0 +1,5 @@
+{
+  "status": 200,
+  "content_type": "application/json",
+  "body": "{\"epic_key\":\"LEADA-EPIC\",\"node_id\":\"jira:LEADA-EPIC\",\"title\":\"jira:LEADA-EPIC\",\"first_at\":\"2026-07-01T00:00:00Z\",\"last_at\":\"2026-09-10T00:00:00Z\",\"members\":{\"jira\":[{\"node_id\":\"jira:LEADA-2\",\"title\":\"jira:LEADA-2\",\"via\":\"epic_self\",\"confidence\":1,\"created_at\":\"2026-09-10T00:00:00Z\"}],\"slack\":[{\"node_id\":\"slack:CLEADA:1.0\",\"title\":\"slack:CLEADA:1.0\",\"url\":\"https://wego.slack.com/archives/CLEADA/p10\",\"via\":\"key\",\"confidence\":1,\"created_at\":\"2026-07-01T00:00:00Z\"}]},\"total\":3,\"replies\":1,\"by_via\":{\"epic_self\":1,\"key\":2}}\n"
+}
