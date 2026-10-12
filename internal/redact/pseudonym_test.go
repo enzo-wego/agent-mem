@@ -19,9 +19,10 @@ func capRunes(s string, n int) string {
 func TestPseudonymizerUnchangedText(t *testing.T) {
 	for _, in := range []string{
 		"payment failed with timeout",
-		"payment PAY-2420",
-		"ref 2026-10-12",
-		"see payments#2424 at 18:30",
+		"PAY-2420",
+		"2026-10-12",
+		"18:30",
+		"see payments#2424 at 18:30 on 2026-10-12 about PAY-2420",
 	} {
 		if got := NewPseudonymizer().Apply(in); got != in {
 			t.Errorf("Apply(%q) = %q, want unchanged", in, got)
@@ -34,7 +35,7 @@ func TestPseudonymizerRefs(t *testing.T) {
 		{"booking reference AB1234", "booking reference ref-1"},
 		{"https://x/y?id=AB12CD34EF56", "https://x/y?id=ref-1"},
 		{"code AB12-CD34EF56GH end", "code ref-1 end"},
-		{"AB1234 and AB1234 again: payment ref AB1234", "AB1234 and AB1234 again: payment ref ref-1"},
+		{"AB1234 and AB1234 again: payment ref AB1234", "ref-1 and ref-1 again: payment ref ref-1"},
 	}
 	for _, c := range cases {
 		if got := NewPseudonymizer().Apply(c.in); got != c.want {
@@ -126,5 +127,94 @@ func TestPseudonymizerNoValueLeaksAndEmpty(t *testing.T) {
 	}
 	if got := p.Apply("odd \uE000a\uE001 input"); strings.ContainsAny(got, "\uE000\uE001") {
 		t.Errorf("shield chars survive: %q", got)
+	}
+}
+
+// code-r1 owner decision: a label word beats every shield.
+func TestPseudonymizerLabelBeatsShields(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"booking BKG-1234567890 failed", "booking ref-1 failed"},
+		{"pnr XY-123456789012", "pnr ref-1"},
+		{"order#123456789 failed", "order#ref-1 failed"},
+		{"ref 8812-34-5678901", "ref ref-1"},
+		{"payment PAY-2420", "payment ref-1"},
+		{"ref 2026-10-12", "ref ref-1"},
+		{"txn 18:30", "txn ref-1"},
+		{"booking repo#1234", "booking ref-1"},
+	}
+	for _, c := range cases {
+		if got := NewPseudonymizer().Apply(c.in); got != c.want {
+			t.Errorf("Apply(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+func TestPseudonymizerShieldBoundaries(t *testing.T) {
+	// Long Jira-like keys and dates/times inside longer digit runs are not shielded.
+	for in, want := range map[string]string{
+		"see BKG-1234567890 now":     "see ref-1 now",
+		"at 1218:305 x":              "at 1218:305 x",
+		"stamp 12345-67-890123456 x": "stamp ref-1 x",
+	} {
+		if got := NewPseudonymizer().Apply(in); got != want {
+			t.Errorf("Apply(%q) = %q, want %q", in, got, want)
+		}
+	}
+	// Shielded date inside a longer digit run would hide an 8+ digit ref.
+	if got := NewPseudonymizer().Apply("n 20261012345 x"); got != "n ref-1 x" {
+		t.Errorf("digit run: %q", got)
+	}
+}
+
+func TestPseudonymizerLongLabelledToken(t *testing.T) {
+	tok := strings.Repeat("A", 44) + "90XYZ12"
+	got := NewPseudonymizer().Apply("ref " + tok + " end")
+	if got != "ref ref-1 end" {
+		t.Errorf("long token: %q", got)
+	}
+}
+
+func TestPseudonymizerUnicodeNames(t *testing.T) {
+	cases := []struct{ name, in, want string }{
+		{"محمد علي", "قال محمد علي إنه", "قال person-1 إنه"},
+		{"Zoë", "Zoë said", "person-1 said"},
+		{"Zoë", "ask zoë.", "ask person-1."},
+		{"Ann (Ops)", "Ann said hi", "person-1 said hi"},
+		{"Ann (Ops)", "Ann (Ops) said hi", "person-1 said hi"},
+		{"Ann Lee (OOO)", "plain Ann Lee here", "plain person-1 here"},
+		{"J.D.", "J.D. said", "person-1 said"},
+		{"J.D.", "told @J.D. ok", "told person-1 ok"},
+	}
+	for _, c := range cases {
+		p := NewPseudonymizer()
+		p.AddPerson("U1", c.name)
+		if got := p.Apply(c.in); got != c.want {
+			t.Errorf("name %q: Apply(%q) = %q, want %q", c.name, c.in, got, c.want)
+		}
+	}
+	// Edges stay whole-word: no match inside a longer word.
+	p := NewPseudonymizer()
+	p.AddPerson("U1", "Zoë")
+	if got := p.Apply("Zoëy and xZoë"); got != "Zoëy and xZoë" {
+		t.Errorf("inside word: %q", got)
+	}
+	// Adjacent registered names are both replaced.
+	p = NewPseudonymizer()
+	p.AddPerson("U1", "Ann Lee")
+	if got := p.Apply("Ann Lee Ann Lee"); got != "person-1 person-1" {
+		t.Errorf("adjacent: %q", got)
+	}
+}
+
+func TestPseudonymizerShieldPlaceholderNotMatched(t *testing.T) {
+	p := NewPseudonymizer()
+	p.AddPerson("U1", "Ed")
+	var in []string
+	for i := 0; i < 8; i++ {
+		in = append(in, "PAY-5")
+	}
+	got := p.Apply(strings.Join(in, " "))
+	if got != strings.Join(in, " ") {
+		t.Errorf("placeholder leaked or matched: %q", got)
 	}
 }

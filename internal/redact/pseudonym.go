@@ -4,8 +4,10 @@ import (
 	"fmt"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 )
 
 // Pseudonymizer replaces identifying values in the text of ONE case with stable
@@ -38,17 +40,21 @@ const (
 )
 
 var (
-	reShieldTok  = regexp.MustCompile("\uE000([a-j]+)\uE001")
-	reShieldJira = regexp.MustCompile(`\b[A-Z][A-Z0-9]+-\d+\b`)
+	// The shield index is encoded in private-use digits U+E010..U+E019, which
+	// no name or ref regex can match.
+	reShieldTok = regexp.MustCompile("\uE000([\uE010-\uE019]+)\uE001")
+	// Jira keys with at most 6 digits only: longer runs look like booking refs.
+	reShieldJira = regexp.MustCompile(`\b[A-Z][A-Z0-9]+-\d{1,6}\b`)
 	reShieldHash = regexp.MustCompile(`[A-Za-z0-9_.-]+#\d+`)
-	reShieldDate = regexp.MustCompile(`\d{4}-\d{2}-\d{2}`)
-	reShieldTime = regexp.MustCompile(`\d{2}:\d{2}(?::\d{2})?`)
+	// Date and time shields need non-digit boundaries (group 2 is the token).
+	reShieldDate = regexp.MustCompile(`(^|\D)(\d{4}-\d{2}-\d{2})($|\D)`)
+	reShieldTime = regexp.MustCompile(`(^|\D)(\d{2}:\d{2}(?::\d{2})?)($|\D)`)
 
 	reMention = regexp.MustCompile(`<@([UW][A-Z0-9]+)(?:\|[^>]*)?>`)
 	// group 1 is the preceding boundary, group 2 the @-name.
 	reAtName = regexp.MustCompile(`(^|[^\p{L}\p{N}._%+-])(@\p{Lu}[\p{L}'’-]*(?:\s+\p{Lu}[\p{L}'’-]*){0,2})`)
 	// group 1 is the label word, group 2 the token.
-	reLabelledRef = regexp.MustCompile(`(?i)\b(booking|payment|order|pnr|bid|txn|transaction|ref|reference)\b(?:\s+(?:ref|reference|id|no|number)\b)?\.?\s*[:#=]?\s*([A-Za-z0-9][A-Za-z0-9-]{3,39})`)
+	reLabelledRef = regexp.MustCompile(`(?i)\b(booking|payment|order|pnr|bid|txn|transaction|ref|reference)\b(?:\s+(?:ref|reference|id|no|number)\b)?\.?\s*[:#=]?\s*(\d{2}:\d{2}(?::\d{2})?|[A-Za-z0-9][A-Za-z0-9_.-]*#\d+|[A-Za-z0-9][A-Za-z0-9-]{3,})`)
 	reRun         = regexp.MustCompile(`[A-Za-z0-9_-]+`)
 	reCutTail     = regexp.MustCompile(`([A-Za-z0-9-]+)…$`)
 )
@@ -79,10 +85,38 @@ func (p *Pseudonymizer) aliasFor(ns, key string) string {
 	return a
 }
 
+var reNameSuffix = regexp.MustCompile(`[\s]*(?:\([^()]*\)|\[[^\[\]]*\])[\s]*$`)
+
+// stripNameSuffix removes trailing parenthetical or bracketed suffixes and
+// trailing symbols/emoji ("Ann Lee (OOO)" -> "Ann Lee").
+func stripNameSuffix(n string) string {
+	for {
+		t := strings.TrimSpace(n)
+		t = reNameSuffix.ReplaceAllString(t, "")
+		t = strings.TrimRightFunc(t, func(r rune) bool { return unicode.IsSymbol(r) || unicode.IsSpace(r) || r == '\uFE0F' || r == '\u200D' })
+		if t == n {
+			return t
+		}
+		n = t
+	}
+}
+
 // AddPerson links a Slack user id and a display name (either may be empty) to
-// one person alias, so <@id>, @Name and Name map to the same person-N.
+// one person alias, so <@id>, @Name and Name map to the same person-N. A name
+// with a suffix such as "(Ops)" is registered both whole and without it.
 func (p *Pseudonymizer) AddPerson(slackID, displayName string) {
-	idKey, nameKey := "", normAlias(strings.TrimSpace(displayName))
+	full := strings.TrimSpace(displayName)
+	names := []string{}
+	if short := stripNameSuffix(full); short != "" {
+		names = append(names, short)
+		if short != full {
+			names = append(names, full)
+		}
+	}
+	idKey, nameKey := "", ""
+	if len(names) > 0 {
+		nameKey = normAlias(names[0])
+	}
 	if slackID != "" {
 		idKey = "id:" + strings.ToLower(slackID)
 	}
@@ -101,9 +135,9 @@ func (p *Pseudonymizer) AddPerson(slackID, displayName string) {
 	if idKey != "" {
 		p.alias["person|"+idKey] = a
 	}
-	if nameKey != "" {
-		p.alias["person|"+nameKey] = a
-		p.persons = append(p.persons, personName{name: strings.TrimSpace(displayName), alias: a})
+	for _, n := range names {
+		p.alias["person|"+normAlias(n)] = a
+		p.persons = append(p.persons, personName{name: n, alias: a})
 		p.nameRes = nil
 	}
 }
@@ -120,15 +154,8 @@ func (p *Pseudonymizer) shield(lit string) string {
 	p.shields = append(p.shields, lit)
 	var b strings.Builder
 	b.WriteString(shieldOpen)
-	if idx == 0 {
-		b.WriteByte('a')
-	}
-	var digits []byte
-	for n := idx; n > 0; n /= 10 {
-		digits = append(digits, byte('a'+n%10))
-	}
-	for i := len(digits) - 1; i >= 0; i-- {
-		b.WriteByte(digits[i])
+	for _, d := range strconv.Itoa(idx) {
+		b.WriteRune('\uE010' + (d - '0'))
 	}
 	b.WriteString(shieldClose)
 	return b.String()
@@ -138,8 +165,8 @@ func (p *Pseudonymizer) unshield(s string) string {
 	return reShieldTok.ReplaceAllStringFunc(s, func(m string) string {
 		t := m[len(shieldOpen) : len(m)-len(shieldClose)]
 		idx := 0
-		for i := range t {
-			idx = idx*10 + int(t[i]-'a')
+		for _, r := range t {
+			idx = idx*10 + int(r-'\uE010')
 		}
 		if idx < len(p.shields) {
 			return p.shields[idx]
@@ -179,12 +206,58 @@ func (p *Pseudonymizer) compileNames() {
 		for i := range words {
 			words[i] = regexp.QuoteMeta(words[i])
 		}
-		re, err := regexp.Compile(`(?i)@?\b` + strings.Join(words, `\s+`) + `\b`)
+		re, err := regexp.Compile(`(?i)@?` + strings.Join(words, `\s+`))
 		if err != nil {
 			continue
 		}
 		p.nameRes = append(p.nameRes, nameRe{re: re, alias: pn.alias})
 	}
+}
+
+func isWordRune(r rune) bool {
+	return r == '_' || unicode.IsLetter(r) || unicode.IsNumber(r)
+}
+
+// replaceNames replaces whole-name matches of re. Boundaries are Unicode-aware
+// and only required where the name's own edge is a word rune (RE2's \b is
+// ASCII-only, so it cannot be used for Arabic or accented edges).
+func replaceNames(re *regexp.Regexp, s string, fn func() string) string {
+	var b strings.Builder
+	pos, from := 0, 0
+	for from <= len(s) {
+		loc := re.FindStringIndex(s[from:])
+		if loc == nil {
+			break
+		}
+		start, end := from+loc[0], from+loc[1]
+		first, _ := utf8.DecodeRuneInString(s[start:])
+		if first == '@' {
+			first, _ = utf8.DecodeRuneInString(s[start+1:])
+		}
+		last, _ := utf8.DecodeLastRuneInString(s[:end])
+		ok := true
+		if start > 0 && isWordRune(first) {
+			prev, _ := utf8.DecodeLastRuneInString(s[:start])
+			ok = !isWordRune(prev)
+		}
+		if ok && end < len(s) && isWordRune(last) {
+			next, _ := utf8.DecodeRuneInString(s[end:])
+			ok = !isWordRune(next)
+		}
+		if !ok {
+			_, w := utf8.DecodeRuneInString(s[start:])
+			from = start + w
+			continue
+		}
+		b.WriteString(s[pos:start])
+		b.WriteString(fn())
+		pos, from = end, end
+		if end == start {
+			from++
+		}
+	}
+	b.WriteString(s[pos:])
+	return b.String()
 }
 
 // Apply pseudonymizes s: protected tokens are shielded, then mentions, names,
@@ -196,16 +269,21 @@ func (p *Pseudonymizer) Apply(s string) string {
 	}
 	p.shields = p.shields[:0]
 	s = strings.Map(func(r rune) rune {
-		if r == '\uE000' || r == '\uE001' {
+		if r >= '\uE000' && r <= '\uE01F' {
 			return '?'
 		}
 		return r
 	}, s)
 
+	// 0. labelled refs beat every shield (code-r1 owner decision): the token
+	// after a label word is a ref even if it looks like a Jira key, repo#n,
+	// date or time. A token without a digit is not a ref.
+	s = p.labelledRefs(s)
 	// 1. shield protected tokens.
-	for _, re := range []*regexp.Regexp{reShieldJira, reShieldHash, reShieldDate, reShieldTime} {
-		s = re.ReplaceAllStringFunc(s, p.shield)
-	}
+	s = reShieldJira.ReplaceAllStringFunc(s, p.shield)
+	s = reShieldHash.ReplaceAllStringFunc(s, p.shield)
+	s = replaceGroup(reShieldDate, s, 2, p.shield)
+	s = replaceGroup(reShieldTime, s, 2, p.shield)
 	// 2. Slack mentions.
 	s = reMention.ReplaceAllStringFunc(s, func(m string) string {
 		id := reMention.FindStringSubmatch(m)[1]
@@ -215,7 +293,7 @@ func (p *Pseudonymizer) Apply(s string) string {
 	p.compileNames()
 	for _, nr := range p.nameRes {
 		alias := nr.alias
-		s = nr.re.ReplaceAllStringFunc(s, func(string) string { return p.shield(alias) })
+		s = replaceNames(nr.re, s, func() string { return p.shield(alias) })
 	}
 	// 4. other @Name.
 	s = replaceGroup(reAtName, s, 2, func(m string) string {
@@ -226,8 +304,6 @@ func (p *Pseudonymizer) Apply(s string) string {
 		ns := strings.Trim(kind, "[]")
 		return p.shield(p.aliasFor(ns, normAlias(text)))
 	})
-	// 6. labelled refs; a token without a digit is not a ref.
-	s = p.labelledRefs(s)
 	// 7. unlabelled refs.
 	s = reRun.ReplaceAllStringFunc(s, func(tok string) string {
 		if refLike(tok) {
@@ -244,6 +320,15 @@ func (p *Pseudonymizer) Apply(s string) string {
 			return tok
 		})
 	}
+	// 9. a value already aliased as a ref is aliased everywhere in the text.
+	s = reRun.ReplaceAllStringFunc(s, func(tok string) string {
+		if k := normAlias(tok); k != "" {
+			if a, ok := p.alias["ref|"+k]; ok {
+				return p.shield(a)
+			}
+		}
+		return tok
+	})
 	return Mask(p.unshield(s))
 }
 
@@ -256,7 +341,7 @@ func (p *Pseudonymizer) labelledRefs(s string) string {
 			break
 		}
 		labelEnd, t0, t1 := pos+m[3], pos+m[4], pos+m[5]
-		if !hasDigitStr(s[t0:t1]) {
+		if !hasDigitStr(s[t0:t1]) || (t1 < len(s) && s[t1] == '@') {
 			// Not a ref: resume right after the label so the next label can match.
 			b.WriteString(s[pos:labelEnd])
 			pos = labelEnd
