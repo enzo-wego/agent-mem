@@ -1,0 +1,98 @@
+case alwaysfail needs_context=yes
+  resolve-admin: POST /api/graph/resolve headers={X-Graph-Admin:1,X-Graph-Caller:eval,X-Graph-No-Side-Effects:1} body={"asker_eeid":0,"query":"alwaysfail","seeds":["seed"]}
+    result: FAILED (0/10 runs succeeded)
+  resolve-asker: POST /api/graph/resolve headers={X-Graph-Caller:eval,X-Graph-No-Side-Effects:1} body={"asker_eeid":1,"query":"alwaysfail","seeds":["seed"]}
+    result: FAILED (0/10 runs succeeded)
+  search-hybrid: GET /api/graph/search?limit=10&match=hybrid&q=alwaysfail headers={X-Asker-User:1,X-Graph-Caller:eval,X-Graph-No-Side-Effects:1} body=
+    result: FAILED (0/10 runs succeeded)
+case degraded needs_context=yes
+  resolve-admin: POST /api/graph/resolve headers={X-Graph-Admin:1,X-Graph-Caller:eval,X-Graph-No-Side-Effects:1} body={"asker_eeid":0,"query":"degraded","seeds":["seed"]}
+    result: runs=10/10 returned=7 (primary=7 linked=0) non_seed=5 dup_replies=1 unknown_meta=1 precision@10=0.250 recall=0.500 unlabelled@10=2 harmful=1
+  resolve-asker: POST /api/graph/resolve headers={X-Graph-Caller:eval,X-Graph-No-Side-Effects:1} body={"asker_eeid":1,"query":"degraded","seeds":["seed"]}
+    result: runs=10/10 returned=7 (primary=7 linked=0) non_seed=5 dup_replies=1 unknown_meta=1 precision@10=0.250 recall=0.500 unlabelled@10=2 harmful=1
+  search-hybrid: GET /api/graph/search?limit=10&match=hybrid&q=degraded headers={X-Asker-User:1,X-Graph-Caller:eval,X-Graph-No-Side-Effects:1} body=
+    result: runs=10/10 returned=7 (primary=6 linked=1) non_seed=5 dup_replies=1 unknown_meta=1 precision@10=0.250 recall=0.500 unlabelled@10=2 harmful=1 degraded
+case firstfail needs_context=yes
+  resolve-admin: POST /api/graph/resolve headers={X-Graph-Admin:1,X-Graph-Caller:eval,X-Graph-No-Side-Effects:1} body={"asker_eeid":0,"query":"firstfail","seeds":["seed"]}
+    result: runs=9/10 returned=2 (primary=2 linked=0) non_seed=2 dup_replies=1 unknown_meta=0 precision@10=0.500 recall=0.500 unlabelled@10=1 harmful=0
+  resolve-asker: POST /api/graph/resolve headers={X-Graph-Caller:eval,X-Graph-No-Side-Effects:1} body={"asker_eeid":1,"query":"firstfail","seeds":["seed"]}
+    result: runs=9/10 returned=2 (primary=2 linked=0) non_seed=2 dup_replies=1 unknown_meta=0 precision@10=0.500 recall=0.500 unlabelled@10=1 harmful=0
+  search-hybrid: GET /api/graph/search?limit=10&match=hybrid&q=firstfail headers={X-Asker-User:1,X-Graph-Caller:eval,X-Graph-No-Side-Effects:1} body=
+    result: runs=9/10 returned=2 (primary=2 linked=0) non_seed=2 dup_replies=1 unknown_meta=0 precision@10=0.500 recall=0.500 unlabelled@10=1 harmful=0
+case ok needs_context=yes
+  resolve-admin: POST /api/graph/resolve headers={X-Graph-Admin:1,X-Graph-Caller:eval,X-Graph-No-Side-Effects:1} body={"asker_eeid":0,"query":"ok","seeds":["seed"]}
+    result: runs=10/10 returned=7 (primary=7 linked=0) non_seed=5 dup_replies=1 unknown_meta=1 precision@10=0.250 recall=0.500 unlabelled@10=2 harmful=1
+  resolve-asker: POST /api/graph/resolve headers={X-Graph-Caller:eval,X-Graph-No-Side-Effects:1} body={"asker_eeid":1,"query":"ok","seeds":["seed"]}
+    result: runs=10/10 returned=7 (primary=7 linked=0) non_seed=5 dup_replies=1 unknown_meta=1 precision@10=0.250 recall=0.500 unlabelled@10=2 harmful=1
+  search-hybrid: GET /api/graph/search?limit=10&match=hybrid&q=ok headers={X-Asker-User:1,X-Graph-Caller:eval,X-Graph-No-Side-Effects:1} body=
+    result: runs=10/10 returned=7 (primary=6 linked=1) non_seed=5 dup_replies=1 unknown_meta=1 precision@10=0.250 recall=0.500 unlabelled@10=2 harmful=1
+case unlabelled needs_context=yes unlabelled
+  resolve-admin: POST /api/graph/resolve headers={X-Graph-Admin:1,X-Graph-Caller:eval,X-Graph-No-Side-Effects:1} body={"asker_eeid":0,"query":"unlabelled","seeds":["seed"]}
+    result: runs=10/10 returned=2 (primary=2 linked=0) non_seed=2 dup_replies=1 unknown_meta=0 unlabelled
+  resolve-asker: POST /api/graph/resolve headers={X-Graph-Caller:eval,X-Graph-No-Side-Effects:1} body={"asker_eeid":1,"query":"unlabelled","seeds":["seed"]}
+    result: runs=10/10 returned=2 (primary=2 linked=0) non_seed=2 dup_replies=1 unknown_meta=0 unlabelled
+  search-hybrid: GET /api/graph/search?limit=10&match=hybrid&q=unlabelled headers={X-Asker-User:1,X-Graph-Caller:eval,X-Graph-No-Side-Effects:1} body=
+    result: runs=10/10 returned=2 (primary=2 linked=0) non_seed=2 dup_replies=1 unknown_meta=0 unlabelled
+case unstable needs_context=yes
+  resolve-admin: POST /api/graph/resolve headers={X-Graph-Admin:1,X-Graph-Caller:eval,X-Graph-No-Side-Effects:1} body={"asker_eeid":0,"query":"unstable","seeds":["seed"]}
+    result: runs=10/10 returned=2 (primary=2 linked=0) non_seed=2 dup_replies=0 unknown_meta=0 precision@10=1.000 recall=0.500 unlabelled@10=0 harmful=0 unstable(2 distinct)
+  resolve-asker: POST /api/graph/resolve headers={X-Graph-Caller:eval,X-Graph-No-Side-Effects:1} body={"asker_eeid":1,"query":"unstable","seeds":["seed"]}
+    result: runs=10/10 returned=2 (primary=2 linked=0) non_seed=2 dup_replies=0 unknown_meta=0 precision@10=1.000 recall=0.500 unlabelled@10=0 harmful=0 unstable(2 distinct)
+  search-hybrid: GET /api/graph/search?limit=10&match=hybrid&q=unstable headers={X-Asker-User:1,X-Graph-Caller:eval,X-Graph-No-Side-Effects:1} body=
+    result: runs=10/10 returned=2 (primary=2 linked=0) non_seed=2 dup_replies=0 unknown_meta=0 precision@10=1.000 recall=0.500 unlabelled@10=0 harmful=0 unstable(2 distinct)
+
+Summary (client round-trip latency; draft labels unless checked_by is set)
+
+resolve-admin
+  cases=6 scored=4 unlabelled=1 failed=1 (alwaysfail) degraded=0 unstable=1
+  precision@10=0.500 (n=4, n/a=0)  recall=0.500 (n=4, n/a=0)
+  unlabelled@10=1.250  harmful=0.500  duplicate_replies=0.800  unknown_meta=2  primary=20 linked=0
+  
+  failed runs (11):
+    alwaysfail/resolve-admin#1: HTTP 500
+    alwaysfail/resolve-admin#2: HTTP 500
+    alwaysfail/resolve-admin#3: HTTP 500
+    alwaysfail/resolve-admin#4: HTTP 500
+    alwaysfail/resolve-admin#5: HTTP 500
+    alwaysfail/resolve-admin#6: HTTP 500
+    alwaysfail/resolve-admin#7: HTTP 500
+    alwaysfail/resolve-admin#8: HTTP 500
+    alwaysfail/resolve-admin#9: HTTP 500
+    alwaysfail/resolve-admin#10: HTTP 500
+    firstfail/resolve-admin#1: HTTP 500
+
+resolve-asker
+  cases=6 scored=4 unlabelled=1 failed=1 (alwaysfail) degraded=0 unstable=1
+  precision@10=0.500 (n=4, n/a=0)  recall=0.500 (n=4, n/a=0)
+  unlabelled@10=1.250  harmful=0.500  duplicate_replies=0.800  unknown_meta=2  primary=20 linked=0
+  
+  failed runs (11):
+    alwaysfail/resolve-asker#1: HTTP 500
+    alwaysfail/resolve-asker#2: HTTP 500
+    alwaysfail/resolve-asker#3: HTTP 500
+    alwaysfail/resolve-asker#4: HTTP 500
+    alwaysfail/resolve-asker#5: HTTP 500
+    alwaysfail/resolve-asker#6: HTTP 500
+    alwaysfail/resolve-asker#7: HTTP 500
+    alwaysfail/resolve-asker#8: HTTP 500
+    alwaysfail/resolve-asker#9: HTTP 500
+    alwaysfail/resolve-asker#10: HTTP 500
+    firstfail/resolve-asker#1: HTTP 500
+
+search-hybrid
+  cases=6 scored=4 unlabelled=1 failed=1 (alwaysfail) degraded=1 unstable=1
+  precision@10=0.500 (n=4, n/a=0)  recall=0.500 (n=4, n/a=0)
+  unlabelled@10=1.250  harmful=0.500  duplicate_replies=0.800  unknown_meta=2  primary=18 linked=2
+  
+  failed runs (11):
+    alwaysfail/search-hybrid#1: HTTP 500
+    alwaysfail/search-hybrid#2: HTTP 500
+    alwaysfail/search-hybrid#3: HTTP 500
+    alwaysfail/search-hybrid#4: HTTP 500
+    alwaysfail/search-hybrid#5: HTTP 500
+    alwaysfail/search-hybrid#6: HTTP 500
+    alwaysfail/search-hybrid#7: HTTP 500
+    alwaysfail/search-hybrid#8: HTTP 500
+    alwaysfail/search-hybrid#9: HTTP 500
+    alwaysfail/search-hybrid#10: HTTP 500
+    firstfail/search-hybrid#1: HTTP 500

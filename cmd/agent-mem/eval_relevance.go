@@ -43,24 +43,27 @@ type metricVal struct {
 }
 
 type perCaseResult struct {
-	CaseID       string          `json:"case_id"`
-	Variant      string          `json:"variant"`
-	NeedsContext string          `json:"needs_context"`
-	Unlabelled   bool            `json:"unlabelled"`
-	Failed       bool            `json:"failed"`
-	Degraded     bool            `json:"degraded"`
-	Unstable     int             `json:"unstable_distinct_lists"`
-	Returned     int             `json:"returned"`
-	Primary      int             `json:"primary"`
-	Linked       int             `json:"linked"`
-	NonSeed      []string        `json:"non_seed_ids"`
-	Precision    *float64        `json:"precision_at_10,omitempty"`
-	Unlabelled10 *int            `json:"unlabelled_at_10,omitempty"`
-	Recall       *float64        `json:"recall,omitempty"`
-	Harmful      *int            `json:"harmful,omitempty"`
-	DupReplies   int             `json:"duplicate_replies"`
-	UnknownMeta  int             `json:"unknown_meta"`
-	Runs         []evalRunResult `json:"runs"`
+	CaseID          string          `json:"case_id"`
+	Variant         string          `json:"variant"`
+	NeedsContext    string          `json:"needs_context"`
+	Unlabelled      bool            `json:"unlabelled"`
+	Failed          bool            `json:"failed"`
+	Degraded        bool            `json:"degraded"`
+	Unstable        int             `json:"unstable_distinct_lists"`
+	Returned        int             `json:"returned"`
+	Primary         int             `json:"primary"`
+	Linked          int             `json:"linked"`
+	NonSeed         []string        `json:"non_seed_ids"`
+	Precision       *float64        `json:"precision_at_10,omitempty"`
+	Unlabelled10    *int            `json:"unlabelled_at_10,omitempty"`
+	Recall          *float64        `json:"recall,omitempty"`
+	Harmful         *int            `json:"harmful,omitempty"`
+	Roots           *int            `json:"roots,omitempty"`
+	SeedGroups      *int            `json:"seed_groups,omitempty"`
+	UnreachableMust *int            `json:"unreachable_must,omitempty"`
+	DupReplies      int             `json:"duplicate_replies"`
+	UnknownMeta     int             `json:"unknown_meta"`
+	Runs            []evalRunResult `json:"runs"`
 }
 
 type variantAgg struct {
@@ -88,6 +91,10 @@ type variantAgg struct {
 	FailedRuns  []string `json:"failed_runs"`
 	Primary     int      `json:"primary_items"`
 	Linked      int      `json:"linked_items"`
+	WarmupOK    int      `json:"warmup_ok"`
+	WarmupTotal int      `json:"warmup_total"`
+	RunsOK      int      `json:"runs_ok"`
+	RunsTotal   int      `json:"runs_total"`
 }
 
 func nearestRank(sorted []float64, p float64) float64 {
@@ -218,6 +225,10 @@ func runRelevanceInner(cmd *cobra.Command, o relevanceOpts) error {
 			if warm.RequestID() != "" {
 				requestIDs = append(requestIDs, warm.RequestID())
 			}
+			agg.WarmupTotal++
+			if evalCallOK(name, warm) {
+				agg.WarmupOK++
+			}
 			if !reachableChecked {
 				reachableChecked = true
 				if warm.Status == 0 && warm.Err != nil {
@@ -228,14 +239,32 @@ func runRelevanceInner(cmd *cobra.Command, o relevanceOpts) error {
 				}
 			}
 			var first *evalReturn
+			var firstLead []leadParsed
 			distinct := map[string]bool{}
 			okRuns := 0
 			for i := 1; i <= evalMeasuredRuns; i++ {
 				call := client.do(method, pathURL, body, headers)
 				run := evalRunResult{Ms: float64(call.Dur.Microseconds()) / 1000}
 				var ret evalReturn
+				var leadRows []leadParsed
 				decodeFailed := false
-				if call.Err == nil {
+				quietCat := ""
+				if call.Err == nil && name == evalLeadVariant {
+					outcome, parsed := parseLeadResponse(call)
+					switch outcome {
+					case outcomeOK:
+						leadRows = parsed
+						ret = evalReturn{IDs: make([]string, 0, len(parsed)), RequestID: call.RequestID()}
+						for _, p := range parsed {
+							ret.IDs = append(ret.IDs, p.Item.ID)
+							ret.Linked = append(ret.Linked, false)
+						}
+					case outcomeLeadOff:
+						call.Err, quietCat = fmt.Errorf("%s", outcome), outcomeLeadOff
+					default:
+						call.Err, decodeFailed = fmt.Errorf("%s", outcome), true
+					}
+				} else if call.Err == nil {
 					ret, err = parseEvalResponse(name, call)
 					if err != nil {
 						call.Err = err
@@ -251,6 +280,9 @@ func runRelevanceInner(cmd *cobra.Command, o relevanceOpts) error {
 						run.Error = evalErrorCategory(call)
 						if decodeFailed {
 							run.Error = "decode"
+						}
+						if quietCat != "" {
+							run.Error = quietCat
 						}
 					}
 					agg.FailedRuns = append(agg.FailedRuns, fmt.Sprintf("%s/%s#%d: %s", c.ID, name, i, run.Error))
@@ -270,10 +302,13 @@ func runRelevanceInner(cmd *cobra.Command, o relevanceOpts) error {
 				if first == nil {
 					r := ret
 					first = &r
+					firstLead = leadRows
 				}
 				res.Runs = append(res.Runs, run)
 			}
 			agg.Samples += okRuns
+			agg.RunsTotal += evalMeasuredRuns
+			agg.RunsOK += okRuns
 			if len(distinct) > 1 {
 				res.Unstable = len(distinct)
 				agg.Unstable++
@@ -369,11 +404,23 @@ func runRelevanceInner(cmd *cobra.Command, o relevanceOpts) error {
 						harm++
 					}
 				}
-				if len(must) == 0 {
+				mustDen := len(must)
+				if name == evalLeadVariant {
+					// Reply-only musts cannot be returned in lead mode (items are roots).
+					unreach := 0
+					for id := range must {
+						if m, ok := meta[id]; ok && m.IsReply {
+							unreach++
+						}
+					}
+					mustDen -= unreach
+					res.UnreachableMust = &unreach
+				}
+				if mustDen == 0 {
 					agg.RecallNA++
 					line += " recall=n/a"
 				} else {
-					r := float64(rhit) / float64(len(must))
+					r := float64(rhit) / float64(mustDen)
 					res.Recall = &r
 					vv[name].rec = append(vv[name].rec, r)
 					line += fmt.Sprintf(" recall=%.3f", r)
@@ -381,6 +428,19 @@ func runRelevanceInner(cmd *cobra.Command, o relevanceOpts) error {
 				res.Harmful = &harm
 				vv[name].harm = append(vv[name].harm, float64(harm))
 				line += fmt.Sprintf(" unlabelled@10=%d harmful=%d", unl, harm)
+			}
+			if name == evalLeadVariant {
+				roots, seedGroups := len(firstLead), 0
+				for _, p := range firstLead {
+					if p.Item.Hop == 0 {
+						seedGroups++
+					}
+				}
+				res.Roots, res.SeedGroups = &roots, &seedGroups
+				line += fmt.Sprintf(" roots=%d seed_groups=%d", roots, seedGroups)
+				if res.UnreachableMust != nil {
+					line += fmt.Sprintf(" unreachable_must=%d", *res.UnreachableMust)
+				}
 			}
 			if res.Degraded {
 				line += " degraded"
@@ -423,6 +483,9 @@ func runRelevanceInner(cmd *cobra.Command, o relevanceOpts) error {
 			fmt.Fprintf(out, " (%s)", strings.Join(a.FailedIDs, ", "))
 		}
 		fmt.Fprintf(out, " degraded=%d unstable=%d\n", a.Degraded, a.Unstable)
+		if o.Quiet {
+			fmt.Fprintf(out, "  warmup_ok=%d/%d runs_ok=%d/%d\n", a.WarmupOK, a.WarmupTotal, a.RunsOK, a.RunsTotal)
+		}
 		fmt.Fprintf(out, "  precision@10=%s (n=%d, n/a=%d)  recall=%s (n=%d, n/a=%d)\n", fmtMean(a.Precision), a.PrecisionN, a.PrecisionNA, fmtMean(a.Recall), a.RecallN, a.RecallNA)
 		fmt.Fprintf(out, "  unlabelled@10=%s  harmful=%s  duplicate_replies=%s  unknown_meta=%d  primary=%d linked=%d\n", fmtMean(a.Unl10), fmtMean(a.Harmful), fmtMean(a.DupReplies), a.UnknownMeta, a.Primary, a.Linked)
 		if a.P50Ms == nil {
@@ -468,4 +531,19 @@ func fmtMean(v *float64) string {
 		return "no coverage"
 	}
 	return fmt.Sprintf("%.3f", *v)
+}
+
+// evalCallOK reports whether a request (a warm-up or a measured run) succeeded:
+// no transport/HTTP error and, for resolve-lead, outcome ok under the strict
+// lead decoding.
+func evalCallOK(name string, call evalCall) bool {
+	if call.Err != nil {
+		return false
+	}
+	if name == evalLeadVariant {
+		outcome, _ := parseLeadResponse(call)
+		return outcome == outcomeOK
+	}
+	_, err := parseEvalResponse(name, call)
+	return err == nil
 }

@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,8 +11,10 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -18,12 +22,19 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/agent-mem/agent-mem/internal/graph/handlers"
+	"github.com/agent-mem/agent-mem/internal/redact"
 )
 
 type replayVariant struct {
-	Status    int      `json:"status"`
+	Status int `json:"status"`
+	// Outcome: ok, lead_off, http_error, transport_error, decode_error. Empty
+	// (legacy replay) with a 2xx status reads as ok for the three old variants.
+	Outcome   string   `json:"outcome,omitempty"`
 	RequestID string   `json:"request_id"`
 	Returned  []string `json:"returned"`
+	// Items is set for resolve-lead only (ids, enums, numbers; never text). A
+	// pointer so an empty list stays distinguishable from a missing one.
+	Items *[]leadItem `json:"items,omitempty"`
 }
 
 type replayCase struct {
@@ -32,21 +43,45 @@ type replayCase struct {
 }
 
 type replayFile struct {
-	PreparedAt  string                `json:"prepared_at"`
-	BuildRev    string                `json:"build_rev"`
-	CasesSHA256 string                `json:"cases_sha256"`
-	Cases       map[string]replayCase `json:"cases"`
+	PreparedAt        string                `json:"prepared_at"`
+	BuildRev          string                `json:"build_rev"`
+	CasesSHA256       string                `json:"cases_sha256"`
+	EligibilitySHA256 string                `json:"eligibility_sha256,omitempty"`
+	SnapshotSHA256    string                `json:"snapshot_sha256,omitempty"`
+	Cases             map[string]replayCase `json:"cases"`
+}
+
+// snapshotItem is the exact text the server returned for one lead root.
+type snapshotItem struct {
+	Title         string `json:"title"`
+	LeadSummary   string `json:"lead_summary"`
+	Author        string `json:"author"`
+	AuthorSlackID string `json:"author_slack_id"`
+}
+
+type snapshotCase struct {
+	Query string                  `json:"query"`
+	Items map[string]snapshotItem `json:"items"`
+}
+
+type snapshotFile struct {
+	PreparedAt        string                  `json:"prepared_at"`
+	CasesSHA256       string                  `json:"cases_sha256"`
+	EligibilitySHA256 string                  `json:"eligibility_sha256"`
+	Cases             map[string]snapshotCase `json:"cases"`
 }
 
 type evalPrepareOpts struct {
-	BaseURL string
-	Refresh bool
-	DataDir string
-	EnvPath string
-	Pool    *pgxpool.Pool
+	BaseURL  string
+	Refresh  bool
+	Snapshot string // private snapshot dir; must not exist, outside the repo
+	DataDir  string
+	EnvPath  string
+	Pool     *pgxpool.Pool
 }
 
-func runEvalPrepareCLI(cmd *cobra.Command, baseURL string, refresh bool) error {
+func runEvalPrepareCLI(cmd *cobra.Command, baseURL string, refresh bool, snapshot string) error {
+	cmd.SilenceUsage = true
 	dsn := evalDatabaseURL(".env")
 	if dsn == "" {
 		return fmt.Errorf("DATABASE_URL not found in .env")
@@ -56,7 +91,95 @@ func runEvalPrepareCLI(cmd *cobra.Command, baseURL string, refresh bool) error {
 		return err
 	}
 	defer pool.Close()
-	return runEvalPrepare(cmd.Context(), cmd.OutOrStdout(), evalPrepareOpts{BaseURL: baseURL, Refresh: refresh, DataDir: evalDataDir, EnvPath: ".env", Pool: pool})
+	return runEvalPrepare(cmd.Context(), cmd.OutOrStdout(), evalPrepareOpts{BaseURL: baseURL, Refresh: refresh, Snapshot: snapshot, DataDir: evalDataDir, EnvPath: ".env", Pool: pool})
+}
+
+// checkPrivateTarget validates a new private path (snapshot or sheet dir): it
+// must not exist (Lstat, so a symlink counts), and its parent, resolved through
+// symlinks, must be outside the repo. It returns the resolved path to create.
+func checkPrivateTarget(p string) (string, error) {
+	abs, err := filepath.Abs(p)
+	if err != nil {
+		return "", categoryErr("out_path")
+	}
+	if _, err := os.Lstat(abs); err == nil {
+		return "", categoryErr("out_exists")
+	} else if !os.IsNotExist(err) {
+		return "", categoryErr("out_stat")
+	}
+	parent, err := filepath.EvalSymlinks(filepath.Dir(abs))
+	if err != nil {
+		return "", categoryErr("out_parent")
+	}
+	root, err := repoRoot()
+	if err != nil {
+		return "", categoryErr("repo_root")
+	}
+	if insideDir(parent, resolveExisting(root)) {
+		return "", categoryErr("out_inside_repo")
+	}
+	return filepath.Join(parent, filepath.Base(abs)), nil
+}
+
+// writePrivateFile creates path exclusively with mode 0600 after checking that
+// nothing (not even a symlink) exists there.
+func writePrivateFile(path string, data []byte) error {
+	if _, err := os.Lstat(path); err == nil {
+		return categoryErr("file_exists")
+	} else if !os.IsNotExist(err) {
+		return categoryErr("file_stat")
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil {
+		return categoryErr("file_create")
+	}
+	_, werr := f.Write(data)
+	if cerr := f.Close(); werr != nil || cerr != nil {
+		return categoryErr("file_write")
+	}
+	return nil
+}
+
+// askerQuery is the case query for lead mode: the resolve-asker body's query
+// (not caseQuery, which prefers the admin query).
+func askerQuery(c evalCase) string {
+	if b, ok := c.Requests["resolve-asker"]; ok {
+		if q, ok := b.Body["query"].(string); ok {
+			return q
+		}
+	}
+	return ""
+}
+
+// leadCategory maps a non-ok outcome to the fixed prepare category
+// (lead_off, lead_http_error, lead_transport_error, lead_decode_error).
+func leadCategory(outcome string) string {
+	return "lead_" + strings.TrimPrefix(outcome, "lead_")
+}
+
+// validateLeadReplay is the shared strict reader for lead data: every case has
+// an ok resolve-lead variant with a 2xx status and well-formed items, and the
+// stored eligibility_sha256 equals a fresh recomputation. It returns the items
+// per case.
+func validateLeadReplay(replay replayFile, cases []loadedCase) (map[string][]leadItem, error) {
+	byCase := make(map[string][]leadItem, len(cases))
+	for _, c := range cases {
+		v, ok := replay.Cases[c.ID].Variants[evalLeadVariant]
+		if !ok {
+			return nil, categoryErr(catLeadMissing)
+		}
+		if v.Outcome != outcomeOK || v.Status < 200 || v.Status >= 300 {
+			return nil, categoryErr(catLeadOutcome)
+		}
+		if v.Items == nil || !leadItemsValid(*v.Items) {
+			return nil, categoryErr(catLeadItems)
+		}
+		byCase[c.ID] = *v.Items
+	}
+	if replay.EligibilitySHA256 == "" || leadEligibilityDigest(byCase) != replay.EligibilitySHA256 {
+		return nil, categoryErr(catEligibilityMismatch)
+	}
+	return byCase, nil
 }
 
 var canonicalSeedsLine = regexp.MustCompile(`(?m)^canonical_seeds:.*$`)
@@ -96,6 +219,13 @@ func runEvalPrepare(ctx context.Context, out io.Writer, o evalPrepareOpts) error
 	if o.BaseURL == "" {
 		return fmt.Errorf("--base-url is required")
 	}
+	if o.Snapshot == "" {
+		return fmt.Errorf("--snapshot is required (resolve-lead is replayed)")
+	}
+	snapDir, err := checkPrivateTarget(o.Snapshot)
+	if err != nil {
+		return fmt.Errorf("--snapshot: %w", err)
+	}
 	cases, _, err := loadEvalCases(o.DataDir)
 	if err != nil {
 		return err
@@ -118,6 +248,8 @@ func runEvalPrepare(ctx context.Context, out io.Writer, o evalPrepareOpts) error
 
 	client := newEvalClient(o.BaseURL, evalAPIKey(o.EnvPath))
 	replay := replayFile{Cases: map[string]replayCase{}}
+	leadItems := map[string][]leadItem{}
+	snapCases := map[string]snapshotCase{}
 	var ids []string
 	buildRev := ""
 	for _, c := range cases {
@@ -130,6 +262,29 @@ func runEvalPrepare(ctx context.Context, out io.Writer, o evalPrepareOpts) error
 				return err
 			}
 			call := client.do(method, pathURL, body, headers)
+			if rev := call.Header.Get("X-Graph-Build-Rev"); rev != "" {
+				buildRev = rev
+			}
+			if name == evalLeadVariant {
+				outcome, parsed := parseLeadResponse(call)
+				if outcome != outcomeOK {
+					return fmt.Errorf("prepare: %s %s", leadCategory(outcome), c.ID)
+				}
+				items := make([]leadItem, 0, len(parsed))
+				returned := make([]string, 0, len(parsed))
+				snapItems := make(map[string]snapshotItem, len(parsed))
+				for _, p := range parsed {
+					items = append(items, p.Item)
+					returned = append(returned, p.Item.ID)
+					snapItems[p.Item.ID] = snapshotItem{Title: p.Title, LeadSummary: p.Summary, Author: p.Author, AuthorSlackID: p.AuthorSlackID}
+				}
+				leadItems[c.ID] = items
+				snapCases[c.ID] = snapshotCase{Query: askerQuery(c.evalCase), Items: snapItems}
+				rc.Variants[name] = replayVariant{Status: call.Status, Outcome: outcomeOK, RequestID: call.RequestID(), Returned: returned, Items: &items}
+				ids = append(ids, returned...)
+				fmt.Fprintf(out, "  %s: %d items\n", name, len(returned))
+				continue
+			}
 			if call.Err != nil {
 				return fmt.Errorf("%s %s: %w", c.ID, name, call.Err)
 			}
@@ -137,10 +292,7 @@ func runEvalPrepare(ctx context.Context, out io.Writer, o evalPrepareOpts) error
 			if err != nil {
 				return fmt.Errorf("%s %s: %w", c.ID, name, err)
 			}
-			if rev := call.Header.Get("X-Graph-Build-Rev"); rev != "" {
-				buildRev = rev
-			}
-			rc.Variants[name] = replayVariant{Status: call.Status, RequestID: ret.RequestID, Returned: ret.IDs}
+			rc.Variants[name] = replayVariant{Status: call.Status, Outcome: outcomeOK, RequestID: ret.RequestID, Returned: ret.IDs}
 			ids = append(ids, ret.IDs...)
 			fmt.Fprintf(out, "  %s: %d items\n", name, len(ret.IDs))
 		}
@@ -192,8 +344,18 @@ func runEvalPrepare(ctx context.Context, out io.Writer, o evalPrepareOpts) error
 		files[c.path] = raw
 	}
 	replay.PreparedAt = time.Now().UTC().Format(time.RFC3339)
-	replay.BuildRev = unknownBuildRev(buildRev)
+	// Build revision: the response header when the server sends one, else the
+	// BUILD_REV env var, else "unknown". (The server does not expose it today.)
+	replay.BuildRev = unknownBuildRev(firstNonEmpty(buildRev, os.Getenv("BUILD_REV")))
 	replay.CasesSHA256 = casesSHA(raws)
+	replay.EligibilitySHA256 = leadEligibilityDigest(leadItems)
+	snapJSON, err := json.MarshalIndent(snapshotFile{PreparedAt: replay.PreparedAt, CasesSHA256: replay.CasesSHA256, EligibilitySHA256: replay.EligibilitySHA256, Cases: snapCases}, "", "  ")
+	if err != nil {
+		return err
+	}
+	snapJSON = append(snapJSON, '\n')
+	snapSum := sha256.Sum256(snapJSON)
+	replay.SnapshotSHA256 = hex.EncodeToString(snapSum[:])
 	metaJSON, err := json.MarshalIndent(meta, "", "  ")
 	if err != nil {
 		return err
@@ -204,26 +366,45 @@ func runEvalPrepare(ctx context.Context, out io.Writer, o evalPrepareOpts) error
 	}
 	files[metaPath] = append(metaJSON, '\n')
 	files[filepath.Join(o.DataDir, "replay.json")] = append(replayJSON, '\n')
-	if err := writeFilesAtomic(files); err != nil {
+	// The snapshot is written last, after every case succeeded; a later
+	// failure removes the directory this run created.
+	if err := os.Mkdir(snapDir, 0o700); err != nil {
+		return categoryErr("snapshot_mkdir")
+	}
+	if err := writePrivateFile(filepath.Join(snapDir, "snapshot.json"), snapJSON); err != nil {
+		_ = os.RemoveAll(snapDir)
 		return err
 	}
-	fmt.Fprintf(out, "wrote node_meta.json (%d nodes), replay.json, %d case files\n", len(meta), len(cases))
+	if err := writeFilesAtomic(files); err != nil {
+		_ = os.RemoveAll(snapDir)
+		return err
+	}
+	fmt.Fprintf(out, "wrote node_meta.json (%d nodes), replay.json, %d case files, private snapshot\n", len(meta), len(cases))
 	return nil
 }
 
 type labelSheetOpts struct {
-	CaseID  string
-	All     bool
-	OutDir  string
-	DataDir string
-	EnvPath string
-	Pool    *pgxpool.Pool
+	CaseID      string
+	All         bool
+	OutDir      string
+	Variant     string // "" or "all" (union of every variant) or resolve-lead
+	Mask        bool
+	SnapshotDir string
+	DataDir     string
+	EnvPath     string
+	Pool        *pgxpool.Pool
 }
 
-func runLabelSheetCLI(cmd *cobra.Command, args []string, all bool, outDir string) error {
+func runLabelSheetCLI(cmd *cobra.Command, args []string, all bool, outDir, variant string, mask bool, snapshot string) error {
+	cmd.SilenceUsage = true
 	id := ""
 	if len(args) == 1 {
 		id = args[0]
+	}
+	o := labelSheetOpts{CaseID: id, All: all, OutDir: outDir, Variant: variant, Mask: mask, SnapshotDir: snapshot, DataDir: evalDataDir, EnvPath: ".env"}
+	if variant == evalLeadVariant {
+		// Lead sheets are built from the replay and the private snapshot: no database.
+		return runLabelSheet(cmd.Context(), cmd.OutOrStdout(), o)
 	}
 	dsn := evalDatabaseURL(".env")
 	if dsn == "" {
@@ -234,7 +415,8 @@ func runLabelSheetCLI(cmd *cobra.Command, args []string, all bool, outDir string
 		return err
 	}
 	defer pool.Close()
-	return runLabelSheet(cmd.Context(), cmd.OutOrStdout(), labelSheetOpts{CaseID: id, All: all, OutDir: outDir, DataDir: evalDataDir, EnvPath: ".env", Pool: pool})
+	o.Pool = pool
+	return runLabelSheet(cmd.Context(), cmd.OutOrStdout(), o)
 }
 
 // repoRoot walks up from the working directory to the directory holding go.mod.
@@ -277,6 +459,193 @@ func insideDir(path, dir string) bool {
 }
 
 func runLabelSheet(ctx context.Context, out io.Writer, o labelSheetOpts) error {
+	switch o.Variant {
+	case "", "all":
+		if o.Mask || o.SnapshotDir != "" {
+			return categoryErr("flag_invalid")
+		}
+		return runLabelSheetAll(ctx, out, o)
+	case evalLeadVariant:
+		return runLeadLabelSheet(out, o)
+	}
+	return categoryErr("variant_invalid")
+}
+
+// leadLinkBucket is the link bucket of a non-seed lead item (see the plan's
+// Cohort buckets): structural, same_topic_hi, same_topic_lo, other_link, no_link.
+func leadLinkBucket(links []leadLink) string {
+	if len(links) == 0 {
+		return "no_link"
+	}
+	hi, lo := false, false
+	for _, l := range links {
+		switch l.Kind {
+		case "PART_OF", "REFERS_TO", "REFERENCES":
+			return "structural"
+		case "SAME_TOPIC":
+			if l.Confidence >= 0.9 {
+				hi = true
+			} else {
+				lo = true
+			}
+		}
+	}
+	switch {
+	case hi:
+		return "same_topic_hi"
+	case lo:
+		return "same_topic_lo"
+	}
+	return "other_link"
+}
+
+const leadSheetHeader = "MASKED: Slack mentions, author names, @-names, emails, phones, cards, refs with a digit. NOT masked: other names in prose, merchant/partner names. CONFIDENTIAL: do not commit or share."
+
+// truncRunes cuts s to at most n runes, ending in "…" when cut.
+func truncRunes(s string, n int) string {
+	if utf8.RuneCountInString(s) <= n {
+		return s
+	}
+	return string([]rune(s)[:n-1]) + "…"
+}
+
+// sheetText pseudonymizes the full string first, then cuts and flattens it.
+func sheetText(ps *redact.Pseudonymizer, s string, limit int) string {
+	s = truncRunes(ps.Apply(s), limit)
+	return strings.Join(strings.Fields(s), " ")
+}
+
+type manifestRow struct {
+	R      int    `json:"r"`
+	NodeID string `json:"node_id"`
+}
+
+// runLeadLabelSheet writes masked sheets for the lead variant from replay.json
+// and the private snapshot. Every refusal is a fixed category; no content.
+func runLeadLabelSheet(out io.Writer, o labelSheetOpts) error {
+	switch {
+	case o.OutDir == "":
+		return categoryErr("out_required")
+	case !o.Mask:
+		return categoryErr("mask_required")
+	case o.SnapshotDir == "":
+		return categoryErr("snapshot_required")
+	case (o.CaseID == "") == !o.All:
+		return categoryErr("case_selection")
+	}
+	target, err := checkPrivateTarget(o.OutDir)
+	if err != nil {
+		return err
+	}
+	replayData, err := os.ReadFile(filepath.Join(o.DataDir, "replay.json"))
+	if err != nil {
+		return categoryErr("replay_read")
+	}
+	var replay replayFile
+	if json.Unmarshal(replayData, &replay) != nil {
+		return categoryErr("replay_read")
+	}
+	cases, sum, err := loadEvalCases(o.DataDir)
+	if err != nil {
+		return categoryErr("cases_read")
+	}
+	if replay.CasesSHA256 != sum {
+		return categoryErr("cases_sha256_mismatch")
+	}
+	lead, err := validateLeadReplay(replay, cases)
+	if err != nil {
+		return err
+	}
+	snapBytes, err := os.ReadFile(filepath.Join(o.SnapshotDir, "snapshot.json"))
+	if err != nil {
+		return categoryErr("snapshot_read")
+	}
+	if got := sha256.Sum256(snapBytes); replay.SnapshotSHA256 == "" || hex.EncodeToString(got[:]) != replay.SnapshotSHA256 {
+		return categoryErr("snapshot_digest_mismatch")
+	}
+	var snap snapshotFile
+	if json.Unmarshal(snapBytes, &snap) != nil {
+		return categoryErr("snapshot_read")
+	}
+	if snap.EligibilitySHA256 != leadEligibilityDigest(lead) {
+		return categoryErr(catEligibilityMismatch)
+	}
+	if snap.CasesSHA256 != sum {
+		return categoryErr("cases_sha256_mismatch")
+	}
+	var chosen []loadedCase
+	for _, c := range cases {
+		if o.All || c.ID == o.CaseID {
+			chosen = append(chosen, c)
+		}
+	}
+	if len(chosen) == 0 {
+		return categoryErr("case_unknown")
+	}
+
+	sheets := map[string][]byte{}
+	manifest := map[string][]manifestRow{}
+	for _, c := range chosen {
+		items, sc := lead[c.ID], snap.Cases[c.ID]
+		for _, it := range items {
+			if _, ok := sc.Items[it.ID]; !ok {
+				return categoryErr("snapshot_missing_row")
+			}
+		}
+		ps := redact.NewPseudonymizer()
+		for _, it := range items {
+			row := sc.Items[it.ID]
+			ps.AddPerson(row.AuthorSlackID, row.Author)
+		}
+		var b strings.Builder
+		fmt.Fprintf(&b, "# Label sheet: %s\n\n%s\n\n", c.ID, leadSheetHeader)
+		fmt.Fprintf(&b, "Use case: %s\n\nSource thread: %s\n\n", sheetText(ps, c.UseCase, 200), c.ID)
+		fmt.Fprintf(&b, "Query: %s\n", sheetText(ps, askerQuery(c.evalCase), 600))
+		b.WriteString("\n## Seeds\n")
+		rows := []manifestRow{}
+		var rest []leadItem
+		for _, it := range items {
+			if it.Hop == 0 {
+				row := sc.Items[it.ID]
+				fmt.Fprintf(&b, "\n- title: %s\n  summary: %s\n", sheetText(ps, row.Title, 200), sheetText(ps, row.LeadSummary, 600))
+			} else {
+				rest = append(rest, it)
+			}
+		}
+		fmt.Fprintf(&b, "\nCandidates: %d (seeds excluded).\n", len(rest))
+		for k, it := range rest {
+			row := sc.Items[it.ID]
+			rows = append(rows, manifestRow{R: k + 1, NodeID: it.ID})
+			fmt.Fprintf(&b, "\n## [r%d] %s\n\n- bucket: %s\n- hop: %d\n- authored_by_bot: %s\n- title: %s\n- summary: %s\n", k+1, it.ID, leadLinkBucket(it.Links), it.Hop, it.AuthoredByBot, sheetText(ps, row.Title, 200), sheetText(ps, row.LeadSummary, 600))
+		}
+		manifest[c.ID] = rows
+		sheets[c.ID+".md"] = []byte(b.String())
+	}
+	manifestJSON, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		return err
+	}
+	sheets["manifest.json"] = append(manifestJSON, '\n')
+
+	if err := os.Mkdir(target, 0o700); err != nil {
+		return categoryErr("out_mkdir")
+	}
+	names := make([]string, 0, len(sheets))
+	for n := range sheets {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	for _, n := range names {
+		if err := writePrivateFile(filepath.Join(target, n), sheets[n]); err != nil {
+			_ = os.RemoveAll(target)
+			return err
+		}
+	}
+	fmt.Fprintf(out, "wrote %d masked label sheets\n", len(chosen))
+	return nil
+}
+
+func runLabelSheetAll(ctx context.Context, out io.Writer, o labelSheetOpts) error {
 	if o.OutDir == "" {
 		return fmt.Errorf("--out is required")
 	}
@@ -347,12 +716,12 @@ func runLabelSheet(ctx context.Context, out io.Writer, o labelSheetOpts) error {
 		fmt.Fprintf(&b, "Use case: %s\n\nSource thread: %s\n\n", c.UseCase, c.SourceThread)
 		fmt.Fprintf(&b, "Query: %s\n\n", caseQuery(c.evalCase))
 		fmt.Fprintf(&b, "Candidates: %d (canonical seeds excluded). CONFIDENTIAL: may contain customer content; do not commit.\n", len(nodes))
-		for _, id := range nodes {
+		for k, id := range nodes {
 			row, err := readSheetNode(ctx, tx, id)
 			if err != nil {
 				return fmt.Errorf("%s %s: %w", c.ID, id, err)
 			}
-			fmt.Fprintf(&b, "\n## %s\n\n- type: %s\n- is_reply: %t\n- title: %s\n- content: %s\n", id, row.Type, row.IsReply, row.Title, row.Content)
+			fmt.Fprintf(&b, "\n## [r%d] %s\n\n- type: %s\n- is_reply: %t\n- title: %s\n- content: %s\n", k+1, id, row.Type, row.IsReply, row.Title, row.Content)
 		}
 		sheets[filepath.Join(o.OutDir, c.ID+".md")] = []byte(b.String())
 	}

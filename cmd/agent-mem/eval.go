@@ -58,23 +58,46 @@ func newEvalCmd() *cobra.Command {
 	relevance.Flags().StringVar(&jsonPath, "json", "", "Write machine-readable results")
 	cmd.AddCommand(relevance)
 
-	var prepBase string
+	var prepBase, prepSnapshot string
 	var refresh bool
 	prepare := &cobra.Command{Use: "prepare", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
-		return runEvalPrepareCLI(cmd, prepBase, refresh)
+		return runEvalPrepareCLI(cmd, prepBase, refresh, prepSnapshot)
 	}}
 	prepare.Flags().StringVar(&prepBase, "base-url", "", "Graph API base URL used for the replays")
 	prepare.Flags().BoolVar(&refresh, "refresh", false, "Add node ids missing from an existing node_meta.json")
+	prepare.Flags().StringVar(&prepSnapshot, "snapshot", "", "Private snapshot directory for the lead response text (required; must not exist, outside the repo)")
 	cmd.AddCommand(prepare)
 
-	var sheetOut string
-	var sheetAll bool
+	var sheetOut, sheetVariant, sheetSnapshot string
+	var sheetAll, sheetMask bool
 	sheet := &cobra.Command{Use: "label-sheet [case-id]", Args: cobra.MaximumNArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
-		return runLabelSheetCLI(cmd, args, sheetAll, sheetOut)
+		return runLabelSheetCLI(cmd, args, sheetAll, sheetOut, sheetVariant, sheetMask, sheetSnapshot)
 	}}
 	sheet.Flags().StringVar(&sheetOut, "out", "", "Output directory (required, outside the repo)")
 	sheet.Flags().BoolVar(&sheetAll, "all", false, "Write a sheet for every case")
+	sheet.Flags().StringVar(&sheetVariant, "variant", "all", "all (union of every variant) or resolve-lead")
+	sheet.Flags().BoolVar(&sheetMask, "mask", false, "Pseudonymize the text (required for --variant resolve-lead)")
+	sheet.Flags().StringVar(&sheetSnapshot, "snapshot", "", "Private snapshot directory (--variant resolve-lead)")
 	cmd.AddCommand(sheet)
+
+	var asmDraft, asmReview, asmOwner, asmOut string
+	assemble := &cobra.Command{Use: "relation-assemble", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+		cmd.SilenceUsage = true
+		return runRelationAssemble(cmd.OutOrStdout(), relationAssembleOpts{Draft: asmDraft, Review: asmReview, Owner: asmOwner, Out: asmOut, DataDir: evalDataDir})
+	}}
+	assemble.Flags().StringVar(&asmDraft, "draft", "", "Draft rows file (required)")
+	assemble.Flags().StringVar(&asmReview, "review", "", "Independent review rows file (required)")
+	assemble.Flags().StringVar(&asmOwner, "owner", "", "Owner override rows file (optional)")
+	assemble.Flags().StringVar(&asmOut, "out", "", "Output relation_labels.json path (required, must not exist)")
+	cmd.AddCommand(assemble)
+
+	var chkFile string
+	check := &cobra.Command{Use: "relation-check", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+		cmd.SilenceUsage = true
+		return runRelationCheck(cmd.OutOrStdout(), chkFile, evalDataDir)
+	}}
+	check.Flags().StringVar(&chkFile, "file", evalDataDir+"/relation_labels.json", "relation_labels.json to check")
+	cmd.AddCommand(check)
 	return cmd
 }
 

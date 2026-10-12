@@ -23,6 +23,7 @@ type capturedEvalRequest struct {
 	asker   string
 	caller  string
 	eeid    int
+	lead    string
 }
 
 // captureEvalRequests records the ACL headers of every request and then hands
@@ -46,6 +47,10 @@ func (c *captureEvalRequests) handler(w http.ResponseWriter, r *http.Request) {
 		rec.variant = "resolve-asker"
 		if b.AskerEEID == 0 {
 			rec.variant = "resolve-admin"
+		}
+		if r.Header.Get("X-Graph-Lead") == "1" {
+			rec.variant = "resolve-lead"
+			rec.lead = "1"
 		}
 	} else {
 		rec.variant = "search-hybrid"
@@ -75,6 +80,10 @@ func assertVariantHeaders(t *testing.T, seen []capturedEvalRequest, wantAsker st
 		case "resolve-asker":
 			if r.admin != "" || r.asker != "" || r.eeid == 0 {
 				t.Errorf("resolve-asker: admin=%q asker=%q eeid=%d, want body eeid only", r.admin, r.asker, r.eeid)
+			}
+		case "resolve-lead":
+			if r.admin != "" || r.asker != "" || r.eeid == 0 || r.lead != "1" {
+				t.Errorf("resolve-lead: admin=%q asker=%q eeid=%d lead=%q, want body eeid, X-Graph-Lead=1 and no admin", r.admin, r.asker, r.eeid, r.lead)
 			}
 		case "search-hybrid":
 			if r.admin != "" || r.asker != wantAsker {
@@ -117,7 +126,7 @@ func TestEvalPrepareSendsPerVariantACLHeaders(t *testing.T) {
 	writeTestCase(t, dataDir, testCaseSpec{ID: "qa", Query: "qa", Seeds: []string{root}})
 	t.Setenv("AGENT_MEM_API_KEY", "")
 	var buf bytes.Buffer
-	if err := runEvalPrepare(t.Context(), &buf, evalPrepareOpts{BaseURL: server.URL, DataDir: dataDir, EnvPath: "/nonexistent", Pool: pool}); err != nil {
+	if err := runEvalPrepare(t.Context(), &buf, evalPrepareOpts{Snapshot: filepath.Join(t.TempDir(), "snap"), BaseURL: server.URL, DataDir: dataDir, EnvPath: "/nonexistent", Pool: pool}); err != nil {
 		t.Fatalf("%v\n%s", err, buf.String())
 	}
 	assertVariantHeaders(t, cap.seen, "1")
@@ -173,6 +182,10 @@ func TestEvalRelevanceDryRunShowsNewVariantsAndHeaders(t *testing.T) {
 			case "resolve-asker":
 				if hasAdmin || hasAsker {
 					t.Errorf("resolve-asker headers wrong: %s", line)
+				}
+			case "resolve-lead":
+				if hasAdmin || hasAsker || !strings.Contains(line, "X-Graph-Lead:1") || !strings.Contains(line, `"include_bodies":false`) || !strings.Contains(line, `"max_items":30`) {
+					t.Errorf("resolve-lead line wrong: %s", line)
 				}
 			case "search-hybrid":
 				if hasAdmin || !hasAsker {
