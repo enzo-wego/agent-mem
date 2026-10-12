@@ -14,6 +14,7 @@ import {
   type ThreadDecision,
 } from '../api'
 import ThreadDecisions from '../ThreadDecisions'
+import { subjectAnchors, mentionsAnchor } from '../subjectAnchor'
 
 // ── palette (copied from LiveGlobe.tsx:41-54; panel2/border2/grid and the per-
 // resource colours come from the approved mockup's dark tokens) ───────────────
@@ -736,8 +737,11 @@ export function GraphSearchPage() {
             const results = await Promise.all(queries.map((query) => graphSearchHybrid(query, 20, 'slack,slack_thread')))
             if (stale()) return
             const seen = new Set<string>()
+            const anchors = subjectAnchors(queries)
             subjectItems = results.flatMap((result, i) =>
-              buildFreeItems(result.results || [])
+              buildFreeItems(
+                (result.results || []).filter((r) => mentionsAnchor(`${r.title || ''} ${r.summary || ''}`, anchors)),
+              )
                 .filter((item) => {
                   if (item.group !== 'slack' || seen.has(item.key)) return false
                   seen.add(item.key)
