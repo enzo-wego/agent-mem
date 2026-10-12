@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -47,7 +48,12 @@ type leadAQueryCounter struct {
 	counts map[string]int
 }
 
-var leadAMarkers = []string{"graph.answer_bots", "lead:aggregate", "unnest($1::text[], $2::text[])"}
+// Every lead-only SQL carries a /* lead:<name> */ tag (aggregate, roots,
+// roots_eligible, epic, enrich, misses, display, links); the counter counts each
+// tag by name. The two table/shape markers stay as an independent check.
+var leadAMarkers = []string{"graph.answer_bots", "unnest($1::text[], $2::text[])"}
+
+var leadATagRe = regexp.MustCompile(`/\* (lead:[a-z_]+) \*/`)
 
 func (c *leadAQueryCounter) TraceQueryStart(ctx context.Context, _ *pgx.Conn, d pgx.TraceQueryStartData) context.Context {
 	c.mu.Lock()
@@ -56,6 +62,9 @@ func (c *leadAQueryCounter) TraceQueryStart(ctx context.Context, _ *pgx.Conn, d 
 		if strings.Contains(d.SQL, m) {
 			c.counts[m]++
 		}
+	}
+	for _, m := range leadATagRe.FindAllStringSubmatch(d.SQL, -1) {
+		c.counts[m[1]]++
 	}
 	return ctx
 }
@@ -410,6 +419,18 @@ func TestLeadAActiveRequestsRunLeadQueries(t *testing.T) {
 			for _, m := range leadAMarkers {
 				if c[m] == 0 {
 					t.Errorf("active %s did not run a query containing %q (counts %v)", tc.name, m, c)
+				}
+			}
+			for _, tag := range []string{"lead:roots", "lead:enrich"} {
+				if c[tag] == 0 {
+					t.Errorf("active %s did not run %s (counts %v)", tc.name, tag, c)
+				}
+			}
+			if tc.name == "resolve-hit-nobodies" {
+				for _, tag := range []string{"lead:misses", "lead:display"} {
+					if c[tag] == 0 {
+						t.Errorf("active %s did not run %s (counts %v)", tc.name, tag, c)
+					}
 				}
 			}
 			if c["lead:aggregate"] != 1 {

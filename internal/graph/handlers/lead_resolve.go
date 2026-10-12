@@ -149,7 +149,7 @@ func (h *Resolve) serveLead(w http.ResponseWriter, r *http.Request, p leadResolv
 	// 7. Misses over every selected item.
 	var missed []string
 	if len(selectedKeys) > 0 {
-		mrows, err := h.db.Query(ctx, `SELECT n.id FROM unnest($1::text[]) AS n(id)
+		mrows, err := h.db.Query(ctx, `/* lead:misses */SELECT n.id FROM unnest($1::text[]) AS n(id)
 WHERE NOT EXISTS (SELECT 1 FROM graph.artifact_bodies b WHERE b.node_id = n.id)`, selectedKeys)
 		if err != nil {
 			writeLeadLookupFailed(w)
@@ -181,7 +181,7 @@ WHERE NOT EXISTS (SELECT 1 FROM graph.artifact_bodies b WHERE b.node_id = n.id)`
 	type display struct{ typ, url, title, author, threadTS string }
 	disp := map[string]display{}
 	if len(selectedKeys) > 0 {
-		drows, err := h.db.Query(ctx, `
+		drows, err := h.db.Query(ctx, `/* lead:display */
 SELECT n.id, n.type, COALESCE(n.url,''),
        COALESCE(NULLIF(n.title,''), CASE WHEN n.type = 'slack' THEN NULLIF(ts.summary,'') END, ''),
        COALESCE(p.display_name,''), COALESCE(n.metadata->>'thread_ts','')
@@ -233,7 +233,7 @@ WHERE n.id = ANY($1) AND n.deleted_at IS NULL`, selectedKeys)
 	}
 	best := map[string]map[string]linkPick{}
 	if len(seedMembers) > 0 && len(otherMembers) > 0 {
-		lrows, err := h.db.Query(ctx, `
+		lrows, err := h.db.Query(ctx, `/* lead:links */
 SELECT from_node_id, to_node_id, kind, metadata
 FROM graph.edges
 WHERE (from_node_id = ANY($1) AND to_node_id = ANY($2))

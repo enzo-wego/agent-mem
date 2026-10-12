@@ -369,7 +369,7 @@ func (s *Search) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	var leadByID map[string]*leadFields
 	if lead {
-		results, leadByID, err = s.leadPage(ctx, r, acl, results, epicKeys)
+		results, leadByID, err = s.leadPage(ctx, r, acl, results)
 		if err != nil {
 			writeLeadLookupFailed(w)
 			return

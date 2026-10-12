@@ -436,15 +436,15 @@ func leadCSearchFixture(t *testing.T, pool *pgxpool.Pool) leadCSearchIDs {
 	gen := leadCPerson(t, pool, "Lead C Generic Bot", "ULCGEN", true)
 	var id leadCSearchIDs
 
-	// Thread A: thread summary wins over the root's index summary; the bot reply
-	// is the latest message.
+	// Thread A: lead_summary is the root's artifact_index summary, never the
+	// thread-summary topic; the bot reply is the latest message.
 	id.rootA = leadCMsg(t, pool, "LCS1", "2000.000001", "2000.000001", hana, "2026-03-01T10:00:00Z", tok+" alpha root")
 	id.replyA = leadCMsg(t, pool, "LCS1", "2000.000002", "2000.000001", enzo, "2026-03-02T11:30:00Z", tok+" alpha reply")
 	leadCThreadSummary(t, pool, "LCS1", "2000.000001", "LCSA thread summary", "LCSA thread overview")
 	leadCIndex(t, pool, id.rootA, "LCSA root index summary")
 	leadCIndex(t, pool, id.replyA, "LCSA reply index summary")
 
-	// Thread B: no thread summary, so the root's artifact_index summary fills in.
+	// Thread B: no thread summary; lead_summary is still the root's artifact_index summary.
 	id.rootB = leadCMsg(t, pool, "LCS1", "3000.000001", "3000.000001", hana, "2026-03-05T08:00:00Z", tok+" bravo root")
 	id.replyB = leadCMsg(t, pool, "LCS1", "3000.000002", "3000.000001", hana, "2026-03-05T09:00:00Z", tok+" bravo reply")
 	leadCIndex(t, pool, id.rootB, "LCSB fallback index summary")
@@ -496,8 +496,8 @@ func leadCCheckSearchRows(t *testing.T, rows []map[string]any, id leadCSearchIDs
 
 	// Thread A (the bot reply is the latest message).
 	a := need(id.rootA)
-	if got := a["lead_summary"]; got != "LCSA thread summary" {
-		t.Errorf("%s root A lead_summary = %v, want the thread summary", who, got)
+	if got := a["lead_summary"]; got != "LCSA root index summary" {
+		t.Errorf("%s root A lead_summary = %v, want the root's artifact_index summary (not the thread-summary topic)", who, got)
 	}
 	for _, k := range []string{"author_slack_id", "authored_by_bot", "bot_in_thread", "channel_id", "last_activity_at"} {
 		want := map[string]string{"author_slack_id": "ULCHANA", "authored_by_bot": "human", "bot_in_thread": "yes", "channel_id": "LCS1", "last_activity_at": "2026-03-02T11:30:00Z"}[k]
@@ -515,7 +515,7 @@ func leadCCheckSearchRows(t *testing.T, rows []map[string]any, id leadCSearchIDs
 		}
 		r := need(id.replyA)
 		// A reply keeps its own id but every thread value comes from the root.
-		if r["lead_summary"] != "LCSA thread summary" || r["author_slack_id"] != "ULCHANA" || r["authored_by_bot"] != "human" ||
+		if r["lead_summary"] != "LCSA root index summary" || r["author_slack_id"] != "ULCHANA" || r["authored_by_bot"] != "human" ||
 			r["bot_in_thread"] != "yes" || r["last_activity_at"] != "2026-03-02T11:30:00Z" || r["channel_id"] != "LCS1" {
 			t.Errorf("%s reply A fields not taken from the root: %v", who, r)
 		}

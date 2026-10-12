@@ -360,6 +360,7 @@ const (
 	leadB3Hidden   = "ULBHIDDEN1"
 	leadB3Why      = "LBLINKWHY"
 	leadB3Date     = "2030-03-03" // hidden root's updated_at: an aggregate value that must not leak
+	leadB3OwnIndex = "LBOWN root own index summary"
 	leadB3Channel  = "LBR"
 	leadB3RootTS   = "100.000001"
 	leadB3ReplyTS  = "101.000001"
@@ -376,7 +377,7 @@ type leadB3Case struct {
 	rootInEpic  bool
 	eligible    bool
 	noRootEdge  bool // no seed -> root edge: the root is not reachable on its own
-	nodeOK      bool // the node route has no epic filter: the root stays eligible there
+	nodeOK      bool // node and search have no epic filter on roots: the root stays eligible there
 }
 
 var leadB3Cases = []leadB3Case{
@@ -414,6 +415,13 @@ func leadB3Build(t *testing.T, pool *pgxpool.Pool, c leadB3Case) leadB3IDs {
 		})
 	}
 	leadBSummary(t, pool, leadB3Channel, leadB3RootTS, leadB3Sentinel+" summary", leadB3Sentinel+" overview")
+	if !c.noRoot {
+		text := leadB3Sentinel + " summary"
+		if c.name == "mismatched_scope" {
+			text = leadB3OwnIndex // the root row is readable as itself; it must not borrow the thread cache
+		}
+		leadBIndex(t, pool, ids.root, text)
+	}
 	leadBMsg(t, pool, leadB3Channel, leadB3ReplyTS, leadB3RootTS, "slack:LBR", "lbtoken reply body", "2026-10-10T00:00:00Z", replyAuthor)
 	leadBInsert(t, pool, leadBNode{id: ids.seed, typ: "jira", title: ids.seed, body: "seed body"})
 	leadBEdge(t, pool, ids.seed, ids.reply, "REFERENCES", `{"why":"`+leadB3Why+` reply edge","tag":"lbtag","confidence":0.9}`)
@@ -537,7 +545,7 @@ func TestLeadB3RootEligibility(t *testing.T) {
 						t.Fatalf("status %d: %s", resp.code, resp.body)
 					}
 					rows := leadBRows(t, resp.body)
-					if c.eligible {
+					if c.eligible || c.nodeOK { // search has no epic filter on roots (plan A2a: resolve only)
 						if len(rows) != 1 {
 							t.Fatalf("rows = %v, want the one thread row", leadBRowIDs(rows))
 						}
@@ -555,8 +563,8 @@ func TestLeadB3RootEligibility(t *testing.T) {
 						// value that would come from the thread cache of the
 						// mismatched root (summary, overview) must not appear.
 						leadBForbid(t, "hybrid mismatch", resp.body, ids.reply, leadB3Sentinel+" summary", leadB3Sentinel+" overview")
-						if len(rows) != 1 || rows[0]["node_id"] != ids.root || rows[0]["lead_summary"] != "" {
-							t.Errorf("rows = %v, want only the root's own row without a thread summary", leadBRowIDs(rows))
+						if len(rows) != 1 || rows[0]["node_id"] != ids.root || rows[0]["lead_summary"] != leadB3OwnIndex {
+							t.Errorf("rows = %v, want only the root's own row with its own index summary", leadBRowIDs(rows))
 						}
 						return
 					}
@@ -586,6 +594,7 @@ func TestLeadB3ResolveMixedThreads(t *testing.T) {
 	x0 := leadBMsg(t, pool, "LBR", "150.000001", "150.000001", "slack:LBR", "x root", "2026-10-05T00:00:00Z", okAuthor)
 	x1 := leadBMsg(t, pool, "LBR", "151.000001", "150.000001", "slack:LBR", "x reply", "2026-10-06T00:00:00Z", okAuthor)
 	leadBSummary(t, pool, "LBR", "150.000001", "visible thread summary", "visible overview")
+	leadBIndex(t, pool, x0, "visible root index summary")
 	// Thread Y: the root sits in a scope the asker lacks and carries the
 	// sentinel; its reply is readable and linked.
 	y0 := "slack:LBR:200.000001"
@@ -593,6 +602,7 @@ func TestLeadB3ResolveMixedThreads(t *testing.T) {
 		meta: `{"ts":"200.000001","thread_ts":"200.000001"}`, updated: leadB3Date + "T03:03:03Z", author: botAuthor})
 	y1 := leadBMsg(t, pool, "LBR", "201.000001", "200.000001", "slack:LBR", "y reply", "2026-10-07T00:00:00Z", okAuthor)
 	leadBSummary(t, pool, "LBR", "200.000001", leadB3Sentinel+" summary", leadB3Sentinel+" overview")
+	leadBIndex(t, pool, y0, leadB3Sentinel+" summary")
 	leadBEdge(t, pool, seed, x1, "REFERENCES", `{"why":"visible why","confidence":0.5}`)
 	leadBEdge(t, pool, seed, y1, "REFERENCES", `{"why":"`+leadB3Why+` y","confidence":0.9}`)
 
@@ -607,7 +617,7 @@ func TestLeadB3ResolveMixedThreads(t *testing.T) {
 	}
 	leadBForbid(t, "resolve", resp.body, leadB3Sentinel, leadB3Hidden, leadB3Why, leadB3Date, y0, y1, x1)
 	a := res.art(t, x0)
-	if a.LeadSummary != "visible thread summary" || a.AuthorSlackID != "ULBVISIBLE1" || a.AuthoredByBot != "human" ||
+	if a.LeadSummary != "visible root index summary" || a.AuthorSlackID != "ULBVISIBLE1" || a.AuthoredByBot != "human" ||
 		a.BotInThread != "no" || a.LastActivityAt != "2026-10-06T00:00:00Z" {
 		t.Errorf("eligible group values = %+v", a)
 	}
@@ -988,12 +998,12 @@ func TestLeadB4MaskingBeforeCapMountedRoutes(t *testing.T) {
 				// resolve: lead_summary of the Slack root and of the Jira issue.
 				body := leadBResolveBody([]string{leadB4Root}, 1, nil)
 				res := leadBDecodeResolve(t, leadBDo(ctx, h, "POST", "/api/graph/resolve", body, caller.asker, true))
-				check("resolve slack lead_summary", res.art(t, leadB4Root).LeadSummary, v.texts[0])
+				check("resolve slack lead_summary", res.art(t, leadB4Root).LeadSummary, v.texts[2])
 				check("resolve jira lead_summary", res.art(t, leadB4Jira).LeadSummary, v.texts[3])
 
 				// node: summary (artifact_index) and lead_summary.
 				for _, n := range []struct{ id, summary, lead string }{
-					{leadB4Root, v.texts[2], v.texts[0]},
+					{leadB4Root, v.texts[2], v.texts[2]},
 					{leadB4Jira, v.texts[3], v.texts[3]},
 				} {
 					resp := leadBDo(ctx, h, "GET", "/api/graph/node?id="+url.QueryEscape(n.id), "", caller.asker, true)
@@ -1016,7 +1026,7 @@ func TestLeadB4MaskingBeforeCapMountedRoutes(t *testing.T) {
 					byID[r["node_id"].(string)] = r
 				}
 				for _, n := range []struct{ id, summary, lead string }{
-					{leadB4Root, v.texts[2], v.texts[0]},
+					{leadB4Root, v.texts[2], v.texts[2]},
 					{leadB4Jira, v.texts[3], v.texts[3]},
 				} {
 					r, ok := byID[n.id]
@@ -1037,7 +1047,7 @@ func TestLeadB4MaskingBeforeCapMountedRoutes(t *testing.T) {
 					byID[r["node_id"].(string)] = r
 				}
 				for _, n := range []struct{ id, summary, lead string }{
-					{leadB4Root, v.texts[1], v.texts[0]},
+					{leadB4Root, v.texts[1], v.texts[2]},
 					{leadB4Jira, v.texts[3], v.texts[3]},
 				} {
 					r, ok := byID[n.id]
@@ -1379,6 +1389,7 @@ func TestLeadB5RootAbsentFromCandidates(t *testing.T) {
 	leadBMsg(t, pool, "LBB", "22.000001", "20.000001", "slack:LBB", "b other reply", "2026-10-03T00:00:00Z", 0)
 	aclExec(t, pool, `UPDATE graph.nodes SET title='Root Title' WHERE id=$1`, b0)
 	leadBSummary(t, pool, "LBB", "20.000001", "root thread summary", "root overview")
+	leadBIndex(t, pool, b0, "root index summary")
 	leadBEdge(t, pool, j, b1, "REFERENCES", `{"tag":"only-reply","confidence":0.4}`)
 
 	res := leadB5Resolve(t, h, []string{j}, 1, nil)
@@ -1388,7 +1399,7 @@ func TestLeadB5RootAbsentFromCandidates(t *testing.T) {
 	leadBAssertShape(t, res, b1, "slack:LBB:22.000001")
 	a := res.art(t, b0)
 	leadBAssertArt(t, a, 1, leadBScoreOf(t, h, b1, 1), "21.000001")
-	if a.Title != "Root Title" || a.LeadSummary != "root thread summary" {
+	if a.Title != "Root Title" || a.LeadSummary != "root index summary" {
 		t.Errorf("title %q lead_summary %q must come from the root", a.Title, a.LeadSummary)
 	}
 	if a.AuthorSlackID != "ULBROOT5" || a.AuthoredByBot != "human" || a.ChannelID != "LBB" {

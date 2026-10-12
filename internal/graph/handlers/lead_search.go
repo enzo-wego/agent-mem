@@ -13,16 +13,17 @@ func (s *Search) WithLeadMode(enabled bool) *Search {
 
 // leadPage applies A2a to the final result page and computes the A4 fields.
 // Slack rows whose thread root is not eligible (hidden, missing, deleted,
-// outside the epic filter, other scope) are dropped, in default and hybrid
-// output alike. A lookup failure returns errLeadLookup.
-func (s *Search) leadPage(ctx context.Context, r *http.Request, acl askerACL, results []searchResult, epicKeys []string) ([]searchResult, map[string]*leadFields, error) {
+// other scope) are dropped, in default and hybrid output alike. The epic filter
+// is not applied to roots: plan A2a limits it to resolve. A lookup failure
+// returns errLeadLookup.
+func (s *Search) leadPage(ctx context.Context, r *http.Request, acl askerACL, results []searchResult) ([]searchResult, map[string]*leadFields, error) {
 	ids := make([]string, len(results))
 	exempt := make(map[string]bool, len(results))
 	for i, res := range results {
 		ids[i] = res.NodeID
 		exempt[res.NodeID] = true
 	}
-	roots, err := leadRoots(ctx, s.db, acl, ids, epicKeys, exempt)
+	roots, err := leadRoots(ctx, s.db, acl, ids, nil, exempt)
 	if err != nil {
 		return nil, nil, err
 	}

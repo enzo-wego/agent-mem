@@ -91,7 +91,7 @@ func leadRoots(ctx context.Context, db *pgxpool.Pool, acl askerACL, ids, epicKey
 	if len(ids) == 0 {
 		return out, nil
 	}
-	rows, err := db.Query(ctx, `
+	rows, err := db.Query(ctx, `/* lead:roots */
 SELECT n.id, n.type = 'slack', COALESCE(n.scope,''),
        'slack:' || split_part(n.id,':',2) || ':' || COALESCE(NULLIF(n.metadata->>'thread_ts',''), split_part(n.id,':',3))
 FROM graph.nodes n WHERE n.id = ANY($1) AND n.deleted_at IS NULL`, ids)
@@ -126,7 +126,7 @@ FROM graph.nodes n WHERE n.id = ANY($1) AND n.deleted_at IS NULL`, ids)
 	if len(members) == 0 {
 		return out, nil
 	}
-	rrows, err := db.Query(ctx, `
+	rrows, err := db.Query(ctx, `/* lead:roots_eligible */
 SELECT x.id, x.scope FROM unnest($1::text[], $2::text[]) AS x(id, scope)
 JOIN graph.nodes r ON r.id = x.id
 WHERE r.deleted_at IS NULL AND r.type = 'slack' AND COALESCE(r.scope,'') = x.scope
@@ -155,7 +155,7 @@ WHERE r.deleted_at IS NULL AND r.type = 'slack' AND COALESCE(r.scope,'') = x.sco
 			needEpic = append(needEpic, m.root)
 		}
 	}
-	inEpic, err := epicMembers(ctx, db, epicKeys, needEpic)
+	inEpic, err := epicMembersTagged(ctx, db, "/* lead:epic */", epicKeys, needEpic)
 	if err != nil {
 		return nil, errLeadLookup
 	}
@@ -171,9 +171,9 @@ WHERE r.deleted_at IS NULL AND r.type = 'slack' AND COALESCE(r.scope,'') = x.sco
 type leadItem struct{ ID, Root string }
 
 type leadNodeData struct {
-	typ, scope, authorSlack, aiSummary, tsSummary string
-	updated                                       time.Time
-	hasPerson, isBot                              bool
+	typ, scope, authorSlack, aiSummary string
+	updated                            time.Time
+	hasPerson, isBot                   bool
 }
 
 // leadEnrich computes the A4 fields for items. Slack items take every value
@@ -196,17 +196,14 @@ func leadEnrich(ctx context.Context, db *pgxpool.Pool, acl askerACL, admin bool,
 			dataIDs = append(dataIDs, id)
 		}
 	}
-	rows, err := db.Query(ctx, `
+	rows, err := db.Query(ctx, `/* lead:enrich */
 SELECT n.id, n.type, COALESCE(n.scope,''), n.updated_at, COALESCE(p.slack_user_id,''), p.id IS NOT NULL,
        (COALESCE(p.is_bot,false) OR ab.slack_user_id IS NOT NULL),
-       COALESCE(ai.summary,''), COALESCE(ts.summary,'')
+       COALESCE(ai.summary,'')
 FROM graph.nodes n
 LEFT JOIN graph.people p ON p.id = n.author_person_id
 LEFT JOIN graph.answer_bots ab ON ab.slack_user_id = p.slack_user_id
 LEFT JOIN graph.artifact_index ai ON ai.node_id = n.id
-LEFT JOIN graph.thread_summaries ts ON n.type = 'slack'
-  AND ts.channel_id = REPLACE(n.scope,'slack:','')
-  AND ts.thread_ts = COALESCE(NULLIF(n.metadata->>'thread_ts',''), split_part(n.id,':',3))
 WHERE n.id = ANY($1) AND n.deleted_at IS NULL`, dataIDs)
 	if err != nil {
 		return nil, errLeadLookup
@@ -215,7 +212,7 @@ WHERE n.id = ANY($1) AND n.deleted_at IS NULL`, dataIDs)
 	for rows.Next() {
 		var id string
 		var d leadNodeData
-		if err := rows.Scan(&id, &d.typ, &d.scope, &d.updated, &d.authorSlack, &d.hasPerson, &d.isBot, &d.aiSummary, &d.tsSummary); err != nil {
+		if err := rows.Scan(&id, &d.typ, &d.scope, &d.updated, &d.authorSlack, &d.hasPerson, &d.isBot, &d.aiSummary); err != nil {
 			rows.Close()
 			return nil, errLeadLookup
 		}
@@ -299,9 +296,6 @@ GROUP BY x.scope, x.thread_ts`, scopes, threads, acl.scopeArg(), acl.resolved)
 		summary := d.aiSummary
 		last := d.updated
 		if it.Root != "" {
-			if d.tsSummary != "" {
-				summary = d.tsSummary
-			}
 			f.BotInThread = "unknown"
 			if a, ok := aggs[d.scope+"\x00"+threadTSOfRoot(it.Root)]; ok {
 				last = a.max

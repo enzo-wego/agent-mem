@@ -177,7 +177,7 @@ separate from a denial. Non-Slack items use only their own node's values.
 
 | Field | Type / values | Value |
 |---|---|---|
-| `lead_summary` | string ≤ 600 runes incl. `…` | Slack: `thread_summaries.summary`, else `artifact_index.summary`; others: `artifact_index.summary`; empty if none |
+| `lead_summary` | string ≤ 600 runes incl. `…` | `artifact_index.summary` for every node type (Slack roots: the root's own, topic plus overview); empty if none |
 | `last_activity_at` | RFC3339 UTC, always present | Slack: max(`updated_at`) over the thread's message nodes (A5); others: `nodes.updated_at` |
 | `author_slack_id` | string, `""` when unknown | root (or node) author `people.slack_user_id` |
 | `authored_by_bot` | `bot` / `human` / `unknown` | `bot` if author is in `graph.answer_bots` or `people.is_bot`; `unknown` if no author person |
@@ -371,3 +371,47 @@ uses `graph_nodes_thread_key_idx` under default planner settings (hot-thread pla
 
 - `make test-db` exits 2 because of the pre-existing `jobs` failure; Enzo to decide whether to fix it separately.
 - The `[bot answer, unverified]` summary label (umbrella P3) stays open; `bot_in_thread` is the interim signal.
+
+## Fix round 1 (after deep review code-r1 APPROVE, `docs/reviews/2026-10-12-graph-context-r1a-lead-fields-code-r1.md`)
+
+Enzo decided F1 on 2026-10-12 15:40 SGT. Fix all five on `feat/graph-lead-mode`, new commit:
+
+1. **F1** `lead_summary` = `artifact_index.summary` (topic plus overview) for every node type,
+   Slack included, masked then cut to 600 runes as before (`lead.go:299-304`). Title keeps the
+   topic. Update A4's table row and the tests that assert the Slack source.
+2. **F2** the migration test (`lead_c_migration_test.go:78-80`) must not fail when a newer
+   migration is added: target this round's two versions by number, not "the newest".
+3. **F3** `router.go:95-96`: a failed `NewResolve` must not panic the worker at startup; keep
+   main's behaviour (route fails at request time) with a nil guard, plus a test.
+4. **F4** lead search applies the epic filter only where the plan says (resolve); remove it from
+   `lead_search.go:18-25`, or if the reply-root check needs it, record why in Findings.
+5. **F5** the acceptance-1 query counter (`lead_a_test.go:50`) must see every lead-only query
+   (all five the review lists), so "no lead query on inactive requests" is fully checked.
+
+Then `make test-db` (only the known jobs flake may fail), `go vet`, update Findings, push.
+
+### Fix round 1 results
+
+- **F1** `lead.go`: `lead_summary` = `artifact_index.summary` for every node type (Slack roots
+  included; thread-summary `summary`/topic no longer read). The unused `thread_summaries`
+  join and `tsSummary` field were removed from the enrich query. Title fallback in resolve is
+  unchanged (topic). A4 table row updated. Tests changed: `lead_b_test.go` (B3 fixture,
+  mixed threads, B4 masking/cap, B5) and `lead_c_test.go` (thread A expects the index summary).
+- **F2** `lead_c_migration_test.go`: dropped the "newest migration" guard; the test only
+  requires the two versions to be found and `thread_key_idx` after `answer_bots`. Rollback
+  and re-apply already addressed the versions by number (`ApplyVersion`).
+- **F3** `router.go`: `WithLeadMode` is called only when `NewResolve` returned non-nil; the
+  nil handler is mounted as on main. New test `lead_router_test.go`
+  (`TestMountSurvivesNewResolveFailure`, closed pool, lead on/off).
+- **F4** `lead_search.go`: `leadPage` no longer takes epic keys and passes nil to
+  `leadRoots`, so lead search does not apply the epic filter to roots (A2a: resolve only).
+- **F5** every lead-only SQL carries a `/* lead:<name> */` tag (`roots`, `roots_eligible`,
+  `epic`, `enrich`, `aggregate`, `misses`, `display`, `links`); `epicMembers` became a wrapper
+  over `epicMembersTagged` (tag empty on main's callers, so main's SQL text is unchanged).
+  The acceptance-1 counter counts every `lead:` tag plus the two old markers; the positive
+  control asserts `roots`, `enrich`, and on resolve `misses`/`display` run when active.
+- **F4 test side effect:** `TestLeadB3RootEligibility` `root_outside_epic` now expects search and
+  hybrid to keep the reply (node already did); the mismatched-scope hybrid case seeds a distinct
+  own index summary for the public root and expects it as `lead_summary`.
+- **Run:** `make test-db` all green (the `jobs` `TestPeriodicTickerReclaimInterleavings` flake
+  passed this run); `go vet ./...` clean.

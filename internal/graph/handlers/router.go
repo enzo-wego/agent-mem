@@ -93,7 +93,9 @@ func mountRoutes(r chi.Router, deps Deps) {
 	r.Method("GET", "/api/graph/search", withContextTrace(maskGraphResponse(search), "search", deps.BuildRev, deps.TraceRecorder))
 
 	resolve, _ := NewResolve(deps.DB)
-	resolve.WithLeadMode(deps.LeadModeEnabled)
+	if resolve != nil { // nil on a weights load failure; main still mounted it (route fails per request)
+		resolve.WithLeadMode(deps.LeadModeEnabled)
+	}
 	r.Method("POST", "/api/graph/resolve", withContextTrace(maskGraphResponse(resolve), "resolve", deps.BuildRev, deps.TraceRecorder))
 	if deps.TraceRecorder != nil {
 		r.Get("/api/graph/traces/stats", traceStatsHandler(deps.TraceRecorder))

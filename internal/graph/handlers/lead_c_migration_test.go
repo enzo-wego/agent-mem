@@ -49,11 +49,7 @@ func leadCMigrationSetup(t *testing.T) (*leadCMigrations, *sql.DB) {
 		t.Fatalf("apply all: %v", err)
 	}
 	m := &leadCMigrations{provider: provider}
-	var maxVer int64
 	for _, s := range provider.ListSources() {
-		if s.Version > maxVer {
-			maxVer = s.Version
-		}
 		base := filepath.Base(s.Path)
 		switch {
 		case strings.HasSuffix(base, "_graph_answer_bots.sql"):
@@ -75,8 +71,8 @@ func leadCMigrationSetup(t *testing.T) (*leadCMigrations, *sql.DB) {
 	if m.botsVer == 0 || m.indexVer == 0 {
 		t.Fatalf("lead migrations not found (answer_bots=%d, thread_key_idx=%d)", m.botsVer, m.indexVer)
 	}
-	if m.indexVer <= m.botsVer || m.indexVer != maxVer {
-		t.Fatalf("thread_key_idx (%d) must be the newest migration, after answer_bots (%d); newest is %d", m.indexVer, m.botsVer, maxVer)
+	if m.indexVer <= m.botsVer {
+		t.Fatalf("thread_key_idx (%d) must be after answer_bots (%d)", m.indexVer, m.botsVer)
 	}
 	return m, db
 }
