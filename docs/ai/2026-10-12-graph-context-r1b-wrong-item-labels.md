@@ -312,7 +312,7 @@ A7. **`eval relation-assemble`** and **`eval relation-check`**.
      missing, enzo}; `check: disputed` or `missing` with a relation other than
      `insufficient`. Seeds are the hop-0 items; the check also fails with `seed_mismatch`
      when a canonical seed of the case (or its `thread_root` per `node_meta.json`) is not a
-     hop-0 item.
+     hop-0 item. Post-merge fix: only seeds whose `node_meta.json` entry has `exists: true` are checked; a seed with `exists: false` or no entry is skipped.
      On success prints counts only: relation × link bucket, relation × author bucket, per
      case relation counts, cases with >= 1 decisive `different_case`, `insufficient` by
      reason.
