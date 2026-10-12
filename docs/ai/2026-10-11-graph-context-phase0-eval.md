@@ -160,3 +160,63 @@ paste numbers into the parent plan's "Results".
 - `relevance` treats an unreachable server (first warm-up gets no HTTP response) and a
   missing `node_meta.json` as harness errors; later transport failures count as failed runs.
 - `request_ids` in `--json` include warm-up and measured calls.
+
+### Lead-mode snapshot and relation labels (R1b, 2026-10-12)
+
+Plan: `docs/ai/2026-10-12-graph-context-r1b-wrong-item-labels.md`. Case files and their
+`labels` are not touched; the new ground truth lives in its own file.
+
+- **Variant `resolve-lead`.** Fourth entry of the variant list: the `resolve-asker` body
+  (deep copy) with `include_bodies: false` and `max_items: 30`, headers `X-Graph-Lead: 1`
+  plus the harness headers, never `X-Graph-Admin`. `relevance` scores it against
+  `labels.resolve` and adds per case `roots`, `seed_groups`, and `unreachable_must`
+  (reply-only `must` ids per `node_meta.json`, excluded from the lead recall denominator
+  only). Lead responses are decoded strictly (HTTP 2xx, no `X-Graph-Lead: off`, an
+  `artifacts` array, unique ids, integer `hop`, valid `links`, `authored_by_bot` in
+  `human|bot|unknown`); anything else is a failed run (`--quiet` category `lead_off` or
+  `decode`). `--quiet` also prints `warmup_ok/warmup_total` and `runs_ok/runs_total` per
+  variant.
+- **`eval prepare --snapshot <dir>`** (required). `<dir>` must not exist and its parent,
+  resolved through symlinks, must be outside the repo. `replay.json` stores per case the
+  lead `outcome` (`ok|lead_off|http_error|transport_error|decode_error`; the three old
+  variants stay `ok`), the HTTP `status` (still an int), and `items` (ids, `hop`, `links`,
+  `authored_by_bot`, `bot_in_thread`, `has_title`, `summary_runes`, `last_activity_at`; no
+  text), plus top-level `eligibility_sha256` and `snapshot_sha256`. Any non-`ok` lead
+  outcome fails the whole run with `prepare: lead_<outcome> <case_id>` and writes nothing.
+  The exact title and `lead_summary` text, author name and Slack id go to
+  `<dir>/snapshot.json` (dir 0700, file 0600, exclusive create, written last, removed if a
+  later step fails). It is confidential; never commit it. `build_rev` comes from the
+  `X-Graph-Build-Rev` response header if the server sends one (it does not today), else the
+  `BUILD_REV` environment variable, else `unknown`.
+- **`eval label-sheet --variant all|resolve-lead`.** `all` (default) is the previous
+  union-of-variants sheet; its row heading is now `## [r<k>] <node_id>`. `--variant
+  resolve-lead --mask --snapshot <dir> --out <dir>` builds masked sheets from the snapshot
+  with one `redact.Pseudonymizer` per case (`person-N`, `email-N`, `phone-N`, `card-N`,
+  `ref-N`), applied to the full text before the 200/600-rune cut, and writes
+  `manifest.json` (`{case_id: [{r, node_id}]}`, ids only). It refuses, with a fixed category
+  on stderr, unless the lead replay validates (`validateLeadReplay`: every case has an
+  `ok` lead variant with 2xx status and well-formed `items`, and `eligibility_sha256`
+  recomputes) and the snapshot, eligibility and case digests all match. Residual exposure:
+  names in prose that are not mentions or authors, merchant/partner names, refs without a
+  digit.
+- **Relation rubric.** `same_case | related_context | different_case | insufficient`, one
+  reason code per row (`same_ref`, `same_ticket_or_pr`, `work_on_case`, `precedent`,
+  `same_component`, `runbook`, `different_ref`, `different_incident`, `shared_words_only`,
+  `empty_evidence`, `ambiguous`, `reviewers_disagree`). A detector should flag
+  `different_case`; it should not flag `same_case` or `related_context` (two separate
+  denominators); `insufficient` is excluded from truth denominators and counted as coverage
+  loss.
+- **`eval relation-assemble --draft <rows> --review <rows> [--owner <rows>] --out <file>`**
+  takes model rows `{case_id: {node_id: {relation, reason}}}`, computes the header itself
+  (header-named keys in a rows file are ignored), merges (agree, or `insufficient` /
+  `reviewers_disagree` / `disputed`, owner rows win, missing rows `insufficient` /
+  `empty_evidence` / `missing`) and creates the output exclusively with mode 0600.
+  **`eval relation-check [--file testdata/eval/graph_context/relation_labels.json]`**
+  validates header, digests against `replay.json` and the case files, exact case and item
+  coverage, enums, the disputed/missing rule and seed consistency, and prints counts only.
+  R1c must run it (or the same validation) before scoring.
+- **Buckets** (each non-seed lead item gets one link bucket and one author bucket):
+  `structural` (any PART_OF, REFERS_TO, REFERENCES link), else `same_topic_hi`
+  (SAME_TOPIC, confidence >= 0.9), `same_topic_lo`, `other_link`, `no_link`; and
+  `authored_by_bot` = `human|bot|unknown`. A bucket with fewer than 5 decisive
+  `different_case` items is inconclusive for that bucket.

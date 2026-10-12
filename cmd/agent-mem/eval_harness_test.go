@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -171,7 +172,9 @@ func (s *relevanceServer) handler(w http.ResponseWriter, r *http.Request) {
 		var parts, leadIDs []string
 		for i, id := range ids {
 			if resolve && r.Header.Get("X-Graph-Lead") == "1" {
-				leadIDs = append(leadIDs, strings.TrimPrefix(id, "L:"))
+				if nid := strings.TrimPrefix(id, "L:"); !slices.Contains(leadIDs, nid) {
+					leadIDs = append(leadIDs, nid)
+				}
 			} else if resolve {
 				parts = append(parts, fmt.Sprintf(`{"node_id":%q}`, strings.TrimPrefix(id, "L:")))
 			} else if strings.HasPrefix(id, "L:") {
@@ -573,13 +576,13 @@ func TestPrepareWritesOraclesAndLabelSheetsUseSavedReplay(t *testing.T) {
 	}
 	qa, _ := os.ReadFile(filepath.Join(outDir, "qa.md"))
 	qb, _ := os.ReadFile(filepath.Join(outDir, "qb.md"))
-	if !strings.Contains(string(qa), "## "+reply) || strings.Contains(string(qa), "## "+root) || !strings.Contains(string(qa), "jira:GONE-1") || strings.Contains(string(qa), "NEW-") {
+	if !strings.Contains(string(qa), "## [r1] "+reply) || strings.Contains(string(qa), "] "+root) || !strings.Contains(string(qa), "## [r2] jira:GONE-1") || strings.Contains(string(qa), "NEW-") {
 		t.Fatalf("qa sheet wrong:\n%s", qa)
 	}
 	if !strings.Contains(string(qa), "is_reply: true") || !strings.Contains(string(qa), "reply title") || strings.Contains(string(qa), strings.Repeat("r", 301)) || !strings.Contains(string(qa), strings.Repeat("r", 300)) {
 		t.Fatalf("qa sheet content wrong:\n%s", qa)
 	}
-	if !strings.Contains(string(qb), "## "+root) || strings.Contains(string(qb), "## "+other) || strings.Contains(string(qb), "NEW-") {
+	if !strings.Contains(string(qb), "## [r1] "+root) || strings.Contains(string(qb), "] "+other) || strings.Contains(string(qb), "NEW-") {
 		t.Fatalf("qb sheet wrong:\n%s", qb)
 	}
 
@@ -736,7 +739,7 @@ func TestRelevanceMarksLowSample(t *testing.T) {
 	if err := runRelevance(cmd, relevanceOpts{BaseURL: server.URL, DataDir: dataDir, EnvPath: "/nonexistent"}); err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.Count(buf.String(), "samples=10 low sample"); got != 3 {
-		t.Fatalf("low sample marks=%d want 3\n%s", got, buf.String())
+	if got := strings.Count(buf.String(), "samples=10 low sample"); got != 4 {
+		t.Fatalf("low sample marks=%d want 4\n%s", got, buf.String())
 	}
 }

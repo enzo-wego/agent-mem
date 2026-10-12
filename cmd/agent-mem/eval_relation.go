@@ -188,11 +188,25 @@ type relationAssembleOpts struct {
 	DataDir                   string
 }
 
+// readRows reads a model's rows file. The header is never taken from model
+// output: any top-level key that names a header field is dropped before the
+// strict decode.
 func readRows(path string) (map[string]map[string]relationRow, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, categoryErr("rows_read")
 	}
+	if err := rejectDuplicateKeys(data); err != nil {
+		return nil, err
+	}
+	var top map[string]json.RawMessage
+	if json.Unmarshal(data, &top) != nil || top == nil {
+		return nil, categoryErr("row_shape")
+	}
+	for _, k := range relationHeaderKeys {
+		delete(top, k)
+	}
+	data, _ = json.Marshal(top)
 	var rows map[string]map[string]relationRow
 	if err := strictDecode(data, &rows); err != nil {
 		return nil, err

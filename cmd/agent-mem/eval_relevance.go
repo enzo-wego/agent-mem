@@ -396,26 +396,27 @@ func runRelevanceInner(cmd *cobra.Command, o relevanceOpts) error {
 				vv[name].unl = append(vv[name].unl, float64(unl))
 				rhit := 0
 				harm := 0
+				// Reply-only musts cannot be returned in lead mode (items are roots):
+				// excluded from the lead recall numerator and denominator only.
+				unreachable := map[string]bool{}
+				if name == evalLeadVariant {
+					for id := range must {
+						if m, ok := meta[id]; ok && m.IsReply {
+							unreachable[id] = true
+						}
+					}
+					n := len(unreachable)
+					res.UnreachableMust = &n
+				}
 				for _, id := range items {
-					if must[id] {
+					if must[id] && !unreachable[id] {
 						rhit++
 					}
 					if mustNot[id] {
 						harm++
 					}
 				}
-				mustDen := len(must)
-				if name == evalLeadVariant {
-					// Reply-only musts cannot be returned in lead mode (items are roots).
-					unreach := 0
-					for id := range must {
-						if m, ok := meta[id]; ok && m.IsReply {
-							unreach++
-						}
-					}
-					mustDen -= unreach
-					res.UnreachableMust = &unreach
-				}
+				mustDen := len(must) - len(unreachable)
 				if mustDen == 0 {
 					agg.RecallNA++
 					line += " recall=n/a"
