@@ -345,9 +345,14 @@ WHERE n.id=$1
 			// slack:C012A121AQJ:1783576586.388629 → cf:4042358787 → gh_pr). Confine
 			// topical edges to hop 1. Entity tags, people and popular resources are
 			// leaves too (see expandableThrough). Pushed after the title resolves so
-			// children can say which row they were reached "via".
+			// children can say which row they were reached "via". Confluence pages
+			// are shown but never walked through: generic reference docs chain
+			// unrelated threads (verified PAY-2397 -> cf:2147516957 -> Razorpay threads).
 			switch n.EdgeKind {
 			case "REFERENCES", "REFERS_TO", "THREAD":
+				if item.Node.Type == "cf" || item.Node.Type == "cf_page" {
+					break
+				}
 				if expandableThrough(ctx, h.db, n.NodeID) {
 					frontier = append(frontier, struct {
 						id  string

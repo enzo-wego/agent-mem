@@ -281,3 +281,39 @@ func testNeighborsResourceExpansion(t *testing.T, resource, typ string, incoming
 		t.Fatalf("target present = %v, want %v; neighbors: %+v", found, wantExpand, rows)
 	}
 }
+
+// A Confluence page is a generic reference doc: it shows at hop 1 but the BFS
+// must not walk through it to unrelated threads that also cite it.
+func TestNeighbors_ConfluencePageIsLeaf(t *testing.T) {
+	pool := testDB(t)
+	seedNode(t, pool, "jira:J-1", "jira", "Jira J")
+	seedNodeURL(t, pool, "jira:J-1", "https://example.atlassian.net/browse/J-1")
+	seedNode(t, pool, "cf:C1", "cf", "Checklist")
+	seedNodeURL(t, pool, "cf:C1", "https://example.atlassian.net/wiki/spaces/X/pages/1")
+	seedNode(t, pool, "slack:C1:1.1", "slack", "Unrelated thread")
+	seedEdge(t, pool, "jira:J-1", "cf:C1", "REFERENCES")
+	seedEdge(t, pool, "slack:C1:1.1", "cf:C1", "REFERENCES")
+
+	r := chi.NewRouter()
+	r.Mount("/api/graph", handlers.NewNeighbors(pool))
+	req := adminRequest("GET", "/api/graph/node/jira:J-1/neighbors?depth=2", nil)
+	req.Header.Set("X-Graph-Admin", "1")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	var sawCF bool
+	for _, row := range decodeNeighbors(t, w) {
+		switch row.Node.NodeID {
+		case "cf:C1":
+			sawCF = true
+			if row.Hop != 1 {
+				t.Errorf("cf hop = %d, want 1", row.Hop)
+			}
+		case "slack:C1:1.1":
+			t.Errorf("slack thread reached through cf page")
+		}
+	}
+	if !sawCF {
+		t.Errorf("cf page missing from neighbors")
+	}
+}
