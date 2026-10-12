@@ -57,7 +57,7 @@ FROM graph.nodes n WHERE n.id = $1`, nodeID).Scan(&typ, &deg)
 func NewNeighbors(db *pgxpool.Pool) chi.Router {
 	r := chi.NewRouter()
 	h := &neighborsHandler{db: db, exp: bfs.NewExpander(db), aclBld: acl.NewBuilder(db, 5*time.Minute)}
-	r.Get("/node/{id}/neighbors", h.serve)
+	r.Get("/node/{id}/neighbors", maskGraphResponse(http.HandlerFunc(h.serve)).ServeHTTP)
 	return r
 }
 

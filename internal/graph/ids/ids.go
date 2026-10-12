@@ -202,3 +202,24 @@ func ParseNaturalKey(nodeID string) (string, bool) {
 	}
 	return nodeID[idx+1:], true
 }
+
+// Node types that are not built by a constructor above but appear as node-id
+// prefixes (extractor findings, epic/business roots).
+const (
+	TypePaymentRef           NodeType = "payment_ref"
+	TypeCKOProcessingChannel NodeType = "cko_processing_channel"
+	TypeWegoOrder            NodeType = "wego_order"
+	TypeEpic                 NodeType = "epic"
+	TypeBusiness             NodeType = "business"
+)
+
+// AllTypes lists every node-id prefix. The response masker uses it to
+// recognize structural node ids; TestAllTypesComplete fails when a NodeType
+// constant is added without updating this list.
+var AllTypes = []NodeType{
+	TypeSlackThread, TypeJira, TypeGHPR, TypeCFPage, TypePagerDuty, TypeDatadog,
+	TypeSentry, TypeGWSDoc, TypeWegoHub, TypeClaudeArtifact, TypeJiraAttachment,
+	TypeSlackFile, TypePartner, TypeFeature, TypeStatus, TypeCurrency,
+	TypeCodeFile, TypePerson, TypeUserGroup,
+	TypePaymentRef, TypeCKOProcessingChannel, TypeWegoOrder, TypeEpic, TypeBusiness,
+}

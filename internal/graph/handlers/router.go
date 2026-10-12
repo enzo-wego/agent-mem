@@ -83,22 +83,22 @@ func mountRoutes(r chi.Router, deps Deps) {
 
 	// Read endpoints (Phase 3).
 	node := NewNode(deps.DB)
-	r.Method("GET", "/api/graph/node", node)
+	r.Method("GET", "/api/graph/node", maskGraphResponse(node))
 
 	person := NewPerson(deps.DB)
 	r.Method("GET", "/api/graph/person", person)
 
 	search, _ := NewSearchWithEmbedder(deps.DB, deps.Gemini)
-	r.Method("GET", "/api/graph/search", withContextTrace(search, "search", deps.BuildRev, deps.TraceRecorder))
+	r.Method("GET", "/api/graph/search", withContextTrace(maskGraphResponse(search), "search", deps.BuildRev, deps.TraceRecorder))
 
 	resolve, _ := NewResolve(deps.DB)
-	r.Method("POST", "/api/graph/resolve", withContextTrace(resolve, "resolve", deps.BuildRev, deps.TraceRecorder))
+	r.Method("POST", "/api/graph/resolve", withContextTrace(maskGraphResponse(resolve), "resolve", deps.BuildRev, deps.TraceRecorder))
 	if deps.TraceRecorder != nil {
 		r.Get("/api/graph/traces/stats", traceStatsHandler(deps.TraceRecorder))
 	}
 
 	// Epic (or business root) members grouped by type, with the activity window.
-	r.Method("GET", "/api/graph/epic/{key}", NewEpic(deps.DB))
+	r.Method("GET", "/api/graph/epic/{key}", maskGraphResponse(NewEpic(deps.DB)))
 
 	r.Method("GET", "/api/graph/slack-users", NewSlackUsersHandler(deps))
 	r.Method("GET", "/api/graph/slack-user", NewSlackUserHandler(deps))

@@ -664,6 +664,24 @@ needs the API key). The dashboard sends it on every request. Every other
 cluster summary, pins, subscriptions, ...) returns `403 admin_required` without
 it. Writes are unchanged.
 
+**Masking (non-admin responses).** On the five filtered routes, every string in a
+non-admin response is passed through `internal/redact` (middleware
+`maskGraphResponse`): emails become `[email]`, phone numbers `[phone]`, card-like
+numbers `[card]`. Payment refs (`p…`/`s…`/`d…`/`a…` shapes and `F.<id>`), labelled
+booking refs (`booking|order|pnr|itinerary` + `ref|no|#|:|=` + one value), node ids,
+URLs, Slack timestamps and UUIDs are left readable; emails are masked even inside
+them. Phones: `+` and 8-15 digits, or 7-15 digits after a label (`phone`, `tel`,
+`mobile`, `whatsapp`, `contact`, `call`, `hp`). Cards: 13-19 digits passing Luhn, or
+12-19 digits after a label (`card`, `pan`, `cc`, `credit`, `debit`, `visa`,
+`mastercard`, `amex`). Admin responses are unmasked. Plain-text error bodies (status >= 400) are masked and keep their status. Any other response that is not one
+valid JSON document becomes `500 {"error":"mask_failed"}`. Traces of masked
+responses carry `acl_mode=filtered-masked:v1`; `agent-mem trace show` does not replay
+their digests. Accepted false negatives: unlabelled local phone numbers without `+`,
+digits inside a real URL path (e.g. `wa.me/6591234567`), PII inside URL syntax (`url?4111…`, `url?tel=9123…`, digits after `#` `/` `=` `&` `-` `~` `*`, glued `url006591…`), zero-width characters, soft hyphen, U+2011 or U+2007 inside a digit run, double-encoded `%252B…` phones, `%2B` glued to a node id (`jira:PAY-1%2B65…`), a plus glued to a letter (`a%2B65…`, `x+(65)…`), out-of-range date-shaped `+` digit runs (`+2010-12-34-5678`), unlabelled non-Luhn digit runs, numbers glued to letters, emails written with spaces
+or "at", customer names. Accepted over-masking: an unlabelled Luhn-valid 13-19 digit
+run that is really an id but not in a protected shape; an email inside a node id or
+URL, so non-admin callers cannot follow such ids.
+
 **GET /api/graph/search** — keyword + semantic candidate search:
 
 ```bash
