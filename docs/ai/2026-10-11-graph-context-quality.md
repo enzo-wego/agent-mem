@@ -389,3 +389,21 @@ Eval rerun (2026-10-12 00:01 SGT, same draft labels, no `prepare --refresh`):
   parents would have exposed linked Slack files (all 4,536 have NULL scope; 10 were
   linked from Jira or Confluence). Slack files now need a visible Slack parent.
 
+
+### Phase 1b masking deployed (2026-10-12 08:04 SGT, hub, build `5ac1edd` = #95 `b2de392` + local bd commit)
+
+Live check, counts only: named-asker searches for "email", "phone number" and
+"card number" returned 0 raw emails where admin returned 97, 11 and 521; all appear
+as `[email]`. Traces record `filtered-masked:v1` for masked rows. The search for
+"email" also masked 251 card-like and 72 phone numbers, all inside the summaries of
+two Jira attachments and six Slack files (one attachment summary is 3.4 MB). These
+files hold data exports or test-card lists; they were fully visible to filtered callers
+before 1b. Open: whether agent-mem should store such attachments at all, and Phase 2
+should cap summary size in results.
+
+Latency after masking (same eval, 10 runs per case): resolve real asker p50 / p95
+30 / 155 ms (was 24 / 143), resolve admin 29 / 112 ms, hybrid search 1,133 / 2,293 ms
+(was 1,008 / 2,304). Within the +20% p95 gate. No failed requests.
+
+Code review took five rounds (URL adjacency, `%2B` phones, form-encoded separators);
+accepted false negatives are listed in the README.
