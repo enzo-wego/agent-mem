@@ -46,9 +46,11 @@ var (
 	// Jira keys with at most 6 digits only: longer runs look like booking refs.
 	reShieldJira = regexp.MustCompile(`\b[A-Z][A-Z0-9]+-\d{1,6}\b`)
 	reShieldHash = regexp.MustCompile(`[A-Za-z0-9_.-]+#\d+`)
-	// Date and time shields need non-digit boundaries (group 2 is the token).
-	reShieldDate = regexp.MustCompile(`(^|\D)(\d{4}-\d{2}-\d{2})($|\D)`)
-	reShieldTime = regexp.MustCompile(`(^|\D)(\d{2}:\d{2}(?::\d{2})?)($|\D)`)
+	// Date and time shields need non-digit boundaries, checked without
+	// consuming them (see shieldBounded).
+	reShieldDate = regexp.MustCompile(`\d{4}-\d{2}-\d{2}`)
+	reShieldTime = regexp.MustCompile(`\d{2}:\d{2}:\d{2}|\d{2}:\d{2}`)
+	reTimeShape  = regexp.MustCompile(`^\d{2}:\d{2}(?::\d{2})?$`)
 
 	reMention = regexp.MustCompile(`<@([UW][A-Z0-9]+)(?:\|[^>]*)?>`)
 	// group 1 is the preceding boundary, group 2 the @-name.
@@ -158,6 +160,41 @@ func (p *Pseudonymizer) shield(lit string) string {
 		b.WriteRune('\uE010' + (d - '0'))
 	}
 	b.WriteString(shieldClose)
+	return b.String()
+}
+
+// shieldOrRef shields lit, or its ref alias when lit was already aliased.
+func (p *Pseudonymizer) shieldOrRef(lit string) string {
+	if a, ok := p.alias["ref|"+normAlias(lit)]; ok {
+		return p.shield(a)
+	}
+	return p.shield(lit)
+}
+
+// shieldBounded shields matches of re that are not part of a longer digit run.
+// The boundary bytes are inspected, not consumed, so adjacent tokens such as
+// "2026-10-12,2026-10-13" are both found. A rejected long time form falls back
+// to its "hh:mm" prefix.
+func shieldBounded(re *regexp.Regexp, s string, fn func(string) string) string {
+	var b strings.Builder
+	pos := 0
+	for _, loc := range re.FindAllStringIndex(s, -1) {
+		start, end := loc[0], loc[1]
+		okAt := func(e int) bool {
+			return (start == 0 || !isDigit(s[start-1])) && (e >= len(s) || !isDigit(s[e]))
+		}
+		if !okAt(end) {
+			if end-start == 8 && okAt(start+5) {
+				end = start + 5
+			} else {
+				continue
+			}
+		}
+		b.WriteString(s[pos:start])
+		b.WriteString(fn(s[start:end]))
+		pos = end
+	}
+	b.WriteString(s[pos:])
 	return b.String()
 }
 
@@ -280,10 +317,12 @@ func (p *Pseudonymizer) Apply(s string) string {
 	// date or time. A token without a digit is not a ref.
 	s = p.labelledRefs(s)
 	// 1. shield protected tokens.
-	s = reShieldJira.ReplaceAllStringFunc(s, p.shield)
-	s = reShieldHash.ReplaceAllStringFunc(s, p.shield)
-	s = replaceGroup(reShieldDate, s, 2, p.shield)
-	s = replaceGroup(reShieldTime, s, 2, p.shield)
+	// A value that already has a ref alias is replaced by that alias, even in
+	// a shield shape.
+	s = reShieldJira.ReplaceAllStringFunc(s, p.shieldOrRef)
+	s = reShieldHash.ReplaceAllStringFunc(s, p.shieldOrRef)
+	s = shieldBounded(reShieldDate, s, p.shieldOrRef)
+	s = shieldBounded(reShieldTime, s, p.shieldOrRef)
 	// 2. Slack mentions.
 	s = reMention.ReplaceAllStringFunc(s, func(m string) string {
 		id := reMention.FindStringSubmatch(m)[1]
@@ -341,6 +380,15 @@ func (p *Pseudonymizer) labelledRefs(s string) string {
 			break
 		}
 		labelEnd, t0, t1 := pos+m[3], pos+m[4], pos+m[5]
+		if reTimeShape.MatchString(s[t0:t1]) && t1 < len(s) && isAlnum(s[t1]) {
+			// "12:3456789": the time alternative matched a prefix; take the whole run.
+			for t1 < len(s) && (isAlnum(s[t1]) || s[t1] == '_' || s[t1] == '-' || s[t1] == ':') {
+				t1++
+			}
+			for t1 > t0 && (s[t1-1] == ':' || s[t1-1] == '-') {
+				t1--
+			}
+		}
 		if !hasDigitStr(s[t0:t1]) || (t1 < len(s) && s[t1] == '@') {
 			// Not a ref: resume right after the label so the next label can match.
 			b.WriteString(s[pos:labelEnd])
@@ -375,4 +423,8 @@ func refLike(tok string) bool {
 		return true
 	}
 	return n >= 10 && letters > 0 && digits > 0
+}
+
+func isAlnum(c byte) bool {
+	return isDigit(c) || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
 }

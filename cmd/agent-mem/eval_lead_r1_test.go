@@ -112,7 +112,7 @@ func TestLeadSeedsPresent(t *testing.T) {
 // Mask-then-cut vs cut-then-mask: a 14-char unlabelled ref straddling the cut
 // leaves a 6-char fragment that no ref rule can catch if the cut comes first.
 func TestLeadLabelSheetMasksBeforeCutAtBoundary(t *testing.T) {
-	ref := "AB12CD34EF56GH"
+	ref := "ABCDEFGH123456"
 	for _, tc := range []struct {
 		name        string
 		title, summ string
@@ -130,7 +130,7 @@ func TestLeadLabelSheetMasksBeforeCutAtBoundary(t *testing.T) {
 			t.Fatal(err)
 		}
 		data, _ := os.ReadFile(filepath.Join(out, "qa.md"))
-		if strings.Contains(string(data), "AB12CD") {
+		if strings.Contains(string(data), "ABCDE") {
 			t.Errorf("%s: ref fragment leaked across the cut", tc.name)
 		}
 		if !strings.Contains(string(data), "ref-1") {

@@ -167,7 +167,7 @@ func TestPseudonymizerShieldBoundaries(t *testing.T) {
 }
 
 func TestPseudonymizerLongLabelledToken(t *testing.T) {
-	tok := strings.Repeat("A", 44) + "90XYZ12"
+	tok := "AB12" + strings.Repeat("C", 36) + "90XYZ12"
 	got := NewPseudonymizer().Apply("ref " + tok + " end")
 	if got != "ref ref-1 end" {
 		t.Errorf("long token: %q", got)
@@ -208,13 +208,48 @@ func TestPseudonymizerUnicodeNames(t *testing.T) {
 
 func TestPseudonymizerShieldPlaceholderNotMatched(t *testing.T) {
 	p := NewPseudonymizer()
-	p.AddPerson("U1", "Ed")
+	p.AddPerson("U1", "E")
 	var in []string
-	for i := 0; i < 8; i++ {
+	for i := 0; i < 50; i++ {
 		in = append(in, "PAY-5")
 	}
 	got := p.Apply(strings.Join(in, " "))
 	if got != strings.Join(in, " ") {
 		t.Errorf("placeholder leaked or matched: %q", got)
+	}
+}
+
+func TestPseudonymizerRepeatedRefAliasInShieldShapes(t *testing.T) {
+	for _, c := range []struct{ in, want string }{
+		{"booking BKG-123456 failed; BKG-123456 retried", "booking ref-1 failed; ref-1 retried"},
+		{"payment PAY-2420 see PAY-2420", "payment ref-1 see ref-1"},
+		{"ref 2026-10-12 and later 2026-10-12", "ref ref-1 and later ref-1"},
+		{"ref 18:30 then 18:30", "ref ref-1 then ref-1"},
+		{"ref payments#2424 and payments#2424", "ref ref-1 and ref-1"},
+	} {
+		if got := NewPseudonymizer().Apply(c.in); got != c.want {
+			t.Errorf("Apply(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+	// Cross-row: one Pseudonymizer, alias known from an earlier row.
+	p := NewPseudonymizer()
+	if got := p.Apply("booking BKG-123456"); got != "booking ref-1" {
+		t.Fatalf("row 2: %q", got)
+	}
+	if got := p.Apply("BKG-123456 again"); got != "ref-1 again" {
+		t.Errorf("row 3: %q", got)
+	}
+}
+
+func TestPseudonymizerShieldBoundariesAdjacent(t *testing.T) {
+	for _, in := range []string{
+		"2026-10-12,2026-10-13", "2026-10-12 2026-10-13", "18:30,19:45", "18:30:05;19:45:10",
+	} {
+		if got := NewPseudonymizer().Apply(in); got != in {
+			t.Errorf("Apply(%q) = %q, want unchanged", in, got)
+		}
+	}
+	if got := NewPseudonymizer().Apply("ref 12:3456789 x"); got != "ref ref-1 x" {
+		t.Errorf("labelled time-prefixed run: %q", got)
 	}
 }
