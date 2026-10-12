@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -159,7 +160,7 @@ func (s *relevanceServer) handler(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.Lock()
 	s.auth = r.Header.Get("Authorization")
-	key := r.URL.Path + "|" + eeid + "|" + q
+	key := r.URL.Path + "|" + eeid + "|" + q + "|" + r.Header.Get("X-Graph-Lead")
 	s.calls[key]++
 	n := s.calls[key]
 	s.mu.Unlock()
@@ -168,9 +169,13 @@ func (s *relevanceServer) handler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Graph-Request-Id", fmt.Sprintf("req-%s-%d", q, n))
 	list := func(ids ...string) {
 		resolve := r.URL.Path == "/api/graph/resolve"
-		var parts []string
+		var parts, leadIDs []string
 		for i, id := range ids {
-			if resolve {
+			if resolve && r.Header.Get("X-Graph-Lead") == "1" {
+				if nid := strings.TrimPrefix(id, "L:"); !slices.Contains(leadIDs, nid) {
+					leadIDs = append(leadIDs, nid)
+				}
+			} else if resolve {
 				parts = append(parts, fmt.Sprintf(`{"node_id":%q}`, strings.TrimPrefix(id, "L:")))
 			} else if strings.HasPrefix(id, "L:") {
 				parts = append(parts, fmt.Sprintf(`{"node_id":%q,"linked_via":"jira:X-1"}`, id[2:]))
@@ -186,6 +191,10 @@ func (s *relevanceServer) handler(w http.ResponseWriter, r *http.Request) {
 		field := "artifacts"
 		if !resolve {
 			field = "results"
+		}
+		if resolve && r.Header.Get("X-Graph-Lead") == "1" {
+			fmt.Fprintf(w, `{"artifacts":%s}`, testLeadItemsJSON(leadIDs...))
+			return
 		}
 		fmt.Fprintf(w, `{"%s":[%s]%s}`, field, strings.Join(parts, ","), arm)
 	}
@@ -309,8 +318,8 @@ func TestRelevanceMetricsOnFixedServer(t *testing.T) {
 	if err := json.Unmarshal(data, &result); err != nil {
 		t.Fatal(err)
 	}
-	if len(result.PerCase) != 18 {
-		t.Fatalf("per_case=%d want 18", len(result.PerCase))
+	if len(result.PerCase) != 24 {
+		t.Fatalf("per_case=%d want 24", len(result.PerCase))
 	}
 	get := func(id, variant string) int {
 		for i, p := range result.PerCase {
@@ -374,7 +383,7 @@ func TestRelevanceMetricsOnFixedServer(t *testing.T) {
 	if agg.Samples != 4*10+9 || agg.LowSample || agg.P50Ms == nil || agg.P95Ms == nil {
 		t.Fatalf("latency aggregate: samples=%d low=%v", agg.Samples, agg.LowSample)
 	}
-	if len(result.RequestIDs) < 18*10 || result.BuildRev != "rev-test" {
+	if len(result.RequestIDs) < 24*10 || result.BuildRev != "rev-test" {
 		t.Fatalf("request ids=%d rev=%s", len(result.RequestIDs), result.BuildRev)
 	}
 	text := buf.String()
@@ -461,6 +470,22 @@ type prepareServer struct {
 	mu   sync.Mutex
 	byQ  map[string][]string
 	fail map[string]bool
+	// leadRoot, per query, is the id the lead response lists first (its hop-0 item).
+	leadRoot map[string]string
+}
+
+// testLeadItemsJSON renders a valid lead-mode artifacts array: the first id is
+// a seed (hop 0), the rest hop 1; every item has the required lead fields.
+func testLeadItemsJSON(ids ...string) string {
+	parts := make([]string, 0, len(ids))
+	for i, id := range ids {
+		hop := 1
+		if i == 0 {
+			hop = 0
+		}
+		parts = append(parts, fmt.Sprintf(`{"node_id":%q,"hop":%d,"links":[],"authored_by_bot":"human","title":"title of %s","lead_summary":"summary of %s","author":"","author_slack_id":"","last_activity_at":"2026-10-01T00:00:00Z"}`, id, hop, id, id))
+	}
+	return "[" + strings.Join(parts, ",") + "]"
 }
 
 func (p *prepareServer) handler(w http.ResponseWriter, r *http.Request) {
@@ -475,6 +500,15 @@ func (p *prepareServer) handler(w http.ResponseWriter, r *http.Request) {
 	}
 	p.mu.Lock()
 	ids, fail := p.byQ[q], p.fail[q+"|"+r.URL.Path]
+	leadIDs := ids
+	if first := p.leadRoot[q]; first != "" {
+		leadIDs = []string{first}
+		for _, id := range ids {
+			if id != first {
+				leadIDs = append(leadIDs, id)
+			}
+		}
+	}
 	p.mu.Unlock()
 	if fail {
 		http.Error(w, "boom", 500)
@@ -486,7 +520,9 @@ func (p *prepareServer) handler(w http.ResponseWriter, r *http.Request) {
 	for _, id := range ids {
 		parts = append(parts, fmt.Sprintf(`{"node_id":%q}`, id))
 	}
-	if resolve {
+	if resolve && r.Header.Get("X-Graph-Lead") == "1" {
+		fmt.Fprintf(w, `{"artifacts":%s}`, testLeadItemsJSON(leadIDs...))
+	} else if resolve {
 		fmt.Fprintf(w, `{"artifacts":[%s]}`, strings.Join(parts, ","))
 	} else {
 		fmt.Fprintf(w, `{"results":[%s]}`, strings.Join(parts, ","))
@@ -500,7 +536,7 @@ func TestPrepareWritesOraclesAndLabelSheetsUseSavedReplay(t *testing.T) {
 	ps := &prepareServer{byQ: map[string][]string{
 		"qa": {reply, root, "jira:GONE-1"},
 		"qb": {other, root},
-	}, fail: map[string]bool{}}
+	}, fail: map[string]bool{}, leadRoot: map[string]string{"qa": root}}
 	server := httptest.NewServer(http.HandlerFunc(ps.handler))
 	defer server.Close()
 
@@ -510,7 +546,7 @@ func TestPrepareWritesOraclesAndLabelSheetsUseSavedReplay(t *testing.T) {
 	writeTestCase(t, dataDir, testCaseSpec{ID: "qb", Query: "qb", Seeds: []string{other}})
 	t.Setenv("AGENT_MEM_API_KEY", "")
 	var buf bytes.Buffer
-	if err := runEvalPrepare(context.Background(), &buf, evalPrepareOpts{BaseURL: server.URL, DataDir: dataDir, EnvPath: "/nonexistent", Pool: pool}); err != nil {
+	if err := runEvalPrepare(context.Background(), &buf, evalPrepareOpts{Snapshot: filepath.Join(t.TempDir(), "snap"), BaseURL: server.URL, DataDir: dataDir, EnvPath: "/nonexistent", Pool: pool}); err != nil {
 		t.Fatalf("%v\n%s", err, buf.String())
 	}
 
@@ -551,13 +587,13 @@ func TestPrepareWritesOraclesAndLabelSheetsUseSavedReplay(t *testing.T) {
 	}
 	qa, _ := os.ReadFile(filepath.Join(outDir, "qa.md"))
 	qb, _ := os.ReadFile(filepath.Join(outDir, "qb.md"))
-	if !strings.Contains(string(qa), "## "+reply) || strings.Contains(string(qa), "## "+root) || !strings.Contains(string(qa), "jira:GONE-1") || strings.Contains(string(qa), "NEW-") {
+	if !strings.Contains(string(qa), "## [r1] "+reply) || strings.Contains(string(qa), "] "+root) || !strings.Contains(string(qa), "## [r2] jira:GONE-1") || strings.Contains(string(qa), "NEW-") {
 		t.Fatalf("qa sheet wrong:\n%s", qa)
 	}
 	if !strings.Contains(string(qa), "is_reply: true") || !strings.Contains(string(qa), "reply title") || strings.Contains(string(qa), strings.Repeat("r", 301)) || !strings.Contains(string(qa), strings.Repeat("r", 300)) {
 		t.Fatalf("qa sheet content wrong:\n%s", qa)
 	}
-	if !strings.Contains(string(qb), "## "+root) || strings.Contains(string(qb), "## "+other) || strings.Contains(string(qb), "NEW-") {
+	if !strings.Contains(string(qb), "## [r1] "+root) || strings.Contains(string(qb), "] "+other) || strings.Contains(string(qb), "NEW-") {
 		t.Fatalf("qb sheet wrong:\n%s", qb)
 	}
 
@@ -634,7 +670,7 @@ func TestPrepareNeverWritesPartialFiles(t *testing.T) {
 	t.Setenv("AGENT_MEM_API_KEY", "")
 
 	// A replay failing after the first case finished (and after DB work).
-	err := runEvalPrepare(context.Background(), &bytes.Buffer{}, evalPrepareOpts{BaseURL: server.URL, DataDir: dataDir, EnvPath: "/nonexistent", Pool: pool})
+	err := runEvalPrepare(context.Background(), &bytes.Buffer{}, evalPrepareOpts{Snapshot: filepath.Join(t.TempDir(), "snap"), BaseURL: server.URL, DataDir: dataDir, EnvPath: "/nonexistent", Pool: pool})
 	if err == nil {
 		t.Fatal("replay failure must fail prepare")
 	}
@@ -651,7 +687,7 @@ func TestPrepareNeverWritesPartialFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	closed.Close()
-	if err := runEvalPrepare(context.Background(), &bytes.Buffer{}, evalPrepareOpts{BaseURL: server.URL, DataDir: dataDir, EnvPath: "/nonexistent", Pool: closed}); err == nil {
+	if err := runEvalPrepare(context.Background(), &bytes.Buffer{}, evalPrepareOpts{Snapshot: filepath.Join(t.TempDir(), "snap"), BaseURL: server.URL, DataDir: dataDir, EnvPath: "/nonexistent", Pool: closed}); err == nil {
 		t.Fatal("database error must fail prepare")
 	}
 	if !sameSnapshot(before, snapshotDir(t, dataDir)) {
@@ -673,7 +709,7 @@ func TestPrepareRefreshAddsMissingIDs(t *testing.T) {
 	writeTestCase(t, dataDir, testCaseSpec{ID: "qa", Query: "qa", Seeds: []string{root}})
 	t.Setenv("AGENT_MEM_API_KEY", "")
 	run := func(refresh bool) {
-		if err := runEvalPrepare(context.Background(), &bytes.Buffer{}, evalPrepareOpts{BaseURL: server.URL, Refresh: refresh, DataDir: dataDir, EnvPath: "/nonexistent", Pool: pool}); err != nil {
+		if err := runEvalPrepare(context.Background(), &bytes.Buffer{}, evalPrepareOpts{Snapshot: filepath.Join(t.TempDir(), "snap"), BaseURL: server.URL, Refresh: refresh, DataDir: dataDir, EnvPath: "/nonexistent", Pool: pool}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -714,7 +750,7 @@ func TestRelevanceMarksLowSample(t *testing.T) {
 	if err := runRelevance(cmd, relevanceOpts{BaseURL: server.URL, DataDir: dataDir, EnvPath: "/nonexistent"}); err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.Count(buf.String(), "samples=10 low sample"); got != 3 {
-		t.Fatalf("low sample marks=%d want 3\n%s", got, buf.String())
+	if got := strings.Count(buf.String(), "samples=10 low sample"); got != 4 {
+		t.Fatalf("low sample marks=%d want 4\n%s", got, buf.String())
 	}
 }

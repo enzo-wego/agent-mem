@@ -52,3 +52,5 @@ docker-compose.override.yml
 .dolt/
 *.db
 .beads-credential-key
+
+/cmd/agent-mem/agent-mem

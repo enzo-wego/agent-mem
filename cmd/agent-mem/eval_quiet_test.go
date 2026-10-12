@@ -77,6 +77,10 @@ func (s *leadAQuietServer) handler(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("X-Graph-Request-Id", fmt.Sprintf("req-%d", n))
 		if r.URL.Path == "/api/graph/resolve" {
+			if r.Header.Get("X-Graph-Lead") == "1" {
+				fmt.Fprint(w, `{"artifacts":`+testLeadItemsJSON("seed", "must1", "may1")+`}`)
+				return
+			}
 			fmt.Fprint(w, `{"artifacts":[{"node_id":"seed"},{"node_id":"must1"},{"node_id":"may1"}]}`)
 		} else {
 			fmt.Fprint(w, `{"results":[{"node_id":"must1"},{"node_id":"may1"}]}`)
@@ -278,14 +282,14 @@ func TestLeadAQuietMeasuredRunFailures(t *testing.T) {
 			if !strings.Contains(quiet.out, "failed=1 (quietcase)") || !strings.Contains(quiet.out, "failed runs (10):") {
 				t.Fatalf("failure counts missing:\n%s", quiet.out)
 			}
-			if got := strings.Count(quiet.out, "quietcase/"); got != 3*10 {
-				t.Fatalf("failed run lines = %d, want 30:\n%s", got, quiet.out)
+			if got := strings.Count(quiet.out, "quietcase/"); got != 4*10 {
+				t.Fatalf("failed run lines = %d, want 40:\n%s", got, quiet.out)
 			}
-			if got := strings.Count(quiet.out, "#1: "+tc.category+"\n"); got != 3 {
+			if got := strings.Count(quiet.out, "#1: "+tc.category+"\n"); got != 4 {
 				t.Fatalf("category %q lines = %d, want 3:\n%s", tc.category, got, quiet.out)
 			}
 			res := leadAParseJSON(t, quiet)
-			if len(res.PerCase) != 3 {
+			if len(res.PerCase) != 4 {
 				t.Fatalf("per_case = %d", len(res.PerCase))
 			}
 			for _, pc := range res.PerCase {
@@ -380,14 +384,16 @@ func TestLeadAQuietHealthyRunMatchesNonQuiet(t *testing.T) {
 	}
 	leadAAssertNoLeak(t, quiet, serverQ.URL)
 
-	for _, want := range []string{"  resolve-admin: POST /api/graph/resolve headers=", "  resolve-asker: POST /api/graph/resolve headers=", "  search-hybrid: GET /api/graph/search?", "q=" + leadAQuietQuery, `"query":"` + leadAQuietQuery + `"`} {
+	for _, want := range []string{"  resolve-admin: POST /api/graph/resolve headers=", "  resolve-asker: POST /api/graph/resolve headers=", "  resolve-lead: POST /api/graph/resolve headers=", "  search-hybrid: GET /api/graph/search?", "q=" + leadAQuietQuery, `"query":"` + leadAQuietQuery + `"`} {
 		if !strings.Contains(loud.out, want) {
 			t.Fatalf("non-quiet output lost %q:\n%s", want, loud.out)
 		}
 	}
-	echo := regexp.MustCompile(`(?m)^  (resolve-admin|resolve-asker|search-hybrid): .*$`)
+	echo := regexp.MustCompile(`(?m)^  (resolve-admin|resolve-asker|resolve-lead|search-hybrid): .*$`)
 	loudStripped := echo.ReplaceAllString(loud.out, "  $1")
-	norm := func(s string) string { return leadAQuietLatency.ReplaceAllString(s, "") }
+	// --quiet additionally prints warmup_ok/runs_ok counters.
+	counters := regexp.MustCompile(`(?m)^  warmup_ok=.*\n`)
+	norm := func(s string) string { return counters.ReplaceAllString(leadAQuietLatency.ReplaceAllString(s, ""), "") }
 	if norm(loudStripped) != norm(quiet.out) {
 		t.Fatalf("quiet output differs beyond request echo\nquiet:\n%s\nnon-quiet stripped:\n%s", quiet.out, loudStripped)
 	}

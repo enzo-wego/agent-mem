@@ -16,13 +16,18 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"gopkg.in/yaml.v3"
 )
 
-var evalVariants = []string{"resolve-admin", "resolve-asker", "search-hybrid"}
+// evalLeadVariant is the lead-mode resolve: the asker's resolve body plus
+// X-Graph-Lead: 1, titles and summaries only.
+const evalLeadVariant = "resolve-lead"
+
+var evalVariants = []string{"resolve-admin", "resolve-asker", "search-hybrid", evalLeadVariant}
 
 const evalRequestTimeout = 10 * time.Second
 
@@ -85,6 +90,8 @@ func evalVariantHeaders(c evalCase, name string) map[string]string {
 		return map[string]string{"X-Graph-Admin": "1"}
 	case "search-hybrid":
 		return map[string]string{"X-Asker-User": strconv.Itoa(c.AskerEEID)}
+	case evalLeadVariant:
+		return map[string]string{"X-Graph-Lead": "1"}
 	}
 	return map[string]string{}
 }
@@ -115,9 +122,13 @@ func formatEvalHeaders(h map[string]string) string {
 
 // buildEvalRequest returns the HTTP request for one named variant of a case.
 func buildEvalRequest(c evalCase, name string) (method, pathURL string, body []byte, headers map[string]string, err error) {
-	req, ok := c.Requests[name]
+	src := name
+	if name == evalLeadVariant {
+		src = "resolve-asker"
+	}
+	req, ok := c.Requests[src]
 	if !ok {
-		return "", "", nil, nil, fmt.Errorf("%s: missing %s", c.ID, name)
+		return "", "", nil, nil, fmt.Errorf("%s: missing %s", c.ID, src)
 	}
 	headers = evalVariantHeaders(c, name)
 	if name == "search-hybrid" {
@@ -132,8 +143,37 @@ func buildEvalRequest(c evalCase, name string) (method, pathURL string, body []b
 		}
 		return http.MethodGet, "/api/graph/search?" + values.Encode(), nil, headers, nil
 	}
-	body, _ = json.Marshal(req.Body)
+	reqBody := req.Body
+	if name == evalLeadVariant {
+		// The YAML anchor makes variant bodies share values: copy before setting.
+		reqBody = deepCopyMap(req.Body)
+		reqBody["include_bodies"] = false
+		reqBody["max_items"] = 30
+	}
+	body, _ = json.Marshal(reqBody)
 	return http.MethodPost, "/api/graph/resolve", body, headers, nil
+}
+
+func deepCopyMap(in map[string]any) map[string]any {
+	out := make(map[string]any, len(in))
+	for k, v := range in {
+		out[k] = deepCopyAny(v)
+	}
+	return out
+}
+
+func deepCopyAny(v any) any {
+	switch x := v.(type) {
+	case map[string]any:
+		return deepCopyMap(x)
+	case []any:
+		out := make([]any, len(x))
+		for i, e := range x {
+			out[i] = deepCopyAny(e)
+		}
+		return out
+	}
+	return v
 }
 
 // readDotEnv parses KEY=VALUE lines (optional `export`, quotes, # comments).
@@ -453,4 +493,246 @@ func validateEvalCaseState(c evalCase) error {
 		}
 	}
 	return nil
+}
+
+// ---- lead mode -------------------------------------------------------------
+
+// Outcomes of one resolve-lead request (and of the replay's variant entry).
+const (
+	outcomeOK             = "ok"
+	outcomeLeadOff        = "lead_off"
+	outcomeHTTPError      = "http_error"
+	outcomeTransportError = "transport_error"
+	outcomeDecodeError    = "decode_error"
+)
+
+// Fixed validation categories: never carry content.
+const (
+	catLeadMissing         = "lead_missing"
+	catLeadOutcome         = "lead_outcome"
+	catLeadItems           = "lead_items"
+	catEligibilityMismatch = "eligibility_mismatch"
+)
+
+// evalCategoryError is an error that is only a fixed category string.
+type evalCategoryError struct{ category string }
+
+func (e *evalCategoryError) Error() string { return e.category }
+
+func categoryErr(c string) error { return &evalCategoryError{category: c} }
+
+type leadLink struct {
+	Kind       string  `json:"kind"`
+	Confidence float64 `json:"confidence"`
+	From       string  `json:"from"`
+	To         string  `json:"to"`
+	invalid    bool
+}
+
+// leadItem is the eligibility metadata of one lead root: ids, enums and
+// numbers only, never text. Decoding from replay.json is strict: a missing or
+// mistyped field marks the item invalid instead of reading as a zero value.
+type leadItem struct {
+	ID             string     `json:"id"`
+	Hop            int        `json:"hop"`
+	Links          []leadLink `json:"links"`
+	AuthoredByBot  string     `json:"authored_by_bot"`
+	BotInThread    string     `json:"bot_in_thread"`
+	HasTitle       bool       `json:"has_title"`
+	SummaryRunes   int        `json:"summary_runes"`
+	LastActivityAt string     `json:"last_activity_at"`
+	invalid        bool
+}
+
+func strictField(m map[string]json.RawMessage, key string, dst any, invalid *bool) {
+	raw, ok := m[key]
+	if !ok || string(raw) == "null" || json.Unmarshal(raw, dst) != nil {
+		*invalid = true
+	}
+}
+
+func (l *leadLink) UnmarshalJSON(data []byte) error {
+	var m map[string]json.RawMessage
+	if json.Unmarshal(data, &m) != nil || m == nil {
+		l.invalid = true
+		return nil
+	}
+	strictField(m, "kind", &l.Kind, &l.invalid)
+	strictField(m, "confidence", &l.Confidence, &l.invalid)
+	strictField(m, "from", &l.From, &l.invalid)
+	strictField(m, "to", &l.To, &l.invalid)
+	return nil
+}
+
+func (it *leadItem) UnmarshalJSON(data []byte) error {
+	var m map[string]json.RawMessage
+	if json.Unmarshal(data, &m) != nil || m == nil {
+		it.invalid = true
+		return nil
+	}
+	strictField(m, "id", &it.ID, &it.invalid)
+	strictField(m, "hop", &it.Hop, &it.invalid)
+	strictField(m, "links", &it.Links, &it.invalid)
+	strictField(m, "authored_by_bot", &it.AuthoredByBot, &it.invalid)
+	strictField(m, "bot_in_thread", &it.BotInThread, &it.invalid)
+	strictField(m, "has_title", &it.HasTitle, &it.invalid)
+	strictField(m, "summary_runes", &it.SummaryRunes, &it.invalid)
+	strictField(m, "last_activity_at", &it.LastActivityAt, &it.invalid)
+	return nil
+}
+
+func validAuthoredByBot(v string) bool { return v == "human" || v == "bot" || v == "unknown" }
+
+// leadItemsValid applies the A2 shape rules to stored or freshly parsed items.
+func leadItemsValid(items []leadItem) bool {
+	seen := map[string]bool{}
+	for _, it := range items {
+		if it.invalid || it.ID == "" || seen[it.ID] || !validAuthoredByBot(it.AuthoredByBot) || it.Links == nil {
+			return false
+		}
+		seen[it.ID] = true
+		for _, l := range it.Links {
+			if l.invalid || l.Kind == "" {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// leadEligibilityDigest is the SHA-256 of the canonical JSON (keys sorted, no
+// whitespace) of {case_id: items}.
+func leadEligibilityDigest(byCase map[string][]leadItem) string {
+	norm := make(map[string][]leadItem, len(byCase))
+	for id, items := range byCase {
+		cp := make([]leadItem, len(items))
+		for i, it := range items {
+			if it.Links == nil {
+				it.Links = []leadLink{}
+			}
+			cp[i] = it
+		}
+		norm[id] = cp
+	}
+	raw, _ := json.Marshal(norm)
+	var generic any
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	_ = dec.Decode(&generic)
+	canon, _ := json.Marshal(generic) // map keys are sorted
+	sum := sha256.Sum256(canon)
+	return hex.EncodeToString(sum[:])
+}
+
+// leadParsed is one lead response item: eligibility metadata plus the exact
+// text the server returned (kept only in the private snapshot).
+type leadParsed struct {
+	Item          leadItem
+	Title         string
+	Summary       string
+	Author        string
+	AuthorSlackID string
+}
+
+// optString reads an optional string field; a present non-string is an error.
+func optString(m map[string]json.RawMessage, key string) (string, bool) {
+	raw, ok := m[key]
+	if !ok || string(raw) == "null" {
+		return "", true
+	}
+	var s string
+	if json.Unmarshal(raw, &s) != nil {
+		return "", false
+	}
+	return s, true
+}
+
+// parseLeadResponse classifies one resolve-lead call and, when ok, returns the
+// items in response order. It does not use parseEvalResponse, which accepts {}.
+func parseLeadResponse(call evalCall) (string, []leadParsed) {
+	switch {
+	case call.Status == 0:
+		return outcomeTransportError, nil
+	case call.Err != nil && (call.Status < 200 || call.Status >= 300):
+		return outcomeHTTPError, nil
+	case call.Err != nil:
+		return outcomeTransportError, nil
+	case call.Status < 200 || call.Status >= 300:
+		return outcomeHTTPError, nil
+	}
+	if call.Header.Get("X-Graph-Lead") == "off" {
+		return outcomeLeadOff, nil
+	}
+	var top map[string]json.RawMessage
+	if json.Unmarshal(call.Body, &top) != nil {
+		return outcomeDecodeError, nil
+	}
+	var arts []json.RawMessage
+	if raw, ok := top["artifacts"]; !ok || string(raw) == "null" || json.Unmarshal(raw, &arts) != nil {
+		return outcomeDecodeError, nil
+	}
+	out := make([]leadParsed, 0, len(arts))
+	seen := map[string]bool{}
+	for _, raw := range arts {
+		var m map[string]json.RawMessage
+		if json.Unmarshal(raw, &m) != nil || m == nil {
+			return outcomeDecodeError, nil
+		}
+		var p leadParsed
+		it := &p.Item
+		var rawID, rawHop, rawAuth json.RawMessage
+		var ok bool
+		if rawID, ok = m["node_id"]; !ok || string(rawID) == "null" || json.Unmarshal(rawID, &it.ID) != nil || it.ID == "" || seen[it.ID] {
+			return outcomeDecodeError, nil
+		}
+		seen[it.ID] = true
+		if rawHop, ok = m["hop"]; !ok || string(rawHop) == "null" || json.Unmarshal(rawHop, &it.Hop) != nil {
+			return outcomeDecodeError, nil
+		}
+		if rawAuth, ok = m["authored_by_bot"]; !ok || string(rawAuth) == "null" || json.Unmarshal(rawAuth, &it.AuthoredByBot) != nil || !validAuthoredByBot(it.AuthoredByBot) {
+			return outcomeDecodeError, nil
+		}
+		it.Links = []leadLink{}
+		if rawLinks, present := m["links"]; present && string(rawLinks) != "null" {
+			var links []map[string]json.RawMessage
+			if json.Unmarshal(rawLinks, &links) != nil {
+				return outcomeDecodeError, nil
+			}
+			for _, lm := range links {
+				var l leadLink
+				if lm == nil {
+					return outcomeDecodeError, nil
+				}
+				for _, f := range []struct {
+					key string
+					dst any
+				}{{"kind", &l.Kind}, {"from", &l.From}, {"to", &l.To}} {
+					if r, ok := lm[f.key]; !ok || string(r) == "null" || json.Unmarshal(r, f.dst) != nil {
+						return outcomeDecodeError, nil
+					}
+				}
+				if l.Kind == "" {
+					return outcomeDecodeError, nil
+				}
+				if r, ok := lm["confidence"]; ok && json.Unmarshal(r, &l.Confidence) != nil {
+					return outcomeDecodeError, nil
+				}
+				it.Links = append(it.Links, l)
+			}
+		}
+		var s1, s2, s3, s4, s5, s6 bool
+		p.Title, s1 = optString(m, "title")
+		p.Summary, s2 = optString(m, "lead_summary")
+		p.Author, s3 = optString(m, "author")
+		p.AuthorSlackID, s4 = optString(m, "author_slack_id")
+		it.BotInThread, s5 = optString(m, "bot_in_thread")
+		it.LastActivityAt, s6 = optString(m, "last_activity_at")
+		if !(s1 && s2 && s3 && s4 && s5 && s6) {
+			return outcomeDecodeError, nil
+		}
+		it.HasTitle = p.Title != ""
+		it.SummaryRunes = utf8.RuneCountInString(p.Summary)
+		out = append(out, p)
+	}
+	return outcomeOK, out
 }

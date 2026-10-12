@@ -46,7 +46,7 @@ test-db: ## Run graph DB tests serially; starts isolated pgvector when TEST_DATA
 	dsn="$(TEST_DATABASE_URL)"; \
 	if [ -z "$$dsn" ]; then \
 	  container="agentmem-test-$$$$-$$RANDOM"; \
-	  trap '"'"'test -z "$$container" || docker rm -f "$$container" >/dev/null 2>&1 || true'"'"' EXIT; \
+	  trap '"'"'test -z "$$container" || docker rm -fv "$$container" >/dev/null 2>&1 || true'"'"' EXIT; \
 	  docker run -d --name "$$container" -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=agentmem_test -p 127.0.0.1::5432 pgvector/pgvector:pg16 >/dev/null; \
 	  ready=""; \
 	  for i in $$(seq 1 60); do \
