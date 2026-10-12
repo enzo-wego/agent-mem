@@ -472,4 +472,41 @@ Part B: `testdata/eval/graph_context/replay.json`, `node_meta.json`, new
 
 ## Results
 
-(filled after Part B and Part C)
+Run 2026-10-12 23:37 SGT, agent-mem main 3dae954, CLI built from it, hub worker build 58b9624. Counts only.
+
+**Shipped:** PR #100 (Part A, c123c82; deep review code-r1 and code-r2 REQUEST_CHANGES, code-r3 APPROVE), PR #101
+(post-merge seed-check fix: case-03's only seed was never ingested, so prepare aborted; review APPROVE), PR #102
+(Part B data, e8c244b).
+
+**B1 prepare:** all 20 `resolve-lead` outcomes ok; 209 roots, 188 non-seed (case-03: 0 roots; probe-a and probe-f hit
+the 30 cap). No case file changed. Eval after prepare (acceptance 3): all four variants warmup 20/20, runs 200/200,
+failed 0; same as the run before prepare.
+
+**Sheet scan (acceptance 5):** emails 0, Slack mentions 0, 8+ digit runs 2 (a Slack permalink timestamp and a
+9-character token that looks like a short git hash; neither is personal data). Tokens under 10 characters stay
+readable; see p-agent-fhlf.
+
+**Labels (`relation_labels.json`, relation-check ok, 20 cases / 188 items):** Opus and pi agreed on 158/188 (84 %).
+
+| relation | items |
+|---|---|
+| same_case | 73 |
+| related_context | 48 |
+| different_case | 7 (5 cases) |
+| insufficient | 60 (reviewers_disagree 30, empty_evidence 25, ambiguous 5) |
+
+By link bucket, different_case: structural 3, no_link 4, same_topic_hi 0, same_topic_lo 0. **Sampling target not met**
+(15 different_case across 6 cases). R1c must report the SAME_TOPIC judge cohort as inconclusive (0 decisive
+different_case there). Enzo may rule on the 30 disputed rows (B5, optional).
+
+**C1 lead vs plain:** plain `resolve-asker` returned 522 items; 518 map to a root that lead mode also returned; 421
+are replies under a root already counted. Folding explains nearly the whole gap; lead also returned 112 roots that
+plain did not.
+
+**C2 authored_by_bot:** non-seed lead roots unknown 78 (41 %), bot 27, human 83. The 70 unique unknown roots are all
+types without author linkage (slack_file 42, jira 12, feature 11, gws_doc 4, cf 1); 0 are Slack messages. DB-wide:
+Slack messages with no author 651/43,895 (1.5 %); authored Slack messages whose person has no Slack id
+6,068/43,244 (14 %). Filed p-agent-rdq4 (P2).
+
+**Follow-ups:** p-agent-fhlf (masking edge cases), p-agent-fet2 (seed check with `--refresh` / missing meta),
+p-agent-rdq4 (authored_by_bot). Private snapshot kept for R1c, then deleted (B7).
