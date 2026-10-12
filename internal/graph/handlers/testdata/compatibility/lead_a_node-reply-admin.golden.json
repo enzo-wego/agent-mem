@@ -1,0 +1,5 @@
+{
+  "status": 200,
+  "content_type": "application/json",
+  "body": "{\"node_id\":\"slack:CGC0:101.000001\",\"type\":\"slack\",\"url\":\"\",\"title\":\"Phase zero reply\",\"summary\":\"reply summary\",\"body\":\"phase zero reply body\",\"updated_at\":\"2026-10-09T00:00:00Z\",\"edges_in\":null,\"edges_out\":null}\n"
+}

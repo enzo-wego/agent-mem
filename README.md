@@ -954,6 +954,35 @@ Core environment variables:
 - `AGENT_MEM_SYNC_INTERVAL`
 - `AGENT_MEM_API_KEY`
 - `AGENT_MEM_MACHINE_ID`
+- `GRAPH_LEAD_MODE_ENABLED` — `false` by default; see [Lead mode](#lead-mode-for-graph-reads)
+
+### Lead mode for graph reads
+
+`resolve`, `node` and `search` (default and `match=hybrid`) have an opt-in **lead mode** for the
+EnzoBot graph-context caller. It runs for a request only when the worker env
+`GRAPH_LEAD_MODE_ENABLED=true` (read at startup, default `false`) **and** the request carries
+`X-Graph-Lead: 1`. The gate is decided before the body is decoded; any other request takes the
+unchanged code path. With the flag off, a request carrying `X-Graph-Lead: 1` gets today's
+response plus response header `X-Graph-Lead: off`.
+
+In lead mode: no bodies (`include_bodies` is ignored); `node` returns no `edges_in`/`edges_out`;
+Slack replies are folded into their thread root (resolve), and a reply whose root is hidden,
+missing, deleted, outside the epic filter or in another scope is omitted (node: 404). A lookup
+failure is `503 lead_lookup_failed`. `resolve` takes `max_items` (default 30, 1-100, otherwise
+`400 bad_max_items`; seeds are always returned). Added item fields: `lead_summary` (<= 600
+runes, masked first for non-admin callers), `last_activity_at`, `author_slack_id`,
+`authored_by_bot` (`bot`/`human`/`unknown`; bot = `graph.answer_bots` or `people.is_bot`),
+`bot_in_thread` (`yes`/`no`/`unknown`, Slack only; `yes` means a summary may quote a bot),
+`channel_id`, and on resolve `focus_ts` and link `from`/`to` (root ids). Slack-derived values
+come from the thread root and only from messages the asker may see.
+`context_tokens` in lead mode = sum of ceil((runes(title) + runes(lead_summary)) / 4).
+
+**No-trace switch (always on).** `X-Graph-No-Side-Effects: 1` (or `true`, case-insensitive) now
+also stops the context-trace write for resolve and search; the request id header and JSON
+`request_id` are still returned. A `no_side_effects` field in the request body alone does not
+stop the trace (the trace wrapper does not parse bodies); it still skips the `fetch_body`
+enqueue. `agent-mem eval relevance --quiet` prints no request URLs/bodies and reports failures
+as a category only (`transport`, `http_<status>`, `decode`).
 
 ### Graph Memory env vars
 

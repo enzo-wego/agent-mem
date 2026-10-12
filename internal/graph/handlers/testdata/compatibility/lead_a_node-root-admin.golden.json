@@ -1,0 +1,5 @@
+{
+  "status": 200,
+  "content_type": "application/json",
+  "body": "{\"node_id\":\"slack:CGC0:100.000001\",\"type\":\"slack\",\"url\":\"\",\"title\":\"Phase zero root\",\"summary\":\"root summary\",\"body\":\"phase zero root body\",\"updated_at\":\"2026-10-10T00:00:00Z\",\"edges_in\":null,\"edges_out\":[{\"to\":\"jira:GC0-1\",\"kind\":\"REFERENCES\"}]}\n"
+}

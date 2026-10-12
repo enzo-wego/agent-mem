@@ -38,8 +38,9 @@ type hybridResult struct {
 	PRs              []prRef            `json:"prs,omitempty"`
 	LinkedVia        string             `json:"linked_via,omitempty"`
 	LinkedViaTitle   string             `json:"linked_via_title,omitempty"`
-	titleSource      string
-	summarySource    string
+	*leadFields
+	titleSource   string
+	summarySource string
 }
 
 // hybridResponse is the /search?match=hybrid envelope: the page's

@@ -407,3 +407,10 @@ Latency after masking (same eval, 10 runs per case): resolve real asker p50 / p9
 
 Code review took five rounds (URL adjacency, `%2B` phones, form-encoded separators);
 accepted false negatives are listed in the README.
+
+### R1a lead mode built (2026-10-12, branch `feat/graph-lead-mode`, not merged or deployed)
+
+Opt-in lead mode for resolve/node/search (`GRAPH_LEAD_MODE_ENABLED` plus `X-Graph-Lead: 1`),
+header-only no-trace switch and `eval relevance --quiet`. Details and test results:
+`docs/ai/2026-10-12-graph-context-r1a-lead-fields.md`, section Findings. The `[bot answer,
+unverified]` summary label (umbrella P3) stays open; lead mode exposes `bot_in_thread`.

@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -22,6 +23,9 @@ type relevanceOpts struct {
 	JSONPath string
 	DataDir  string
 	EnvPath  string
+	// Quiet suppresses request URLs/bodies and raw error strings (transport
+	// errors embed the full URL); failures are reported as a category only.
+	Quiet bool
 }
 
 type evalRunResult struct {
@@ -118,7 +122,35 @@ func setOf(l []string) map[string]bool {
 	return m
 }
 
+// quietEvalError carries only a failure category; it never wraps the cause.
+type quietEvalError struct{ category string }
+
+func (e *quietEvalError) Error() string { return "eval relevance failed: " + e.category }
+
+// evalErrorCategory classifies a failed call without exposing URLs or bodies.
+func evalErrorCategory(call evalCall) string {
+	if call.Status == 0 {
+		return "transport"
+	}
+	if call.Status < 200 || call.Status >= 300 {
+		return fmt.Sprintf("http_%d", call.Status)
+	}
+	return "transport"
+}
+
 func runRelevance(cmd *cobra.Command, o relevanceOpts) error {
+	err := runRelevanceInner(cmd, o)
+	if err == nil || !o.Quiet {
+		return err
+	}
+	var qe *quietEvalError
+	if errors.As(err, &qe) {
+		return qe
+	}
+	return &quietEvalError{category: "setup"}
+}
+
+func runRelevanceInner(cmd *cobra.Command, o relevanceOpts) error {
 	cases, sum, err := loadEvalCases(o.DataDir)
 	if err != nil {
 		return err
@@ -170,7 +202,11 @@ func runRelevance(cmd *cobra.Command, o relevanceOpts) error {
 			if err != nil {
 				return err
 			}
-			fmt.Fprintf(out, "  %s: %s %s headers=%s body=%s\n", name, method, pathURL, formatEvalHeaders(evalRequestHeaders(headers)), string(body))
+			if o.Quiet {
+				fmt.Fprintf(out, "  %s\n", name)
+			} else {
+				fmt.Fprintf(out, "  %s: %s %s headers=%s body=%s\n", name, method, pathURL, formatEvalHeaders(evalRequestHeaders(headers)), string(body))
+			}
 			if o.DryRun {
 				continue
 			}
@@ -185,6 +221,9 @@ func runRelevance(cmd *cobra.Command, o relevanceOpts) error {
 			if !reachableChecked {
 				reachableChecked = true
 				if warm.Status == 0 && warm.Err != nil {
+					if o.Quiet {
+						return &quietEvalError{category: evalErrorCategory(warm)}
+					}
 					return fmt.Errorf("unreachable server %s: %w", o.BaseURL, warm.Err)
 				}
 			}
@@ -195,10 +234,12 @@ func runRelevance(cmd *cobra.Command, o relevanceOpts) error {
 				call := client.do(method, pathURL, body, headers)
 				run := evalRunResult{Ms: float64(call.Dur.Microseconds()) / 1000}
 				var ret evalReturn
+				decodeFailed := false
 				if call.Err == nil {
 					ret, err = parseEvalResponse(name, call)
 					if err != nil {
 						call.Err = err
+						decodeFailed = true
 					}
 				}
 				if id := firstNonEmpty(ret.RequestID, call.RequestID()); id != "" {
@@ -206,6 +247,12 @@ func runRelevance(cmd *cobra.Command, o relevanceOpts) error {
 				}
 				if call.Err != nil {
 					run.Error = call.Err.Error()
+					if o.Quiet {
+						run.Error = evalErrorCategory(call)
+						if decodeFailed {
+							run.Error = "decode"
+						}
+					}
 					agg.FailedRuns = append(agg.FailedRuns, fmt.Sprintf("%s/%s#%d: %s", c.ID, name, i, run.Error))
 					res.Runs = append(res.Runs, run)
 					continue

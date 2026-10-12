@@ -89,8 +89,29 @@ func (h *traceHTTP) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		record.Items = items[:200]
 		record.ItemsTruncated = true
 	}
+	if headerNoSideEffects(r) {
+		return
+	}
 	h.recorder.Enqueue(r.Context(), record)
 }
+
+// headerNoSideEffects reports whether X-Graph-No-Side-Effects alone asks for
+// no writes: "1" or "true" (case-insensitive).
+func headerNoSideEffects(r *http.Request) bool {
+	value := r.Header.Get("X-Graph-No-Side-Effects")
+	return value == "1" || strings.EqualFold(value, "true")
+}
+
+// noSideEffects applies the shared rule: an explicit header overrides the body
+// flag; "1" and "true" (case-insensitive) enable it, any other non-empty value
+// disables it.
+func noSideEffects(r *http.Request, bodyFlag bool) bool {
+	if r.Header.Get("X-Graph-No-Side-Effects") != "" {
+		return headerNoSideEffects(r)
+	}
+	return bodyFlag
+}
+
 func newContextID() string {
 	var b [13]byte
 	if _, err := rand.Read(b[:]); err != nil {
