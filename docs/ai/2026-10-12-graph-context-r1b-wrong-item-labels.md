@@ -238,6 +238,13 @@ A5. **Pseudonymizer** in `internal/redact` (new file `pseudonym.go`; `Mask` unch
      1. **Shield** protected tokens so later steps cannot match inside them: Jira keys
         `\b[A-Z][A-Z0-9]+-\d+\b`, `[A-Za-z0-9_.-]+#\d+`, ISO dates `\d{4}-\d{2}-\d{2}`,
         times `\d{2}:\d{2}(:\d{2})?`.
+        **code-r1 owner decision (Enzo, 2026-10-12):** a label word (step 6, plus its optional
+        `ref`/`reference`/`id`/`no`/`number` word) beats every shield: the token after it is
+        masked as `ref-N` even if it looks like a Jira key, `repo#n`, date or time, so labelled
+        refs are extracted before the shields; the Jira-key shield applies only to keys whose
+        numeric part has at most 6 digits; date and time shields need non-digit boundaries on
+        both sides. `payment PAY-2420` and `ref 2026-10-12` therefore mask the token, while
+        `PAY-2420`, `payments#2424`, `2026-10-12` and `18:30` alone stay readable.
      2. Slack mentions `<@([UW][A-Z0-9]+)(\|[^>]*)?>` → the alias of that id (new
         `person-N` if unknown).
      3. Registered display names: `@Name` or whole-word `Name`, case-insensitive →
@@ -280,7 +287,7 @@ A6. **`label-sheet --variant`.** Default `all`: today's union of all variants, t
    `os.Mkdir 0700`, files `O_CREATE|O_EXCL` 0600 after `Lstat`. Also writes
    `<out>/manifest.json`: `{case_id: [{r, node_id}]}` (ids only; the drafter's row
    inventory). Header: "MASKED: Slack mentions, author names, @-names, emails, phones, cards,
-   refs with a digit. NOT masked: other names in prose, merchant/partner names. CONFIDENTIAL:
+   refs with a digit (any token after a label word such as booking/payment/order). NOT masked: other names in prose, merchant/partner names. CONFIDENTIAL:
    do not commit or share." Errors are fixed categories on stderr, never content.
 A7. **`eval relation-assemble`** and **`eval relation-check`**.
    - Row file format (what models produce): `{case_id: {node_id: {relation, reason}}}`.
@@ -324,7 +331,7 @@ A8. **Tests** (`cmd/agent-mem/eval_*_test.go`, `internal/redact/pseudonym_test.g
      warm-up shows in `warmup_ok`; old variants' metrics match a golden output from before
      the change;
    - Pseudonymizer: `payment failed with timeout` unchanged; `booking reference AB1234` →
-     `booking reference ref-1`; `payment PAY-2420` unchanged; `ref 2026-10-12` unchanged;
+     `booking reference ref-1`; `PAY-2420` and `2026-10-12` alone unchanged (labelled: `payment ref-1`, `ref ref-1`);
      same ref twice → same alias; two refs → `ref-1`, `ref-2`;
      `https://x/y?id=AB12CD34EF56` masked inside the URL; `AB12-CD34EF56GH` masked;
      `payments#2424`, `18:30` kept; `AddPerson("U1","Ann Lee")` then `<@U1>`, `@Ann Lee`,

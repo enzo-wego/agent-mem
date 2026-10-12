@@ -173,8 +173,11 @@ Plan: `docs/ai/2026-10-12-graph-context-r1b-wrong-item-labels.md`. Case files an
   (reply-only `must` ids per `node_meta.json`, excluded from the lead recall denominator
   only). Lead responses are decoded strictly (HTTP 2xx, no `X-Graph-Lead: off`, an
   `artifacts` array, unique ids, integer `hop`, valid `links`, `authored_by_bot` in
-  `human|bot|unknown`); anything else is a failed run (`--quiet` category `lead_off` or
-  `decode`). `--quiet` also prints `warmup_ok/warmup_total` and `runs_ok/runs_total` per
+  `human|bot|unknown`); anything else is a failed run (`--quiet` category: the same categories as the old
+  variants, e.g. `HTTP <n>`, a transport error, or the lead outcome). Precision@10 excludes
+  seeds by `canonical_seeds` as for the old variants; for a reply seed the lead hop-0 root has
+  a different id, so it still counts toward precision@10 (sheets and `relation-check` treat
+  hop 0 as the seed). `--quiet` also prints `warmup_ok/warmup_total` and `runs_ok/runs_total` per
   variant.
 - **`eval prepare --snapshot <dir>`** (required). `<dir>` must not exist and its parent,
   resolved through symlinks, must be outside the repo. `replay.json` stores per case the
@@ -187,7 +190,9 @@ Plan: `docs/ai/2026-10-12-graph-context-r1b-wrong-item-labels.md`. Case files an
   `<dir>/snapshot.json` (dir 0700, file 0600, exclusive create, written last, removed if a
   later step fails). It is confidential; never commit it. `build_rev` comes from the
   `X-Graph-Build-Rev` response header if the server sends one (it does not today), else the
-  `BUILD_REV` environment variable, else `unknown`.
+  client-side `BUILD_REV` environment variable of the eval host (not the server's), else
+  `unknown`; expect `unknown` in practice. `prepare` also fails with `prepare: seed_mismatch
+  <case_id>` when a canonical seed (or its thread root) is not a hop-0 lead item.
 - **`eval label-sheet --variant all|resolve-lead`.** `all` (default) is the previous
   union-of-variants sheet; its row heading is now `## [r<k>] <node_id>`. `--variant
   resolve-lead --mask --snapshot <dir> --out <dir>` builds masked sheets from the snapshot
@@ -198,7 +203,9 @@ Plan: `docs/ai/2026-10-12-graph-context-r1b-wrong-item-labels.md`. Case files an
   `ok` lead variant with 2xx status and well-formed `items`, and `eligibility_sha256`
   recomputes) and the snapshot, eligibility and case digests all match. Residual exposure:
   names in prose that are not mentions or authors, merchant/partner names, refs without a
-  digit.
+  digit. A token after a label word (`booking`, `payment`, `order`, `pnr`, `bid`, `txn`,
+  `transaction`, `ref`, `reference`) is always masked, even if it looks like a Jira key,
+  `repo#n`, date or time.
 - **Relation rubric.** `same_case | related_context | different_case | insufficient`, one
   reason code per row (`same_ref`, `same_ticket_or_pr`, `work_on_case`, `precedent`,
   `same_component`, `runbook`, `different_ref`, `different_incident`, `shared_words_only`,

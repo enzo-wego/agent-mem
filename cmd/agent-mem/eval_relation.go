@@ -61,7 +61,9 @@ type relationFile struct {
 	Cases map[string]map[string]labelRow `json:"cases"`
 }
 
-var relationHeaderKeys = []string{"version", "adjudication", "cases_sha256", "eligibility_sha256", "snapshot_sha256", "build_rev", "input_mode", "cases"}
+var relationScalarKeys = []string{"version", "adjudication", "cases_sha256", "eligibility_sha256", "snapshot_sha256", "build_rev", "input_mode"}
+
+var relationHeaderKeys = append(append([]string(nil), relationScalarKeys...), "cases")
 
 // rejectDuplicateKeys fails on invalid JSON or an object with a repeated key.
 func rejectDuplicateKeys(data []byte) error {
@@ -164,19 +166,14 @@ func loadRelationContext(dataDir string) (*relationContext, error) {
 	}
 	rc.nonSeed = map[string]map[string]bool{}
 	for _, c := range rc.cases {
-		hop0 := map[string]bool{}
 		set := map[string]bool{}
 		for _, it := range rc.lead[c.ID] {
-			if it.Hop == 0 {
-				hop0[it.ID] = true
-			} else {
+			if it.Hop != 0 {
 				set[it.ID] = true
 			}
 		}
-		for _, s := range rc.replay.Cases[c.ID].CanonicalSeeds {
-			if !hop0[s] && !hop0[meta[s].ThreadRoot] {
-				return nil, categoryErr("seed_mismatch")
-			}
+		if !leadSeedsPresent(rc.replay.Cases[c.ID].CanonicalSeeds, rc.lead[c.ID], meta) {
+			return nil, categoryErr("seed_mismatch")
 		}
 		rc.nonSeed[c.ID] = set
 	}
@@ -203,7 +200,11 @@ func readRows(path string) (map[string]map[string]relationRow, error) {
 	if json.Unmarshal(data, &top) != nil || top == nil {
 		return nil, categoryErr("row_shape")
 	}
-	for _, k := range relationHeaderKeys {
+	// A relation_labels-shaped file ({"cases": ...}) is not a rows file.
+	if _, ok := top["cases"]; ok {
+		return nil, categoryErr("row_shape")
+	}
+	for _, k := range relationScalarKeys {
 		delete(top, k)
 	}
 	data, _ = json.Marshal(top)
@@ -346,6 +347,10 @@ func runRelationCheck(out io.Writer, path, dataDir string) error {
 		return categoryErr("version")
 	case f.InputMode != relationInputMode:
 		return categoryErr("input_mode")
+	case f.Adjudication != relationAdjudic:
+		return categoryErr("adjudication")
+	case f.BuildRev != rc.replay.BuildRev:
+		return categoryErr("build_rev_mismatch")
 	case f.EligibilitySHA256 != rc.replay.EligibilitySHA256:
 		return categoryErr(catEligibilityMismatch)
 	case f.SnapshotSHA256 != rc.replay.SnapshotSHA256:

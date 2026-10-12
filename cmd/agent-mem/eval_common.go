@@ -682,14 +682,14 @@ func parseLeadResponse(call evalCall) (string, []leadParsed) {
 		it := &p.Item
 		var rawID, rawHop, rawAuth json.RawMessage
 		var ok bool
-		if rawID, ok = m["node_id"]; !ok || json.Unmarshal(rawID, &it.ID) != nil || it.ID == "" || seen[it.ID] {
+		if rawID, ok = m["node_id"]; !ok || string(rawID) == "null" || json.Unmarshal(rawID, &it.ID) != nil || it.ID == "" || seen[it.ID] {
 			return outcomeDecodeError, nil
 		}
 		seen[it.ID] = true
-		if rawHop, ok = m["hop"]; !ok || json.Unmarshal(rawHop, &it.Hop) != nil {
+		if rawHop, ok = m["hop"]; !ok || string(rawHop) == "null" || json.Unmarshal(rawHop, &it.Hop) != nil {
 			return outcomeDecodeError, nil
 		}
-		if rawAuth, ok = m["authored_by_bot"]; !ok || json.Unmarshal(rawAuth, &it.AuthoredByBot) != nil || !validAuthoredByBot(it.AuthoredByBot) {
+		if rawAuth, ok = m["authored_by_bot"]; !ok || string(rawAuth) == "null" || json.Unmarshal(rawAuth, &it.AuthoredByBot) != nil || !validAuthoredByBot(it.AuthoredByBot) {
 			return outcomeDecodeError, nil
 		}
 		it.Links = []leadLink{}
@@ -707,9 +707,12 @@ func parseLeadResponse(call evalCall) (string, []leadParsed) {
 					key string
 					dst any
 				}{{"kind", &l.Kind}, {"from", &l.From}, {"to", &l.To}} {
-					if r, ok := lm[f.key]; !ok || json.Unmarshal(r, f.dst) != nil {
+					if r, ok := lm[f.key]; !ok || string(r) == "null" || json.Unmarshal(r, f.dst) != nil {
 						return outcomeDecodeError, nil
 					}
+				}
+				if l.Kind == "" {
+					return outcomeDecodeError, nil
 				}
 				if r, ok := lm["confidence"]; ok && json.Unmarshal(r, &l.Confidence) != nil {
 					return outcomeDecodeError, nil

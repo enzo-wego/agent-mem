@@ -470,6 +470,8 @@ type prepareServer struct {
 	mu   sync.Mutex
 	byQ  map[string][]string
 	fail map[string]bool
+	// leadRoot, per query, is the id the lead response lists first (its hop-0 item).
+	leadRoot map[string]string
 }
 
 // testLeadItemsJSON renders a valid lead-mode artifacts array: the first id is
@@ -498,6 +500,15 @@ func (p *prepareServer) handler(w http.ResponseWriter, r *http.Request) {
 	}
 	p.mu.Lock()
 	ids, fail := p.byQ[q], p.fail[q+"|"+r.URL.Path]
+	leadIDs := ids
+	if first := p.leadRoot[q]; first != "" {
+		leadIDs = []string{first}
+		for _, id := range ids {
+			if id != first {
+				leadIDs = append(leadIDs, id)
+			}
+		}
+	}
 	p.mu.Unlock()
 	if fail {
 		http.Error(w, "boom", 500)
@@ -510,7 +521,7 @@ func (p *prepareServer) handler(w http.ResponseWriter, r *http.Request) {
 		parts = append(parts, fmt.Sprintf(`{"node_id":%q}`, id))
 	}
 	if resolve && r.Header.Get("X-Graph-Lead") == "1" {
-		fmt.Fprintf(w, `{"artifacts":%s}`, testLeadItemsJSON(ids...))
+		fmt.Fprintf(w, `{"artifacts":%s}`, testLeadItemsJSON(leadIDs...))
 	} else if resolve {
 		fmt.Fprintf(w, `{"artifacts":[%s]}`, strings.Join(parts, ","))
 	} else {
@@ -525,7 +536,7 @@ func TestPrepareWritesOraclesAndLabelSheetsUseSavedReplay(t *testing.T) {
 	ps := &prepareServer{byQ: map[string][]string{
 		"qa": {reply, root, "jira:GONE-1"},
 		"qb": {other, root},
-	}, fail: map[string]bool{}}
+	}, fail: map[string]bool{}, leadRoot: map[string]string{"qa": root}}
 	server := httptest.NewServer(http.HandlerFunc(ps.handler))
 	defer server.Close()
 

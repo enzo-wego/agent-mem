@@ -1151,6 +1151,12 @@ func TestPrepareLeadOutcomes(t *testing.T) {
 		{"item missing hop", "prepare: lead_decode_error qa", func(w http.ResponseWriter) {
 			_, _ = w.Write([]byte(`{"artifacts":[{"node_id":"` + root + `","authored_by_bot":"human"}]}`))
 		}},
+		{"item hop null", "prepare: lead_decode_error qa", func(w http.ResponseWriter) {
+			_, _ = w.Write([]byte(`{"artifacts":[{"node_id":"` + root + `","hop":null,"authored_by_bot":"human"}]}`))
+		}},
+		{"seed not a hop-0 item", "prepare: seed_mismatch qa", func(w http.ResponseWriter) {
+			_, _ = w.Write([]byte(`{"artifacts":[` + goodItem(root, 1) + `]}`))
+		}},
 		{"bad authored_by_bot", "prepare: lead_decode_error qa", func(w http.ResponseWriter) {
 			_, _ = w.Write([]byte(`{"artifacts":[{"node_id":"` + root + `","hop":0,"authored_by_bot":"robot"}]}`))
 		}},
@@ -1201,7 +1207,7 @@ func TestPrepareLeadOutcomes(t *testing.T) {
 		}))
 		defer server.Close()
 		dataDir := filepath.Join(t.TempDir(), "gc")
-		writeTestCase(t, dataDir, testCaseSpec{ID: "qa", Query: "qa", Seeds: []string{root}})
+		writeTestCase(t, dataDir, testCaseSpec{ID: "qa", Query: "qa", Seeds: []string{"https://example.invalid/none"}})
 		snap := filepath.Join(t.TempDir(), "snap")
 		t.Setenv("AGENT_MEM_API_KEY", "")
 		var buf bytes.Buffer

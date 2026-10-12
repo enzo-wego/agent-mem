@@ -115,7 +115,7 @@ func checkPrivateTarget(p string) (string, error) {
 	if err != nil {
 		return "", categoryErr("repo_root")
 	}
-	if insideDir(parent, resolveExisting(root)) {
+	if insideAnyCheckout(parent, root) {
 		return "", categoryErr("out_inside_repo")
 	}
 	return filepath.Join(parent, filepath.Base(abs)), nil
@@ -157,6 +157,23 @@ func leadCategory(outcome string) string {
 	return "lead_" + strings.TrimPrefix(outcome, "lead_")
 }
 
+// leadSeedsPresent reports whether every canonical seed (or its thread root,
+// per meta) is a hop-0 lead item.
+func leadSeedsPresent(seeds []string, items []leadItem, meta map[string]nodeMeta) bool {
+	hop0 := map[string]bool{}
+	for _, it := range items {
+		if it.Hop == 0 {
+			hop0[it.ID] = true
+		}
+	}
+	for _, s := range seeds {
+		if !hop0[s] && !hop0[meta[s].ThreadRoot] {
+			return false
+		}
+	}
+	return true
+}
+
 // validateLeadReplay is the shared strict reader for lead data: every case has
 // an ok resolve-lead variant with a 2xx status and well-formed items, and the
 // stored eligibility_sha256 equals a fresh recomputation. It returns the items
@@ -175,6 +192,9 @@ func validateLeadReplay(replay replayFile, cases []loadedCase) (map[string][]lea
 			return nil, categoryErr(catLeadItems)
 		}
 		byCase[c.ID] = *v.Items
+	}
+	if replay.SnapshotSHA256 == "" {
+		return nil, categoryErr("snapshot_missing")
 	}
 	if replay.EligibilitySHA256 == "" || leadEligibilityDigest(byCase) != replay.EligibilitySHA256 {
 		return nil, categoryErr(catEligibilityMismatch)
@@ -326,6 +346,12 @@ func runEvalPrepare(ctx context.Context, out io.Writer, o evalPrepareOpts) error
 		meta[id] = m
 	}
 
+	for _, c := range cases {
+		if !leadSeedsPresent(seeds[c.ID], leadItems[c.ID], meta) {
+			return fmt.Errorf("prepare: seed_mismatch %s", c.ID)
+		}
+	}
+
 	files := map[string][]byte{}
 	raws := make([][]byte, 0, len(cases))
 	for _, c := range cases {
@@ -453,9 +479,59 @@ func resolveExisting(p string) string {
 	}
 }
 
-func insideDir(path, dir string) bool {
-	rel, err := filepath.Rel(dir, path)
-	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+// insideAnyCheckout reports whether path lies inside the repo root or the hub
+// (main) checkout this worktree belongs to. It compares by file identity
+// (os.SameFile) while walking the parents, so case-insensitive file systems and
+// alternative spellings of the same directory cannot slip through.
+func insideAnyCheckout(path, root string) bool {
+	roots := []string{root}
+	if hub := hubCheckout(root); hub != "" {
+		roots = append(roots, hub)
+	}
+	var infos []os.FileInfo
+	for _, r := range roots {
+		if fi, err := os.Stat(r); err == nil {
+			infos = append(infos, fi)
+		}
+	}
+	for dir := path; ; {
+		if fi, err := os.Stat(dir); err == nil {
+			for _, ri := range infos {
+				if os.SameFile(fi, ri) {
+					return true
+				}
+			}
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return false
+		}
+		dir = parent
+	}
+}
+
+// hubCheckout returns the main checkout of the repository that root belongs to
+// when root is a linked worktree (its .git is a file pointing into the hub's
+// .git/worktrees), else "".
+func hubCheckout(root string) string {
+	raw, err := os.ReadFile(filepath.Join(root, ".git"))
+	if err != nil {
+		return ""
+	}
+	gitdir, ok := strings.CutPrefix(strings.TrimSpace(string(raw)), "gitdir:")
+	if !ok {
+		return ""
+	}
+	gitdir = strings.TrimSpace(gitdir)
+	if !filepath.IsAbs(gitdir) {
+		gitdir = filepath.Join(root, gitdir)
+	}
+	// <hub>/.git/worktrees/<name>
+	common := filepath.Dir(filepath.Dir(gitdir))
+	if filepath.Base(common) != ".git" {
+		return ""
+	}
+	return filepath.Dir(common)
 }
 
 func runLabelSheet(ctx context.Context, out io.Writer, o labelSheetOpts) error {
@@ -499,7 +575,7 @@ func leadLinkBucket(links []leadLink) string {
 	return "other_link"
 }
 
-const leadSheetHeader = "MASKED: Slack mentions, author names, @-names, emails, phones, cards, refs with a digit. NOT masked: other names in prose, merchant/partner names. CONFIDENTIAL: do not commit or share."
+const leadSheetHeader = "MASKED: Slack mentions, author names, @-names, emails, phones, cards, refs with a digit (any token after a label word such as booking/payment/order). NOT masked: other names in prose, merchant/partner names. CONFIDENTIAL: do not commit or share."
 
 // truncRunes cuts s to at most n runes, ending in "…" when cut.
 func truncRunes(s string, n int) string {
@@ -656,7 +732,7 @@ func runLabelSheetAll(ctx context.Context, out io.Writer, o labelSheetOpts) erro
 	if err != nil {
 		return err
 	}
-	if insideDir(resolveExisting(o.OutDir), resolveExisting(root)) {
+	if insideAnyCheckout(resolveExisting(o.OutDir), root) {
 		return fmt.Errorf("--out must be outside the repo (%s)", root)
 	}
 	replayData, err := os.ReadFile(filepath.Join(o.DataDir, "replay.json"))
