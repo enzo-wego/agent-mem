@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/rs/zerolog"
@@ -14,6 +15,7 @@ import (
 	"github.com/agent-mem/agent-mem/internal/database"
 	"github.com/agent-mem/agent-mem/internal/graph/entities"
 	"github.com/agent-mem/agent-mem/internal/graph/jobs"
+	"github.com/agent-mem/agent-mem/internal/graph/teamdir"
 )
 
 // newEntitiesCmd returns the "entities" cobra parent command with its
@@ -222,6 +224,55 @@ Examples:
 	importBambooHRCmd.Flags().StringVar(&bambooHRJSONPath, "json", "", "Path to org-chart page-graph JSON (carries job titles)")
 	importBambooHRCmd.Flags().BoolVar(&bambooHRRetire, "retire-missing", false, "Mark people absent from the import inactive")
 
+	// entities import-team-directory
+	var teamDirFile string
+	importTeamDirCmd := &cobra.Command{
+		Use:   "import-team-directory",
+		Short: "Enqueue an import_team_directory job from the Tenderloin team-directory page",
+		Long: `Parses the Tenderloin team-directory HTML page (or a bare KB JSON object),
+prints row counts, and enqueues an import_team_directory job carrying only the
+sanitized typed directory. The import is strictly additive: it upserts team:
+nodes, inserts edges and graph.person_teams rows, and never deletes anything.
+
+--file - reads stdin, so the page can be piped into a container:
+  cat page.html | docker exec -i agent-mem-worker-1 agent-mem entities import-team-directory --file -`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if teamDirFile == "" {
+				return fmt.Errorf("--file is required (path, or - for stdin)")
+			}
+			var raw []byte
+			var err error
+			if teamDirFile == "-" {
+				raw, err = io.ReadAll(cmd.InOrStdin())
+			} else {
+				raw, err = os.ReadFile(teamDirFile)
+			}
+			if err != nil {
+				return fmt.Errorf("read input: %w", err)
+			}
+			payload, err := buildTeamDirectoryPayload(raw, cmd.OutOrStdout())
+			if err != nil {
+				return err
+			}
+			ctx := context.Background()
+			pool, err := database.Connect(ctx, getCfg().DatabaseURL)
+			if err != nil {
+				return fmt.Errorf("open db: %w", err)
+			}
+			defer pool.Close()
+			jobID, err := jobs.EnqueueRaw(ctx, pool, "import_team_directory", payload, jobs.EnqueueOptions{
+				Priority:  5,
+				MachineID: getCfg().MachineID,
+			})
+			if err != nil {
+				return fmt.Errorf("enqueue import_team_directory job: %w", err)
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "enqueued import_team_directory job id=%d\n", jobID)
+			return nil
+		},
+	}
+	importTeamDirCmd.Flags().StringVar(&teamDirFile, "file", "", "Path to the team-directory page or KB JSON (- for stdin)")
+
 	// entities refresh-slack-users
 	refreshSlackUsersCmd := &cobra.Command{
 		Use:   "refresh-slack-users",
@@ -283,6 +334,29 @@ Example:
 		},
 	}
 
-	entitiesCmd.AddCommand(seedPartnersCmd, loadCSVCmd, listCmd, importBambooHRCmd, refreshSlackUsersCmd, refreshSlackBotsCmd)
+	entitiesCmd.AddCommand(seedPartnersCmd, loadCSVCmd, listCmd, importBambooHRCmd, importTeamDirCmd, refreshSlackUsersCmd, refreshSlackBotsCmd)
 	return entitiesCmd
+}
+
+// buildTeamDirectoryPayload extracts and parses the page, prints counts only
+// (never names) to out, and returns the job payload {"directory": <sanitized>}.
+func buildTeamDirectoryPayload(raw []byte, out io.Writer) ([]byte, error) {
+	kb, err := teamdir.Extract(raw)
+	if err != nil {
+		return nil, err
+	}
+	dir, st, err := teamdir.Parse(kb)
+	if err != nil {
+		return nil, err
+	}
+	fmt.Fprintf(out, "teams=%d people=%d directory=%d reports=%d projects=%d past_work=%d\n",
+		len(dir.Teams), len(dir.People), len(dir.Directory), len(dir.Reports), len(dir.Projects), len(dir.PastWork))
+	fmt.Fprintf(out, "skipped: people=%d reports=%d projects=%d past_work=%d directory_rows=%d; dropped: involved_teams=%d directory_teams=%d\n",
+		st.SkippedPeople, st.SkippedReports, st.SkippedProjects, st.SkippedPastWork, st.SkippedDirectoryRow,
+		st.DroppedInvolved, st.DroppedDirTeams)
+	dj, err := json.Marshal(dir)
+	if err != nil {
+		return nil, fmt.Errorf("marshal directory: %w", err)
+	}
+	return json.Marshal(map[string]json.RawMessage{"directory": dj})
 }

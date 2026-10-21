@@ -82,6 +82,7 @@ func RegisterAll(reg *jobs.Registry, deps Deps) {
 	reg.Register("backfill_artifact_tsv", NewBackfillArtifactTSVHandler(deps))
 	reg.Register("merge_identities_by_name", NewMergeIdentitiesByNameHandler(deps))
 	reg.Register("import_bamboohr", NewImportBambooHRHandler(deps))
+	reg.Register("import_team_directory", NewImportTeamDirectoryHandler(deps))
 	reg.Register("recompute_person_distance", jobs.Entry{
 		Handler:    RecomputePersonDistance(deps.DB, deps.Logger),
 		Systems:    []string{},

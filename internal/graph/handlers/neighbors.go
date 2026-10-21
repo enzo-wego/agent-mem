@@ -48,6 +48,9 @@ FROM graph.nodes n WHERE n.id = $1`, nodeID).Scan(&typ, &deg)
 		// The business root touches every epic; walking through it is "all of
 		// Payments". Scope with ?business=payments instead.
 		return false
+	case "team":
+		// Leaf: a team references hundreds of tickets and pages; same reason as business.
+		return false
 	default:
 		return false
 	}

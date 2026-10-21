@@ -594,6 +594,16 @@ agent-mem entities import-bamboohr --csv ~/Downloads/bamboohr_org_chart_for_visi
 
 The command enqueues an `import_bamboohr` job. The worker processes the CSV to upsert `graph.people` rows with `eeid`, `display_name`, `reports_to`, and `depth_from_root`.
 
+### Import team directory (Tenderloin)
+
+```bash
+cat page.html | docker exec -i agent-mem-worker-1 agent-mem entities import-team-directory --file -
+```
+
+The command parses the Tenderloin team-directory page, prints row counts only, and enqueues an `import_team_directory` job carrying the sanitized directory (no HR fields, Slack handles or change rules). The job upserts one public `team:<id>` node per team, inserts `REFERENCES` edges to nodes it already knows, and records person-to-team memberships in `graph.person_teams` (hub-only; exact-name match against `graph.people`).
+
+The import is strictly additive: it never writes `graph.people`, never deletes or updates an edge, and teams or memberships missing from a later file stay. It is CLI-only and is not on the `/api/graph/jobs/enqueue` allowlist.
+
 ### Graph sync
 
 Graph tables (`graph.people`, `graph.nodes`, `graph.edges`, `graph.artifact_bodies`, etc.) are included in the standard push/pull sync rotation. Batch sizes: `artifact_bodies` and `artifact_index` use 50 rows per batch; all others use 100. Embeddings are excluded from sync transport — the receiving machine re-generates them via the `index_artifact` job.

@@ -156,7 +156,11 @@ func linkTopicsHandler(deps Deps) jobs.Handler {
 		}
 		// Case-mates outrank the embedding shortlist but not the identifier or
 		// explicit paths: a candidate found by BOTH keeps its own SharedIDs.
-		cands := mergeTopicCandidates(idCands, extraCands, caseCands, edgeCands, embCands)
+		// Team nodes are directory entries and never topic-link, so another
+		// node's judging can't create, update or delete a SAME_TOPIC edge on one.
+		// ponytail: team nodes can still take an embedding shortlist slot before
+		// this filter; with ~31 team nodes that is negligible.
+		cands := dropTeamCandidates(mergeTopicCandidates(idCands, extraCands, caseCands, edgeCands, embCands))
 		srcStart, srcEnd, srcOK := nodeActivityWindow(ctx, deps, p.NodeID)
 
 		g, gctx := errgroup.WithContext(ctx)
@@ -347,7 +351,7 @@ const topicLinkMinSummaryChars = 40
 // exports judged "same topic" 252 times), and no-substance summaries can't
 // establish a topic at all.
 func skipTopicLinkSource(source topicLinkNode) bool {
-	if source.Type == "slack_file" || source.Type == "jira_attachment" {
+	if source.Type == "slack_file" || source.Type == "jira_attachment" || source.Type == "team" {
 		return true
 	}
 	if source.Kind == "chatter" {
@@ -360,6 +364,17 @@ func skipTopicLinkSource(source topicLinkNode) bool {
 		return false
 	}
 	return strings.HasPrefix(source.Scope, "slack:D") || source.SummaryKind != "thread_summary"
+}
+
+// dropTeamCandidates removes team nodes from a merged candidate list.
+func dropTeamCandidates(cands []topicLinkCandidate) []topicLinkCandidate {
+	out := cands[:0:0]
+	for _, c := range cands {
+		if c.Type != "team" {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 func shortlistTopicLinks(ctx context.Context, deps Deps, nodeID string) ([]topicLinkCandidate, error) {

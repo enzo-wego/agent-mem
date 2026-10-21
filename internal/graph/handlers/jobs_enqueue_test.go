@@ -48,3 +48,20 @@ func TestJobsEnqueue_EpicBriefDryRunOnly(t *testing.T) {
 		})
 	}
 }
+
+func TestJobsEnqueue_RejectsImportTeamDirectory(t *testing.T) {
+	pool := openTestDB(t)
+	truncateGraphHandlerTables(t, pool)
+	t.Cleanup(func() { truncateGraphHandlerTables(t, pool) })
+	h := NewJobsEnqueueHandler(Deps{DB: pool, Logger: zerolog.Nop(), MachineID: "test"})
+	body := `{"type":"import_team_directory","payload":{"directory":{"teams":[]}}}`
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/graph/jobs/enqueue", strings.NewReader(body)))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+	var n int
+	if err := pool.QueryRow(t.Context(), `SELECT count(*) FROM graph.jobs WHERE type='import_team_directory'`).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("jobs = %d, err %v", n, err)
+	}
+}
