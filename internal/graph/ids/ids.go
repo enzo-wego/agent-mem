@@ -12,35 +12,37 @@ import (
 type NodeType string
 
 const (
-	TypeSlackThread NodeType = "slack"
-	TypeJira        NodeType = "jira"
-	TypeGHPR        NodeType = "gh_pr"
-	TypeCFPage      NodeType = "cf"
-	TypePagerDuty   NodeType = "pagerduty"
-	TypeDatadog     NodeType = "datadog"
-	TypeSentry      NodeType = "sentry"
+	TypeSlackThread    NodeType = "slack"
+	TypeJira           NodeType = "jira"
+	TypeGHPR           NodeType = "gh_pr"
+	TypeCFPage         NodeType = "cf"
+	TypePagerDuty      NodeType = "pagerduty"
+	TypeDatadog        NodeType = "datadog"
+	TypeSentry         NodeType = "sentry"
 	TypeGWSDoc         NodeType = "gws_doc"
 	TypeWegoHub        NodeType = "wegohub"
 	TypeClaudeArtifact NodeType = "claude_artifact"
 	TypeJiraAttachment NodeType = "jira_attachment"
-	TypeSlackFile   NodeType = "slack_file"
-	TypePartner     NodeType = "partner"
-	TypeFeature     NodeType = "feature"
-	TypeStatus      NodeType = "status"
-	TypeCurrency    NodeType = "currency"
-	TypeCodeFile    NodeType = "code_file"
-	TypePerson      NodeType = "person"
-	TypeUserGroup   NodeType = "usergroup"
+	TypeSlackFile      NodeType = "slack_file"
+	TypePartner        NodeType = "partner"
+	TypeFeature        NodeType = "feature"
+	TypeStatus         NodeType = "status"
+	TypeCurrency       NodeType = "currency"
+	TypeCodeFile       NodeType = "code_file"
+	TypePerson         NodeType = "person"
+	TypeUserGroup      NodeType = "usergroup"
+	TypeTeam           NodeType = "team"
 )
 
 var (
-	reJiraKey       = regexp.MustCompile(`^[A-Z][A-Z0-9]+-\d+$`)
-	rePagerDutyID   = regexp.MustCompile(`^[A-Z0-9]+$`)
-	reSentryID      = regexp.MustCompile(`^[A-Z0-9_\-]+$`)
-	reGHRepo        = regexp.MustCompile(`^[a-zA-Z0-9_.\-]+/[a-zA-Z0-9_.\-]+$`)
-	reWegoHubSlug   = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$`)
-	reClaudeArtID   = regexp.MustCompile(`^[A-Za-z0-9_-]{8,}$`)
-	datadogTypes    = map[string]bool{"monitor": true, "dashboard": true, "log": true}
+	reJiraKey     = regexp.MustCompile(`^[A-Z][A-Z0-9]+-\d+$`)
+	rePagerDutyID = regexp.MustCompile(`^[A-Z0-9]+$`)
+	reSentryID    = regexp.MustCompile(`^[A-Z0-9_\-]+$`)
+	reGHRepo      = regexp.MustCompile(`^[a-zA-Z0-9_.\-]+/[a-zA-Z0-9_.\-]+$`)
+	reWegoHubSlug = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$`)
+	reClaudeArtID = regexp.MustCompile(`^[A-Za-z0-9_-]{8,}$`)
+	reTeamID      = regexp.MustCompile(`^[a-z0-9_-]+$`)
+	datadogTypes  = map[string]bool{"monitor": true, "dashboard": true, "log": true}
 )
 
 // SlackThread builds "slack:<channel>:<ts>". ts is the parent thread_ts.
@@ -173,6 +175,16 @@ func UserGroup(id string) string {
 	return fmt.Sprintf("usergroup:%s", id)
 }
 
+// Team builds "team:<id>". The id is lowercased and trimmed, then must match
+// ^[a-z0-9_-]+$.
+func Team(teamID string) (string, error) {
+	id := strings.ToLower(strings.TrimSpace(teamID))
+	if !reTeamID.MatchString(id) {
+		return "", fmt.Errorf("ids: invalid team id %q (want [a-z0-9_-]+)", teamID)
+	}
+	return "team:" + id, nil
+}
+
 // ParseType returns the NodeType prefix of any node ID.
 // Returns ("", false) if malformed.
 func ParseType(nodeID string) (NodeType, bool) {
@@ -186,7 +198,7 @@ func ParseType(nodeID string) (NodeType, bool) {
 		TypeDatadog, TypeSentry, TypeGWSDoc, TypeWegoHub, TypeClaudeArtifact, TypeJiraAttachment,
 		TypeSlackFile, TypePartner,
 		TypeFeature, TypeStatus, TypeCurrency, TypeCodeFile, TypePerson,
-		TypeUserGroup:
+		TypeUserGroup, TypeTeam:
 		return NodeType(prefix), true
 	}
 	return "", false
@@ -220,6 +232,6 @@ var AllTypes = []NodeType{
 	TypeSlackThread, TypeJira, TypeGHPR, TypeCFPage, TypePagerDuty, TypeDatadog,
 	TypeSentry, TypeGWSDoc, TypeWegoHub, TypeClaudeArtifact, TypeJiraAttachment,
 	TypeSlackFile, TypePartner, TypeFeature, TypeStatus, TypeCurrency,
-	TypeCodeFile, TypePerson, TypeUserGroup,
+	TypeCodeFile, TypePerson, TypeUserGroup, TypeTeam,
 	TypePaymentRef, TypeCKOProcessingChannel, TypeWegoOrder, TypeEpic, TypeBusiness,
 }

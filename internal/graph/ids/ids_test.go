@@ -417,6 +417,7 @@ func TestParseType(t *testing.T) {
 		{"code_file:pkg/payment/tabby/integration.go", TypeCodeFile, true},
 		{"person:lei@wego.com", TypePerson, true},
 		{"usergroup:S01TMG8Q65R", TypeUserGroup, true},
+		{"team:x", TypeTeam, true},
 		// malformed
 		{"nocolon", "", false},
 		{"", "", false},
@@ -506,5 +507,17 @@ func TestAllTypesComplete(t *testing.T) {
 	}
 	if len(declared) != len(listed) {
 		t.Errorf("declared %d types, AllTypes lists %d", len(declared), len(listed))
+	}
+}
+
+func TestTeam(t *testing.T) {
+	t.Parallel()
+	if got, err := Team("Payments "); err != nil || got != "team:payments" {
+		t.Fatalf("Team(%q) = %q, %v", "Payments ", got, err)
+	}
+	for _, bad := range []string{"", "a b", "a/b"} {
+		if _, err := Team(bad); err == nil {
+			t.Fatalf("Team(%q) want error", bad)
+		}
 	}
 }
