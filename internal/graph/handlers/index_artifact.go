@@ -136,6 +136,9 @@ WHERE channel_id=$1 AND thread_ts=$2`,
 			decisionsText = &dt
 		}
 	}
+	if summary == "" {
+		return nil // no heuristic or thread summary: nothing to embed
+	}
 
 	// Step 4: extract identifiers from RAW text (thread roots read the
 	// whole thread) — summaries drop the IDs that shared-identifier
