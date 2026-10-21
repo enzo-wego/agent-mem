@@ -199,3 +199,12 @@ func sha256Hex(s string) string {
 	sum := sha256.Sum256([]byte(s))
 	return hex.EncodeToString(sum[:])
 }
+
+func TestMaskGraphResponseKeepsTeamNodeID(t *testing.T) {
+	body := `{"node_id":"team:payments","results":[{"node_id":"team:risk-ops_2"}]}`
+	w := httptest.NewRecorder()
+	maskGraphResponse(stubJSON(body)).ServeHTTP(w, httptest.NewRequest("GET", "/x", nil))
+	if strings.TrimSpace(w.Body.String()) != body {
+		t.Fatalf("team id masked: %s", w.Body.String())
+	}
+}

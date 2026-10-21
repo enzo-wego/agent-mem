@@ -317,3 +317,38 @@ func TestNeighbors_ConfluencePageIsLeaf(t *testing.T) {
 		t.Errorf("cf page missing from neighbors")
 	}
 }
+
+// A team node adjacent to an opened node is listed, but the BFS never walks
+// through it to the unrelated tickets and threads it references.
+func TestNeighbors_TeamIsLeaf(t *testing.T) {
+	pool := testDB(t)
+	seedNode(t, pool, "jira:J-1", "jira", "Jira J")
+	seedNodeURL(t, pool, "jira:J-1", "https://example.atlassian.net/browse/J-1")
+	seedNode(t, pool, "team:t", "team", "Team T")
+	seedNode(t, pool, "slack:C1:1.1", "slack", "Unrelated thread")
+	seedEdge(t, pool, "team:t", "jira:J-1", "REFERENCES")
+	seedEdge(t, pool, "team:t", "slack:C1:1.1", "REFERENCES")
+
+	r := chi.NewRouter()
+	r.Mount("/api/graph", handlers.NewNeighbors(pool))
+	req := adminRequest("GET", "/api/graph/node/jira:J-1/neighbors?depth=2", nil)
+	req.Header.Set("X-Graph-Admin", "1")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	var sawTeam bool
+	for _, row := range decodeNeighbors(t, w) {
+		switch row.Node.NodeID {
+		case "team:t":
+			sawTeam = true
+			if row.Hop != 1 {
+				t.Errorf("team hop = %d, want 1", row.Hop)
+			}
+		case "slack:C1:1.1":
+			t.Errorf("slack thread reached through team node")
+		}
+	}
+	if !sawTeam {
+		t.Errorf("team node missing from neighbors")
+	}
+}
