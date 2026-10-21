@@ -537,3 +537,25 @@ SELECT decisions_text IS NULL FROM graph.artifact_index WHERE node_id = 'jira:PA
 		t.Fatal("Jira decisions_text must be NULL")
 	}
 }
+
+func TestIndexArtifact_SlackNodeWithoutSummarySkipsEmbedding(t *testing.T) {
+	pool, rec := decisionIndexTestDB(t)
+	if _, err := pool.Exec(context.Background(), `
+INSERT INTO graph.nodes (id, type, natural_key, body, scope, metadata, machine_id)
+VALUES ('slack:CDKW:920.000001', 'slack', 'slack:CDKW:920.000001', E'\n\n  ', 'slack:CDKW',
+        '{"ts":"920.000001","thread_ts":"920.000001"}', 'test')`); err != nil {
+		t.Fatal(err)
+	}
+	runDecisionIndex(t, pool, rec, "slack:CDKW:920.000001")
+	if len(rec.inputs) != 0 {
+		t.Fatalf("embedding inputs = %q, want none", rec.inputs)
+	}
+	var rows int
+	if err := pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM graph.artifact_index WHERE node_id = 'slack:CDKW:920.000001'`).Scan(&rows); err != nil {
+		t.Fatal(err)
+	}
+	if rows != 0 {
+		t.Fatalf("artifact_index rows = %d, want 0", rows)
+	}
+}
