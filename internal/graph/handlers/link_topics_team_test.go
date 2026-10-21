@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/zerolog"
@@ -55,6 +57,26 @@ func (f *recordingJudge) prompts() string {
 
 const teamSummarySentinel = "TEAMSUMMARYSENTINEL directory entry for the payments routing team."
 
+// topicTestRun returns a per-run suffix. The judgment cache is keyed on
+// content, so ids and summaries must be unique per run for the judge to be
+// asked again; no cleanup is then needed.
+func topicTestRun() string { return strconv.FormatInt(time.Now().UnixNano(), 36) }
+
+func seedTopicThread(t *testing.T, pool *pgxpool.Pool, id, run string) {
+	t.Helper()
+	ctx := context.Background()
+	if _, err := pool.Exec(ctx, `
+INSERT INTO graph.nodes (id, type, natural_key, title, scope, machine_id)
+VALUES ($1, 'slack_thread', $1, $1, 'slack:' || split_part($1,':',2), 'test')`, id); err != nil {
+		t.Fatalf("seed thread: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+INSERT INTO graph.artifact_index (node_id, summary, summary_kind, identifiers, refreshed_at, machine_id)
+VALUES ($1, $2, 'thread_summary', '{}', NOW(), 'test')`, id, "Thread "+id+" "+run+": a summary long enough to clear the forty character floor."); err != nil {
+		t.Fatalf("seed thread index: %v", err)
+	}
+}
+
 func seedTeamForTopicTest(t *testing.T, pool *pgxpool.Pool, id string) {
 	t.Helper()
 	ctx := context.Background()
@@ -68,14 +90,6 @@ INSERT INTO graph.artifact_index (node_id, summary, summary_kind, identifiers, r
 VALUES ($1, $2, 'heuristic', '{}', NOW(), 'test') ON CONFLICT (node_id) DO NOTHING`, id, teamSummarySentinel); err != nil {
 		t.Fatalf("seed team index: %v", err)
 	}
-}
-
-func cleanTeamTopicRows(pool *pgxpool.Pool) {
-	ctx := context.Background()
-	_, _ = pool.Exec(ctx, `DELETE FROM graph.topic_link_judgments WHERE source_node_id LIKE 'team:tt%' OR target_node_id LIKE 'team:tt%'`)
-	_, _ = pool.Exec(ctx, `DELETE FROM graph.edges WHERE from_node_id LIKE 'team:tt%' OR to_node_id LIKE 'team:tt%'`)
-	_, _ = pool.Exec(ctx, `DELETE FROM graph.artifact_index WHERE node_id LIKE 'team:tt%'`)
-	_, _ = pool.Exec(ctx, `DELETE FROM graph.nodes WHERE id LIKE 'team:tt%'`)
 }
 
 func edgeMeta(t *testing.T, pool *pgxpool.Pool, a, b string) (string, bool) {
@@ -100,12 +114,12 @@ func runLinkTopics(t *testing.T, pool *pgxpool.Pool, judge *recordingJudge, node
 }
 
 func TestLinkTopics_TeamExistingEdgeUnchanged(t *testing.T) {
-	pool := caseTestDB(t)
-	cleanTeamTopicRows(pool)
-	t.Cleanup(func() { cleanTeamTopicRows(pool) })
+	pool := openTestDB(t)
+	truncateGraphHandlerTables(t, pool)
+	run := topicTestRun()
 
-	const s, team = "slack:CT1:100", "team:tt-direct"
-	caseSeedThread(t, pool, s)
+	s, team := "slack:CT1:"+run, "team:tt-direct"
+	seedTopicThread(t, pool, s, run)
 	seedTeamForTopicTest(t, pool, team)
 	seedTopicEdge(t, pool, s, team, `{"method":"cosine-shortlist + llm-confirm","confidence":0.9}`)
 	before, ok := edgeMeta(t, pool, s, team)
@@ -126,13 +140,13 @@ func TestLinkTopics_TeamExistingEdgeUnchanged(t *testing.T) {
 }
 
 func TestLinkTopics_TeamNeverTwoHopCaseMate(t *testing.T) {
-	pool := caseTestDB(t)
-	cleanTeamTopicRows(pool)
-	t.Cleanup(func() { cleanTeamTopicRows(pool) })
+	pool := openTestDB(t)
+	truncateGraphHandlerTables(t, pool)
+	run := topicTestRun()
 
-	const s, p, team = "slack:CT1:100", "slack:CT2:200", "team:tt-hop"
-	caseSeedThread(t, pool, s)
-	caseSeedThread(t, pool, p)
+	s, p, team := "slack:CT1:"+run, "slack:CT2:"+run, "team:tt-hop"
+	seedTopicThread(t, pool, s, run)
+	seedTopicThread(t, pool, p, run)
 	seedTeamForTopicTest(t, pool, team)
 	seedTopicEdge(t, pool, s, p, `{"method":"cosine-shortlist + llm-confirm","confidence":0.9}`)
 	seedTopicEdge(t, pool, p, team, `{"method":"shared-identifier + llm-confirm","confidence":1,"shared_ids":["p0yy6hmqdw"]}`)

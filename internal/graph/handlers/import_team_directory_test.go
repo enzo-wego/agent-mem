@@ -599,10 +599,7 @@ func TestImportTeamDirectory_NoMatchStillSucceeds(t *testing.T) {
 func TestImportTeamDirectory_KeywordSearchFindsLateBodyText(t *testing.T) {
 	pool := openTestDB(t)
 	truncateGraphHandlerTables(t, pool)
-	t.Cleanup(func() {
-		truncateGraphHandlerTables(t, pool)
-		_, _ = pool.Exec(context.Background(), `DELETE FROM graph.member_scopes`)
-	})
+	t.Cleanup(func() { truncateGraphHandlerTables(t, pool) })
 	if err := tdRun(tdDeps(pool, nil), tdDir(false, "m"), teamImportHooks{}); err != nil {
 		t.Fatal(err)
 	}

@@ -66,9 +66,10 @@ func TestImportTeamDirectoryCLI_EnqueuesSanitizedJob(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	clean := func() { _, _ = pool.Exec(ctx, `DELETE FROM graph.jobs WHERE type='import_team_directory'`) }
-	clean()
-	t.Cleanup(clean)
+	var maxBefore int64
+	if err := pool.QueryRow(ctx, `SELECT COALESCE(max(id), 0) FROM graph.jobs`).Scan(&maxBefore); err != nil {
+		t.Fatal(err)
+	}
 
 	file := filepath.Join(t.TempDir(), "page.html")
 	if err := os.WriteFile(file, []byte(teamDirFixture), 0o600); err != nil {
@@ -83,7 +84,7 @@ func TestImportTeamDirectoryCLI_EnqueuesSanitizedJob(t *testing.T) {
 		t.Fatalf("execute: %v\n%s", err, out.String())
 	}
 	var payload string
-	if err := pool.QueryRow(ctx, `SELECT payload::text FROM graph.jobs WHERE type='import_team_directory'`).Scan(&payload); err != nil {
+	if err := pool.QueryRow(ctx, `SELECT payload::text FROM graph.jobs WHERE type='import_team_directory' AND id > $1`, maxBefore).Scan(&payload); err != nil {
 		t.Fatalf("job row: %v", err)
 	}
 	if !strings.Contains(payload, `"directory"`) || strings.Contains(payload, "SENTINEL") || strings.Contains(payload, "hr_manager") || strings.Contains(payload, "hr_title") {
