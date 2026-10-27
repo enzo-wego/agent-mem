@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -22,6 +23,23 @@ var version = "dev"
 var buildRev string
 
 var runBackfill = runBackfillEmbeddings
+var loadBackfillRuntimeSettings = loadBackfillSettings
+
+func loadBackfillSettings(ctx context.Context, cfg *config.Config) error {
+	pool, err := database.Connect(ctx, cfg.DatabaseURL)
+	if err != nil {
+		return fmt.Errorf("load backfill settings: connect database: %w", err)
+	}
+	defer pool.Close()
+
+	settings, err := database.NewDB(pool).GetAllSettings(ctx)
+	if err != nil {
+		return fmt.Errorf("load backfill settings: %w", err)
+	}
+	cfg.ApplyDBSettings(settings)
+	config.ApplyEnv(cfg)
+	return nil
+}
 
 func newBackfillCmd(loadConfig func() *config.Config) *cobra.Command {
 	var openrouterOnly bool
@@ -31,6 +49,11 @@ func newBackfillCmd(loadConfig func() *config.Config) *cobra.Command {
 		Long:  "Generate embeddings for all rows without them. Use --openrouter-only to disable the gateway's Gemini fallback.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg := loadConfig()
+			if cfg.LLMGatewayURL == "" || cfg.LLMGatewayAPIKey == "" {
+				if err := loadBackfillRuntimeSettings(cmd.Context(), cfg); err != nil {
+					return err
+				}
+			}
 			if cfg.LLMGatewayURL == "" || cfg.LLMGatewayAPIKey == "" {
 				return fmt.Errorf("llm_gateway_url and llm_gateway_api_key required: agent-mem holds no provider keys")
 			}

@@ -3,8 +3,11 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"strings"
 	"testing"
 
 	"github.com/agent-mem/agent-mem/internal/config"
@@ -100,6 +103,134 @@ func TestBackfillCommandOpenRouterOnlyFlag(t *testing.T) {
 	if len(received) != 2 || received[0] || !received[1] {
 		t.Fatalf("openrouter-only values = %v, want [false true]", received)
 	}
+}
+
+func TestBackfillCommandLoadsMissingGatewaySettings(t *testing.T) {
+	originalLoader := loadBackfillRuntimeSettings
+	originalRun := runBackfill
+	t.Cleanup(func() {
+		loadBackfillRuntimeSettings = originalLoader
+		runBackfill = originalRun
+	})
+
+	t.Setenv("LLM_GATEWAY_URL", "")
+
+	cfg := &config.Config{
+		DatabaseURL:         "postgres://user:pass@127.0.0.1:1/agentmem",
+		GeminiEmbeddingDims: 1,
+	}
+	loadCalls := 0
+	loadBackfillRuntimeSettings = func(_ context.Context, loaded *config.Config) error {
+		loadCalls++
+		loaded.LLMGatewayURL = "http://gateway.test"
+		loaded.LLMGatewayAPIKey = "loaded-key"
+		return nil
+	}
+	var receivedKey string
+	runBackfill = func(_, key, _ string, _ int, _ bool) error {
+		receivedKey = key
+		return nil
+	}
+
+	cmd := newBackfillCmd(func() *config.Config { return cfg })
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if loadCalls != 1 {
+		t.Fatalf("loader calls = %d, want 1", loadCalls)
+	}
+	if receivedKey != "loaded-key" {
+		t.Fatalf("runBackfill key = %q, want loaded key", receivedKey)
+	}
+	if got := os.Getenv("LLM_GATEWAY_URL"); got != "http://gateway.test" {
+		t.Fatalf("LLM_GATEWAY_URL = %q, want loaded URL", got)
+	}
+}
+
+func TestBackfillCommandSettingsLoaderConditions(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		cfg            *config.Config
+		loadErr        error
+		clearAfterLoad bool
+		wantLoad       bool
+		wantRun        bool
+		wantErr        string
+	}{
+		{
+			name: "configured values skip loader",
+			cfg: &config.Config{
+				LLMGatewayURL:    "http://gateway.test",
+				LLMGatewayAPIKey: "configured-key",
+			},
+			wantRun: true,
+		},
+		{
+			name:     "loader error is returned",
+			cfg:      &config.Config{},
+			loadErr:  errors.New("settings unavailable"),
+			wantLoad: true,
+			wantErr:  "settings unavailable",
+		},
+		{
+			name:           "missing loaded value retains required error",
+			cfg:            &config.Config{},
+			clearAfterLoad: true,
+			wantLoad:       true,
+			wantErr:        "llm_gateway_url and llm_gateway_api_key required",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			originalLoader := loadBackfillRuntimeSettings
+			originalRun := runBackfill
+			t.Cleanup(func() {
+				loadBackfillRuntimeSettings = originalLoader
+				runBackfill = originalRun
+			})
+
+			loadCalls := 0
+			loadBackfillRuntimeSettings = func(_ context.Context, cfg *config.Config) error {
+				loadCalls++
+				if tc.loadErr != nil {
+					return tc.loadErr
+				}
+				cfg.LLMGatewayURL = "http://gateway.test"
+				cfg.LLMGatewayAPIKey = "loaded-key"
+				if tc.clearAfterLoad {
+					cfg.LLMGatewayAPIKey = ""
+				}
+				return nil
+			}
+			runCalls := 0
+			runBackfill = func(_, _, _ string, _ int, _ bool) error {
+				runCalls++
+				return nil
+			}
+
+			cmd := newBackfillCmd(func() *config.Config { return tc.cfg })
+			err := cmd.Execute()
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatal(err)
+				}
+			} else if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("error = %v, want containing %q", err, tc.wantErr)
+			}
+			if loadCalls != btoi(tc.wantLoad) {
+				t.Fatalf("loader calls = %d, want %d", loadCalls, btoi(tc.wantLoad))
+			}
+			if runCalls != btoi(tc.wantRun) {
+				t.Fatalf("runBackfill calls = %d, want %d", runCalls, btoi(tc.wantRun))
+			}
+		})
+	}
+}
+
+func btoi(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
 }
 
 func TestRunBackfillEmbeddingsPropagatesRequestOptions(t *testing.T) {
