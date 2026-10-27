@@ -2,7 +2,11 @@ package handlers
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -203,9 +207,72 @@ func TestConfirmTopicLinkShowsCaseContextAsEvidence(t *testing.T) {
 // TestTopicLinkContentHashKeyedOnCaseIDs: gaining case context is new evidence,
 // so a verdict reached without it must not be served from cache.
 func TestTopicLinkContentHashKeyedOnCaseIDs(t *testing.T) {
-	base := topicLinkContentHash("a", "b", "sa", "sb", nil, "overlap", nil)
-	withCase := topicLinkContentHash("a", "b", "sa", "sb", nil, "overlap", []string{"p0yy6hmqdw"})
+	base := topicLinkContentHash("a", "b", "sa", "sb", nil, "overlap", nil, "")
+	withCase := topicLinkContentHash("a", "b", "sa", "sb", nil, "overlap", []string{"p0yy6hmqdw"}, "")
 	if base == withCase {
 		t.Error("content hash ignores case ids; a pre-context refusal would be served from cache")
+	}
+}
+
+func TestTopicLinkContentHashTopicCompatibility(t *testing.T) {
+	oldHash := func(caseIDs []string) string {
+		h := sha256.Sum256([]byte(fmt.Sprintf("rules-v%d\x00", loadedTopicRules.Version) +
+			"a\x00b\x00sa\x00sb\x00shared\x00overlap\x00" + strings.Join(caseIDs, ",")))
+		return hex.EncodeToString(h[:])
+	}
+	for _, tc := range []struct {
+		name    string
+		caseIDs []string
+	}{
+		{"plain", nil},
+		{"case mate", []string{"p0yy6hmqdw"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := topicLinkContentHash("a", "b", "sa", "sb", []string{"shared"}, "overlap", tc.caseIDs, "")
+			if got != oldHash(tc.caseIDs) {
+				t.Fatalf("empty TopicVia changed existing hash: got %s want %s", got, oldHash(tc.caseIDs))
+			}
+			if withTopic := topicLinkContentHash("a", "b", "sa", "sb", []string{"shared"}, "overlap", tc.caseIDs, "slack:CT3:300"); withTopic == got {
+				t.Fatal("TopicVia did not change hash")
+			}
+		})
+	}
+}
+
+func TestConfirmTopicLinkShowsOnlyApplicableContext(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		cand      topicLinkCandidate
+		wantTopic bool
+		wantCase  bool
+	}{
+		{"topic mate", topicLinkCandidate{topicLinkNode: topicLinkNode{Summary: "candidate summary"}, TopicVia: "slack:CT3:300"}, true, false},
+		{"plain", topicLinkCandidate{topicLinkNode: topicLinkNode{Summary: "candidate summary"}}, false, false},
+		{"case mate", topicLinkCandidate{topicLinkNode: topicLinkNode{Summary: "candidate summary"}, CaseVia: "slack:CT3:300", CaseIDs: []string{"p0yy6hmqdw"}}, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			gem := &mockGemini{generateResult: func() (string, error) {
+				return `{"tag":"bug_incident","same_topic":false,"confidence":0.9,"topic":"t","why":"w"}`, nil
+			}}
+			_, err := confirmTopicLink(context.Background(), Deps{Gemini: gem}, topicLinkNode{Summary: "source summary"}, tc.cand, topicLinkContext{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := strings.Contains(gem.generateUser, "Topic context:"); got != tc.wantTopic {
+				t.Fatalf("topic context present=%v, want %v", got, tc.wantTopic)
+			}
+			if got := strings.Contains(gem.generateUser, "Case context:"); got != tc.wantCase {
+				t.Fatalf("case context present=%v, want %v", got, tc.wantCase)
+			}
+		})
+	}
+}
+
+func TestMergeTopicCandidatesPreservesTopicVia(t *testing.T) {
+	id := topicLinkCandidate{topicLinkNode: topicLinkNode{NodeID: "b"}, SharedIDs: []string{"PAY-1"}}
+	mate := topicLinkCandidate{topicLinkNode: topicLinkNode{NodeID: "b"}, TopicVia: "c"}
+	got := mergeTopicCandidates([]topicLinkCandidate{id}, []topicLinkCandidate{mate})
+	if len(got) != 1 || !reflect.DeepEqual(got[0].SharedIDs, id.SharedIDs) || got[0].TopicVia != "c" {
+		t.Fatalf("merged candidate = %+v", got)
 	}
 }

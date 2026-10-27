@@ -24,6 +24,8 @@ import (
 const (
 	topicLinkShortlistLimit = 12
 	topicLinkMinFloor       = 0.65
+	// ponytail: cap chosen to match the recent lane; raise if R1b shows misses.
+	topicLinkTopicMateLimit = 10
 	// topicLinkIdentifierRarityCap: an identifier appearing in more indexed
 	// artifacts than this is generic (a widely-quoted error code, a hot Jira
 	// ticket) and nominates no candidates — the judge would drown in noise.
@@ -53,6 +55,8 @@ type topicLinkNode struct {
 	SummaryKind string
 	Department  string
 	Kind        string // thread_summaries.kind: "chatter" never links
+	Markets     []string
+	HasMarkets  bool
 }
 
 type topicLinkCandidate struct {
@@ -68,6 +72,10 @@ type topicLinkCandidate struct {
 	// payment id must still lose on tie-breaker #3.
 	CaseVia string
 	CaseIDs []string
+	// TopicVia marks an independent A-C-B SAME_TOPIC path where B has the same
+	// requester and scope as A. It is separate from case context for cache
+	// compatibility.
+	TopicVia string
 }
 
 // topicLinkContext carries the per-pair time context shown to the judge.
@@ -132,6 +140,7 @@ func linkTopicsHandler(deps Deps) jobs.Handler {
 			return nil
 		}
 
+		srcStart, srcEnd, srcOK := nodeActivityWindow(ctx, deps, p.NodeID)
 		embCands, err := shortlistTopicLinks(ctx, deps, p.NodeID)
 		if err != nil {
 			return err
@@ -154,14 +163,19 @@ func linkTopicsHandler(deps Deps) jobs.Handler {
 		if err != nil {
 			return err
 		}
-		// Case-mates outrank the embedding shortlist but not the identifier or
-		// explicit paths: a candidate found by BOTH keeps its own SharedIDs.
-		// Team nodes are directory entries and never topic-link, so another
-		// node's judging can't create, update or delete a SAME_TOPIC edge on one.
-		// ponytail: team nodes can still take an embedding shortlist slot before
-		// this filter; with ~31 team nodes that is negligible.
-		cands := dropTeamCandidates(mergeTopicCandidates(idCands, extraCands, caseCands, edgeCands, embCands))
-		srcStart, srcEnd, srcOK := nodeActivityWindow(ctx, deps, p.NodeID)
+		mateCands, err := topicMateCandidates(ctx, deps, p.NodeID)
+		if err != nil {
+			return err
+		}
+		srcMarkets := resolveMarkets(source.Markets, source.HasMarkets, source.Summary)
+		recentCands, err := recentMarketCandidates(ctx, deps, source, srcMarkets, srcStart, srcEnd)
+		if err != nil {
+			return err
+		}
+		// Existing fields retain first-list precedence. TopicVia is merged
+		// independently so a valid two-hop context survives another nomination.
+		cands := dropTeamCandidates(mergeTopicCandidates(
+			idCands, extraCands, caseCands, mateCands, edgeCands, recentCands, embCands))
 
 		g, gctx := errgroup.WithContext(ctx)
 		g.SetLimit(topicLinkConfirmConcurrency)
@@ -174,7 +188,7 @@ func linkTopicsHandler(deps Deps) jobs.Handler {
 				candStart, candEnd, candOK := nodeActivityWindow(gctx, deps, cand.NodeID)
 				timeDesc, timeBucket := timeRelation(srcStart, srcEnd, srcOK, candStart, candEnd, candOK)
 				from, to, sourceSummary, targetSummary := canonicalTopicPair(source.NodeID, cand.NodeID, source.Summary, cand.Summary)
-				contentHash := topicLinkContentHash(from, to, sourceSummary, targetSummary, cand.SharedIDs, timeBucket, cand.CaseIDs)
+				contentHash := topicLinkContentHash(from, to, sourceSummary, targetSummary, cand.SharedIDs, timeBucket, cand.CaseIDs, cand.TopicVia)
 				judgment, cached, err := cachedTopicLinkJudgment(gctx, deps, from, to, contentHash)
 				if err != nil {
 					return err
@@ -321,11 +335,154 @@ WHERE n.deleted_at IS NULL
 	return out, rows.Err()
 }
 
+func topicMateCandidates(ctx context.Context, deps Deps, nodeID string) ([]topicLinkCandidate, error) {
+	rows, err := deps.DB.Query(ctx, `
+WITH src AS (
+  SELECT n.author_person_id AS author, n.scope, ai.embedding
+  FROM graph.nodes n JOIN graph.artifact_index ai ON ai.node_id=n.id
+  WHERE n.id=$1 AND n.author_person_id IS NOT NULL AND ai.embedding IS NOT NULL
+),
+paths AS (
+  SELECT CASE WHEN e1.from_node_id=$1 THEN e1.to_node_id ELSE e1.from_node_id END AS c
+  FROM graph.edges e1
+  WHERE e1.kind='SAME_TOPIC' AND $1 IN (e1.from_node_id,e1.to_node_id)
+),
+mates AS (
+  SELECT CASE WHEN e2.from_node_id=p.c THEN e2.to_node_id ELSE e2.from_node_id END AS b,
+         min(p.c) AS via
+  FROM paths p
+  JOIN graph.edges e2 ON e2.kind='SAME_TOPIC' AND p.c IN (e2.from_node_id,e2.to_node_id)
+  WHERE p.c<>$1
+    AND CASE WHEN e2.from_node_id=p.c THEN e2.to_node_id ELSE e2.from_node_id END <> $1
+    AND CASE WHEN e2.from_node_id=p.c THEN e2.to_node_id ELSE e2.from_node_id END <> p.c
+  GROUP BY 1
+)
+SELECT n.id,n.type,COALESCE(n.scope,''),COALESCE(ai.summary,''),COALESCE(ai.summary_kind,''),
+       COALESCE(pe.department,''),COALESCE(ts.kind,''),
+       1.0-(ai.embedding <=> src.embedding) AS cosine,m.via
+FROM mates m
+JOIN graph.nodes n ON n.id=m.b
+JOIN graph.artifact_index ai ON ai.node_id=n.id
+CROSS JOIN src
+LEFT JOIN graph.people pe ON pe.id=n.author_person_id
+LEFT JOIN graph.thread_summaries ts ON ts.channel_id=REPLACE(n.scope,'slack:','')
+ AND ts.thread_ts=COALESCE(NULLIF(n.metadata->>'thread_ts',''),split_part(n.id,':',3))
+WHERE n.deleted_at IS NULL
+  AND n.author_person_id=src.author AND n.scope=src.scope
+  AND ai.embedding IS NOT NULL AND 1.0-(ai.embedding <=> src.embedding) >= $2
+  AND NOT (n.type IN ('slack','slack_thread') AND ai.summary_kind<>'thread_summary')
+  AND n.type NOT IN ('slack_file','jira_attachment')
+  AND length(TRIM(COALESCE(ai.summary,''))) >= $3
+  AND COALESCE(ts.kind,'') <> 'chatter'
+  AND NOT (n.type IN ('slack','slack_thread') AND n.scope LIKE 'slack:D%')
+ORDER BY cosine DESC, n.id ASC
+LIMIT $4`, nodeID, topicLinkMinFloor, topicLinkMinSummaryChars, topicLinkTopicMateLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []topicLinkCandidate
+	for rows.Next() {
+		var c topicLinkCandidate
+		if err := rows.Scan(&c.NodeID, &c.Type, &c.Scope, &c.Summary, &c.SummaryKind, &c.Department, &c.Kind, &c.Cosine, &c.TopicVia); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+const (
+	topicLinkRecentWindow = 30 * 24 * time.Hour
+	// ponytail: fitted on one case; tune from the R1b replay.
+	topicLinkRecentMinCosine = 0.75
+	topicLinkRecentPrefilter = 50
+	topicLinkRecentLimit     = 10
+)
+
+func recentMarketCandidates(ctx context.Context, deps Deps, source topicLinkNode, srcMarkets []string, srcStart, srcEnd time.Time) ([]topicLinkCandidate, error) {
+	if srcStart.IsZero() || srcEnd.IsZero() {
+		return []topicLinkCandidate{}, nil
+	}
+	lo, hi := srcStart.Add(-topicLinkRecentWindow), srcEnd.Add(topicLinkRecentWindow)
+	// The SQL cap intentionally precedes market filtering: a matching row below
+	// 50 higher-cosine wrong-market rows is not considered.
+	rows, err := deps.DB.Query(ctx, `
+WITH src AS (
+  SELECT ai.embedding AS emb, REPLACE(n.scope,'slack:','') AS ch,
+         COALESCE(NULLIF(n.metadata->>'thread_ts',''),split_part(n.id,':',3)) AS tt
+  FROM graph.nodes n JOIN graph.artifact_index ai ON ai.node_id=n.id
+  WHERE n.id=$1 AND ai.embedding IS NOT NULL
+),
+sims AS (
+  SELECT n.id,n.type,COALESCE(n.scope,'') AS scope,COALESCE(ai.summary,'') AS summary,
+         COALESCE(ai.summary_kind,'') AS summary_kind,COALESCE(p.department,'') AS department,
+         COALESCE(ts.kind,'') AS kind,1.0-(ai.embedding <=> src.emb) AS cosine,
+         ts.markets IS NOT NULL AS has_markets,COALESCE(ts.markets,'{}') AS markets,
+         activity.started,activity.ended
+  FROM graph.artifact_index ai
+  JOIN graph.nodes n ON n.id=ai.node_id
+  LEFT JOIN graph.people p ON p.id=n.author_person_id
+  CROSS JOIN src
+  LEFT JOIN graph.thread_summaries ts ON ts.channel_id=REPLACE(n.scope,'slack:','')
+    AND ts.thread_ts=COALESCE(NULLIF(n.metadata->>'thread_ts',''),split_part(n.id,':',3))
+  CROSS JOIN LATERAL (
+    SELECT
+      CASE WHEN n.type IN ('slack','slack_thread') THEN
+        COALESCE((SELECT min(COALESCE(to_timestamp(NULLIF(msg.metadata->>'ts','')::float8),msg.first_seen_at))
+          FROM graph.nodes msg WHERE msg.scope=n.scope AND msg.deleted_at IS NULL
+            AND COALESCE(NULLIF(msg.metadata->>'thread_ts',''),split_part(msg.id,':',3))=
+                COALESCE(NULLIF(n.metadata->>'thread_ts',''),split_part(n.id,':',3))),n.first_seen_at)
+      ELSE n.first_seen_at END AS started,
+      CASE WHEN n.type IN ('slack','slack_thread') THEN
+        COALESCE((SELECT max(COALESCE(to_timestamp(NULLIF(msg.metadata->>'ts','')::float8),msg.first_seen_at))
+          FROM graph.nodes msg WHERE msg.scope=n.scope AND msg.deleted_at IS NULL
+            AND COALESCE(NULLIF(msg.metadata->>'thread_ts',''),split_part(msg.id,':',3))=
+                COALESCE(NULLIF(n.metadata->>'thread_ts',''),split_part(n.id,':',3))),n.updated_at)
+      ELSE n.updated_at END AS ended
+  ) activity
+  WHERE ai.node_id<>$1 AND ai.embedding IS NOT NULL AND n.deleted_at IS NULL
+    AND 1.0-(ai.embedding <=> src.emb) >= $2
+    AND NOT (n.type IN ('slack','slack_thread') AND ai.summary_kind<>'thread_summary')
+    AND n.type NOT IN ('slack_file','jira_attachment')
+    AND length(TRIM(COALESCE(ai.summary,''))) >= $3
+    AND COALESCE(ts.kind,'') <> 'chatter'
+    AND NOT (n.type IN ('slack','slack_thread') AND n.scope LIKE 'slack:D%')
+    AND NOT (n.type IN ('slack','slack_thread') AND REPLACE(n.scope,'slack:','')=src.ch
+      AND COALESCE(NULLIF(n.metadata->>'thread_ts',''),split_part(n.id,':',3))=src.tt)
+)
+SELECT id,type,scope,summary,summary_kind,department,kind,cosine,has_markets,markets
+FROM sims WHERE started <= $5 AND ended >= $4
+ORDER BY cosine DESC,id ASC LIMIT $6`, source.NodeID, topicLinkRecentMinCosine, topicLinkMinSummaryChars, lo, hi, topicLinkRecentPrefilter)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]topicLinkCandidate, 0, topicLinkRecentLimit)
+	for rows.Next() {
+		var c topicLinkCandidate
+		if err := rows.Scan(&c.NodeID, &c.Type, &c.Scope, &c.Summary, &c.SummaryKind, &c.Department, &c.Kind, &c.Cosine, &c.HasMarkets, &c.Markets); err != nil {
+			return nil, err
+		}
+		candidateMarkets := resolveMarkets(c.Markets, c.HasMarkets, c.Summary)
+		if recentMarketCandidateMatches(srcMarkets, candidateMarkets, source.Scope, c.Scope) {
+			out = append(out, c)
+			if len(out) == topicLinkRecentLimit {
+				break
+			}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func loadTopicLinkSource(ctx context.Context, deps Deps, nodeID string) (topicLinkNode, error) {
 	var n topicLinkNode
 	err := deps.DB.QueryRow(ctx, `
 SELECT n.id, n.type, COALESCE(n.scope,''), COALESCE(ai.summary,''), COALESCE(ai.summary_kind,''), COALESCE(p.department,''),
-       COALESCE(ts.kind,'')
+       COALESCE(ts.kind,''), ts.markets IS NOT NULL, COALESCE(ts.markets, '{}')
 FROM graph.nodes n
 JOIN graph.artifact_index ai ON ai.node_id = n.id
 LEFT JOIN graph.people p ON p.id = n.author_person_id
@@ -334,7 +491,7 @@ LEFT JOIN graph.thread_summaries ts
   AND ts.thread_ts = COALESCE(NULLIF(n.metadata->>'thread_ts',''), split_part(n.id,':',3))
 WHERE n.id=$1 AND n.deleted_at IS NULL`,
 		nodeID,
-	).Scan(&n.NodeID, &n.Type, &n.Scope, &n.Summary, &n.SummaryKind, &n.Department, &n.Kind)
+	).Scan(&n.NodeID, &n.Type, &n.Scope, &n.Summary, &n.SummaryKind, &n.Department, &n.Kind, &n.HasMarkets, &n.Markets)
 	return n, err
 }
 
@@ -450,11 +607,15 @@ func canonicalTopicPair(a, b, aSummary, bSummary string) (from, to, fromSummary,
 // invalidate the cache on every new reply).
 // caseIDs is part of the key too: gaining case context is new evidence, so a
 // verdict reached without it must not be served from cache.
-func topicLinkContentHash(from, to, fromSummary, toSummary string, sharedIDs []string, timeBucket string, caseIDs []string) string {
-	h := sha256.Sum256([]byte(fmt.Sprintf("rules-v%d\x00", loadedTopicRules.Version) +
+func topicLinkContentHash(from, to, fromSummary, toSummary string, sharedIDs []string, timeBucket string, caseIDs []string, topicVia string) string {
+	input := fmt.Sprintf("rules-v%d\x00", loadedTopicRules.Version) +
 		from + "\x00" + to + "\x00" + fromSummary + "\x00" + toSummary +
 		"\x00" + strings.Join(sharedIDs, ",") + "\x00" + timeBucket +
-		"\x00" + strings.Join(caseIDs, ",")))
+		"\x00" + strings.Join(caseIDs, ",")
+	if topicVia != "" {
+		input += "\x00topic:" + topicVia
+	}
+	h := sha256.Sum256([]byte(input))
 	return hex.EncodeToString(h[:])
 }
 
@@ -550,13 +711,16 @@ LIMIT $3`,
 // SharedIDs over an embedding duplicate).
 func mergeTopicCandidates(lists ...[]topicLinkCandidate) []topicLinkCandidate {
 	var out []topicLinkCandidate
-	seen := map[string]struct{}{}
+	index := map[string]int{}
 	for _, l := range lists {
 		for _, c := range l {
-			if _, ok := seen[c.NodeID]; ok {
+			if i, ok := index[c.NodeID]; ok {
+				if out[i].TopicVia == "" && c.TopicVia != "" {
+					out[i].TopicVia = c.TopicVia
+				}
 				continue
 			}
-			seen[c.NodeID] = struct{}{}
+			index[c.NodeID] = len(out)
 			out = append(out, c)
 		}
 	}
@@ -786,6 +950,9 @@ such a passage in BOTH artifacts, answer same_topic false.
 			" payment id, but a release/deploy thread, a stand-up or a PR that merely quotes the id in"+
 			" passing is still a DIFFERENT topic (tie-breakers #2 and #3).",
 			strings.Join(cand.CaseIDs, ", "))
+	}
+	if cand.TopicVia != "" {
+		extra.WriteString("\nTopic context: artifact B is confirmed same topic as another artifact that is ALREADY CONFIRMED same topic as artifact A, and B was started by the same person in the same channel. Weigh this as evidence, not as a decision.")
 	}
 	user := fmt.Sprintf(
 		"Artifact A (%s, department %s, active %s):\n%s\n\nArtifact B (%s, department %s, active %s, cosine %.3f):\n%s%s",

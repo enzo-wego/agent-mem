@@ -532,3 +532,74 @@ func TestChannelTopics_ServesDecisions(t *testing.T) {
 		t.Fatalf("found %d thread views: %s", found, w.Body.String())
 	}
 }
+
+func TestSummarizeThread_StoresUpdatesAndSkipsMarkets(t *testing.T) {
+	pool := decisionsTestPool(t)
+	ctx := context.Background()
+	seedDecisionThread(t, pool, "C", "800.000001", 1, 20)
+	replies := []string{
+		`{"topic":"India work","overview":"India GST work is active.","markets":["IN","IN"]}`,
+		`{"topic":"Saudi work","overview":"Saudi work is active.","markets":["SA"]}`,
+		`{"topic":"No market","overview":"Generic work is active.","markets":[17]}`,
+	}
+	calls := 0
+	gem := &mockGemini{generateResult: func() (string, error) {
+		reply := replies[calls]
+		calls++
+		return reply, nil
+	}}
+	runDecisionSummary(t, pool, gem, "800.000001", false)
+	var markets []string
+	var nonnull bool
+	if err := pool.QueryRow(ctx, `SELECT markets,markets IS NOT NULL FROM graph.thread_summaries WHERE channel_id='C' AND thread_ts='800.000001'`).Scan(&markets, &nonnull); err != nil {
+		t.Fatal(err)
+	}
+	if !nonnull || len(markets) != 1 || markets[0] != "IN" {
+		t.Fatalf("insert markets=%v nonnull=%v", markets, nonnull)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE graph.nodes SET updated_at=updated_at+interval '1 second' WHERE id='slack:C:800.000001'`); err != nil {
+		t.Fatal(err)
+	}
+	runDecisionSummary(t, pool, gem, "800.000001", false)
+	if calls != 2 {
+		t.Fatalf("model calls after changed input=%d, want 2", calls)
+	}
+	if err := pool.QueryRow(ctx, `SELECT markets FROM graph.thread_summaries WHERE channel_id='C' AND thread_ts='800.000001'`).Scan(&markets); err != nil || len(markets) != 1 || markets[0] != "SA" {
+		t.Fatalf("updated markets=%v err=%v", markets, err)
+	}
+	runDecisionSummary(t, pool, gem, "800.000001", false)
+	if calls != 2 {
+		t.Fatalf("unchanged input made model call; calls=%d", calls)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE graph.nodes SET updated_at=updated_at+interval '1 second' WHERE id='slack:C:800.000001'`); err != nil {
+		t.Fatal(err)
+	}
+	runDecisionSummary(t, pool, gem, "800.000001", false)
+	if calls != 3 {
+		t.Fatalf("no-market changed input calls=%d, want 3", calls)
+	}
+	if err := pool.QueryRow(ctx, `SELECT markets,markets IS NOT NULL FROM graph.thread_summaries WHERE channel_id='C' AND thread_ts='800.000001'`).Scan(&markets, &nonnull); err != nil || !nonnull || len(markets) != 0 {
+		t.Fatalf("empty markets=%v nonnull=%v err=%v", markets, nonnull, err)
+	}
+
+	seedDecisionThread(t, pool, "D", "900.000001", 1, 20)
+	var count int
+	var newest int64
+	if err := pool.QueryRow(ctx, `SELECT count(*),max((EXTRACT(EPOCH FROM updated_at)*1000)::bigint) FROM graph.nodes WHERE scope='slack:D'`).Scan(&count, &newest); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO graph.thread_summaries(channel_id,thread_ts,signature,link_signature,summary,overview,markets) VALUES('D','900.000001',$1,'','Legacy','Legacy overview',NULL)`, threadSummarySignature(count, newest)); err != nil {
+		t.Fatal(err)
+	}
+	before := calls
+	payload, _ := json.Marshal(summarizeThreadPayload{ChannelID: "D", ThreadTs: "900.000001"})
+	if err := NewSummarizeThreadHandler(Deps{DB: pool, Gemini: gem, Logger: zerolog.Nop()}).Handler(ctx, payload); err != nil {
+		t.Fatal(err)
+	}
+	if calls != before {
+		t.Fatal("matching legacy row called model")
+	}
+	if err := pool.QueryRow(ctx, `SELECT markets IS NULL FROM graph.thread_summaries WHERE channel_id='D'`).Scan(&nonnull); err != nil || !nonnull {
+		t.Fatalf("legacy NULL markets changed: null=%v err=%v", nonnull, err)
+	}
+}
