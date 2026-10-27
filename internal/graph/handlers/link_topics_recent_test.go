@@ -106,6 +106,62 @@ func TestTopicMateCandidatesGatesAndVia(t *testing.T) {
 	}
 }
 
+func TestTopicMateCandidatesLimitsByCosineThenID(t *testing.T) {
+	pool := caseTestDB(t)
+	deps := Deps{DB: pool, Logger: zerolog.Nop(), MachineID: "test"}
+	ctx := context.Background()
+	var author int64
+	if err := pool.QueryRow(ctx, `INSERT INTO graph.people(display_name,machine_id) VALUES('limited topic author','test') RETURNING id`).Scan(&author); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		pool.Exec(ctx, `UPDATE graph.nodes SET author_person_id=NULL WHERE author_person_id=$1`, author)
+		pool.Exec(ctx, `DELETE FROM graph.people WHERE id=$1`, author)
+	})
+
+	now := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	const source = "slack:CTL:1790812800"
+	const via = "slack:CTL:1790812801"
+	seedRecentThread(t, deps, source, "slack:CTL", strings.Repeat("source work ", 8), 1, now, &author, nil, false)
+	seedRecentThread(t, deps, via, "slack:CTL", strings.Repeat("via work ", 8), .95, now, &author, nil, false)
+	seedTopicEdge(t, pool, source, via, `{}`)
+
+	mates := []struct {
+		id     string
+		cosine float64
+	}{
+		{"slack:CTL:1790812810", .99},
+		{"slack:CTL:1790812811", .98},
+		{"slack:CTL:1790812812", .97},
+		{"slack:CTL:1790812813", .96},
+		{"slack:CTL:1790812814", .95},
+		{"slack:CTL:1790812815", .94},
+		{"slack:CTL:1790812816", .93},
+		{"slack:CTL:1790812817", .92},
+		{"slack:CTL:1790812818", .91},
+		{"slack:CTL:1790812819", .90},
+		{"slack:CTL:1790812820", .90},
+		{"slack:CTL:1790812821", .89},
+	}
+	for _, mate := range mates {
+		seedRecentThread(t, deps, mate.id, "slack:CTL", strings.Repeat("candidate work ", 6), mate.cosine, now, &author, nil, false)
+		seedTopicEdge(t, pool, via, mate.id, `{}`)
+	}
+
+	cands, err := topicMateCandidates(ctx, deps, source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cands) != 10 {
+		t.Fatalf("candidate count=%d, want 10", len(cands))
+	}
+	for i, want := range mates[:10] {
+		if cands[i].NodeID != want.id {
+			t.Errorf("candidate %d=%s, want %s", i, cands[i].NodeID, want.id)
+		}
+	}
+}
+
 func TestRecentMarketCandidatesActivityMarketsLimitsAndCaps(t *testing.T) {
 	pool := caseTestDB(t)
 	deps := Deps{DB: pool, Logger: zerolog.Nop(), MachineID: "test"}

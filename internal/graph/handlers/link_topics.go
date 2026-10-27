@@ -24,6 +24,8 @@ import (
 const (
 	topicLinkShortlistLimit = 12
 	topicLinkMinFloor       = 0.65
+	// ponytail: cap chosen to match the recent lane; raise if R1b shows misses.
+	topicLinkTopicMateLimit = 10
 	// topicLinkIdentifierRarityCap: an identifier appearing in more indexed
 	// artifacts than this is generic (a widely-quoted error code, a hot Jira
 	// ticket) and nominates no candidates — the judge would drown in noise.
@@ -373,7 +375,8 @@ WHERE n.deleted_at IS NULL
   AND length(TRIM(COALESCE(ai.summary,''))) >= $3
   AND COALESCE(ts.kind,'') <> 'chatter'
   AND NOT (n.type IN ('slack','slack_thread') AND n.scope LIKE 'slack:D%')
-ORDER BY n.id`, nodeID, topicLinkMinFloor, topicLinkMinSummaryChars)
+ORDER BY cosine DESC, n.id ASC
+LIMIT $4`, nodeID, topicLinkMinFloor, topicLinkMinSummaryChars, topicLinkTopicMateLimit)
 	if err != nil {
 		return nil, err
 	}
