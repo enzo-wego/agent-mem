@@ -163,6 +163,72 @@ func TestEmbedWithOptionsOverridesDims(t *testing.T) {
 	}
 }
 
+func TestOpenRouterOnlyEmbedBatchRequests(t *testing.T) {
+	var requests []capture
+	var callers []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		requests = append(requests, capture{path: r.URL.Path, body: body})
+		callers = append(callers, r.Header.Get("X-LLM-Caller"))
+		_, _ = w.Write([]byte(`{"embeddings":[[1],[2]],"dims":1}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	client := New(srv.URL, "secret", 1, WithOpenRouterOnlyEmbedBatch("agent-mem/backfill"))
+	for range 2 {
+		if _, err := client.EmbedBatch(context.Background(), []string{"one", "two"}); err != nil {
+			t.Fatalf("EmbedBatch: %v", err)
+		}
+	}
+	for i := range requests {
+		if requests[i].body["fallback"] != false {
+			t.Errorf("request %d fallback = %v, want false", i, requests[i].body["fallback"])
+		}
+		if callers[i] != "agent-mem/backfill" {
+			t.Errorf("request %d caller = %q", i, callers[i])
+		}
+	}
+}
+
+func TestDefaultEmbedRequestsOmitFallbackAndCaller(t *testing.T) {
+	var bodies []map[string]any
+	var callers []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		bodies = append(bodies, body)
+		callers = append(callers, r.Header.Get("X-LLM-Caller"))
+		count := len(body["texts"].([]any))
+		embeddings := make([][]float32, count)
+		for i := range embeddings {
+			embeddings[i] = []float32{1}
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"embeddings": embeddings, "dims": 1})
+	}))
+	t.Cleanup(srv.Close)
+
+	client := New(srv.URL, "secret", 1)
+	if _, err := client.Embed(context.Background(), "one"); err != nil {
+		t.Fatalf("Embed: %v", err)
+	}
+	if _, err := client.EmbedBatch(context.Background(), []string{"one", "two"}); err != nil {
+		t.Fatalf("EmbedBatch: %v", err)
+	}
+	for i := range bodies {
+		if _, ok := bodies[i]["fallback"]; ok {
+			t.Errorf("request %d unexpectedly sent fallback", i)
+		}
+		if callers[i] != "" {
+			t.Errorf("request %d caller = %q, want empty", i, callers[i])
+		}
+	}
+}
+
 // A width mismatch must be caught here, not by pgvector. The DB error surfaces
 // far from the cause and reads like a schema problem.
 func TestEmbedRejectsWrongWidth(t *testing.T) {

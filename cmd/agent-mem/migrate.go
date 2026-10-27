@@ -23,7 +23,16 @@ type batchEmbedder interface {
 	EmbedBatch(ctx context.Context, texts []string) ([][]float32, error)
 }
 
-func runBackfillEmbeddings(databaseURL, gatewayKey, embeddingModel string, embeddingDims int) error {
+var backfillAll = backfillEmbeddings
+
+func newBackfillClient(url, key string, dims int, openrouterOnly bool) *llmgateway.Client {
+	if openrouterOnly {
+		return llmgateway.New(url, key, dims, llmgateway.WithOpenRouterOnlyEmbedBatch("agent-mem/backfill"))
+	}
+	return llmgateway.New(url, key, dims)
+}
+
+func runBackfillEmbeddings(databaseURL, gatewayKey, embeddingModel string, embeddingDims int, openrouterOnly bool) error {
 	ctx := context.Background()
 
 	pool, err := pgxpool.New(ctx, databaseURL)
@@ -34,8 +43,8 @@ func runBackfillEmbeddings(databaseURL, gatewayKey, embeddingModel string, embed
 
 	// embeddingModel is ignored: the gateway owns model choice. The width still
 	// comes from the caller because it must match the destination column.
-	client := llmgateway.New(os.Getenv("LLM_GATEWAY_URL"), gatewayKey, embeddingDims)
-	return backfillEmbeddings(ctx, pool, client)
+	client := newBackfillClient(os.Getenv("LLM_GATEWAY_URL"), gatewayKey, embeddingDims, openrouterOnly)
+	return backfillAll(ctx, pool, client)
 }
 
 func runMigrate(sqlitePath, databaseURL, gatewayKey string) error {

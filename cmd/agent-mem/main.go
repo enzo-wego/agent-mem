@@ -21,6 +21,29 @@ import (
 var version = "dev"
 var buildRev string
 
+var runBackfill = runBackfillEmbeddings
+
+func newBackfillCmd(loadConfig func() *config.Config) *cobra.Command {
+	var openrouterOnly bool
+	cmd := &cobra.Command{
+		Use:   "backfill-embeddings",
+		Short: "Generate embeddings for all rows without them (via llm-gateway)",
+		Long:  "Generate embeddings for all rows without them. Use --openrouter-only to disable the gateway's Gemini fallback.",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg := loadConfig()
+			if cfg.LLMGatewayURL == "" || cfg.LLMGatewayAPIKey == "" {
+				return fmt.Errorf("llm_gateway_url and llm_gateway_api_key required: agent-mem holds no provider keys")
+			}
+			// LLM_GATEWAY_URL is read from the environment by runBackfillEmbeddings;
+			// mirror the configured value so the CLI works without extra exports.
+			_ = os.Setenv("LLM_GATEWAY_URL", cfg.LLMGatewayURL)
+			return runBackfill(cfg.DatabaseURL, cfg.LLMGatewayAPIKey, "", cfg.GeminiEmbeddingDims, openrouterOnly)
+		},
+	}
+	cmd.Flags().BoolVar(&openrouterOnly, "openrouter-only", false, "Disable the gateway's Gemini fallback and use OpenRouter only")
+	return cmd
+}
+
 func main() {
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr})
 
@@ -346,20 +369,8 @@ func main() {
 	}
 	migrateSqliteCmd.Flags().StringVar(&sqlitePath, "sqlite-path", "", "Path to claude-mem SQLite database (default: ~/.claude-mem/claude-mem.db)")
 
-	// backfill-embeddings - generate Gemini embeddings for rows missing them
-	backfillCmd := &cobra.Command{
-		Use:   "backfill-embeddings",
-		Short: "Generate embeddings for all rows without them (via llm-gateway)",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			if cfg.LLMGatewayURL == "" || cfg.LLMGatewayAPIKey == "" {
-				return fmt.Errorf("llm_gateway_url and llm_gateway_api_key required: agent-mem holds no provider keys")
-			}
-			// LLM_GATEWAY_URL is read from the environment by runBackfillEmbeddings;
-			// mirror the configured value so the CLI works without extra exports.
-			_ = os.Setenv("LLM_GATEWAY_URL", cfg.LLMGatewayURL)
-			return runBackfillEmbeddings(cfg.DatabaseURL, cfg.LLMGatewayAPIKey, "", cfg.GeminiEmbeddingDims)
-		},
-	}
+	// backfill-embeddings - generate embeddings for rows missing them
+	backfillCmd := newBackfillCmd(func() *config.Config { return cfg })
 
 	rootCmd.AddCommand(
 		versionCmd,
