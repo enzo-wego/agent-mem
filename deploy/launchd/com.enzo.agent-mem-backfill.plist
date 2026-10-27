@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Back-fills agent-mem rows stored without an embedding, through OpenRouter only
+  (never the gateway's Gemini fallback). Runs at 09:00 SGT on the 1st and 15th,
+  one hour after the OpenRouter monthly cap resets (00:00 UTC on the 1st).
+  Install: sudo install -m 644 -o root -g wheel <this file> /Library/LaunchDaemons/
+           sudo launchctl bootstrap system /Library/LaunchDaemons/com.enzo.agent-mem-backfill.plist
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.enzo.agent-mem-backfill</string>
+    <key>UserName</key>
+    <string>enzo</string>
+    <key>GroupName</key>
+    <string>staff</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/opt/homebrew/bin/docker</string>
+        <string>exec</string>
+        <string>agent-mem-worker-1</string>
+        <string>agent-mem</string>
+        <string>backfill-embeddings</string>
+        <string>--openrouter-only</string>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>/Users/enzo</string>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/bin:/bin</string>
+        <key>DOCKER_HOST</key>
+        <string>unix:///Users/enzo/.colima/default/docker.sock</string>
+    </dict>
+    <key>StartCalendarInterval</key>
+    <array>
+        <dict><key>Day</key><integer>1</integer><key>Hour</key><integer>9</integer><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Day</key><integer>15</integer><key>Hour</key><integer>9</integer><key>Minute</key><integer>0</integer></dict>
+    </array>
+    <key>StandardOutPath</key>
+    <string>/Users/enzo/Library/Logs/agent-mem-backfill.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/enzo/Library/Logs/agent-mem-backfill.log</string>
+</dict>
+</plist>

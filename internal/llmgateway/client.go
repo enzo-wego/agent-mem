@@ -163,13 +163,28 @@ func (m *meter) logCapHit(cap, count int) {
 // gemini.Client for the calls agent-mem makes, so it can replace that client
 // rather than sit beside it.
 type Client struct {
-	baseURL    string
-	apiKey     string
-	dims       int // default embedding dimensionality: 768 flat, 3072 graph
-	http       *http.Client
-	cap        int   // hourly generate cap; 0 = unlimited
-	genMeter   meter // counts generate calls
-	embedMeter meter // counts embed calls (attributed but not capped)
+	baseURL       string
+	apiKey        string
+	dims          int // default embedding dimensionality: 768 flat, 3072 graph
+	http          *http.Client
+	cap           int   // hourly generate cap; 0 = unlimited
+	genMeter      meter // counts generate calls
+	embedMeter    meter // counts embed calls (attributed but not capped)
+	batchFallback *bool
+	batchCaller   string
+}
+
+// Option customizes a client without changing default request behavior.
+type Option func(*Client)
+
+// WithOpenRouterOnlyEmbedBatch disables gateway fallback for EmbedBatch and
+// attributes those requests to caller. Single-text embedding calls are unchanged.
+func WithOpenRouterOnlyEmbedBatch(caller string) Option {
+	fallback := false
+	return func(c *Client) {
+		c.batchFallback = &fallback
+		c.batchCaller = caller
+	}
 }
 
 // New returns a client for baseURL (e.g. "http://172.18.0.1:8750"). dims is the
@@ -177,7 +192,7 @@ type Client struct {
 // observations.embedding is vector(768) while the graph uses halfvec(3072).
 // Getting it wrong fails every insert with "expected 768 dimensions, not 3072",
 // which looks like a partial outage rather than a config error.
-func New(baseURL, apiKey string, dims int) *Client {
+func New(baseURL, apiKey string, dims int, options ...Option) *Client {
 	if dims <= 0 {
 		dims = 3072
 	}
@@ -187,7 +202,7 @@ func New(baseURL, apiKey string, dims int) *Client {
 	// that cannot reach it, so gateway traffic must always connect directly.
 	transport.Proxy = nil
 	now := time.Now().Hour()
-	return &Client{
+	client := &Client{
 		baseURL:    strings.TrimRight(baseURL, "/"),
 		apiKey:     apiKey,
 		dims:       dims,
@@ -195,6 +210,10 @@ func New(baseURL, apiKey string, dims int) *Client {
 		genMeter:   meter{hour: now},
 		embedMeter: meter{hour: now},
 	}
+	for _, option := range options {
+		option(client)
+	}
+	return client
 }
 
 // SetCap sets the hourly generate call ceiling. 0 = unlimited.
@@ -260,6 +279,10 @@ func callerName() string {
 // wrapped in ErrUnreachable; an HTTP error status is not, because the gateway
 // answered and its answer is authoritative.
 func (c *Client) post(ctx context.Context, path string, in, out any) error {
+	return c.postWithCaller(ctx, path, "", in, out)
+}
+
+func (c *Client) postWithCaller(ctx context.Context, path, caller string, in, out any) error {
 	body, err := json.Marshal(in)
 	if err != nil {
 		return fmt.Errorf("llm-gateway: marshal %s: %w", path, err)
@@ -270,6 +293,9 @@ func (c *Client) post(ctx context.Context, path string, in, out any) error {
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-API-Key", c.apiKey)
+	if caller != "" {
+		req.Header.Set("X-LLM-Caller", caller)
+	}
 
 	resp, err := c.http.Do(req)
 	if err != nil {
@@ -360,8 +386,9 @@ func (c *Client) GenerateCheap(ctx context.Context, systemPrompt, userMessage st
 }
 
 type embedRequest struct {
-	Texts []string `json:"texts"`
-	Dims  int      `json:"dims"`
+	Texts    []string `json:"texts"`
+	Dims     int      `json:"dims"`
+	Fallback *bool    `json:"fallback,omitempty"`
 }
 
 type embedResponse struct {
@@ -427,7 +454,9 @@ func (c *Client) EmbedBatch(ctx context.Context, texts []string) ([][]float32, e
 	start := time.Now()
 	n := c.embedMeter.incr()
 	var out embedResponse
-	if err := c.post(ctx, "/embed", embedRequest{Texts: texts, Dims: c.dims}, &out); err != nil {
+	if err := c.postWithCaller(ctx, "/embed", c.batchCaller, embedRequest{
+		Texts: texts, Dims: c.dims, Fallback: c.batchFallback,
+	}, &out); err != nil {
 		return nil, err
 	}
 	if len(out.Embeddings) != len(texts) {
