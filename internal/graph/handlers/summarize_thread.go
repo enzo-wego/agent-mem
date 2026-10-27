@@ -217,14 +217,15 @@ ORDER BY COALESCE(to_timestamp(NULLIF(n.metadata->>'ts','')::float8), n.first_se
 			hlJSON = []byte("[]")
 		}
 		_, err = deps.DB.Exec(ctx,
-			`INSERT INTO graph.thread_summaries(channel_id,thread_ts,signature,link_signature,summary,overview,highlights,kind,decisions,open_questions,updated_at)
-			 VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NOW())
+			`INSERT INTO graph.thread_summaries(channel_id,thread_ts,signature,link_signature,summary,overview,highlights,kind,decisions,open_questions,markets,updated_at)
+			 VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,NOW())
 			 ON CONFLICT (channel_id,thread_ts) DO UPDATE SET
 			   signature=excluded.signature, link_signature=excluded.link_signature,
 			   summary=excluded.summary,
 			   overview=excluded.overview, highlights=excluded.highlights,
-			   kind=excluded.kind, decisions=excluded.decisions, open_questions=excluded.open_questions, updated_at=NOW()`,
-			p.ChannelID, p.ThreadTs, sig, linkSig, ds.Topic, ds.Overview, hlJSON, ds.Kind, decJSON, oqJSON)
+			   kind=excluded.kind, decisions=excluded.decisions, open_questions=excluded.open_questions,
+			   markets=excluded.markets, updated_at=NOW()`,
+			p.ChannelID, p.ThreadTs, sig, linkSig, ds.Topic, ds.Overview, hlJSON, ds.Kind, decJSON, oqJSON, ds.Markets)
 		if err == nil {
 			if _, jErr := jobs.Enqueue(ctx, deps.DB, "index_artifact", map[string]any{
 				"node_id":      ids.SlackMessage(p.ChannelID, p.ThreadTs),
@@ -333,6 +334,7 @@ type threadDeepSummary struct {
 	Highlights            []string
 	Decisions             []threadDecision
 	OpenQuestions         []string
+	Markets               []string
 }
 
 func genThreadDeepSummary(ctx context.Context, g GeminiClient, transcript string) threadDeepSummary {
@@ -354,7 +356,8 @@ Summarize it so a teammate can understand it quickly and act on it. Respond as J
  "decisions":[{"text":"one line: what was decided or agreed, in present tense","by":"the person's name as written, without the team label","date":"YYYY-MM-DD","ts":"the ts of the message where it was decided"}],
  "open_questions":["one line each: what is still unresolved as of the latest messages"],
  "highlights":["chronological key points, each one short line, max 6 items"],
- "kind":"substantive|chatter"}
+ "kind":"substantive|chatter",
+ "markets":["two-letter uppercase country codes of the markets the thread is about, e.g. IN for India GST, SA for Saudi; [] when none"]}
 
 DECISIONS are things settled: agreed, approved, confirmed, final, no longer
 required. List every decision, oldest first. When a later decision replaces an
@@ -391,18 +394,19 @@ No markdown, no quotes around the whole thing.`
 		Kind          string           `json:"kind"`
 		Decisions     []threadDecision `json:"decisions"`
 		OpenQuestions []string         `json:"open_questions"`
+		Markets       json.RawMessage  `json:"markets"`
 	}
 	if json.Unmarshal(llmjson.ExtractJSON(out), &parsed) != nil {
 		// Non-JSON prose reply (see prose() in cluster_summary.go): keep it as the
 		// overview so the thread still summarizes and caches instead of retrying
 		// forever. Topic label stays empty; callers fall back to the thread's title.
-		return threadDeepSummary{Overview: prose(out)}
+		return threadDeepSummary{Overview: prose(out), Markets: []string{}}
 	}
 	kind := parsed.Kind
 	if kind != "chatter" {
 		kind = "substantive" // anything unexpected defaults to visible
 	}
-	return threadDeepSummary{Topic: firstLine(parsed.Topic, 90), Overview: strings.TrimSpace(parsed.Overview), Highlights: parsed.Highlights, Kind: kind, Decisions: parsed.Decisions, OpenQuestions: parsed.OpenQuestions}
+	return threadDeepSummary{Topic: firstLine(parsed.Topic, 90), Overview: strings.TrimSpace(parsed.Overview), Highlights: parsed.Highlights, Kind: kind, Decisions: parsed.Decisions, OpenQuestions: parsed.OpenQuestions, Markets: parseMarkets(parsed.Markets)}
 }
 
 // BackfillMissingThreadSummaries enqueues summarize_thread for threads that
