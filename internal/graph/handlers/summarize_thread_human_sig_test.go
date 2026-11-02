@@ -160,19 +160,26 @@ func TestSummarizeThread_BotOnlyLegacyAndFillDecisions(t *testing.T) {
 	if calls != 1 {
 		t.Fatalf("bot-only calls=%d", calls)
 	}
-	seedSigMessage(t, pool, "L", "400.000001", "400.000001", "legacy", `{"display_name":"Human"}`, nil, at)
+	// A legacy row with a matching full signature and an already populated,
+	// correctly computed link signature backfills only human_signature.
+	seedSigMessage(t, pool, "L", "400.000001", "400.000001", "https://jira/PAY-N", `{"display_name":"Human"}`, nil, at)
+	seedSigResource(t, pool, "jira:PAY-N", "PAY-N title", "PAY-N body", "slack:L:400.000001")
 	full := threadSummarySignature(1, at.UnixMilli())
-	if _, err := pool.Exec(ctx, `INSERT INTO graph.thread_summaries(channel_id,thread_ts,signature,human_signature,link_signature,summary,overview,updated_at) VALUES('L','400.000001',$1,'','','Legacy','O',$2)`, full, at); err != nil {
+	expectedLink := linkSignature(linkedResourceBlock(ctx, Deps{DB: pool}, "L", "400.000001", true))
+	if expectedLink == "" {
+		t.Fatal("referenced resource produced empty link signature")
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO graph.thread_summaries(channel_id,thread_ts,signature,human_signature,link_signature,summary,overview,updated_at) VALUES('L','400.000001',$1,'',$2,'Legacy','O',$3)`, full, expectedLink, at); err != nil {
 		t.Fatal(err)
 	}
 	runSigSummary(t, pool, gem, zerolog.Nop(), "L", "400.000001", false)
-	var sig, summary string
+	var sig, summary, link string
 	var storedAt time.Time
-	if err := pool.QueryRow(ctx, `SELECT signature,human_signature,summary,updated_at FROM graph.thread_summaries WHERE channel_id='L'`).Scan(&sig, &hs, &summary, &storedAt); err != nil {
+	if err := pool.QueryRow(ctx, `SELECT signature,human_signature,link_signature,summary,updated_at FROM graph.thread_summaries WHERE channel_id='L'`).Scan(&sig, &hs, &link, &summary, &storedAt); err != nil {
 		t.Fatal(err)
 	}
-	if calls != 1 || sig != full || hs != threadHumanSignature(1, at.UnixMilli()) || summary != "Legacy" || !storedAt.Equal(at) {
-		t.Fatalf("legacy calls=%d sig=%q hs=%q summary=%q at=%s", calls, sig, hs, summary, storedAt)
+	if calls != 1 || sig != full || hs != threadHumanSignature(1, at.UnixMilli()) || link != expectedLink || summary != "Legacy" || !storedAt.Equal(at) {
+		t.Fatalf("legacy calls=%d sig=%q human=%q link=%q summary=%q at=%s", calls, sig, hs, link, summary, storedAt)
 	}
 	// Both legacy signature columns empty: skip and backfill both from a real
 	// referenced resource, while preserving the cached row.
@@ -181,13 +188,16 @@ func TestSummarizeThread_BotOnlyLegacyAndFillDecisions(t *testing.T) {
 	if _, err := pool.Exec(ctx, `INSERT INTO graph.thread_summaries(channel_id,thread_ts,signature,human_signature,link_signature,summary,overview,updated_at) VALUES('M','450.000001',$1,'','','Legacy links','O',$2)`, full, at); err != nil {
 		t.Fatal(err)
 	}
+	expectedBothEmptyLink := linkSignature(linkedResourceBlock(ctx, Deps{DB: pool}, "M", "450.000001", true))
+	if expectedBothEmptyLink == "" {
+		t.Fatal("both-empty legacy resource produced empty link signature")
+	}
 	runSigSummary(t, pool, gem, zerolog.Nop(), "M", "450.000001", false)
-	var link string
-	if err := pool.QueryRow(ctx, `SELECT human_signature,link_signature FROM graph.thread_summaries WHERE channel_id='M'`).Scan(&hs, &link); err != nil {
+	if err := pool.QueryRow(ctx, `SELECT signature,human_signature,link_signature,summary,updated_at FROM graph.thread_summaries WHERE channel_id='M'`).Scan(&sig, &hs, &link, &summary, &storedAt); err != nil {
 		t.Fatal(err)
 	}
-	if calls != 1 || hs != threadHumanSignature(1, at.UnixMilli()) || link == "" {
-		t.Fatalf("both-empty legacy calls=%d human=%q link=%q", calls, hs, link)
+	if calls != 1 || sig != full || hs != threadHumanSignature(1, at.UnixMilli()) || link != expectedBothEmptyLink || summary != "Legacy links" || !storedAt.Equal(at) {
+		t.Fatalf("both-empty legacy calls=%d sig=%q human=%q link=%q summary=%q at=%s", calls, sig, hs, link, summary, storedAt)
 	}
 	if _, err := pool.Exec(ctx, `UPDATE graph.thread_summaries SET decisions=NULL WHERE channel_id='B'`); err != nil {
 		t.Fatal(err)
