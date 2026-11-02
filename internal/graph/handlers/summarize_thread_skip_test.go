@@ -2,45 +2,41 @@ package handlers
 
 import "testing"
 
-// TestSummarySkip pins the cache-key logic that replaced the force flag. The
-// force path re-summarized threads whose input was byte-identical: 1,335 LLM
-// calls/hour for 3 real updates. Every row below is a case that must NOT call
-// the LLM, or must.
+// TestSummarySkip pins the six-input cache decision, including safe legacy
+// backfills and bot-only full-signature changes.
 func TestSummarySkip(t *testing.T) {
-	sigA := threadSummarySignature(3, 1785480000000)
-	sigB := threadSummarySignature(4, 1785480999000) // a reply arrived
+	fullA := threadSummarySignature(3, 1785480000000)
+	fullB := threadSummarySignature(4, 1785480999000)
+	humanA := "h1:1:1785480000000"
+	humanB := "h1:2:1785480999000"
 	const (
 		linkA = "a1b2c3d4e5f60718"
-		linkB = "0f1e2d3c4b5a6978" // the ticket's title landed
+		linkB = "0f1e2d3c4b5a6978"
 	)
 	for _, tc := range []struct {
-		name                                 string
-		existingSig, sig, existingLink, link string
-		wantSkip, wantBackfill               bool
+		name                                                         string
+		existingFull, full, existingHuman, human, existingLink, link string
+		wantSkip, wantBackfillHuman, wantBackfillLink                bool
 	}{
-		// The case the whole fix exists for: messages unchanged, links unchanged.
-		// force=true used to re-summarize here on every single fetch_body.
-		{"nothing changed", sigA, sigA, linkA, linkA, true, false},
-		// The case force was reached for, and the only one it was right about.
-		{"link title changed", sigA, sigA, linkA, linkB, false, false},
-		{"messages changed", sigA, sigB, linkA, linkA, false, false},
-		{"both changed", sigA, sigB, linkA, linkB, false, false},
-		// No cached row at all — existingSig is "" and can never equal a real sig.
-		{"no cached row", "", sigA, "", linkA, false, false},
-		// Deploy safety: pre-migration rows store "". Skip and record the hash,
-		// otherwise the first run re-summarizes every thread that has links.
-		{"legacy row backfills", sigA, sigA, "", linkA, true, true},
-		// Legacy row on a thread with no links: nothing to backfill.
-		{"legacy row without links", sigA, sigA, "", "", true, false},
-		// A thread that lost its last link must regenerate — the summary still
-		// names a resource the thread no longer references.
-		{"links removed", sigA, sigA, linkA, "", false, false},
+		{"no row", "", fullA, "", humanA, "", linkA, false, false, false},
+		{"old version", "v8:3:1785480000000", fullA, humanA, humanA, linkA, linkA, false, false, false},
+		{"legacy equal full", fullA, fullA, "", humanA, linkA, linkA, true, true, false},
+		{"legacy differing full", fullA, fullB, "", humanA, linkA, linkA, false, false, false},
+		{"equal human ignores differing full", fullA, fullB, humanA, humanA, linkA, linkA, true, false, false},
+		{"differing human", fullA, fullB, humanA, humanB, linkA, linkA, false, false, false},
+		{"differing link", fullA, fullB, humanA, humanA, linkA, linkB, false, false, false},
+		{"empty existing link backfills", fullA, fullB, humanA, humanA, "", linkA, true, false, true},
+		{"legacy both empty backfills both", fullA, fullA, "", humanA, "", linkA, true, true, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			skip, backfill := summarySkip(tc.existingSig, tc.sig, tc.existingLink, tc.link)
-			if skip != tc.wantSkip || backfill != tc.wantBackfill {
-				t.Fatalf("summarySkip(%q,%q,%q,%q) = (skip=%v, backfill=%v), want (skip=%v, backfill=%v)",
-					tc.existingSig, tc.sig, tc.existingLink, tc.link, skip, backfill, tc.wantSkip, tc.wantBackfill)
+			skip, backfillHuman, backfillLink := summarySkip(
+				tc.existingFull, tc.full, tc.existingHuman, tc.human, tc.existingLink, tc.link,
+			)
+			if skip != tc.wantSkip || backfillHuman != tc.wantBackfillHuman || backfillLink != tc.wantBackfillLink {
+				t.Fatalf("summarySkip(%q,%q,%q,%q,%q,%q) = (%v,%v,%v), want (%v,%v,%v)",
+					tc.existingFull, tc.full, tc.existingHuman, tc.human, tc.existingLink, tc.link,
+					skip, backfillHuman, backfillLink,
+					tc.wantSkip, tc.wantBackfillHuman, tc.wantBackfillLink)
 			}
 		})
 	}

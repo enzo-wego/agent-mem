@@ -75,12 +75,16 @@ func threadSummarySignature(count int, newestUpdatedMs int64) string {
 	return fmt.Sprintf("%s:%d:%d", threadSummarySigVersion, count, newestUpdatedMs)
 }
 
+// threadHumanSignature tracks only human-authored message state. Bot messages
+// remain in the transcript and full signature, but do not invalidate a summary.
+func threadHumanSignature(count int, newestUpdatedMs int64) string {
+	return fmt.Sprintf("h1:%d:%d", count, newestUpdatedMs)
+}
+
 // summarizeThreadPayload is the JSON payload for the summarize_thread job type.
-// There is deliberately no Force field: the signature pair below covers both
-// what the messages say and what the linked resources are called, so every
-// legitimate reason to regenerate is already detected. A force flag used to
-// exist for "only the links changed" and cost 1,335 LLM calls/hour for 3 real
-// updates, because it bypassed the dedup and the skip check together.
+// There is deliberately no Force field: human message state and linked-resource
+// state cover every invalidation reason without bypassing the skip decision.
+// The full signature is retained for compatibility and observability.
 type summarizeThreadPayload struct {
 	ChannelID     string `json:"channel_id"`
 	ThreadTs      string `json:"thread_ts"`
@@ -121,7 +125,8 @@ SELECT COALESCE(NULLIF(n.body,''), n.title, ''), COALESCE(NULLIF(CASE WHEN p.dis
        COALESCE(dr.domain,''), COALESCE(dr.role_label,''),
        (EXTRACT(EPOCH FROM n.updated_at) * 1000)::bigint AS upd_ms,
        COALESCE(NULLIF(n.metadata->>'ts',''), split_part(n.id,':',3)) AS msg_ts,
-       to_char(COALESCE(to_timestamp(NULLIF(n.metadata->>'ts','')::float8), n.first_seen_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS msg_date
+       to_char(COALESCE(to_timestamp(NULLIF(n.metadata->>'ts','')::float8), n.first_seen_at) AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS msg_date,
+       (COALESCE(p.is_bot, false) OR COALESCE(n.metadata->'author'->>'is_bot' = 'true', false)) AS is_bot
 FROM graph.nodes n
 LEFT JOIN graph.people p ON p.id = n.author_person_id
 LEFT JOIN graph.person_derived_roles dr ON dr.eeid = p.eeid
@@ -134,19 +139,26 @@ ORDER BY COALESCE(to_timestamp(NULLIF(n.metadata->>'ts','')::float8), n.first_se
 		}
 		var lines []string
 		dateOf := map[string]string{}
-		var count int
-		var maxUpdated int64
+		var count, humanCount int
+		var maxUpdated, humanMaxUpdated int64
 		var hasDiscussion bool
 		for rows.Next() {
 			var body, author, dept, jobTitle, domain, role, ts, date string
 			var upd int64
-			if err := rows.Scan(&body, &author, &dept, &jobTitle, &domain, &role, &upd, &ts, &date); err != nil {
+			var isBot bool
+			if err := rows.Scan(&body, &author, &dept, &jobTitle, &domain, &role, &upd, &ts, &date, &isBot); err != nil {
 				rows.Close()
 				return err
 			}
 			count++
 			if upd > maxUpdated {
 				maxUpdated = upd
+			}
+			if !isBot {
+				humanCount++
+				if upd > humanMaxUpdated {
+					humanMaxUpdated = upd
+				}
 			}
 			if !linkOnly(body) {
 				hasDiscussion = true
@@ -177,6 +189,7 @@ ORDER BY COALESCE(to_timestamp(NULLIF(n.metadata->>'ts','')::float8), n.first_se
 		// instead of "someone". Bump to regenerate rows cached with anonymous authors.
 		// v8: author labels prefer evidence-backed domain roles when available.
 		sig := threadSummarySignature(count, maxUpdated)
+		humanSig := threadHumanSignature(humanCount, humanMaxUpdated)
 
 		// Prepend the thread's linked-resource titles so the summary can name the
 		// ticket/doc it is about instead of ignoring it. When the thread is only a
@@ -189,22 +202,42 @@ ORDER BY COALESCE(to_timestamp(NULLIF(n.metadata->>'ts','')::float8), n.first_se
 		resBlock := linkedResourceBlock(ctx, deps, p.ChannelID, p.ThreadTs, !hasDiscussion)
 		linkSig := linkSignature(resBlock)
 
-		// Skip when BOTH the messages and the linked-resource titles are unchanged.
-		var existingSig, existingLinkSig string
+		// Skip when the human messages and linked-resource block are unchanged.
+		// The full signature remains stored and logged, but bot-only changes to it
+		// do not invalidate rows that already have a human signature.
+		var existingSig, existingHumanSig, existingLinkSig string
 		var decisionsMissing bool
 		_ = deps.DB.QueryRow(ctx,
-			`SELECT signature, COALESCE(link_signature,''), decisions IS NULL
+			`SELECT signature, COALESCE(human_signature,''), COALESCE(link_signature,''), decisions IS NULL
 			   FROM graph.thread_summaries WHERE channel_id=$1 AND thread_ts=$2`,
-			p.ChannelID, p.ThreadTs).Scan(&existingSig, &existingLinkSig, &decisionsMissing)
-		if skip, backfill := summarySkip(existingSig, sig, existingLinkSig, linkSig); skip && !(p.FillDecisions && decisionsMissing) {
-			if backfill {
+			p.ChannelID, p.ThreadTs).Scan(&existingSig, &existingHumanSig, &existingLinkSig, &decisionsMissing)
+		skip, backfillHuman, backfillLink := summarySkip(existingSig, sig, existingHumanSig, humanSig, existingLinkSig, linkSig)
+		outcome := summaryDecisionOutcome(existingSig, sig, existingHumanSig, humanSig, existingLinkSig, linkSig)
+		if skip && p.FillDecisions && decisionsMissing {
+			skip = false
+			outcome = "run_fill_decisions"
+		}
+		logDecision := func() {
+			deps.Logger.Info().
+				Str("channel_id", p.ChannelID).
+				Str("thread_ts", p.ThreadTs).
+				Str("outcome", outcome).
+				Bool("full_signature_changed", existingSig != "" && existingSig != sig).
+				Msg("summarize_thread: decision")
+		}
+		if skip {
+			if backfillHuman || backfillLink {
 				_, _ = deps.DB.Exec(ctx,
-					`UPDATE graph.thread_summaries SET link_signature=$3
+					`UPDATE graph.thread_summaries
+					    SET human_signature = CASE WHEN $3 THEN $4 ELSE human_signature END,
+					        link_signature = CASE WHEN $5 AND link_signature = '' THEN $6 ELSE link_signature END
 					  WHERE channel_id=$1 AND thread_ts=$2`,
-					p.ChannelID, p.ThreadTs, linkSig)
+					p.ChannelID, p.ThreadTs, backfillHuman, humanSig, backfillLink, linkSig)
 			}
+			logDecision()
 			return nil
 		}
+		logDecision()
 
 		ds := genThreadDeepSummary(ctx, deps.Gemini, resBlock+fitTranscript(lines, threadTranscriptBudget))
 		if ds.Topic == "" && ds.Overview == "" {
@@ -217,15 +250,15 @@ ORDER BY COALESCE(to_timestamp(NULLIF(n.metadata->>'ts','')::float8), n.first_se
 			hlJSON = []byte("[]")
 		}
 		_, err = deps.DB.Exec(ctx,
-			`INSERT INTO graph.thread_summaries(channel_id,thread_ts,signature,link_signature,summary,overview,highlights,kind,decisions,open_questions,markets,updated_at)
-			 VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,NOW())
+			`INSERT INTO graph.thread_summaries(channel_id,thread_ts,signature,human_signature,link_signature,summary,overview,highlights,kind,decisions,open_questions,markets,updated_at)
+			 VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,NOW())
 			 ON CONFLICT (channel_id,thread_ts) DO UPDATE SET
-			   signature=excluded.signature, link_signature=excluded.link_signature,
-			   summary=excluded.summary,
+			   signature=excluded.signature, human_signature=excluded.human_signature,
+			   link_signature=excluded.link_signature, summary=excluded.summary,
 			   overview=excluded.overview, highlights=excluded.highlights,
 			   kind=excluded.kind, decisions=excluded.decisions, open_questions=excluded.open_questions,
 			   markets=excluded.markets, updated_at=NOW()`,
-			p.ChannelID, p.ThreadTs, sig, linkSig, ds.Topic, ds.Overview, hlJSON, ds.Kind, decJSON, oqJSON, ds.Markets)
+			p.ChannelID, p.ThreadTs, sig, humanSig, linkSig, ds.Topic, ds.Overview, hlJSON, ds.Kind, decJSON, oqJSON, ds.Markets)
 		if err == nil {
 			if _, jErr := jobs.Enqueue(ctx, deps.DB, "index_artifact", map[string]any{
 				"node_id":      ids.SlackMessage(p.ChannelID, p.ThreadTs),
@@ -240,23 +273,45 @@ ORDER BY COALESCE(to_timestamp(NULLIF(n.metadata->>'ts','')::float8), n.first_se
 	}
 }
 
-// summarySkip decides whether a cached summary is still current, and whether its
-// link_signature needs backfilling. Both signatures must match for a skip: the
-// message pair (count + newest updated_at) and the linked-resource hash.
-//
-// A row written before link_signature existed stores "". That reads as "unknown",
-// never as "changed" — otherwise the first run after deploy re-summarizes every
-// thread that has links, which is exactly the burn being fixed. Such a row skips
-// and gets its hash backfilled with no LLM call, so the NEXT real title change is
-// caught normally.
-func summarySkip(existingSig, sig, existingLinkSig, linkSig string) (skip, backfill bool) {
-	if existingSig != sig {
-		return false, false
+// summarySkip decides whether a cached summary is current and which legacy
+// signature columns need backfilling. Old-version rows always run. Legacy rows
+// without human_signature compare the full signature once; populated rows
+// compare only human_signature. The link rule is unchanged.
+func summarySkip(existingSig, sig, existingHumanSig, humanSig, existingLinkSig, linkSig string) (skip, backfillHuman, backfillLink bool) {
+	if existingSig == "" || strings.SplitN(existingSig, ":", 2)[0] != threadSummarySigVersion {
+		return false, false, false
+	}
+	if existingHumanSig == "" {
+		if existingSig != sig {
+			return false, false, false
+		}
+		backfillHuman = true
+	} else if existingHumanSig != humanSig {
+		return false, false, false
 	}
 	if existingLinkSig == "" && linkSig != "" {
-		return true, true // legacy row: trust it, record the hash for next time
+		return true, backfillHuman, true
 	}
-	return existingLinkSig == linkSig, false
+	return existingLinkSig == linkSig, backfillHuman && existingLinkSig == linkSig, false
+}
+
+func summaryDecisionOutcome(existingSig, sig, existingHumanSig, humanSig, existingLinkSig, linkSig string) string {
+	if existingSig == "" {
+		return "run_new"
+	}
+	if strings.SplitN(existingSig, ":", 2)[0] != threadSummarySigVersion {
+		return "run_version"
+	}
+	if existingHumanSig == "" && existingSig != sig {
+		return "run_full_legacy"
+	}
+	if existingHumanSig != "" && existingHumanSig != humanSig {
+		return "run_human"
+	}
+	if existingLinkSig != linkSig && !(existingLinkSig == "" && linkSig != "") {
+		return "run_link"
+	}
+	return "skip"
 }
 
 // linkSignature hashes the linked-resource prompt block, so a referenced
