@@ -14,6 +14,9 @@ const threadSummaryHumanSignatureBaseVersion int64 = 20261027095115
 
 func TestThreadSummaryHumanSignatureMigration(t *testing.T) {
 	ctx := context.Background()
+	// Enforce the repository's scratch-database guard before opening a second
+	// database/sql connection for goose.
+	_ = openTestDB(t)
 	db, err := sql.Open("pgx", os.Getenv("DATABASE_URL"))
 	if err != nil {
 		t.Fatal(err)
@@ -23,7 +26,11 @@ func TestThreadSummaryHumanSignatureMigration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _, _ = provider.Up(ctx) })
+	t.Cleanup(func() {
+		if _, err := provider.Up(ctx); err != nil {
+			t.Errorf("restore migrations: %v", err)
+		}
+	})
 	if _, err := provider.Up(ctx); err != nil {
 		t.Fatal(err)
 	}
