@@ -45,6 +45,13 @@ func (f *fakeGateway) CallCount() (gen, embed, cap int) {
 	return f.genCount, 0, f.cap
 }
 
+type cappedGateway struct {
+	*fakeGateway
+	capped bool
+}
+
+func (g *cappedGateway) Capped() bool { return g.capped }
+
 // A nil client must produce a nil INTERFACE. Handlers gate on
 // `deps.Gemini == nil` to skip LLM work when no gateway is configured; a typed
 // nil inside a non-nil interface passes that check and panics on first call.
@@ -115,5 +122,22 @@ func TestGeminiAdapterCallCountTracksSwappedClient(t *testing.T) {
 	adapter.Swap(second)
 	if gen, _, cap := adapter.CallCount(); gen != 10 || cap != 10 {
 		t.Fatalf("swapped CallCount = (%d, %d), want (10, 10)", gen, cap)
+	}
+}
+
+func TestGeminiAdapterCappedTracksOptionalSwappedClient(t *testing.T) {
+	adapter := NewGeminiAdapter(&fakeGateway{genCount: 10, cap: 10}).(*GeminiAdapter)
+	if adapter.Capped() {
+		t.Fatal("client without optional Capped method reported capped")
+	}
+
+	withCap := &cappedGateway{fakeGateway: &fakeGateway{}, capped: true}
+	adapter.Swap(withCap)
+	if !adapter.Capped() {
+		t.Fatal("adapter did not forward Capped from swapped client")
+	}
+	withCap.capped = false
+	if adapter.Capped() {
+		t.Fatal("adapter did not observe updated token state")
 	}
 }

@@ -80,6 +80,10 @@ type flatLLM interface {
 	Embed(ctx context.Context, text string) ([]float32, error)
 }
 
+func capReached(adapter *graphhandlers.GeminiAdapter) bool {
+	return adapter != nil && adapter.Capped()
+}
+
 // getFlatLLM returns the client flat memory should call (may be nil).
 func (s *Server) getFlatLLM() flatLLM {
 	if s.flatLLMGetter != nil {
@@ -281,11 +285,7 @@ func NewServer(cfg *config.Config, logBuf *LogBuffer) (*Server, error) {
 			// the dashboard takes effect within one idle interval without a restart.
 			Paused: func() bool { return cfg.Snapshot().ProcessingPaused },
 			CapReached: func() bool {
-				if graphAdapter == nil {
-					return false
-				}
-				gen, _, cap := graphAdapter.CallCount()
-				return cap > 0 && gen >= cap
+				return capReached(graphAdapter)
 			},
 			RefundAttempt: func(err error) bool {
 				return errors.Is(err, llmgateway.ErrCapped)

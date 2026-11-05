@@ -30,6 +30,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/rs/zerolog/log"
 
@@ -37,11 +38,11 @@ import (
 	"github.com/agent-mem/agent-mem/internal/llmjson"
 )
 
-// RequestTimeout must sit ABOVE the gateway's own LLM_GATEWAY_CLAUDE_TIMEOUT_S
-// (180s by default) and BELOW the job lease of every handler that calls us.
-// The ordering is load-bearing:
+// RequestTimeout must exceed the gateway's own LLM_GATEWAY_CLAUDE_TIMEOUT_S
+// (180s by default), while PermitWait plus RequestTimeout must fit below every
+// caller's job lease. The ordering is load-bearing:
 //
-//	gateway 180s  <  client 200s  <  lease 240s
+//	gateway 180s < client 200s; permit 30s + client 200s < lease 240s
 //
 // Too low and we cut off calls the gateway would have answered. Too high and the
 // lease expires mid-flight, the janitor reclaims the job, and a second worker
@@ -111,14 +112,11 @@ func IsRetryable(err error) bool {
 	return false
 }
 
-// meter tracks LLM calls in a rolling hour window.
+// meter tracks embedding calls in a clock-hour display window.
 type meter struct {
 	mu    sync.Mutex
 	hour  int // time.Now().Hour()
 	count int
-	// loggedCapHit tracks whether we've logged a cap refusal this hour, so we
-	// only log once per hour instead of flooding on every refused call.
-	loggedCapHit bool
 }
 
 // tickLocked resets the counter when the clock hour changes.
@@ -128,7 +126,6 @@ func (m *meter) tickLocked() {
 	if m.hour != h {
 		m.hour = h
 		m.count = 0
-		m.loggedCapHit = false
 	}
 }
 
@@ -149,16 +146,6 @@ func (m *meter) get() int {
 	return m.count
 }
 
-// logCapHit logs a cap warning once per hour.
-func (m *meter) logCapHit(cap, count int) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if !m.loggedCapHit {
-		log.Warn().Int("cap", cap).Int("count", count).Msg("LLM hourly cap reached")
-		m.loggedCapHit = true
-	}
-}
-
 // Client talks to one llm-gateway instance. It satisfies the same method set as
 // gemini.Client for the calls agent-mem makes, so it can replace that client
 // rather than sit beside it.
@@ -167,8 +154,6 @@ type Client struct {
 	apiKey        string
 	dims          int // default embedding dimensionality: 768 flat, 3072 graph
 	http          *http.Client
-	cap           int   // hourly generate cap; 0 = unlimited
-	genMeter      meter // counts generate calls
 	embedMeter    meter // counts embed calls (attributed but not capped)
 	batchFallback *bool
 	batchCaller   string
@@ -201,14 +186,12 @@ func New(baseURL, apiKey string, dims int, options ...Option) *Client {
 	// are for external egress and can route this internal hop through a relay
 	// that cannot reach it, so gateway traffic must always connect directly.
 	transport.Proxy = nil
-	now := time.Now().Hour()
 	client := &Client{
 		baseURL:    strings.TrimRight(baseURL, "/"),
 		apiKey:     apiKey,
 		dims:       dims,
 		http:       &http.Client{Transport: transport, Timeout: RequestTimeout},
-		genMeter:   meter{hour: now},
-		embedMeter: meter{hour: now},
+		embedMeter: meter{hour: time.Now().Hour()},
 	}
 	for _, option := range options {
 		option(client)
@@ -216,19 +199,22 @@ func New(baseURL, apiKey string, dims int, options ...Option) *Client {
 	return client
 }
 
-// SetCap sets the hourly generate call ceiling. 0 = unlimited.
-// Call this after New when a configured cap is available — the client starts
-// unlimited and the cap can be changed live.
+// SetCap sets the process-wide hourly generate rate. Zero is unlimited.
 func (c *Client) SetCap(n int) {
-	c.genMeter.mu.Lock()
-	defer c.genMeter.mu.Unlock()
-	c.cap = n
+	sharedLimiter.setCap(n)
 }
 
-// CallCount returns (generateCount, embedCount, hourlyCap).
-// Safe for concurrent use. The counts reset at the clock-hour boundary.
+// Capped reports whether the shared generate bucket currently has no full
+// token. It neither consumes a token nor considers the shared dispatch permits.
+func (c *Client) Capped() bool {
+	return sharedLimiter.capped(limiterNow())
+}
+
+// CallCount returns (sharedGenerateCount, clientEmbedCount, sharedHourlyCap).
+// The display counts reset at their respective clock-hour boundaries.
 func (c *Client) CallCount() (gen, embed, cap int) {
-	return c.genMeter.get(), c.embedMeter.get(), c.cap
+	gen, cap = sharedLimiter.callCount(limiterNow())
+	return gen, c.embedMeter.get(), cap
 }
 
 // callerName walks the call stack out of this package and returns a short,
@@ -273,6 +259,40 @@ func callerName() string {
 		}
 	}
 	return "unknown"
+}
+
+func sanitizeCaller(name string) string {
+	const prefix = "agent-mem/"
+	const maxSuffix = 64 - len(prefix)
+
+	var b strings.Builder
+	b.Grow(maxSuffix)
+	lastHyphen := false
+	for _, r := range name {
+		r = unicode.ToLower(r)
+		valid := r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '_'
+		if valid {
+			if b.Len() == maxSuffix {
+				break
+			}
+			b.WriteByte(byte(r))
+			lastHyphen = false
+			continue
+		}
+		if b.Len() == 0 || lastHyphen {
+			continue
+		}
+		if b.Len() == maxSuffix {
+			break
+		}
+		b.WriteByte('-')
+		lastHyphen = true
+	}
+	suffix := strings.TrimRight(b.String(), "-")
+	if suffix == "" {
+		suffix = "unknown"
+	}
+	return prefix + suffix
 }
 
 // post sends a JSON body and decodes a JSON response. A transport failure is
@@ -343,21 +363,26 @@ type textResponse struct {
 // summary cache with blanks that never regenerate.
 func (c *Client) generate(ctx context.Context, tier, systemPrompt, userMessage string) (string, error) {
 	caller := callerName()
+	if sharedLimiter.capped(limiterNow()) {
+		return "", tokenCapError(caller, tier)
+	}
 
-	// Check cap before making any HTTP request.
-	if c.cap > 0 {
-		count := c.genMeter.get()
-		if count >= c.cap {
-			c.genMeter.logCapHit(c.cap, count)
-			return "", fmt.Errorf("%w: %w: hourly cap of %d generate calls reached (caller=%s tier=%s)",
-				ErrUnreachable, ErrCapped, c.cap, caller, tier)
-		}
+	release, err := acquirePermit(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer release()
+	if err := ctx.Err(); err != nil {
+		return "", classifyPermitContext(err)
+	}
+	n, _, admitted := sharedLimiter.admit(limiterNow())
+	if !admitted {
+		return "", tokenCapError(caller, tier)
 	}
 
 	start := time.Now()
-	n := c.genMeter.incr()
 	var out textResponse
-	if err := c.post(ctx, "/generate",
+	if err := c.postWithCaller(ctx, "/generate", sanitizeCaller(caller),
 		generateRequest{System: systemPrompt, User: userMessage, Tier: tier}, &out); err != nil {
 		return "", err
 	}
