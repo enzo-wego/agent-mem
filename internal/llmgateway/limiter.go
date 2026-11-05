@@ -147,7 +147,7 @@ func tokenCapError(caller, tier string) error {
 		log.Warn().Int("cap", cap).Int("count", count).Msg("LLM hourly cap token unavailable")
 	}
 	return admissionError(
-		fmt.Sprintf("hourly cap of %d generate calls has no token available (caller=%s tier=%s)", cap, caller, tier),
+		fmt.Sprintf("hourly cap of %d generate calls reached (caller=%s tier=%s)", cap, caller, tier),
 		nil,
 	)
 }
@@ -159,16 +159,16 @@ func admissionError(reason string, cause error) error {
 	return fmt.Errorf("%w: %w: %s", ErrUnreachable, ErrCapped, reason)
 }
 
-func classifyPermitContext(err error) error {
+func classifyPermitContext(err error, caller string) error {
 	if errors.Is(err, context.Canceled) {
 		return context.Canceled
 	}
-	return admissionError("context deadline expired while waiting for shared generate permit", err)
+	return admissionError(fmt.Sprintf("context deadline expired while waiting for shared generate permit (caller=%s)", caller), err)
 }
 
-func acquireGeneratePermit(ctx context.Context) (func(), error) {
+func acquireGeneratePermit(ctx context.Context, caller string) (func(), error) {
 	if err := ctx.Err(); err != nil {
-		return nil, classifyPermitContext(err)
+		return nil, classifyPermitContext(err, caller)
 	}
 
 	permits := limiterPermits
@@ -184,8 +184,8 @@ func acquireGeneratePermit(ctx context.Context) (func(), error) {
 	case permits <- struct{}{}:
 		return func() { <-permits }, nil
 	case <-ctx.Done():
-		return nil, classifyPermitContext(ctx.Err())
+		return nil, classifyPermitContext(ctx.Err(), caller)
 	case <-timer.C:
-		return nil, admissionError("timed out waiting for shared generate permit", nil)
+		return nil, admissionError(fmt.Sprintf("timed out waiting for shared generate permit (caller=%s)", caller), nil)
 	}
 }

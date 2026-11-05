@@ -357,7 +357,7 @@ func TestPermitReleasedWhenTokenRecheckRefuses(t *testing.T) {
 	c := New("http://127.0.0.1:1", "key", 1)
 	c.SetCap(12)
 	var released int
-	acquirePermit = func(context.Context) (func(), error) {
+	acquirePermit = func(context.Context, string) (func(), error) {
 		sharedLimiter.mu.Lock()
 		sharedLimiter.tokens = 0
 		sharedLimiter.mu.Unlock()
@@ -388,7 +388,7 @@ func TestPermitReleasedAfterEveryDispatchedResult(t *testing.T) {
 			resetSharedLimiter(t, clock)
 			srv, _ := serve(t, tc.code, tc.body)
 			var released int
-			acquirePermit = func(context.Context) (func(), error) {
+			acquirePermit = func(context.Context, string) (func(), error) {
 				return func() { released++ }, nil
 			}
 

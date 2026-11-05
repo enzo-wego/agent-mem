@@ -367,13 +367,13 @@ func (c *Client) generate(ctx context.Context, tier, systemPrompt, userMessage s
 		return "", tokenCapError(caller, tier)
 	}
 
-	release, err := acquirePermit(ctx)
+	release, err := acquirePermit(ctx, caller)
 	if err != nil {
 		return "", err
 	}
 	defer release()
 	if err := ctx.Err(); err != nil {
-		return "", classifyPermitContext(err)
+		return "", classifyPermitContext(err, caller)
 	}
 	n, _, admitted := sharedLimiter.admit(limiterNow())
 	if !admitted {
