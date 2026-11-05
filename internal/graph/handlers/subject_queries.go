@@ -69,14 +69,7 @@ func NewSubjectQueries(deps Deps) http.HandlerFunc {
 		defer cancel()
 		reply, err := deps.Gemini.GenerateCheap(ctx, subjectQueriesPrompt, "Title: "+title+"\n\n"+body)
 		if err != nil {
-			switch {
-			case errors.Is(err, llmgateway.ErrCapped):
-				resp.Error = "llm hourly cap reached"
-			case errors.Is(err, context.DeadlineExceeded):
-				resp.Error = "llm timed out"
-			default:
-				resp.Error = "llm generation failed"
-			}
+			resp.Error = subjectQueriesLLMError(err)
 			writeJSON(w, http.StatusOK, resp)
 			return
 		}
@@ -154,4 +147,18 @@ func subjectTitleQuery(title string) string {
 		return ""
 	}
 	return title
+}
+
+// subjectQueriesLLMError maps a generate failure to the user-facing message.
+// DeadlineExceeded is checked first: a permit wait that hit the request
+// deadline also wraps ErrCapped but is a timeout, not a hit cap.
+func subjectQueriesLLMError(err error) string {
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		return "llm timed out"
+	case errors.Is(err, llmgateway.ErrCapped):
+		return "llm hourly cap reached"
+	default:
+		return "llm generation failed"
+	}
 }

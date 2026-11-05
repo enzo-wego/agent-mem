@@ -19,11 +19,12 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// TestNewGatewayClientHonoursCap verifies that a client produced by
-// newGatewayClient carries the cap from the snapshot and refuses generate
-// calls once the ceiling is reached — with no HTTP request made for the
-// refused call.
-func TestNewGatewayClientHonoursCap(t *testing.T) {
+// A settings reload builds new flat and graph clients. Re-applying the same cap
+// must not refill the package-wide bucket and admit a burst.
+func TestNewGatewayClientCapPersistsAcrossReload(t *testing.T) {
+	reset := llmgateway.New("http://127.0.0.1:1", "key", 1)
+	reset.SetCap(0)
+	t.Cleanup(func() { reset.SetCap(0) })
 	calls := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
@@ -56,8 +57,12 @@ func TestNewGatewayClientHonoursCap(t *testing.T) {
 		t.Fatalf("expected 1 HTTP call after first Generate, got %d", calls)
 	}
 
-	// Second call: cap is exhausted, must refuse without an HTTP request.
-	_, err = c.Generate(ctx, "sys", "user")
+	// A same-cap reload must retain the exhausted package-level bucket.
+	reloaded := newGatewayClient(snap, 768)
+	if !reloaded.Capped() {
+		t.Fatal("same-cap reload reset the exhausted bucket")
+	}
+	_, err = reloaded.Generate(ctx, "sys", "user")
 	if err == nil {
 		t.Fatal("second Generate (over cap) should have been refused, got nil error")
 	}
@@ -69,6 +74,33 @@ func TestNewGatewayClientHonoursCap(t *testing.T) {
 	}
 	if calls != 1 {
 		t.Errorf("HTTP call count = %d after cap refusal, want 1 (no new request)", calls)
+	}
+}
+
+func TestCapReachedIsNilSafeAndUsesTokenState(t *testing.T) {
+	if capReached(nil) {
+		t.Fatal("nil graph adapter reported capped")
+	}
+
+	reset := llmgateway.New("http://127.0.0.1:1", "key", 1)
+	reset.SetCap(0)
+	t.Cleanup(func() { reset.SetCap(0) })
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"backend":"test","text":"ok"}`))
+	}))
+	t.Cleanup(srv.Close)
+	client := llmgateway.New(srv.URL, "key", 1)
+	client.SetCap(1)
+	adapter := graphhandlers.NewGeminiAdapter(client).(*graphhandlers.GeminiAdapter)
+
+	if capReached(adapter) {
+		t.Fatal("full token bucket reported capped")
+	}
+	if _, err := client.Generate(context.Background(), "s", "u"); err != nil {
+		t.Fatalf("consume initial token: %v", err)
+	}
+	if !capReached(adapter) {
+		t.Fatal("empty token bucket did not report capped")
 	}
 }
 

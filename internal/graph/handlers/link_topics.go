@@ -10,6 +10,7 @@ import (
 	"math"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -177,53 +178,44 @@ func linkTopicsHandler(deps Deps) jobs.Handler {
 		cands := dropTeamCandidates(mergeTopicCandidates(
 			idCands, extraCands, caseCands, mateCands, edgeCands, recentCands, embCands))
 
-		g, gctx := errgroup.WithContext(ctx)
-		g.SetLimit(topicLinkConfirmConcurrency)
-		for _, cand := range cands {
-			cand := cand
-			if strings.TrimSpace(cand.Summary) == "" {
-				continue
+		return runTopicLinkConfirms(ctx, cands, func(ctx context.Context, cand topicLinkCandidate) error {
+			candStart, candEnd, candOK := nodeActivityWindow(ctx, deps, cand.NodeID)
+			timeDesc, timeBucket := timeRelation(srcStart, srcEnd, srcOK, candStart, candEnd, candOK)
+			from, to, sourceSummary, targetSummary := canonicalTopicPair(source.NodeID, cand.NodeID, source.Summary, cand.Summary)
+			contentHash := topicLinkContentHash(from, to, sourceSummary, targetSummary, cand.SharedIDs, timeBucket, cand.CaseIDs, cand.TopicVia)
+			judgment, cached, err := cachedTopicLinkJudgment(ctx, deps, from, to, contentHash)
+			if err != nil {
+				return err
 			}
-			g.Go(func() error {
-				candStart, candEnd, candOK := nodeActivityWindow(gctx, deps, cand.NodeID)
-				timeDesc, timeBucket := timeRelation(srcStart, srcEnd, srcOK, candStart, candEnd, candOK)
-				from, to, sourceSummary, targetSummary := canonicalTopicPair(source.NodeID, cand.NodeID, source.Summary, cand.Summary)
-				contentHash := topicLinkContentHash(from, to, sourceSummary, targetSummary, cand.SharedIDs, timeBucket, cand.CaseIDs, cand.TopicVia)
-				judgment, cached, err := cachedTopicLinkJudgment(gctx, deps, from, to, contentHash)
+			var evFrom, evTo string
+			if !cached || p.Force {
+				judgment, err = confirmTopicLink(ctx, deps, source, cand, topicLinkContext{
+					SourceWindow: formatWindow(srcStart, srcEnd, srcOK),
+					CandWindow:   formatWindow(candStart, candEnd, candOK),
+					TimeDesc:     timeDesc,
+				})
 				if err != nil {
 					return err
 				}
-				var evFrom, evTo string
-				if !cached || p.Force {
-					judgment, err = confirmTopicLink(gctx, deps, source, cand, topicLinkContext{
-						SourceWindow: formatWindow(srcStart, srcEnd, srcOK),
-						CandWindow:   formatWindow(candStart, candEnd, candOK),
-						TimeDesc:     timeDesc,
-					})
-					if err != nil {
-						return err
-					}
-					if err := saveTopicLinkJudgment(gctx, deps, from, to, contentHash, judgment); err != nil {
-						return err
-					}
-					// The judge's A is the source; the stored from may be the candidate.
-					evFrom, evTo = judgment.EvidenceA, judgment.EvidenceB
-					if source.NodeID != from {
-						evFrom, evTo = evTo, evFrom
-					}
-				} else if judgment.SameTopic {
-					var err error
-					if evFrom, evTo, err = existingEdgeEvidence(gctx, deps, from, to); err != nil {
-						return err
-					}
+				if err := saveTopicLinkJudgment(ctx, deps, from, to, contentHash, judgment); err != nil {
+					return err
 				}
-				if judgment.SameTopic {
-					return upsertSameTopicEdge(gctx, deps, from, to, judgment, cand, timeDesc, evFrom, evTo)
+				// The judge's A is the source; the stored from may be the candidate.
+				evFrom, evTo = judgment.EvidenceA, judgment.EvidenceB
+				if source.NodeID != from {
+					evFrom, evTo = evTo, evFrom
 				}
-				return deleteSameTopicEdge(gctx, deps, from, to)
-			})
-		}
-		return g.Wait()
+			} else if judgment.SameTopic {
+				var err error
+				if evFrom, evTo, err = existingEdgeEvidence(ctx, deps, from, to); err != nil {
+					return err
+				}
+			}
+			if judgment.SameTopic {
+				return upsertSameTopicEdge(ctx, deps, from, to, judgment, cand, timeDesc, evFrom, evTo)
+			}
+			return deleteSameTopicEdge(ctx, deps, from, to)
+		})
 	}
 }
 
@@ -964,7 +956,7 @@ such a passage in BOTH artifacts, answer same_topic false.
 	// precision; see docs/ai/plan-judge-evidence.md addendum r6.
 	out, err := deps.Gemini.Generate(ctx, sys, user)
 	if err != nil {
-		return topicLinkJudgment{}, fmt.Errorf("%w: link_topics confirm: %v", jobs.ErrTransient, err)
+		return topicLinkJudgment{}, fmt.Errorf("%w: link_topics confirm: %w", jobs.ErrTransient, err)
 	}
 	if strings.TrimSpace(out) == "" {
 		return topicLinkJudgment{}, fmt.Errorf("%w: link_topics confirm: empty response", jobs.ErrTransient)
@@ -1109,4 +1101,33 @@ func enqueueLinkTopics(ctx context.Context, deps Deps, nodeID string, force, ski
 
 func linkTopicsForceFromIndexArtifact(_ bool) bool {
 	return false
+}
+
+// runTopicLinkConfirms runs confirm for each candidate with a summary, at most
+// topicLinkConfirmConcurrency at a time. After the first error no new candidate
+// starts, but running ones keep the caller's ctx and finish: the gateway keeps
+// working after a client disconnect, so cancelling siblings would waste slots.
+func runTopicLinkConfirms(ctx context.Context, cands []topicLinkCandidate, confirm func(context.Context, topicLinkCandidate) error) error {
+	var g errgroup.Group
+	g.SetLimit(topicLinkConfirmConcurrency)
+	var failed atomic.Bool
+	for _, cand := range cands {
+		if failed.Load() {
+			break
+		}
+		if strings.TrimSpace(cand.Summary) == "" {
+			continue
+		}
+		g.Go(func() error {
+			if failed.Load() {
+				return nil
+			}
+			err := confirm(ctx, cand)
+			if err != nil {
+				failed.Store(true)
+			}
+			return err
+		})
+	}
+	return g.Wait()
 }

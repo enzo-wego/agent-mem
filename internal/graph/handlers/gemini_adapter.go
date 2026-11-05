@@ -9,10 +9,9 @@ import (
 )
 
 // SummaryLease is the job lease for every handler that can reach the LLM
-// gateway. It must exceed the gateway's own LLM timeout
-// (LLM_GATEWAY_CLAUDE_TIMEOUT_S, 180s) and the client's RequestTimeout (200s):
+// gateway. It must exceed the full local admission and request window:
 //
-//	gateway 180s  <  client 200s  <  lease 240s
+//	gateway 180s < client 200s; permit 30s + client 200s < lease 240s
 //
 // A shorter lease expires mid-call, the janitor reclaims the job, and a second
 // worker redoes the same work — duplicate LLM calls, the exact amplification
@@ -78,6 +77,15 @@ func (a *GeminiAdapter) CallCount() (gen, embed, cap int) {
 		return 0, 0, 0
 	}
 	return counter.CallCount()
+}
+
+// Capped forwards the optional token-bucket status exposed by llm-gateway.
+// Clients without that extension remain usable and are treated as uncapped.
+func (a *GeminiAdapter) Capped() bool {
+	capped, ok := a.client().(interface {
+		Capped() bool
+	})
+	return ok && capped.Capped()
 }
 
 // Embed generates one vector at the client's configured width. This reaches
