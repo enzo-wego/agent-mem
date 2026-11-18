@@ -27,6 +27,7 @@ services:
       context: .
       args:
         BUILD_REV: ${BUILD_REV:-unknown}
+    restart: unless-stopped
     depends_on:
       postgres:
         condition: service_healthy
