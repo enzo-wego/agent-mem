@@ -11,7 +11,7 @@
 
 **Flat Memory**
 
-- Accepts hook events (session start, prompt submit, post-tool-use, stop) from Claude Code, Codex, and Gemini CLI (one-shot installers)
+- Accepts hook events (session start, prompt submit, post-tool-use, stop) from Claude Code, Codex, Gemini CLI, oh-my-pi (OMP), and OmO
 - Stores prompts, observations, summaries, and sync metadata in PostgreSQL
 - Builds relevant context for future sessions and serves hybrid keyword + semantic search
 
@@ -901,6 +901,57 @@ For a user-global install:
 agent-mem install gemini --scope user
 ```
 
+## OmO native hooks
+
+OmO 5.1.83 loads a TypeScript extension; it does not use the Claude, Codex,
+or Gemini JSON hook files. Use **one scope**, not both: OmO can load both
+copies in a trusted project, duplicating capture.
+
+```bash
+# From the project root; loads only in a trusted project
+agent-mem install-hooks omo --scope project
+
+# Alternatively, for sessions using your user agent directory
+agent-mem install-hooks omo --scope user
+```
+
+The installer prints the file it manages: `.omo/extensions/agent-mem.ts` in
+project scope, or `extensions/agent-mem.ts` under the user agent directory
+(normally `~/.omo/agent`; the installer also checks `OMO_CODING_AGENT_DIR`,
+`SENPI_CODING_AGENT_DIR`, then `PI_CODING_AGENT_DIR`). For a custom layout,
+check `omo config agent-dir --json` and pass the full destination filename
+with `--hooks-file`. Reinstall to update that file; identical content
+is a no-op. It does not grant project trust or enable other integrations.
+Restart OmO or `/reload` after installing. To **remove**, delete only the
+printed `agent-mem.ts` file and restart or reload. This stops future capture;
+it does not erase data already sent.
+
+The extension runs `agent-mem hook <event> omo` with JSON on stdin. Use the
+new CLI on `PATH`, or set `AGENT_MEM_BIN` to its absolute path. The CLI posts
+to the existing local worker at `localhost:$AGENT_MEM_WORKER_PORT`. Prompts,
+tool arguments/results, and final replies can contain sensitive data. Choose
+the narrowest scope you need; worker-side project and tool filters still apply.
+
+Every payload includes the OmO `session_id` and `cwd`. The extension sends
+the following fields, not a transcript:
+
+| OmO 5.1.83 event | CLI event | Data and behavior |
+|---|---|---|
+| `session_start` | `session-start` | Sends `source` (the start reason). Adds nonempty recalled `additionalContext` to model context without triggering a turn. A session-history marker prevents replay on reload/resume. |
+| `input` → `input_disposition: started` | `prompt-submit` | Sends `prompt`: the text of a human-attributed input admitted to the turn, not extension chatter or a handled slash command. |
+| `tool_result` | `post-tool-use` | Sends `tool_name`, JSON `tool_input`, and text-only `tool_response`. A failed result is prefixed with `[tool failed]` inside `tool_response` so the worker retains the distinction. |
+| `agent_end` → `agent_settled` | `stop` | Sends `last_assistant_message` when a user turn settles. If there is no final text, the worker can use its existing observation fallback. Intermediate model/tool steps, retries, and `session_shutdown` do not produce a second summary. |
+
+Capture is best effort: an unavailable CLI or worker must not prevent a turn
+from completing. Oversize tool inputs are omitted; result and message text
+are capped. Images, thinking blocks, and tool-result metadata are not sent
+as result or reply text. Tool arguments and ordinary text are **not** redacted.
+
+To exercise discovery and the four worker routes without installing anything
+in your profile, run `python3 scripts/smoke-omo-hooks.py` on macOS with the
+5.1.83 binary. The smoke builds a CLI, creates a temporary agent directory,
+and checks actual model requests and hook payloads against loopback mocks.
+
 ## Uninstallation
 
 To remove `agent-mem` hooks from your coding agents:
@@ -936,7 +987,7 @@ agent-mem install codex --scope project
 agent-mem install gemini --scope project
 agent-mem install-skill mem-search --scope project
 
-# hook adapters (stdin JSON -> worker; defaults to claude, pass "codex" or "gemini" as 2nd arg)
+# hook adapters (stdin JSON -> worker; defaults to claude, or pass codex, gemini, or omo)
 agent-mem hook session-start
 agent-mem hook prompt-submit
 agent-mem hook post-tool-use

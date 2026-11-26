@@ -119,8 +119,8 @@ func main() {
 	var installHooksScope string
 	installHooksCmd := &cobra.Command{
 		Use:   "install-hooks [provider]",
-		Short: "Install agent-mem hook entries into a supported agent config",
-		Long:  "Safely installs the managed agent-mem hooks for the selected coding agent. Codex and Gemini get hook entries merged into a shared JSON config; omp gets an embedded hook module dropped into its hooks directory. Supports user-global, project-local, or explicit-path targets.",
+		Short: "Install agent-mem hooks for Codex, Gemini, omp, or OmO",
+		Long:  "Codex (the default) and Gemini get hook entries merged into JSON config. omp and OmO get an embedded extension module. Use --scope project for a project-local install or --hooks-file to override the destination.",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			provider := hooks.ProviderCodex
@@ -150,7 +150,7 @@ func main() {
 			return nil
 		},
 	}
-	installHooksCmd.Flags().StringVar(&installHooksFile, "hooks-file", "", "Override the hooks config path (defaults to the provider's standard user config)")
+	installHooksCmd.Flags().StringVar(&installHooksFile, "hooks-file", "", "Override the hook destination (for example, for a custom OmO profile)")
 	installHooksCmd.Flags().StringVar(&installHooksScope, "scope", "user", "Install scope: user or project")
 	installHooksCmd.Flags().StringVar(&installHooksProjectDir, "project-dir", "", "Project root to use with --scope project (defaults to the current working directory)")
 
@@ -283,13 +283,13 @@ func main() {
 		Use:   "install",
 		Short: "Install agent-mem integration surfaces into supported coding agents",
 	}
-	installCmd.AddCommand(installCodexCmd, installGeminiCmd, installOMPCmd)
+	installCmd.AddCommand(installCodexCmd, installGeminiCmd, installOMPCmd, newInstallOmOCmd())
 
 	// hook <event> [provider]
 	hookCmd := &cobra.Command{
 		Use:   "hook [event] [provider]",
 		Short: "Run an agent-mem hook adapter",
-		Long:  "Reads stdin JSON from a supported coding agent hook, normalizes the payload, POSTs to the worker, and writes response to stdout. Provider defaults to claude.",
+		Long:  "Reads stdin JSON from a coding agent hook, normalizes the payload, POSTs to the worker, and writes the response to stdout. Supported providers: claude (default), codex, gemini, omo.",
 		Args: func(cmd *cobra.Command, args []string) error {
 			if len(args) < 1 || len(args) > 2 {
 				return cobra.RangeArgs(1, 2)(cmd, args)

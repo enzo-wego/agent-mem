@@ -32,6 +32,7 @@ func RunHook(event, provider string, port int) error {
 	if err != nil {
 		return err
 	}
+	resolvedProvider, _ := NormalizeProvider(provider) // validated by normalizeHookPayload
 
 	// POST to worker with short timeout
 	client := &http.Client{Timeout: 25 * time.Second}
@@ -44,7 +45,6 @@ func RunHook(event, provider string, port int) error {
 			fmt.Println("{}")
 			return nil
 		}
-		resolvedProvider, _ := NormalizeProvider(provider)
 		if resolvedProvider == ProviderGemini {
 			fmt.Println(`{"continue":true,"decision":"allow"}`)
 		} else {
@@ -54,10 +54,20 @@ func RunHook(event, provider string, port int) error {
 	}
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(resp.Body)
+	// OmO treats additionalContext as recalled memory, never an HTTP error body.
+	if event == "session-start" && resolvedProvider == ProviderOmO &&
+		(resp.StatusCode < 200 || resp.StatusCode >= 300) {
+		fmt.Println("{}")
+		return nil
+	}
+	body, err := io.ReadAll(resp.Body)
 
 	// For session-start: wrap response as hookSpecificOutput for context injection
 	if event == "session-start" {
+		if resolvedProvider == ProviderOmO && err != nil {
+			fmt.Println("{}")
+			return nil
+		}
 		context := string(body)
 		if len(context) > 0 {
 			// Providers may have different response requirements.
@@ -77,7 +87,6 @@ func RunHook(event, provider string, port int) error {
 		}
 	} else {
 		// All other hooks: return continue signal
-		resolvedProvider, _ := NormalizeProvider(provider)
 		if resolvedProvider == ProviderGemini {
 			fmt.Println(`{"continue":true,"decision":"allow"}`)
 		} else {
@@ -98,6 +107,8 @@ func NormalizeProvider(provider string) (string, error) {
 		return ProviderCodex, nil
 	case ProviderGemini:
 		return ProviderGemini, nil
+	case ProviderOmO:
+		return ProviderOmO, nil
 	default:
 		return "", fmt.Errorf("unsupported hook provider %q", provider)
 	}

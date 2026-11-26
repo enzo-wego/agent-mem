@@ -80,10 +80,12 @@ func InstallHooks(provider, hooksPath string) (InstallResult, error) {
 		}
 	}
 
-	// omp hooks are code modules dropped into an auto-discovered directory, not
-	// JSON entries merged into a shared config; handle that path separately.
-	if resolvedProvider == ProviderOMP {
+	// Extension providers install modules rather than merging a JSON config.
+	switch resolvedProvider {
+	case ProviderOMP:
 		return installOMPHook(hooksPath)
+	case ProviderOmO:
+		return installOmOHook(hooksPath)
 	}
 
 	cfg, created, err := loadHookConfig(hooksPath)
@@ -132,8 +134,10 @@ func normalizeInstallProvider(provider string) (string, error) {
 		return ProviderGemini, nil
 	case ProviderOMP:
 		return ProviderOMP, nil
+	case ProviderOmO:
+		return ProviderOmO, nil
 	default:
-		return "", fmt.Errorf("install-hooks currently supports %q, %q, and %q only", ProviderCodex, ProviderGemini, ProviderOMP)
+		return "", fmt.Errorf("install-hooks currently supports %q, %q, %q, and %q only", ProviderCodex, ProviderGemini, ProviderOMP, ProviderOmO)
 	}
 }
 
@@ -162,6 +166,9 @@ func normalizeInstallScope(scope string) string {
 }
 
 func defaultHooksPath(provider string) (string, error) {
+	if provider == ProviderOmO {
+		return defaultOmOHooksPath()
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
@@ -194,6 +201,8 @@ func projectHooksPath(provider, projectDir string) (string, error) {
 		return filepath.Join(base, ".gemini", "settings.json"), nil
 	case ProviderOMP:
 		return filepath.Join(base, ".omp", "extensions", ompHookFileName), nil
+	case ProviderOmO:
+		return filepath.Join(base, ".omo", "extensions", omoHookFileName), nil
 	default:
 		return filepath.Join(base, ".codex", "hooks.json"), nil
 	}

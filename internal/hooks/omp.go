@@ -1,10 +1,7 @@
 package hooks
 
 import (
-	"bytes"
 	_ "embed"
-	"os"
-	"path/filepath"
 )
 
 // ProviderOMP is the oh-my-pi (omp) install target.
@@ -28,36 +25,7 @@ var ompHookSource []byte
 // directories as needed. It is idempotent: an existing file with identical
 // content reports no change; differing content is overwritten atomically.
 func installOMPHook(destPath string) (InstallResult, error) {
-	existing, err := os.ReadFile(destPath)
-	switch {
-	case err == nil:
-		if bytes.Equal(existing, ompHookSource) {
-			return InstallResult{Path: destPath, Created: false, Changed: false}, nil
-		}
-	case !os.IsNotExist(err):
-		return InstallResult{}, err
-	}
-	created := os.IsNotExist(err)
-
-	if err := os.MkdirAll(filepath.Dir(destPath), 0o755); err != nil {
-		return InstallResult{}, err
-	}
-
-	tmpPath := destPath + ".tmp"
-	if err := os.WriteFile(tmpPath, ompHookSource, 0o644); err != nil {
-		return InstallResult{}, err
-	}
-	if err := os.Rename(tmpPath, destPath); err != nil {
-		_ = os.Remove(tmpPath)
-		return InstallResult{}, err
-	}
-
-	return InstallResult{
-		Path:          destPath,
-		Created:       created,
-		Changed:       true,
-		ChangedEvents: ompHookEvents(),
-	}, nil
+	return installHookModule(destPath, ompHookSource, ompHookEvents())
 }
 
 // ompHookEvents lists the omp events the dropped hook subscribes to, in the
