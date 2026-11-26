@@ -11,6 +11,15 @@ import (
 // nullLeaseGrace bounds abandoned claims from versions that did not set a lease.
 const nullLeaseGrace = 30 * time.Minute
 
+// Done jobs older than doneRetention are deleted once per pruneInterval, in
+// pruneBatch-row deletes. fetch_body and describe_attachment rows are kept:
+// their handlers read each node's newest job, done or failed.
+const (
+	doneRetention = 30 * 24 * time.Hour
+	pruneInterval = time.Hour
+	pruneBatch    = 50000
+)
+
 // JanitorConfig configures the lease-expiry reclaimer.
 type JanitorConfig struct {
 	DB           *pgxpool.Pool
@@ -41,6 +50,7 @@ func (j *Janitor) Run(ctx context.Context) {
 	log.Info().Dur("interval", j.cfg.ScanInterval).Msg("janitor starting")
 	t := time.NewTicker(j.cfg.ScanInterval)
 	defer t.Stop()
+	var lastPrune time.Time
 	for {
 		select {
 		case <-ctx.Done():
@@ -54,6 +64,14 @@ func (j *Janitor) Run(ctx context.Context) {
 			}
 			if n > 0 {
 				log.Warn().Int("reclaimed", n).Msg("requeued expired leases")
+			}
+			if time.Since(lastPrune) >= pruneInterval {
+				lastPrune = time.Now()
+				if n, err := j.prune(ctx); err != nil {
+					log.Error().Err(err).Msg("janitor prune failed")
+				} else if n > 0 {
+					log.Info().Int("deleted", n).Msg("pruned old done jobs")
+				}
 			}
 		}
 	}
@@ -86,4 +104,26 @@ func (j *Janitor) scan(ctx context.Context) (int, error) {
 		return 0, err
 	}
 	return int(tag.RowsAffected()), nil
+}
+
+// prune deletes done jobs past doneRetention and returns the number deleted.
+func (j *Janitor) prune(ctx context.Context) (int, error) {
+	total := 0
+	for {
+		tag, err := j.cfg.DB.Exec(ctx, `
+			DELETE FROM graph.jobs WHERE id IN (
+				SELECT id FROM graph.jobs
+				WHERE status = 'done'
+				  AND type NOT IN ('fetch_body', 'describe_attachment')
+				  AND completed_at < NOW() - ($1::bigint * INTERVAL '1 second')
+				LIMIT $2)`, int64(doneRetention/time.Second), pruneBatch)
+		if err != nil {
+			return total, err
+		}
+		n := int(tag.RowsAffected())
+		total += n
+		if n < pruneBatch || ctx.Err() != nil {
+			return total, nil
+		}
+	}
 }
