@@ -392,28 +392,34 @@ const (
 	topicLinkRecentLimit     = 10
 )
 
-func recentMarketCandidates(ctx context.Context, deps Deps, source topicLinkNode, srcMarkets []string, srcStart, srcEnd time.Time) ([]topicLinkCandidate, error) {
-	if srcStart.IsZero() || srcEnd.IsZero() {
-		return []topicLinkCandidate{}, nil
-	}
-	lo, hi := srcStart.Add(-topicLinkRecentWindow), srcEnd.Add(topicLinkRecentWindow)
-	// The SQL cap intentionally precedes market filtering: a matching row below
-	// 50 higher-cosine wrong-market rows is not considered.
-	rows, err := deps.DB.Query(ctx, `
+// ponytail: only the 400 nearest (by the HNSW scan) are considered; a qualifying row outside them is never linked. Raise if the recall gate fails.
+const topicLinkRecentANNCandidates = 400
+
+const topicLinkRecentEFSearch = 400
+
+// recentMarketSQL args: $1 source id, $2 min cosine, $3 min summary chars,
+// $4/$5 window lo/hi, $6 row cap, $7 ANN candidates.
+const recentMarketSQL = `
 WITH src AS (
   SELECT ai.embedding AS emb, REPLACE(n.scope,'slack:','') AS ch,
          COALESCE(NULLIF(n.metadata->>'thread_ts',''),split_part(n.id,':',3)) AS tt
   FROM graph.nodes n JOIN graph.artifact_index ai ON ai.node_id=n.id
   WHERE n.id=$1 AND ai.embedding IS NOT NULL
 ),
+near AS (
+  SELECT ai.node_id,ai.summary,ai.summary_kind,ai.embedding <=> (SELECT emb FROM src) AS dist
+  FROM graph.artifact_index ai
+  WHERE ai.node_id<>$1 AND ai.embedding IS NOT NULL
+  ORDER BY ai.embedding <=> (SELECT emb FROM src) LIMIT $7
+),
 sims AS (
-  SELECT n.id,n.type,COALESCE(n.scope,'') AS scope,COALESCE(ai.summary,'') AS summary,
-         COALESCE(ai.summary_kind,'') AS summary_kind,COALESCE(p.department,'') AS department,
-         COALESCE(ts.kind,'') AS kind,1.0-(ai.embedding <=> src.emb) AS cosine,
+  SELECT n.id,n.type,COALESCE(n.scope,'') AS scope,COALESCE(near.summary,'') AS summary,
+         COALESCE(near.summary_kind,'') AS summary_kind,COALESCE(p.department,'') AS department,
+         COALESCE(ts.kind,'') AS kind,1.0-near.dist AS cosine,
          ts.markets IS NOT NULL AS has_markets,COALESCE(ts.markets,'{}') AS markets,
          activity.started,activity.ended
-  FROM graph.artifact_index ai
-  JOIN graph.nodes n ON n.id=ai.node_id
+  FROM near
+  JOIN graph.nodes n ON n.id=near.node_id
   LEFT JOIN graph.people p ON p.id=n.author_person_id
   CROSS JOIN src
   LEFT JOIN graph.thread_summaries ts ON ts.channel_id=REPLACE(n.scope,'slack:','')
@@ -433,11 +439,11 @@ sims AS (
                 COALESCE(NULLIF(n.metadata->>'thread_ts',''),split_part(n.id,':',3))),n.updated_at)
       ELSE n.updated_at END AS ended
   ) activity
-  WHERE ai.node_id<>$1 AND ai.embedding IS NOT NULL AND n.deleted_at IS NULL
-    AND 1.0-(ai.embedding <=> src.emb) >= $2
-    AND NOT (n.type IN ('slack','slack_thread') AND ai.summary_kind<>'thread_summary')
+  WHERE n.deleted_at IS NULL
+    AND 1.0-near.dist >= $2
+    AND NOT (n.type IN ('slack','slack_thread') AND near.summary_kind<>'thread_summary')
     AND n.type NOT IN ('slack_file','jira_attachment')
-    AND length(TRIM(COALESCE(ai.summary,''))) >= $3
+    AND length(TRIM(COALESCE(near.summary,''))) >= $3
     AND COALESCE(ts.kind,'') <> 'chatter'
     AND NOT (n.type IN ('slack','slack_thread') AND n.scope LIKE 'slack:D%')
     AND NOT (n.type IN ('slack','slack_thread') AND REPLACE(n.scope,'slack:','')=src.ch
@@ -445,17 +451,71 @@ sims AS (
 )
 SELECT id,type,scope,summary,summary_kind,department,kind,cosine,has_markets,markets
 FROM sims WHERE started <= $5 AND ended >= $4
-ORDER BY cosine DESC,id ASC LIMIT $6`, source.NodeID, topicLinkRecentMinCosine, topicLinkMinSummaryChars, lo, hi, topicLinkRecentPrefilter)
+ORDER BY cosine DESC,id ASC LIMIT $6`
+
+// recentMarketTestHook runs after the transaction settings are applied and
+// before the query; nil in production. Tests use it to inject an error.
+var recentMarketTestHook func() error
+
+func recentMarketCandidates(ctx context.Context, deps Deps, source topicLinkNode, srcMarkets []string, srcStart, srcEnd time.Time) ([]topicLinkCandidate, error) {
+	if srcStart.IsZero() || srcEnd.IsZero() {
+		return []topicLinkCandidate{}, nil
+	}
+	lo, hi := srcStart.Add(-topicLinkRecentWindow), srcEnd.Add(topicLinkRecentWindow)
+	tx, err := deps.DB.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return nil, err
+	}
+	// Never committed: rollback releases the SET LOCAL settings with the tx.
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, fmt.Sprintf(`SET LOCAL hnsw.ef_search = %d`, topicLinkRecentEFSearch)); err != nil {
+		return nil, err
+	}
+	if _, err := tx.Exec(ctx, `SET LOCAL hnsw.iterative_scan = relaxed_order`); err != nil {
+		return nil, err
+	}
+	// The planner picks a parallel seq scan + sort for LIMIT 400; force the HNSW index.
+	if _, err := tx.Exec(ctx, `SET LOCAL enable_seqscan = off`); err != nil {
+		return nil, err
+	}
+	rows, err := queryRecentMarketRows(ctx, tx, source.NodeID, lo, hi, topicLinkRecentANNCandidates)
+	if err != nil {
+		return nil, err
+	}
+	return selectRecentMarket(rows, srcMarkets, source), nil
+}
+
+// queryRecentMarketRows returns up to topicLinkRecentPrefilter SQL rows drawn
+// from the k nearest artifacts. rows is closed on every path.
+func queryRecentMarketRows(ctx context.Context, q pgx.Tx, sourceID string, lo, hi time.Time, k int) ([]topicLinkCandidate, error) {
+	if recentMarketTestHook != nil {
+		if err := recentMarketTestHook(); err != nil {
+			return nil, err
+		}
+	}
+	// The SQL cap intentionally precedes market filtering: a matching row below
+	// 50 higher-cosine wrong-market rows is not considered.
+	rows, err := q.Query(ctx, recentMarketSQL, sourceID, topicLinkRecentMinCosine, topicLinkMinSummaryChars, lo, hi, topicLinkRecentPrefilter, k)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	out := make([]topicLinkCandidate, 0, topicLinkRecentLimit)
+	out := make([]topicLinkCandidate, 0, topicLinkRecentPrefilter)
 	for rows.Next() {
 		var c topicLinkCandidate
 		if err := rows.Scan(&c.NodeID, &c.Type, &c.Scope, &c.Summary, &c.SummaryKind, &c.Department, &c.Kind, &c.Cosine, &c.HasMarkets, &c.Markets); err != nil {
 			return nil, err
 		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+// selectRecentMarket applies the market filter to the SQL rows, stopping at
+// topicLinkRecentLimit matches.
+func selectRecentMarket(rows []topicLinkCandidate, srcMarkets []string, source topicLinkNode) []topicLinkCandidate {
+	out := make([]topicLinkCandidate, 0, topicLinkRecentLimit)
+	for _, c := range rows {
 		candidateMarkets := resolveMarkets(c.Markets, c.HasMarkets, c.Summary)
 		if recentMarketCandidateMatches(srcMarkets, candidateMarkets, source.Scope, c.Scope) {
 			out = append(out, c)
@@ -464,15 +524,22 @@ ORDER BY cosine DESC,id ASC LIMIT $6`, source.NodeID, topicLinkRecentMinCosine, 
 			}
 		}
 	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return out, nil
+	return out
+}
+
+// rowQuerier is satisfied by *pgxpool.Pool and pgx.Tx.
+type rowQuerier interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 }
 
 func loadTopicLinkSource(ctx context.Context, deps Deps, nodeID string) (topicLinkNode, error) {
+	return loadTopicLinkSourceFrom(ctx, deps.DB, nodeID)
+}
+
+func loadTopicLinkSourceFrom(ctx context.Context, q rowQuerier, nodeID string) (topicLinkNode, error) {
 	var n topicLinkNode
-	err := deps.DB.QueryRow(ctx, `
+	err := q.QueryRow(ctx, `
 SELECT n.id, n.type, COALESCE(n.scope,''), COALESCE(ai.summary,''), COALESCE(ai.summary_kind,''), COALESCE(p.department,''),
        COALESCE(ts.kind,''), ts.markets IS NOT NULL, COALESCE(ts.markets, '{}')
 FROM graph.nodes n
@@ -784,7 +851,11 @@ SELECT EXISTS(
 // threads the first→last message time; for other artifacts first_seen→updated
 // (ingest-time approximation).
 func nodeActivityWindow(ctx context.Context, deps Deps, nodeID string) (start, end time.Time, ok bool) {
-	err := deps.DB.QueryRow(ctx, `
+	return nodeActivityWindowFrom(ctx, deps.DB, nodeID)
+}
+
+func nodeActivityWindowFrom(ctx context.Context, q rowQuerier, nodeID string) (start, end time.Time, ok bool) {
+	err := q.QueryRow(ctx, `
 WITH nd AS (
   SELECT n.type, COALESCE(n.scope,'') AS scope,
          COALESCE(NULLIF(n.metadata->>'thread_ts',''), split_part(n.id,':',3)) AS tt,
