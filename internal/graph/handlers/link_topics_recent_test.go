@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -12,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/pgvector/pgvector-go"
 	"github.com/rs/zerolog"
 )
@@ -373,4 +376,156 @@ func TestShortlistMissRecoveredByTopicAndMarketLanes(t *testing.T) {
 	if _, ok := candidateByID(recent, b); !ok {
 		t.Fatal("recent-market lane did not recover B")
 	}
+}
+
+// cleanRecentSummaries removes the thread_summaries rows the CT* seeds create;
+// caseTestDB's cleanup does not cover that table.
+func cleanRecentSummaries(t *testing.T, pool *pgxpool.Pool) {
+	t.Helper()
+	del := func() {
+		pool.Exec(context.Background(), `DELETE FROM graph.thread_summaries WHERE channel_id LIKE 'CT%'`)
+	}
+	del()
+	t.Cleanup(del)
+}
+
+func recentCore(t *testing.T, pool *pgxpool.Pool, id string, now time.Time, k int) []topicLinkCandidate {
+	t.Helper()
+	ctx := context.Background()
+	tx, err := pool.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	rows, err := queryRecentMarketRows(ctx, tx, id, now.Add(-topicLinkRecentWindow), now.Add(topicLinkRecentWindow), k)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return rows
+}
+
+func TestRecentMarketThresholdKeepsNearestDropsBelow(t *testing.T) {
+	pool := caseTestDB(t)
+	cleanRecentSummaries(t, pool)
+	deps := Deps{DB: pool, Logger: zerolog.Nop(), MachineID: "test"}
+	now := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	const src = "slack:CT0:1790812800"
+	seed := func(id string, cos float64) {
+		seedRecentThread(t, deps, id, "slack:"+strings.Split(id, ":")[1], strings.Repeat("India GST work ", 5), cos, now, nil, []string{"IN"}, true)
+	}
+	seed(src, 1)
+	seed("slack:CT1:1790812801", .80)
+	seed("slack:CT2:1790812802", .70)
+	for i := range 5 {
+		seed(fmt.Sprintf("slack:CT3:%010d", 1790812810+i), .5-float64(i)/100)
+	}
+	rows := recentCore(t, pool, src, now, 50)
+	if len(rows) != 1 || rows[0].NodeID != "slack:CT1:1790812801" {
+		t.Fatalf("rows = %+v, want only the .80 row", rows)
+	}
+	if math.Abs(rows[0].Cosine-.80) > 1e-3 {
+		t.Fatalf("cosine = %v", rows[0].Cosine)
+	}
+}
+
+func TestRecentMarketANNCutoffDropsEligibleBeyondK(t *testing.T) {
+	pool := caseTestDB(t)
+	cleanRecentSummaries(t, pool)
+	deps := Deps{DB: pool, Logger: zerolog.Nop(), MachineID: "test"}
+	ctx := context.Background()
+	now := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	const src = "slack:CT0:1790812800"
+	sum := strings.Repeat("India GST work ", 5)
+	seedRecentThread(t, deps, src, "slack:CT0", sum, 1, now, nil, []string{"IN"}, true)
+	for i, cos := range []float64{.95, .94, .93} {
+		id := fmt.Sprintf("slack:CT1:%010d", 1790812801+i)
+		seedRecentThread(t, deps, id, "slack:CT1", sum, cos, now, nil, []string{"IN"}, true)
+		if _, err := pool.Exec(ctx, `UPDATE graph.nodes SET type='slack_file' WHERE id=$1`, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	const target = "slack:CT2:1790812810"
+	seedRecentThread(t, deps, target, "slack:CT2", sum, .80, now, nil, []string{"IN"}, true)
+	if _, ok := candidateByID(recentCore(t, pool, src, now, 3), target); ok {
+		t.Fatal("rank-4 row returned with k=3")
+	}
+	if _, ok := candidateByID(recentCore(t, pool, src, now, 4), target); !ok {
+		t.Fatal("rank-4 row missing with k=4")
+	}
+}
+
+func TestRecentMarketTxDoesNotLeakSettings(t *testing.T) {
+	main := caseTestDB(t)
+	cleanRecentSummaries(t, main)
+	deps := Deps{DB: main, Logger: zerolog.Nop(), MachineID: "test"}
+	ctx := context.Background()
+	now := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	const src = "slack:CT0:1790812800"
+	sum := strings.Repeat("India GST work ", 5)
+	seedRecentThread(t, deps, src, "slack:CT0", sum, 1, now, nil, []string{"IN"}, true)
+	for i := range 13 {
+		seedRecentThread(t, deps, fmt.Sprintf("slack:CT5:%010d", 1790812900+i), "slack:CT5", sum, .8, now, nil, []string{"IN"}, true)
+	}
+	source, err := loadTopicLinkSource(ctx, deps, src)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := pgxpool.ParseConfig(os.Getenv("DATABASE_URL"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.MaxConns = 1
+	one, err := pgxpool.NewWithConfig(ctx, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(one.Close)
+	oneDeps := Deps{DB: one, Logger: zerolog.Nop(), MachineID: "test"}
+
+	state := func(c *pgxpool.Conn) (pid int, ef, iter, seq string) {
+		t.Helper()
+		if err := c.QueryRow(ctx, `SELECT pg_backend_pid(), current_setting('hnsw.ef_search'), current_setting('hnsw.iterative_scan'), current_setting('enable_seqscan')`).Scan(&pid, &ef, &iter, &seq); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	c, err := one.Acquire(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var d float64
+	if err := c.QueryRow(ctx, `SELECT '[1,2]'::halfvec <=> '[1,2]'::halfvec`).Scan(&d); err != nil {
+		t.Fatal(err)
+	}
+	pid0, ef0, iter0, seq0 := state(c)
+	c.Release()
+	check := func(label string) {
+		t.Helper()
+		cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		c, err := one.Acquire(cctx)
+		if err != nil {
+			t.Fatalf("%s: reacquire: %v", label, err)
+		}
+		defer c.Release()
+		pid, ef, iter, seq := state(c)
+		if pid != pid0 || ef != ef0 || iter != iter0 || seq != seq0 {
+			t.Fatalf("%s: pid/ef/iter/seqscan = %d/%s/%s/%s, want %d/%s/%s/%s", label, pid, ef, iter, seq, pid0, ef0, iter0, seq0)
+		}
+	}
+
+	got, err := recentMarketCandidates(ctx, oneDeps, source, []string{"IN"}, now, now)
+	if err != nil || len(got) != topicLinkRecentLimit {
+		t.Fatalf("early break: len=%d err=%v", len(got), err)
+	}
+	check("early break")
+
+	sentinel := errors.New("sentinel")
+	recentMarketTestHook = func() error { return sentinel }
+	t.Cleanup(func() { recentMarketTestHook = nil })
+	if _, err := recentMarketCandidates(ctx, oneDeps, source, []string{"IN"}, now, now); !errors.Is(err, sentinel) {
+		t.Fatalf("err = %v, want sentinel", err)
+	}
+	check("query error")
 }
